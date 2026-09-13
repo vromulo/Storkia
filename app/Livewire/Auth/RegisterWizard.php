@@ -42,6 +42,11 @@ class RegisterWizard extends Component
      */
     public function updated($propertyName)
     {
+        // Backend fallback for extra spaces (strips leading spaces and condenses multiples)
+        if (in_array($propertyName, ['first_name', 'last_name', 'middle_initial'])) {
+            $this->$propertyName = ltrim(preg_replace('/ {2,}/', ' ', $this->$propertyName));
+        }
+
         if ($this->currentStep === 1 && $propertyName === 'email') {
             $this->validateOnly('email', [
                 'email' => ['required', 'email:rfc,dns']
@@ -49,11 +54,11 @@ class RegisterWizard extends Component
         } elseif ($this->currentStep === 2) {
             $this->validateOnly($propertyName, $this->getStep2Rules(), $this->getStep2Messages());
         } elseif ($this->currentStep === 3) {
-            // Validate the password and confirmation matching in real-time
-            if ($propertyName === 'password' || $propertyName === 'password_confirmation') {
-                $this->validateOnly('password', $this->getStep3Rules());
-
-                // Only re-check confirmation if the user has already started typing into it
+            
+            if ($propertyName === 'password') {
+                $this->validateOnly('password', $this->getStep3Rules(), $this->getStep3Messages());
+                
+                // Trigger confirmation validation if they've already typed something in it
                 if (!empty($this->password_confirmation)) {
                     $this->validateOnly('password_confirmation', [
                         'password_confirmation' => ['same:password']
@@ -201,18 +206,16 @@ class RegisterWizard extends Component
         $this->resetErrorBag();
     }
 
-    // --- Validation Rules for Step 2 ---
     protected function getStep2Rules(): array
     {
         return [
             'first_name' => ['required', 'string', 'regex:/^[A-Za-z\s]+$/'],
             'last_name' => ['required', 'string', 'regex:/^[A-Za-z\s]+$/'],
             'middle_initial' => ['nullable', 'string', 'regex:/^[A-Za-z]$/'],
-            'sex' => ['required', 'in:male,female'], // Removed 'other'
+            'sex' => ['required', 'in:male,female'],
             'birthday' => [
                 'required',
                 'date',
-                // Dynamically ensure they are at least 18 and at most 100
                 'before_or_equal:' . now()->subYears(18)->format('Y-m-d'),
                 'after_or_equal:' . now()->subYears(100)->format('Y-m-d'),
             ],
@@ -246,7 +249,6 @@ class RegisterWizard extends Component
         }
     }
 
-    // --- Validation Rules for Step 3 ---
     protected function getStep3Rules(): array
     {
         return [
@@ -270,13 +272,19 @@ class RegisterWizard extends Component
         ];
     }
 
+    protected function getStep3Messages(): array
+    {
+        return [
+            'password.required' => 'Please enter a password.',
+            'password.min' => 'Password must be at least 8 characters long.',
+            'password_confirmation.required' => 'Please confirm your password.',
+            'password_confirmation.same' => 'The password confirmation does not match.',
+        ];
+    }
+
     public function register(): void
     {
-        // Strict backend validation before creation
-        $this->validate($this->getStep3Rules(), [
-            'password_confirmation.same' => 'The password confirmation does not match.',
-            'password.min' => 'Password must be at least 8 characters long.',
-        ]);
+        $this->validate($this->getStep3Rules(), $this->getStep3Messages());
 
         $record = RegistrationOtp::where('email', $this->email)
             ->where('verification_token', $this->verificationToken)
@@ -297,9 +305,10 @@ class RegisterWizard extends Component
 
         DB::transaction(function () use ($record) {
             $user = User::create([
-                'first_name' => ucwords(strtolower($this->first_name)),
-                'last_name' => ucwords(strtolower($this->last_name)),
-                'middle_initial' => $this->middle_initial ? strtoupper($this->middle_initial) : null,
+                // Double protection: Final trim before hitting the database
+                'first_name' => ucwords(strtolower(trim($this->first_name))),
+                'last_name' => ucwords(strtolower(trim($this->last_name))),
+                'middle_initial' => trim($this->middle_initial) ? strtoupper(trim($this->middle_initial)) : null,
                 'sex' => $this->sex,
                 'email' => $this->email,
                 'contact_no' => null,
