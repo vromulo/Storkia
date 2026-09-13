@@ -15,6 +15,9 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->alias([
             'seller.approved' => \App\Http\Middleware\EnsureSellerIsApproved::class,
         ]);
+        
+        // Trust all proxies for Cloudflare Tunnel
+        $middleware->trustProxies(at: '*');
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         $exceptions->shouldRenderJsonWhen(

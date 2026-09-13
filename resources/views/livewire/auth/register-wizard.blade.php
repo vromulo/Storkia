@@ -1,12 +1,12 @@
 <div>
     {{-- Step Progress Indicator --}}
     <div class="flex items-center justify-center gap-1 sm:gap-2 mb-6 sm:mb-8 px-2">
-        @foreach ([1 => 'Verify Email', 2 => 'Personal Info', 3 => 'Password'] as $num =>$label)
+        @foreach ([1 => 'Verify Email', 2 => 'Personal Info', 3 => 'Password'] as $num => $label)
             <div class="flex items-center gap-1 sm:gap-2">
                 <div class="flex flex-col items-center gap-1">
                     <div class="w-7 h-7 sm:w-8 sm:h-8 rounded-full flex items-center justify-center text-[10px] sm:text-xs font-bold transition-colors
-                        {{ $currentStep ===$num ? 'bg-primary text-surface' : ($currentStep >$num ? 'bg-primary-dark text-surface' : 'bg-surface-subtle text-text-muted') }}">
-                        @if ($currentStep >$num)
+                        {{ $currentStep === $num ? 'bg-primary text-surface' : ($currentStep > $num ? 'bg-primary-dark text-surface' : 'bg-surface-subtle text-text-muted') }}">
+                        @if ($currentStep > $num)
                             <svg class="w-3 h-3 sm:w-4 sm:h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7" />
                             </svg>
@@ -17,7 +17,7 @@
                     <span class="text-[9px] sm:text-[10px] font-medium text-text-muted whitespace-nowrap">{{ $label }}</span>
                 </div>
                 @if ($num < 3)
-                    <div class="w-4 sm:w-8 h-0.5 {{ $currentStep >$num ? 'bg-primary-dark' : 'bg-border-subtle' }} mb-4"></div>
+                    <div class="w-4 sm:w-8 h-0.5 {{ $currentStep > $num ? 'bg-primary-dark' : 'bg-border-subtle' }} mb-4"></div>
                 @endif
             </div>
         @endforeach
@@ -37,7 +37,7 @@
             </div>
 
             @if (! $codeSent)
-                <button wire:click="sendCode" wire:loading.attr="disabled" wire:target="sendCode"
+                <button type="button" wire:click="sendCode" wire:loading.attr="disabled" wire:target="sendCode"
                     class="w-full py-2.5 sm:py-3 px-4 bg-primary hover:bg-primary-dark text-surface text-sm font-bold rounded-xl shadow-md transition-colors cursor-pointer disabled:cursor-not-allowed disabled:opacity-60">
                     <span wire:loading.remove wire:target="sendCode">Send Verification Code</span>
                     <span wire:loading wire:target="sendCode">Sending...</span>
@@ -54,7 +54,7 @@
                     <p class="text-text-muted text-xs mt-1 text-center sm:text-left">We sent a 6-digit code to {{ $email }}.</p>
                 </div>
 
-                <button wire:click="verifyCode" wire:loading.attr="disabled" wire:target="verifyCode"
+                <button type="button" wire:click="verifyCode" wire:loading.attr="disabled" wire:target="verifyCode"
                     class="w-full py-2.5 sm:py-3 px-4 bg-primary hover:bg-primary-dark text-surface text-sm font-bold rounded-xl shadow-md transition-colors cursor-pointer disabled:cursor-not-allowed disabled:opacity-60">
                     <span wire:loading.remove wire:target="verifyCode">Verify Code</span>
                     <span wire:loading wire:target="verifyCode">Verifying...</span>
@@ -62,7 +62,7 @@
 
                 <div class="text-center" x-data="{ seconds: {{ $resendCooldown }} }"
                     x-init="let t = setInterval(() => { if (seconds > 0) seconds--; else clearInterval(t); }, 1000)">
-                    <button wire:click="resendCode" wire:loading.attr="disabled" wire:target="resendCode"
+                    <button type="button" wire:click="resendCode" wire:loading.attr="disabled" wire:target="resendCode"
                         x-bind:disabled="seconds > 0"
                         class="text-xs font-bold text-primary hover:text-primary-dark transition-colors cursor-pointer disabled:text-text-muted disabled:cursor-not-allowed">
                         <span x-show="seconds === 0">Resend Code</span>
@@ -81,7 +81,7 @@
             <div>
                 <label class="block text-xs font-bold text-text-main mb-1">First Name*</label>
                 <input type="text" 
-                wire:model.live.debounce.500ms="first_name"
+                    wire:model.live.debounce.500ms="first_name"
                     x-on:input="$event.target.value = $event.target.value.replace(/\b\w/g, c => c.toUpperCase())"
                     class="capitalize w-full py-2 px-3 border-2 rounded-xl bg-surface outline-none transition-all shadow-sm text-sm 
                     @error('first_name') border-danger focus:border-danger focus:ring-1 focus:ring-danger 
@@ -136,7 +136,6 @@
             {{-- Birthday --}}
             <div>
                 <label class="block text-xs font-bold text-text-main mb-1">Birthday*</label>
-                <!-- min/max explicitly blocks UI selection outside of 18-100 years old -->
                 <input type="date" wire:model.live="birthday"
                     min="{{ now()->subYears(100)->format('Y-m-d') }}"
                     max="{{ now()->subYears(18)->format('Y-m-d') }}"
@@ -147,11 +146,11 @@
             </div>
 
             <div class="flex gap-2 sm:gap-3 mt-4">
-                <button wire:click="backToStep(1)" type="button"
+                <button type="button" wire:click="backToStep(1)"
                     class="flex-1 py-2.5 sm:py-3 px-4 bg-surface-subtle hover:bg-border-subtle text-text-main text-sm font-bold rounded-xl transition-colors cursor-pointer">
                     Back
                 </button>
-                <button wire:click="goToPasswordStep" wire:loading.attr="disabled" wire:target="goToPasswordStep"
+                <button type="button" wire:click="goToPasswordStep" wire:loading.attr="disabled" wire:target="goToPasswordStep"
                     class="flex-[2] py-2.5 sm:py-3 px-4 bg-primary hover:bg-primary-dark text-surface text-sm font-bold rounded-xl shadow-md transition-colors cursor-pointer disabled:cursor-not-allowed disabled:opacity-60">
                     Continue
                 </button>
@@ -195,11 +194,11 @@
             </div>
 
             <div class="flex gap-2 sm:gap-3 mt-4">
-                <button wire:click="backToStep(2)" type="button"
+                <button type="button" wire:click="backToStep(2)"
                     class="flex-1 py-2.5 sm:py-3 px-4 bg-surface-subtle hover:bg-border-subtle text-text-main text-sm font-bold rounded-xl transition-colors cursor-pointer">
                     Back
                 </button>
-                <button wire:click="register" wire:loading.attr="disabled" wire:target="register"
+                <button type="button" wire:click="register" wire:loading.attr="disabled" wire:target="register"
                     class="flex-[2] py-2.5 sm:py-3 px-4 bg-primary hover:bg-primary-dark text-surface text-sm font-bold rounded-xl shadow-md transition-colors cursor-pointer disabled:cursor-not-allowed disabled:opacity-60">
                     <span wire:loading.remove wire:target="register">Complete</span>
                     <span wire:loading wire:target="register">Creating...</span>

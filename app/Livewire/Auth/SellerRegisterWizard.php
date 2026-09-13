@@ -173,7 +173,7 @@ class SellerRegisterWizard extends Component
     }
 
     // --- OTP Logic (Reused from Buyer) ---
-    public function sendCode(): void { /* Identical to RegisterWizard.php */ 
+    public function sendCode(): void { 
         $this->validateOnly('email', ['email' => ['required', 'email:rfc,dns']]);
         if (User::where('email', $this->email)->exists()) {
             $this->addError('email', 'This email is already registered.');
@@ -237,8 +237,8 @@ class SellerRegisterWizard extends Component
 
     protected function getStep5Rules(): array {
         return [
-            'valid_id' => ['required', 'image', 'max:5120'], // 5MB Max
-            'business_permit' => ['required', 'image', 'max:5120'],
+            'valid_id' => ['required', 'file', 'mimes:jpg,jpeg,png,pdf', 'max:10240'], // 10MB Max
+            'business_permit' => ['required', 'file', 'mimes:jpg,jpeg,png,pdf', 'max:10240'],
         ];
     }
 
