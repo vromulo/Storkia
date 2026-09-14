@@ -14,28 +14,17 @@
     style="display: none;"
 >
     <div class="mx-auto w-full max-w-7xl h-[450px] overflow-y-auto bg-white relative border border-t-0 border-border-subtle rounded-b-2xl [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-track]:bg-surface-subtle [&::-webkit-scrollbar-thumb]:bg-border-subtle [&::-webkit-scrollbar-thumb]:rounded-full">
-        <!-- Stork Icons Background Overlay (50% Opacity) -->
-        <div class="absolute inset-0 pointer-events-none z-0 opacity-50 overflow-hidden" aria-hidden="true">
-            <svg class="w-full h-full text-gray-300" xmlns="http://www.w3.org/2000/svg" width="100%" height="100%">
+        <!-- Minimized Logo Background Overlay (10% Opacity, Black) -->
+        <div class="absolute inset-0 pointer-events-none z-0 opacity-10 overflow-hidden" aria-hidden="true">
+            <svg class="w-full h-full" xmlns="http://www.w3.org/2000/svg" width="100%" height="100%">
                 <defs>
                     <pattern id="stork-pattern-dropdown" width="120" height="120" patternUnits="userSpaceOnUse" patternTransform="rotate(-15)">
-                        <!-- Stork Icon -->
-                        <g transform="translate(20, 20)" fill="currentColor">
-                            <!-- Stork Head & Beak -->
-                            <path d="M0 12 L20 18 C24 12 28 10 34 11 C38 11.5 42 14 46 18 C42 18.5 38 18 34 16.5 C30 15 27 16 23 20 L16 24 C12 26 8 25 4 22 L0 12 Z"/>
-                            <!-- Wing Silhouette -->
-                            <path d="M22 19 L32 8 C30 12 28 16 24 20 Z"/>
-                            <!-- Long Stork Legs -->
-                            <path d="M21 21 L18 38 M24 20 L22 38" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
-                        </g>
+                        <image href="{{ asset('assets/storkia-minimized.png') }}" x="36" y="36" width="48" height="48" style="filter: brightness(0);" />
                     </pattern>
                 </defs>
                 <rect width="100%" height="100%" fill="url(#stork-pattern-dropdown)" />
             </svg>
         </div>
-
-        <!-- Top Accent Line -->
-        <div class="h-1 w-full bg-primary/20 sticky top-0 z-20"></div>
 
         <div class="p-8 lg:p-10 relative z-10">
             @foreach($categories as $categoryName => $subcategories)
@@ -51,10 +40,9 @@
                         class="grid grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4 md:gap-8"
                     >
                         
-                        <!-- View All Link -->
+                        <!-- View All Link (Shadow removed) -->
                         <a href="{{ url('/category/' . Str::slug($categoryName)) }}" class="flex flex-col items-center group text-center">
-                            <div class="w-16 h-16 md:w-24 md:h-24 rounded-full overflow-hidden mb-2 md:mb-4 border-2 border-transparent group-hover:border-white/50 transition-colors duration-300 shadow-sm relative bg-[#623040] text-white flex items-center justify-center shrink-0">
-                                <!-- Adjusted to text-white -->
+                            <div class="w-16 h-16 md:w-24 md:h-24 rounded-full overflow-hidden mb-2 md:mb-4 border-2 border-transparent group-hover:border-white/50 transition-colors duration-300 relative bg-[#623040] text-white flex items-center justify-center shrink-0">
                                 <svg xmlns="http://www.w3.org/2000/svg" class="w-6 h-6 md:w-8 md:h-8 text-white group-hover:scale-110 transition-all duration-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                     <rect x="4" y="4" width="6" height="6" rx="0.5" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
                                     <rect x="14" y="4" width="6" height="6" rx="0.5" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
@@ -67,12 +55,10 @@
                             </span>
                         </a>
 
-                        <!-- Subcategories with Theme Icons -->
+                        <!-- Subcategories with Theme Icons (Shadow removed) -->
                         @foreach($subcategories as $sub)
                             <a href="{{ url('/category/' . Str::slug($categoryName) . '?subcategory=' . urlencode($sub['name'])) }}" class="flex flex-col items-center group text-center">
-                                
-                                <!-- Added Tailwind arbitrary variants to target injected SVG elements and force them to white and size correctly -->
-                                <div class="w-16 h-16 md:w-24 md:h-24 rounded-full overflow-hidden mb-2 md:mb-4 border-2 border-transparent group-hover:border-white/50 transition-colors duration-300 shadow-sm relative bg-[#623040] text-white flex items-center justify-center shrink-0 [&>svg]:w-6 [&>svg]:h-6 md:[&>svg]:w-8 md:[&>svg]:h-8 [&>svg]:!text-white [&>svg]:!stroke-white [&>svg_*]:!stroke-white [&>svg]:group-hover:scale-110 [&>svg]:transition-all [&>svg]:duration-300">
+                                <div class="w-16 h-16 md:w-24 md:h-24 rounded-full overflow-hidden mb-2 md:mb-4 border-2 border-transparent group-hover:border-white/50 transition-colors duration-300 relative bg-[#623040] text-white flex items-center justify-center shrink-0 [&>svg]:w-6 [&>svg]:h-6 md:[&>svg]:w-8 md:[&>svg]:h-8 [&>svg]:!text-white [&>svg]:!stroke-white [&>svg_*]:!stroke-white [&>svg]:group-hover:scale-110 [&>svg]:transition-all [&>svg]:duration-300">
                                     @if(!empty($sub['icon']))
                                         {!! $sub['icon'] !!}
                                     @else

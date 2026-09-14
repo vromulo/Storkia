@@ -20,6 +20,18 @@
 </head>
 <body class="m-0 p-0 h-screen w-screen font-sans antialiased text-text-main overflow-hidden bg-gradient-to-b from-surface via-surface to-brand-light/30 relative">
 
+    <!-- Logo Background Overlay[cite: 13] -->
+    <div class="absolute inset-0 pointer-events-none z-0 opacity-5 overflow-hidden" aria-hidden="true">
+        <svg class="w-full h-full" xmlns="http://www.w3.org/2000/svg" width="100%" height="100%">
+            <defs>
+                <pattern id="stork-pattern-admin-login" width="120" height="120" patternUnits="userSpaceOnUse" patternTransform="rotate(-15)">
+                    <image href="{{ asset('assets/storkia-minimized.png') }}" x="36" y="36" width="48" height="48" style="filter: brightness(0);" />
+                </pattern>
+            </defs>
+            <rect width="100%" height="100%" fill="url(#stork-pattern-admin-login)" />
+        </svg>
+    </div>
+
     <!-- Mobile Restricted View -->
     <div class="mobile-view fixed inset-0 bg-surface/80 backdrop-blur-md z-40"></div>
     
@@ -45,11 +57,11 @@
     </div>
 
     <!-- Desktop View (Full Screen Login) -->
-    <div class="desktop-view h-screen w-screen flex items-center justify-center relative overflow-y-auto p-4 sm:p-6">
-        <div class="w-full max-w-md z-10 my-auto">
+    <div class="desktop-view h-screen w-screen flex items-center justify-center relative overflow-y-auto p-4 sm:p-6 z-10">
+        <div class="w-full max-w-md my-auto">
             
             <!-- Branding -->
-            <div class="text-center mb-8">
+            <div class="text-center mb-8 relative z-20">
                 <div class="inline-flex items-center justify-center w-16 h-16 rounded-full bg-brand-light/40 text-primary-dark mb-4 shadow-inner">
                     <svg class="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
@@ -61,7 +73,7 @@
             </div>
 
             <!-- Login Card -->
-            <div class="bg-surface/80 backdrop-blur-xl py-8 px-6 shadow-2xl sm:rounded-3xl sm:px-10 border border-border-subtle hover:border-primary/30 transition-all duration-300">
+            <div class="relative z-20 bg-surface/80 backdrop-blur-xl py-8 px-6 shadow-2xl sm:rounded-3xl sm:px-10 border border-border-subtle hover:border-primary/30 transition-all duration-300">
                 
                 <form class="space-y-6" action="{{ route('admin.login') }}" method="POST">
                     @csrf

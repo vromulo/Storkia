@@ -20,6 +20,18 @@
 </head>
 <body class="m-0 p-0 h-screen w-screen font-sans antialiased text-text-main overflow-hidden bg-gradient-to-b from-surface via-surface to-brand-light/30 relative">
 
+    <!-- Logo Background Overlay[cite: 12] -->
+    <div class="absolute inset-0 pointer-events-none z-0 opacity-5 overflow-hidden" aria-hidden="true">
+        <svg class="w-full h-full" xmlns="http://www.w3.org/2000/svg" width="100%" height="100%">
+            <defs>
+                <pattern id="stork-pattern-admin-otp" width="120" height="120" patternUnits="userSpaceOnUse" patternTransform="rotate(-15)">
+                    <image href="{{ asset('assets/storkia-minimized.png') }}" x="36" y="36" width="48" height="48" style="filter: brightness(0);" />
+                </pattern>
+            </defs>
+            <rect width="100%" height="100%" fill="url(#stork-pattern-admin-otp)" />
+        </svg>
+    </div>
+
     <!-- Mobile Restricted View -->
     <div class="mobile-view fixed inset-0 bg-surface/80 backdrop-blur-md z-40"></div>
     
@@ -45,11 +57,11 @@
     </div>
 
     <!-- Desktop View (Full Screen OTP) -->
-    <div class="desktop-view h-screen w-screen flex items-center justify-center relative overflow-y-auto p-4 sm:p-6">
-        <div class="w-full max-w-md z-10 my-auto">
+    <div class="desktop-view h-screen w-screen flex items-center justify-center relative overflow-y-auto p-4 sm:p-6 z-10">
+        <div class="w-full max-w-md my-auto">
             
             <!-- Header -->
-            <div class="text-center mb-8">
+            <div class="text-center mb-8 relative z-20">
                 <div class="inline-flex items-center justify-center w-16 h-16 rounded-full bg-brand-light/40 text-primary-dark mb-4 shadow-inner">
                     <svg class="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
@@ -61,7 +73,7 @@
             </div>
 
             <!-- OTP Card -->
-            <div class="bg-surface/80 backdrop-blur-xl py-8 px-6 shadow-2xl sm:rounded-3xl sm:px-10 border border-border-subtle hover:border-primary/30 transition-all duration-300">
+            <div class="relative z-20 bg-surface/80 backdrop-blur-xl py-8 px-6 shadow-2xl sm:rounded-3xl sm:px-10 border border-border-subtle hover:border-primary/30 transition-all duration-300">
                 
                 <form class="space-y-6" action="{{ route('admin.otp.verify') }}" method="POST">
                     @csrf

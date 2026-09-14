@@ -154,7 +154,7 @@ $categories = [
                 x-cloak
             ></div>
 
-            <!-- Left Navigation Arrow -->
+            <!-- Left Navigation Arrow (Shadow Removed) -->
             <button 
                 type="button"
                 x-show="showLeft" 
@@ -165,7 +165,7 @@ $categories = [
                 x-transition:leave-start="opacity-100"
                 x-transition:leave-end="opacity-0"
                 @click="scroll('left')" 
-                class="absolute left-0 md:-left-2 top-1/2 -translate-y-1/2 z-20 bg-black/20 shadow-sm backdrop-blur-sm rounded-full p-1.5 border border-white/30 text-white hover:text-[#F6D8BD] hover:border-[#F6D8BD] transition-colors flex items-center justify-center cursor-pointer"
+                class="absolute left-0 md:-left-2 top-1/2 -translate-y-1/2 z-20 bg-black/20 backdrop-blur-sm rounded-full p-1.5 border border-white/30 text-white hover:text-[#F6D8BD] hover:border-[#F6D8BD] transition-colors flex items-center justify-center cursor-pointer"
                 aria-label="Previous categories"
                 x-cloak
             >
@@ -190,9 +190,9 @@ $categories = [
                         @mouseenter="setActive('{{ addslashes($categoryName) }}')"
                         @click="setActive('{{ addslashes($categoryName) }}')"
                         :class="activeMenu === '{{ addslashes($categoryName) }}' || {{ $isActive ? 'true' : 'false' }} 
-                            ? 'bg-white text-[#CF4173] font-bold shadow-sm' 
+                            ? 'bg-[#F6D8BD] text-[#5D3140] font-bold' 
                             : 'text-white hover:text-[#F6D8BD] hover:bg-white/10'"
-                        class="flex-shrink-0 text-sm font-medium px-4 py-1.5 rounded-full transition-all duration-300 whitespace-nowrap cursor-pointer {{ $isActive ? 'active-category' : '' }}"
+                        class="flex-shrink-0 text-sm font-medium px-4 py-1.5 rounded transition-all duration-300 whitespace-nowrap cursor-pointer {{ $isActive ? 'active-category' : '' }}"
                     >
                         {{ $categoryName }}
                     </a>
@@ -212,7 +212,7 @@ $categories = [
                 x-cloak
             ></div>
 
-            <!-- Right Navigation Arrow -->
+            <!-- Right Navigation Arrow (Shadow Removed) -->
             <button 
                 type="button"
                 x-show="showRight" 
@@ -223,7 +223,7 @@ $categories = [
                 x-transition:leave-start="opacity-100"
                 x-transition:leave-end="opacity-0"
                 @click="scroll('right')" 
-                class="absolute right-0 md:-right-2 top-1/2 -translate-y-1/2 z-20 bg-black/20 shadow-sm backdrop-blur-sm rounded-full p-1.5 border border-white/30 text-white hover:text-[#F6D8BD] hover:border-[#F6D8BD] transition-colors flex items-center justify-center cursor-pointer"
+                class="absolute right-0 md:-right-2 top-1/2 -translate-y-1/2 z-20 bg-black/20 backdrop-blur-sm rounded-full p-1.5 border border-white/30 text-white hover:text-[#F6D8BD] hover:border-[#F6D8BD] transition-colors flex items-center justify-center cursor-pointer"
                 aria-label="Next categories"
                 x-cloak
             >

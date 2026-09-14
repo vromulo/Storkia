@@ -1,6 +1,7 @@
 <div>
     {{-- Step Progress Indicator --}}
-    <div class="flex items-center justify-center gap-1 sm:gap-2 mb-6 sm:mb-8 px-2">
+    <!-- Added relative and z-10 to ensure the step indicator stays above the new absolute body background -->
+    <div class="relative z-10 flex items-center justify-center gap-1 sm:gap-2 mb-6 sm:mb-8 px-2">
         @foreach ([1 => 'Verify Email', 2 => 'Personal Info', 3 => 'Password'] as $num => $label)
             <div class="flex items-center gap-1 sm:gap-2">
                 <div class="flex flex-col items-center gap-1">
@@ -25,7 +26,8 @@
 
     {{-- STEP 1: Verify Email --}}
     @if ($currentStep === 1)
-        <div class="w-full max-w-md mx-auto space-y-4 sm:space-y-5">
+        <!-- Added relative and z-10 to ensure the form container stays above the background -->
+        <div class="relative z-10 w-full max-w-md mx-auto space-y-4 sm:space-y-5">
             <div>
                 <label class="block text-xs font-bold text-text-main mb-1">E-mail*</label>
                 <input type="email" wire:model.live.debounce.500ms="email" @if ($codeSent) disabled @endif
@@ -75,7 +77,8 @@
 
     {{-- STEP 2: Personal Info --}}
     @if ($currentStep === 2)
-        <div class="w-full max-w-md mx-auto space-y-4 sm:space-y-5">
+        <!-- Added relative and z-10 to ensure the form container stays above the background -->
+        <div class="relative z-10 w-full max-w-md mx-auto space-y-4 sm:space-y-5">
 
             {{-- First Name --}}
             <div>
@@ -160,7 +163,8 @@
 
     {{-- STEP 3: Password --}}
     @if ($currentStep === 3)
-        <div class="w-full max-w-md mx-auto space-y-4 sm:space-y-5" x-data="{ showPass: false, showConfirm: false }">
+        <!-- Added relative and z-10 to ensure the form container stays above the background -->
+        <div class="relative z-10 w-full max-w-md mx-auto space-y-4 sm:space-y-5" x-data="{ showPass: false, showConfirm: false }">
             <div>
                 <label class="block text-xs font-bold text-text-main mb-1">Password*</label>
                 <div class="relative flex items-center">

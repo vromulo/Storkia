@@ -1,7 +1,7 @@
-<nav class="bg-[#5D3140] sticky top-0 z-50 font-sans text-white shadow-md">
+<nav class="bg-[#5D3140] sticky top-0 z-50 font-sans text-white">
     @guest
-    <!-- Top notification bar: Hidden on mobile using 'hidden md:block' -->
-    <div class="hidden md:block py-1.5 text-xs bg-black/10 font-sans">
+    <!-- Top notification bar: Mild black color -->
+    <div class="hidden md:block py-1.5 text-xs bg-[#222222] font-sans">
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex justify-between items-center">
             <div class="flex items-center space-x-4">
                 <a href="{{ route('seller.login') }}" class="hover:text-[#F6D8BD] font-medium hover:underline transition-colors">Start Selling</a>
@@ -30,9 +30,9 @@
                 </a>
             </div>
 
-            <!-- Search Bar -->
+            <!-- Search Bar (Shadow removed) -->
             <div class="flex flex-1 max-w-3xl mx-3 sm:mx-4 md:mx-8">
-                <div class="relative w-full shadow-sm rounded-full">
+                <div class="relative w-full rounded-full">
                     <input type="text" placeholder="Search products..." class="w-full bg-white border-0 rounded-full py-2.5 px-4 pl-11 focus:outline-none focus:ring-2 focus:ring-[#F6D8BD] text-gray-900 placeholder:text-gray-500 text-sm sm:text-base">
                     <div class="absolute left-4 top-2.5 text-gray-500">
                         <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -42,7 +42,7 @@
                 </div>
             </div>
 
-            <!-- Action Icons: Spacing optimized for mobile using 'space-x-4 md:space-x-6' -->
+            <!-- Action Icons -->
             <div class="flex items-center space-x-4 md:space-x-6">
                 
                 <!-- Profile Menu -->

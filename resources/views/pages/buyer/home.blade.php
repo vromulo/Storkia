@@ -14,22 +14,16 @@
     </style>
 
     <!-- Main Container -->
-    <div x-data="{ modalOpen: false, activeProduct: null }" class="relative bg-white font-sans antialiased text-text-main overflow-x-hidden min-h-screen">
+    <div x-data="{ modalOpen: false, activeProduct: null }" class="relative bg-[#F5EBE0] font-sans antialiased text-text-main overflow-x-hidden min-h-screen">
         
-        <!-- Stork Icons Background Overlay (50% Opacity) -->
-        <div class="absolute inset-0 pointer-events-none z-0 opacity-50 overflow-hidden" aria-hidden="true">
-            <svg class="w-full h-full text-gray-300" xmlns="http://www.w3.org/2000/svg" width="100%" height="100%">
+        <!-- Logo Background Overlay (25% Opacity, Black, Original Reference Spacing) -->
+        <div class="absolute inset-0 pointer-events-none z-0 opacity-10 overflow-hidden" aria-hidden="true">
+            <svg class="w-full h-full" xmlns="http://www.w3.org/2000/svg" width="100%" height="100%">
                 <defs>
+                    <!-- Matched to the original 120x120 pattern tile & -15deg rotation -->
                     <pattern id="stork-pattern" width="120" height="120" patternUnits="userSpaceOnUse" patternTransform="rotate(-15)">
-                        <!-- Stork Icon -->
-                        <g transform="translate(20, 20)" fill="currentColor">
-                            <!-- Stork Head & Beak -->
-                            <path d="M0 12 L20 18 C24 12 28 10 34 11 C38 11.5 42 14 46 18 C42 18.5 38 18 34 16.5 C30 15 27 16 23 20 L16 24 C12 26 8 25 4 22 L0 12 Z"/>
-                            <!-- Wing Silhouette -->
-                            <path d="M22 19 L32 8 C30 12 28 16 24 20 Z"/>
-                            <!-- Long Stork Legs -->
-                            <path d="M21 21 L18 38 M24 20 L22 38" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
-                        </g>
+                        <!-- Logo sized to 48px and perfectly centered in the 120px tile -->
+                        <image href="{{ asset('assets/storkia-minimized.png') }}" x="36" y="36" width="48" height="48" style="filter: brightness(0);" />
                     </pattern>
                 </defs>
                 <rect width="100%" height="100%" fill="url(#stork-pattern)" />
