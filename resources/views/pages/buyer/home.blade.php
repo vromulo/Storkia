@@ -13,10 +13,31 @@
         }
     </style>
 
-    <!-- Updated to solid white background -->
-    <div x-data="{ modalOpen: false, activeProduct: null }" class="bg-white font-sans antialiased text-text-main overflow-x-hidden min-h-screen">
+    <!-- Main Container -->
+    <div x-data="{ modalOpen: false, activeProduct: null }" class="relative bg-white font-sans antialiased text-text-main overflow-x-hidden min-h-screen">
         
-        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 animate-fade-in-up">
+        <!-- Stork Icons Background Overlay (50% Opacity) -->
+        <div class="absolute inset-0 pointer-events-none z-0 opacity-50 overflow-hidden" aria-hidden="true">
+            <svg class="w-full h-full text-gray-300" xmlns="http://www.w3.org/2000/svg" width="100%" height="100%">
+                <defs>
+                    <pattern id="stork-pattern" width="120" height="120" patternUnits="userSpaceOnUse" patternTransform="rotate(-15)">
+                        <!-- Stork Icon -->
+                        <g transform="translate(20, 20)" fill="currentColor">
+                            <!-- Stork Head & Beak -->
+                            <path d="M0 12 L20 18 C24 12 28 10 34 11 C38 11.5 42 14 46 18 C42 18.5 38 18 34 16.5 C30 15 27 16 23 20 L16 24 C12 26 8 25 4 22 L0 12 Z"/>
+                            <!-- Wing Silhouette -->
+                            <path d="M22 19 L32 8 C30 12 28 16 24 20 Z"/>
+                            <!-- Long Stork Legs -->
+                            <path d="M21 21 L18 38 M24 20 L22 38" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                        </g>
+                    </pattern>
+                </defs>
+                <rect width="100%" height="100%" fill="url(#stork-pattern)" />
+            </svg>
+        </div>
+
+        <!-- Main Content Wrapper -->
+        <div class="relative z-10 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 animate-fade-in-up">
             
             <!-- Hero Banner -->
             <div class="relative bg-cover bg-center rounded-3xl overflow-hidden mb-12 shadow-md border border-border-subtle h-[350px] flex items-center" style="background-image: url('{{ asset('assets/yeezy-preview.png') }}');">

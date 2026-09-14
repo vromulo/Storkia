@@ -1,4 +1,4 @@
-<nav class="bg-gradient-to-r from-[#F30399] via-[#CF4173] to-[#5D3140] sticky top-0 z-50 font-sans text-white shadow-md">
+<nav class="bg-[#5D3140] sticky top-0 z-50 font-sans text-white shadow-md">
     @guest
     <!-- Top notification bar: Hidden on mobile using 'hidden md:block' -->
     <div class="hidden md:block py-1.5 text-xs bg-black/10 font-sans">
