@@ -18,7 +18,7 @@
                     </h2>
                 </div>
 
-                <a href="#products-grid" class="text-xs font-semibold text-text-main hover:text-primary transition-colors inline-flex items-center gap-1">
+                <a href="#" class="text-xs font-semibold text-text-main hover:text-primary transition-colors inline-flex items-center gap-1">
                     Limited-time offers
                     <svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7" />
@@ -99,7 +99,7 @@
                         Trends
                     </h2>
                 </div>
-                <a href="{{ url('/category/electronics') }}" class="text-xs font-semibold text-text-main hover:text-primary transition-colors inline-flex items-center gap-1">
+                <a href="#" class="text-xs font-semibold text-text-main hover:text-primary transition-colors inline-flex items-center gap-1">
                     Top Searches
                     <svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7" />
