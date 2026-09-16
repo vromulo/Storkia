@@ -7,18 +7,7 @@
     x-cloak
     style="display: none;"
 >
-    <div class="mx-auto w-full max-w-7xl h-[450px] overflow-y-auto bg-surface relative border border-t-0 border-border-subtle rounded-b-2xl [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-track]:bg-surface-subtle [&::-webkit-scrollbar-thumb]:bg-border-subtle [&::-webkit-scrollbar-thumb]:rounded-full">
-        <!-- Minimized Logo Background Overlay (opacity-5) -->
-        <div class="absolute inset-0 pointer-events-none z-0 opacity-3 overflow-hidden" aria-hidden="true">
-            <svg class="w-full h-full" xmlns="http://www.w3.org/2000/svg" width="100%" height="100%">
-                <defs>
-                    <pattern id="stork-pattern-dropdown" width="120" height="120" patternUnits="userSpaceOnUse" patternTransform="rotate(-15)">
-                        <image href="{{ asset('assets/storkia-minimized.png') }}" x="36" y="36" width="48" height="48" style="filter: brightness(0);" />
-                    </pattern>
-                </defs>
-                <rect width="100%" height="100%" fill="url(#stork-pattern-dropdown)" />
-            </svg>
-        </div>
+    <div class="mx-auto w-full max-w-[1292px] h-[450px] justify-center overflow-y-auto bg-surface relative border border-t-0 border-border-subtle rounded-b-2xl [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-track]:bg-surface-subtle [&::-webkit-scrollbar-thumb]:bg-border-subtle [&::-webkit-scrollbar-thumb]:rounded-full">
 
         <div class="p-8 lg:p-10 relative z-10">
             @foreach($categories as $categoryName => $subcategories)

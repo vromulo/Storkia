@@ -137,7 +137,7 @@ $categories = [
     @mouseleave="activeMenu = null"
     class="w-full bg-[#5D3140] relative z-20"
 >
-    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+    <div class="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8">
         <!-- Inner wrapper to contain absolute positioned fades and arrows -->
         <div class="relative w-full">
             
@@ -178,7 +178,7 @@ $categories = [
             <nav 
                 x-ref="slider" 
                 @scroll.passive="updateArrows"
-                class="flex items-center overflow-x-auto scroll-smooth [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] relative z-0"
+                class="flex items-center justify-center overflow-x-auto scroll-smooth [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] relative z-0"
                 aria-label="Category Navigation"
             >
                 @foreach($categories as $categoryName => $subcategories)
@@ -192,7 +192,7 @@ $categories = [
                         :class="activeMenu === '{{ addslashes($categoryName) }}' || {{ $isActive ? 'true' : 'false' }} 
                             ? 'bg-surface text-text-main font-bold' 
                             : 'text-white hover:bg-surface hover:text-text-main'"
-                        class="flex-shrink-0 text-sm font-medium px-4 py-1.5 rounded-none transition-all duration-150 whitespace-nowrap cursor-pointer {{ $isActive ? 'active-category' : '' }}"
+                        class="flex-shrink-0 text-sm font-medium px-3 sm:px-3.5 py-1 rounded-none transition-all duration-150 whitespace-nowrap cursor-pointer {{ $isActive ? 'active-category' : '' }}"
                     >
                         {{ $categoryName }}
                     </a>
