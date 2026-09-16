@@ -14,15 +14,13 @@
     </style>
 
     <!-- Main Container -->
-    <div x-data="{ modalOpen: false, activeProduct: null }" class="relative bg-[#F5EBE0] font-sans antialiased text-text-main overflow-x-hidden min-h-screen">
+    <div x-data="{ modalOpen: false, activeProduct: null }" class="relative bg-surface font-sans antialiased text-text-main overflow-x-hidden min-h-screen">
         
         <!-- Logo Background Overlay (25% Opacity, Black, Original Reference Spacing) -->
-        <div class="absolute inset-0 pointer-events-none z-0 opacity-10 overflow-hidden" aria-hidden="true">
+        <div class="absolute inset-0 pointer-events-none z-0 opacity-3 overflow-hidden" aria-hidden="true">
             <svg class="w-full h-full" xmlns="http://www.w3.org/2000/svg" width="100%" height="100%">
                 <defs>
-                    <!-- Matched to the original 120x120 pattern tile & -15deg rotation -->
                     <pattern id="stork-pattern" width="120" height="120" patternUnits="userSpaceOnUse" patternTransform="rotate(-15)">
-                        <!-- Logo sized to 48px and perfectly centered in the 120px tile -->
                         <image href="{{ asset('assets/storkia-minimized.png') }}" x="36" y="36" width="48" height="48" style="filter: brightness(0);" />
                     </pattern>
                 </defs>

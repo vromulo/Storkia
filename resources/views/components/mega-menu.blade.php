@@ -135,7 +135,7 @@ $categories = [
         }
     }" 
     @mouseleave="activeMenu = null"
-    class="w-full bg-[#5D3140] py-2 relative z-20 border-b border-white/20"
+    class="w-full bg-[#5D3140] relative z-20"
 >
     <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <!-- Inner wrapper to contain absolute positioned fades and arrows -->
@@ -165,12 +165,12 @@ $categories = [
                 x-transition:leave-start="opacity-100"
                 x-transition:leave-end="opacity-0"
                 @click="scroll('left')" 
-                class="absolute left-0 md:-left-2 top-1/2 -translate-y-1/2 z-20 bg-black/20 backdrop-blur-sm rounded-full p-1.5 border border-white/30 text-white hover:text-[#F6D8BD] hover:border-[#F6D8BD] transition-colors flex items-center justify-center cursor-pointer"
+                class="absolute left-1 top-1/2 -translate-y-1/2 z-20 w-6 h-6 bg-black/30 backdrop-blur-sm rounded-full border border-white/30 text-white hover:text-[#F6D8BD] hover:border-[#F6D8BD] transition-colors flex items-center justify-center cursor-pointer"
                 aria-label="Previous categories"
                 x-cloak
             >
-                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M15 19l-7-7 7-7" />
                 </svg>
             </button>
 
@@ -178,7 +178,7 @@ $categories = [
             <nav 
                 x-ref="slider" 
                 @scroll.passive="updateArrows"
-                class="flex items-center overflow-x-auto gap-2 md:gap-3 pb-1 pt-1 scroll-smooth [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] relative z-0 px-2"
+                class="flex items-center overflow-x-auto scroll-smooth [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] relative z-0"
                 aria-label="Category Navigation"
             >
                 @foreach($categories as $categoryName => $subcategories)
@@ -190,9 +190,9 @@ $categories = [
                         @mouseenter="setActive('{{ addslashes($categoryName) }}')"
                         @click="setActive('{{ addslashes($categoryName) }}')"
                         :class="activeMenu === '{{ addslashes($categoryName) }}' || {{ $isActive ? 'true' : 'false' }} 
-                            ? 'bg-[#F6D8BD] text-[#5D3140] font-bold' 
-                            : 'text-white hover:text-[#F6D8BD] hover:bg-white/10'"
-                        class="flex-shrink-0 text-sm font-medium px-4 py-1.5 rounded transition-all duration-300 whitespace-nowrap cursor-pointer {{ $isActive ? 'active-category' : '' }}"
+                            ? 'bg-surface text-text-main font-bold' 
+                            : 'text-white hover:bg-surface hover:text-text-main'"
+                        class="flex-shrink-0 text-sm font-medium px-4 py-1.5 rounded-none transition-all duration-150 whitespace-nowrap cursor-pointer {{ $isActive ? 'active-category' : '' }}"
                     >
                         {{ $categoryName }}
                     </a>
@@ -223,12 +223,12 @@ $categories = [
                 x-transition:leave-start="opacity-100"
                 x-transition:leave-end="opacity-0"
                 @click="scroll('right')" 
-                class="absolute right-0 md:-right-2 top-1/2 -translate-y-1/2 z-20 bg-black/20 backdrop-blur-sm rounded-full p-1.5 border border-white/30 text-white hover:text-[#F6D8BD] hover:border-[#F6D8BD] transition-colors flex items-center justify-center cursor-pointer"
+                class="absolute right-1 top-1/2 -translate-y-1/2 z-20 w-6 h-6 bg-black/30 backdrop-blur-sm rounded-full border border-white/30 text-white hover:text-[#F6D8BD] hover:border-[#F6D8BD] transition-colors flex items-center justify-center cursor-pointer"
                 aria-label="Next categories"
                 x-cloak
             >
-                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7" />
                 </svg>
             </button>
             
@@ -238,12 +238,6 @@ $categories = [
     <!-- Page Dark Overlay -->
     <div 
         x-show="activeMenu" 
-        x-transition:enter="transition ease-out duration-300"
-        x-transition:enter-start="opacity-0"
-        x-transition:enter-end="opacity-100"
-        x-transition:leave="transition ease-in duration-200"
-        x-transition:leave-start="opacity-100"
-        x-transition:leave-end="opacity-0"
         class="hidden md:block absolute top-full left-0 w-full h-[100vh] bg-gray-900/60 z-40 pointer-events-none"
         x-cloak
     ></div>
