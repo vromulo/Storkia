@@ -47,11 +47,29 @@
                      @mouseenter="clearTimeout(timer); open = true" 
                      @mouseleave="timer = setTimeout(() => { open = false }, 300)" 
                      class="relative flex items-center h-full">
-                    <button type="button" class="flex items-center text-white hover:text-[#F6D8BD] transition-colors cursor-pointer focus:outline-none">
-                        <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-                        </svg>
-                    </button>
+                    
+                    @guest
+                        <!-- Clickable link to login for guests -->
+                        <a href="{{ route('login') }}" 
+                        class="flex items-center text-white hover:text-[#F6D8BD] transition-colors cursor-pointer focus:outline-none"
+                        aria-label="Sign in or Register">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                            </svg>
+                        </a>
+                    @endguest
+
+                    @auth
+                        <!-- Retains button behavior when logged in -->
+                        <button type="button" 
+                                @click="open = !open" 
+                                class="flex items-center text-white hover:text-[#F6D8BD] transition-colors cursor-pointer focus:outline-none"
+                                aria-label="User account menu">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                            </svg>
+                        </button>
+                    @endauth
                     
                     <div x-show="open" x-cloak class="absolute right-0 top-full mt-2 w-48 bg-white border border-gray-100 rounded-xl shadow-xl z-50 overflow-hidden">
                         <div class="p-2 flex flex-col space-y-1">
