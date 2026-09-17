@@ -53,8 +53,11 @@
         @include('components.footer')
     @endif
 
-    <!-- Scroll to Top Component -->
+    <!-- Scroll to Top Component (z-[60]) -->
     <x-scroll-to-top />
+
+    <!-- Global Minimalist Toast (z-[100], layers over scroll-to-top) -->
+    <x-toast-notification />
 
     @livewireScripts
 

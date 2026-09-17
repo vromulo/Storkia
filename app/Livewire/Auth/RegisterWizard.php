@@ -321,6 +321,8 @@ class RegisterWizard extends Component
             Auth::login($user);
         });
 
+        session()->flash('success', 'Your account has been created successfully.');
+        
         $this->redirect(route('home'), navigate: false);
     }
 
