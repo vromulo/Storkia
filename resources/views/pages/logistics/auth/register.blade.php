@@ -6,35 +6,39 @@
     <title>Storkia - Logistics Hub Registration</title>
     @vite(['resources/css/app.css', 'resources/js/app.js'])
     @livewireStyles
-    <style>
-        .rounded-scrollbar::-webkit-scrollbar { width: 6px; }
-        .rounded-scrollbar::-webkit-scrollbar-track { background: transparent; }
-        .rounded-scrollbar::-webkit-scrollbar-thumb { background-color: var(--color-primary, #CF4173); border-radius: 9999px; }
-    </style>
 </head>
-<body class="m-0 p-0 h-screen w-screen font-sans antialiased text-text-main overflow-hidden bg-surface relative">
-    <div class="relative z-10 flex w-full h-full">
-        <!-- Carousel Side Panel -->
-        <div class="hidden lg:block lg:w-1/2 h-full z-20">
-            <x-carousel />
-        </div>
-        
-        <!-- Registration Form Side Panel -->
-        <div class="relative w-full lg:w-1/2 h-full flex flex-col items-center justify-start p-4 sm:p-8 lg:p-12 overflow-y-auto rounded-scrollbar bg-surface">
-            <div class="relative z-10 w-full max-w-2xl bg-surface p-6 sm:p-8 rounded-2xl sm:rounded-[2rem] shadow-xl border border-border-subtle my-auto">
-                <div class="text-center mb-6 sm:mb-8">
-                    <a href="/" class="inline-block mb-1 cursor-pointer">
-                        <img src="{{ asset('assets/storkia-maximized.png') }}" alt="Storkia Logo" class="h-12 sm:h-16 w-auto mx-auto drop-shadow-md hover:drop-shadow-lg transition-all">
-                    </a>
-                    <h1 class="text-xl sm:text-2xl font-bold text-text-main">Join Logistics Team</h1>
-                    <p class="text-text-muted mt-1 text-xs sm:text-sm">Register your sorting center or delivery hub.</p>
-                </div>
+<body class="m-0 p-0 h-screen w-screen flex font-sans antialiased text-text-main overflow-hidden bg-surface selection:bg-brand-light selection:text-primary-dark">
+    
+    <!-- Split Layout Canvas -->
+    <div class="hidden lg:block lg:w-1/2 h-full">
+        <x-carousel />
+    </div>
 
-                <!-- Mounts the Logistics Livewire Wizard -->
-                <livewire:auth.logistics-register-wizard />
-            </div>
+    <!-- Right Canvas: Minimalist, Containerless Column -->
+    <div class="w-full lg:w-1/2 h-full flex flex-col justify-between p-8 sm:p-14 lg:p-20 overflow-y-auto bg-surface">
+        
+        <!-- Centered, Prominent Brand Title -->
+        <div class="w-full max-w-md mx-auto text-center pt-2">
+            <a href="/" wire:navigate class="inline-block group cursor-pointer focus:outline-none">
+                <span class="font-serif text-4xl sm:text-5xl font-bold text-primary-dark tracking-tight transition-colors duration-200 group-hover:text-primary">
+                    Storkia
+                </span>
+            </a>
+        </div>
+
+        <!-- Center Logistics Wizard Body -->
+        <div class="w-full max-w-md mx-auto my-auto py-8">
+            <livewire:auth.logistics-register-wizard />
+        </div>
+
+        <!-- Minimalist Bottom Footer -->
+        <div class="w-full max-w-md mx-auto text-center pb-2">
+            <p class="text-[11px] text-text-muted/70">
+                &copy; {{ date('Y') }} Storkia. All rights reserved.
+            </p>
         </div>
     </div>
+
     @livewireScripts
 </body>
 </html>
