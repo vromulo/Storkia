@@ -82,6 +82,25 @@
                  x-cloak>
                  
                 <div class="max-w-7xl mx-auto">
+
+                    @if($latestApp && $latestApp->status === 'pending')
+                        <div class="mb-8 p-6 bg-yellow-50 border border-yellow-200 rounded-3xl shadow-xs">
+                            <h3 class="text-base font-bold text-yellow-900">Hub Application Under Review</h3>
+                            <p class="text-xs sm:text-sm text-yellow-800 mt-1">
+                                Your application for <strong>{{ $latestApp->business_name }}</strong> (revision v{{ $latestApp->version }}) is pending administrative approval. Dispatch and operational routing will unlock once verified.
+                            </p>
+                        </div>
+                    @elseif($latestApp && $latestApp->status === 'rejected')
+                        <div class="mb-8 p-6 bg-red-50 border border-red-200 rounded-3xl shadow-xs flex justify-between items-center">
+                            <div>
+                                <h3 class="text-base font-bold text-red-900">Application Rejected</h3>
+                                <p class="text-xs sm:text-sm text-red-800 mt-1">Reason: <em>"{{ $latestApp->rejection_reason }}"</em></p>
+                            </div>
+                            <a href="{{ route('logistics.reapply') }}" class="px-5 py-2.5 bg-primary text-white text-xs font-bold rounded-xl shadow-md">
+                                Update & Re-apply
+                            </a>
+                        </div>
+                    @endif
                     
                     <!-- Header -->
                     <div class="flex justify-between items-center mb-8">

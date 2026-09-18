@@ -14,6 +14,7 @@ return Application::configure(basePath: dirname(__DIR__))
     ->withMiddleware(function (Middleware $middleware): void {
         $middleware->alias([
             'seller.approved' => \App\Http\Middleware\EnsureSellerIsApproved::class,
+            'logistics.approved' => \App\Http\Middleware\EnsureLogisticsIsApproved::class,
         ]);
         
         // Trust all proxies for Cloudflare Tunnel

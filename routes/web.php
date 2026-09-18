@@ -14,6 +14,8 @@ use App\Livewire\Admin\SellerApplications;
 use App\Http\Controllers\SellerController;
 use App\Http\Controllers\SellerProductController;
 
+use App\Http\Controllers\LogisticsAuthController;
+use App\Livewire\Admin\LogisticsApplications;
 use App\Http\Controllers\LogisticsController;
 
 use App\Http\Controllers\CategoryController;
@@ -34,7 +36,12 @@ Route::prefix('admin')->name('admin.')->group(function () {
 
         // Seller Applications Management
         Route::get('/applications/sellers', SellerApplications::class)->name('applications.sellers');
-        Route::get('/applications/{application}/documents/{type}', [AdminDocumentController::class, 'view'])->name('seller-applications.document');
+
+        // Logistics Applications
+        Route::get('/applications/logistics', LogisticsApplications::class)->name('applications.logistics');
+        
+        // Unified document viewer for both seller and logistics applications
+        Route::get('/applications/{entity}/{id}/documents/{type}', [AdminDocumentController::class, 'view'])->name('applications.document');
     });
 });
 
@@ -52,6 +59,7 @@ Route::middleware('guest')->group(function () {
     Route::get('/seller/register', [SellerAuthController::class, 'showRegister'])->name('seller.register');
 
     Route::get('/logistics/login', function() { return view('pages.logistics.auth.login'); })->name('logistics.login');
+    Route::get('/logistics/register', [LogisticsAuthController::class, 'showRegister'])->name('logistics.register');
 });
 
 Route::middleware('auth')->group(function () {
@@ -78,4 +86,10 @@ Route::middleware('auth')->group(function () {
 
     // Logistics
     Route::get('pages/logistics/logistics-dashboard', [LogisticsController::class, 'index'])->name('logistics.logistics-dashboard');
+    Route::get('pages/logistics/reapply', [LogisticsController::class, 'showReapply'])->name('logistics.reapply');
+
+    // Operations Routes (Guarded by approval)
+    Route::prefix('logistics')->name('logistics.')->middleware('logistics.approved')->group(function () {
+        // Protected dispatch, hub sorting, and parcel assignments routes
+    });
 });

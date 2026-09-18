@@ -67,4 +67,24 @@ class User extends Authenticatable
     {
         return $this->hasOne(SellerApplication::class)->latestOfMany('version');
     }
+
+
+
+
+    
+
+    public function logisticsProfile()
+    {
+        return $this->hasOne(LogisticsProfile::class);
+    }
+
+    public function logisticsApplications()
+    {
+        return $this->hasMany(LogisticsApplication::class)->latest('version');
+    }
+
+    public function latestLogisticsApplication()
+    {
+        return $this->hasOne(LogisticsApplication::class)->latestOfMany('version');
+    }
 }
