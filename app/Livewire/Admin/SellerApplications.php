@@ -61,7 +61,14 @@ class SellerApplications extends Component
         $ext = strtolower(pathinfo($path, PATHINFO_EXTENSION));
         $this->docModalType = in_array($ext, ['pdf']) ? 'pdf' : 'image';
         $this->docModalTitle = ($type === 'id' ? 'Valid ID' : 'Business Permit') . " - {$app->business_name} (v{$app->version})";
-        $this->docModalUrl = route('admin.seller-applications.document', ['application' => $app->id, 'type' => $type]);
+        
+        // FIXED: Updated route name and provided the required parameters (entity, id, type)
+        $this->docModalUrl = route('admin.applications.document', [
+            'entity' => 'seller', 
+            'id' => $app->id, 
+            'type' => $type
+        ]);
+        
         $this->docModalOpen = true;
     }
 

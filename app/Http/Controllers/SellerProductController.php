@@ -35,8 +35,9 @@ class SellerProductController extends Controller
     {
         $request->validate([
             'name' => 'required|string|max:100',
+            'category' => 'nullable|string',
+            'subcategory' => 'required|string',
             'discount' => 'nullable|numeric|min:0',
-            'stock_quantity' => 'required|integer|min:0',
             'description' => 'nullable|string',
             'additional_descriptions' => 'nullable|string',
             'pictures' => 'required|array',
@@ -69,6 +70,7 @@ class SellerProductController extends Controller
 
         $minPrice = null;
         $baseWeight = null;
+        $totalStock = 0; // Initialize total aggregate stock counter
 
         if ($request->has('variant_names')) {
             foreach ($request->variant_names as $vId => $vName) {
@@ -77,6 +79,7 @@ class SellerProductController extends Controller
                     'image' => null,
                     'price' => null,
                     'weight' => null,
+                    'stock' => null, // Granular main-variant stock
                     'subs' => []
                 ];
 
@@ -84,10 +87,13 @@ class SellerProductController extends Controller
                     $item['image'] = $request->file("variant_pictures.$vId")->store('variants', 'public');
                 }
 
-                // If Price depends on Main Variant
+                // If configuration depends on Main Variant
                 if ($variantsData['price_dependency'] === 'main') {
                     $item['price'] = $request->variant_prices[$vId] ?? 0;
                     $item['weight'] = $request->variant_weights[$vId] ?? '0';
+                    $item['stock'] = (int) ($request->variant_stocks[$vId] ?? 0);
+                    
+                    $totalStock += $item['stock']; // Add to global stock
 
                     if (is_null($minPrice) || $item['price'] < $minPrice) $minPrice = $item['price'];
                     if (is_null($baseWeight)) $baseWeight = $item['weight'];
@@ -99,13 +105,17 @@ class SellerProductController extends Controller
                         $sub = [
                             'name' => $sName,
                             'price' => null,
-                            'weight' => null
+                            'weight' => null,
+                            'stock' => null // Granular sub-variant stock
                         ];
 
-                        // If Price depends on Sub Variant
+                        // If configuration depends on Sub Variant
                         if ($variantsData['price_dependency'] === 'sub') {
                             $sub['price'] = $request->sub_variant_prices[$vId][$sId] ?? 0;
                             $sub['weight'] = $request->sub_variant_weights[$vId][$sId] ?? '0';
+                            $sub['stock'] = (int) ($request->sub_variant_stocks[$vId][$sId] ?? 0);
+                            
+                            $totalStock += $sub['stock']; // Add to global stock
 
                             if (is_null($minPrice) || $sub['price'] < $minPrice) $minPrice = $sub['price'];
                             if (is_null($baseWeight)) $baseWeight = $sub['weight'];
@@ -120,10 +130,12 @@ class SellerProductController extends Controller
 
         Product::create([
             'name' => $request->name,
+            'category' => $request->category,
+            'subcategory' => $request->subcategory,
             'price' => $minPrice ?? 0, 
             'weight' => $baseWeight ?? '0', 
             'discount' => $request->discount ?? 0,
-            'stock_quantity' => $request->stock_quantity,
+            'stock_quantity' => $totalStock, // Assign the dynamically calculated total sum here
             'description' => $request->description,
             'additional_descriptions' => $request->additional_descriptions,
             'pictures' => $picturePaths,
