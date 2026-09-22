@@ -51,14 +51,19 @@ Route::get('/product/{product}', [ProductController::class, 'show'])->name('prod
 Route::get('/category/{slug}', [CategoryController::class, 'show'])->name('category.show');
 
 Route::middleware('guest')->group(function () {
+    // Buyer Auth
     Route::get('/login', [AuthController::class, 'showLogin'])->name('login');
     Route::post('/login', [AuthController::class, 'login'])->name('login.post');
     Route::get('/register', [AuthController::class, 'showRegister'])->name('register');
-    
-    Route::get('/seller/login', function() { return view('pages.seller.auth.login'); })->name('seller.login');
+
+    // Seller Auth
+    Route::get('/seller/login', [SellerAuthController::class, 'showLogin'])->name('seller.login');
+    Route::post('/seller/login', [SellerAuthController::class, 'login'])->name('seller.login.post');
     Route::get('/seller/register', [SellerAuthController::class, 'showRegister'])->name('seller.register');
 
-    Route::get('/logistics/login', function() { return view('pages.logistics.auth.login'); })->name('logistics.login');
+    // Logistics Auth
+    Route::get('/logistics/login', [LogisticsAuthController::class, 'showLogin'])->name('logistics.login');
+    Route::post('/logistics/login', [LogisticsAuthController::class, 'login'])->name('logistics.login.post');
     Route::get('/logistics/register', [LogisticsAuthController::class, 'showRegister'])->name('logistics.register');
 });
 

@@ -54,7 +54,7 @@
         <x-auth.login-form 
             title="Seller Portal" 
             subtitle="Manage your store and orders"
-            :submitRoute="route('login.post')"
+            :submitRoute="route('seller.login.post')"
             :registerRoute="route('seller.register')"
             registerText="Apply as a Seller"
         />
