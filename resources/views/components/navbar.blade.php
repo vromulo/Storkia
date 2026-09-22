@@ -6,7 +6,7 @@
             <div class="flex items-center space-x-3">
                 <a href="{{ route('seller.login') }}" class="hover:text-[#F6D8BD] font-medium hover:underline transition-colors">Start Selling</a>
                 <span class="text-white/50">|</span>
-                <a href="{{ route('logistics.register') }}" class="hover:text-[#F6D8BD] font-medium hover:underline transition-colors">Join the Logistics Team</a>
+                <a href="{{ route('logistics.login') }}" class="hover:text-[#F6D8BD] font-medium hover:underline transition-colors">Join the Logistics Team</a>
             </div>
             <div class="flex items-center space-x-3">
                 <a href="#" class="hover:text-[#F6D8BD] font-medium hover:underline transition-colors">Help</a>

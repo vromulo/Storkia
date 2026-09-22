@@ -55,7 +55,9 @@
             title="Logistics Operations" 
             subtitle="Sign in to your courier dashboard"
             :submitRoute="route('login.post')"
-            :showRegister="false"
+            :registerRoute="route('logistics.register')"
+            registerText="Apply for Logistics Hub"
+            :showRegister="true"
         />
     </div>
 

@@ -497,7 +497,7 @@
         <div class="mt-8 pt-8 border-t border-border-subtle/50 text-center">
             <p class="text-xs text-text-muted">
                 Already registered with logistics? 
-                <a href="{{ route('login') }}" wire:navigate class="ml-1 font-bold text-primary hover:text-primary-dark underline underline-offset-4 transition-colors cursor-pointer">
+                <a href="{{ route('logistics.login') }}" wire:navigate class="ml-1 font-bold text-primary hover:text-primary-dark underline underline-offset-4 transition-colors cursor-pointer">
                     Sign in here
                 </a>
             </p>
