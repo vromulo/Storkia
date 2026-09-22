@@ -14,8 +14,8 @@ Route::middleware('guest')->group(function () {
 // Authenticated Logistics Routes
 Route::middleware('auth')->group(function () {
     // Dashboard & Status Gate
-    Route::get('pages/logistics/logistics-dashboard', [DashboardController::class, 'index'])->name('logistics.logistics-dashboard');
-    Route::get('pages/logistics/reapply', [DashboardController::class, 'showReapply'])->name('logistics.reapply');
+    Route::get('/logistics/dashboard', [DashboardController::class, 'index'])->name('logistics.logistics-dashboard');
+    Route::get('/logistics/reapply', [DashboardController::class, 'showReapply'])->name('logistics.reapply');
 
     // Approved Logistics Operations
     Route::prefix('logistics')->name('logistics.')->middleware('logistics.approved')->group(function () {

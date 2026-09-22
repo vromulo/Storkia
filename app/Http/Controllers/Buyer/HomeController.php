@@ -13,6 +13,6 @@ class HomeController extends Controller
             ->latest()
             ->get();
 
-        return view('pages.buyer.home', compact('products'));
+        return view('buyer.home', compact('products'));
     }
 }

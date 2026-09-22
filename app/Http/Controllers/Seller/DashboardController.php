@@ -14,7 +14,7 @@ class DashboardController extends Controller
         $profile = SellerProfile::where('user_id', Auth::id())->first();
         $latestApp = SellerApplication::where('user_id', Auth::id())->latest('version')->first();
 
-        return view('pages.seller.seller-dashboard', compact('profile', 'latestApp'));
+        return view('seller.seller-dashboard', compact('profile', 'latestApp'));
     }
 
     public function showReapply()
@@ -25,6 +25,6 @@ class DashboardController extends Controller
             return redirect()->route('seller.seller-dashboard');
         }
 
-        return view('pages.seller.auth.reapply');
+        return view('seller.auth.reapply');
     }
 }

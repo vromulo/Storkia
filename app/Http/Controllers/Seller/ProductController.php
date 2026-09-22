@@ -12,24 +12,24 @@ class ProductController extends Controller
     public function index()
     {
         $products = Product::latest()->paginate(10);
-        return view('pages.seller.products.index', compact('products'));
+        return view('seller.products.index', compact('products'));
     }
 
     public function create()
     {
-        return view('pages.seller.products.create');
+        return view('seller.products.create');
     }
 
     public function inventory()
     {
         $products = Product::latest()->get(['id', 'name', 'stock_quantity']);
-        return view('pages.seller.products.inventory', compact('products'));
+        return view('seller.products.inventory', compact('products'));
     }
 
     public function archived()
     {
         $products = Product::onlyTrashed()->latest()->get();
-        return view('pages.seller.products.archived', compact('products'));
+        return view('seller.products.archived', compact('products'));
     }
 
     public function store(Request $request)

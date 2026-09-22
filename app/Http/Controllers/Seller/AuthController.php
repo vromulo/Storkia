@@ -14,7 +14,7 @@ class AuthController extends Controller
 
     public function showLogin()
     {
-        return view('pages.seller.auth.login');
+        return view('seller.auth.login');
     }
 
     public function login(Request $request)
@@ -24,6 +24,6 @@ class AuthController extends Controller
 
     public function showRegister()
     {
-        return view('pages.seller.auth.register');
+        return view('seller.auth.register');
     }
 }

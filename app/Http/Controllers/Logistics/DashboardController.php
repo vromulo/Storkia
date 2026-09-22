@@ -14,7 +14,7 @@ class DashboardController extends Controller
         $profile = LogisticsProfile::where('user_id', Auth::id())->first();
         $latestApp = LogisticsApplication::where('user_id', Auth::id())->latest('version')->first();
 
-        return view('pages.logistics.logistics-dashboard', compact('profile', 'latestApp'));
+        return view('logistics.logistics-dashboard', compact('profile', 'latestApp'));
     }
 
     public function showReapply()
@@ -25,6 +25,6 @@ class DashboardController extends Controller
             return redirect()->route('logistics.logistics-dashboard');
         }
 
-        return view('pages.logistics.auth.reapply', compact('latestApp'));
+        return view('logistics.auth.reapply', compact('latestApp'));
     }
 }

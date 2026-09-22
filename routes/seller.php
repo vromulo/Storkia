@@ -15,8 +15,8 @@ Route::middleware('guest')->group(function () {
 // Authenticated Seller Routes
 Route::middleware('auth')->group(function () {
     // Dashboard & Status Gate
-    Route::get('pages/seller/seller-dashboard', [DashboardController::class, 'index'])->name('seller.seller-dashboard');
-    Route::get('pages/seller/reapply', [DashboardController::class, 'showReapply'])->name('seller.reapply');
+    Route::get('/seller/dashboard', [DashboardController::class, 'index'])->name('seller.seller-dashboard');
+    Route::get('/seller/reapply', [DashboardController::class, 'showReapply'])->name('seller.reapply');
 
     // Approved Seller Operations
     Route::prefix('seller')->name('seller.')->middleware('seller.approved')->group(function () {
