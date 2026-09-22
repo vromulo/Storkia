@@ -1,15 +1,14 @@
 <?php
 
-namespace App\Http\Controllers;
+namespace App\Http\Controllers\Buyer;
 
+use App\Http\Controllers\Controller;
 use App\Models\Product;
-use Illuminate\Http\Request;
 
 class ProductController extends Controller
 {
     public function show(Product $product)
     {
-        // View for individual product details
         return view('pages.buyer.product-show', compact('product'));
     }
 }

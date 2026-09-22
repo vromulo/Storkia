@@ -1,14 +1,15 @@
 <?php
 
-namespace App\Http\Controllers;
+namespace App\Http\Controllers\Admin;
 
+use App\Http\Controllers\Controller;
 use App\Models\SellerApplication;
 use App\Models\LogisticsApplication;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
 use Symfony\Component\HttpFoundation\BinaryFileResponse;
 
-class AdminDocumentController extends Controller
+class DocumentController extends Controller
 {
     public function view(Request $request, string $entity, int $id, string $type): BinaryFileResponse
     {

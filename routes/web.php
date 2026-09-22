@@ -1,10 +1,10 @@
 <?php
 
 use Illuminate\Support\Facades\Route;
-use App\Http\Controllers\AuthController;
-use App\Http\Controllers\HomeController;
-use App\Http\Controllers\CategoryController;
-use App\Http\Controllers\ProductController;
+use App\Http\Controllers\Buyer\AuthController;
+use App\Http\Controllers\Buyer\HomeController;
+use App\Http\Controllers\Buyer\CategoryController;
+use App\Http\Controllers\Buyer\ProductController;
 
 // Storefront & Public Routes
 Route::get('/', [HomeController::class, 'index'])->name('home');

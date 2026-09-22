@@ -1,7 +1,8 @@
 <?php
 
-namespace App\Http\Controllers;
+namespace App\Http\Controllers\Buyer;
 
+use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
 
@@ -110,7 +111,7 @@ class CategoryController extends Controller
 
         $matchedCategory = null;
         $categoryName = '';
-        
+
         foreach ($categories as $name => $subcategories) {
             if (Str::slug($name) === $slug) {
                 $matchedCategory = $subcategories;
@@ -119,19 +120,18 @@ class CategoryController extends Controller
             }
         }
 
-        if (!$matchedCategory && $categoryName === '') {
+        if (! $matchedCategory && $categoryName === '') {
             abort(404);
         }
 
-        // Get selected subcategory from query parameter
         $selectedSubcategory = $request->query('subcategory', 'All');
-        $products = []; 
+        $products = [];
 
         return view('category.show', [
             'categoryName' => $categoryName,
             'subcategories' => $matchedCategory,
             'selectedSubcategory' => $selectedSubcategory,
-            'products' => $products
+            'products' => $products,
         ]);
     }
 }

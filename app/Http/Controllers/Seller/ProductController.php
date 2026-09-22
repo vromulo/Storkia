@@ -1,12 +1,13 @@
 <?php
 
-namespace App\Http\Controllers;
+namespace App\Http\Controllers\Seller;
 
+use App\Http\Controllers\Controller;
 use App\Models\Product;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
 
-class SellerProductController extends Controller
+class ProductController extends Controller
 {
     public function index()
     {
@@ -42,7 +43,7 @@ class SellerProductController extends Controller
             'additional_descriptions' => 'nullable|string',
             'pictures' => 'required|array',
             'pictures.*' => 'image|mimes:jpeg,png,jpg,webp|max:5120',
-            
+
             // Variant Validations
             'variant_title' => 'required|string|max:50',
             'variant_names' => 'required|array',
@@ -58,9 +59,7 @@ class SellerProductController extends Controller
             }
         }
 
-        // AUTO-DETECT DEPENDENCY: If sub-title is filled, price depends on sub-variants
         $priceDependency = !empty($request->sub_variant_title) ? 'sub' : 'main';
-
         $variantsData = [
             'title' => $request->variant_title,
             'sub_title' => $request->sub_variant_title,
@@ -70,7 +69,7 @@ class SellerProductController extends Controller
 
         $minPrice = null;
         $baseWeight = null;
-        $totalStock = 0; // Initialize total aggregate stock counter
+        $totalStock = 0;
 
         if ($request->has('variant_names')) {
             foreach ($request->variant_names as $vId => $vName) {
@@ -79,7 +78,7 @@ class SellerProductController extends Controller
                     'image' => null,
                     'price' => null,
                     'weight' => null,
-                    'stock' => null, // Granular main-variant stock
+                    'stock' => null,
                     'subs' => []
                 ];
 
@@ -87,43 +86,39 @@ class SellerProductController extends Controller
                     $item['image'] = $request->file("variant_pictures.$vId")->store('variants', 'public');
                 }
 
-                // If configuration depends on Main Variant
                 if ($variantsData['price_dependency'] === 'main') {
                     $item['price'] = $request->variant_prices[$vId] ?? 0;
                     $item['weight'] = $request->variant_weights[$vId] ?? '0';
                     $item['stock'] = (int) ($request->variant_stocks[$vId] ?? 0);
-                    
-                    $totalStock += $item['stock']; // Add to global stock
 
+                    $totalStock += $item['stock'];
                     if (is_null($minPrice) || $item['price'] < $minPrice) $minPrice = $item['price'];
                     if (is_null($baseWeight)) $baseWeight = $item['weight'];
                 }
 
-                // Process Sub Variants (if any)
                 if (!empty($request->sub_variant_names[$vId])) {
                     foreach ($request->sub_variant_names[$vId] as $sId => $sName) {
                         $sub = [
                             'name' => $sName,
                             'price' => null,
                             'weight' => null,
-                            'stock' => null // Granular sub-variant stock
+                            'stock' => null
                         ];
 
-                        // If configuration depends on Sub Variant
                         if ($variantsData['price_dependency'] === 'sub') {
                             $sub['price'] = $request->sub_variant_prices[$vId][$sId] ?? 0;
                             $sub['weight'] = $request->sub_variant_weights[$vId][$sId] ?? '0';
                             $sub['stock'] = (int) ($request->sub_variant_stocks[$vId][$sId] ?? 0);
-                            
-                            $totalStock += $sub['stock']; // Add to global stock
 
+                            $totalStock += $sub['stock'];
                             if (is_null($minPrice) || $sub['price'] < $minPrice) $minPrice = $sub['price'];
                             if (is_null($baseWeight)) $baseWeight = $sub['weight'];
                         }
+
                         $item['subs'][] = $sub;
                     }
                 }
-                
+
                 $variantsData['items'][] = $item;
             }
         }
@@ -132,10 +127,10 @@ class SellerProductController extends Controller
             'name' => $request->name,
             'category' => $request->category,
             'subcategory' => $request->subcategory,
-            'price' => $minPrice ?? 0, 
-            'weight' => $baseWeight ?? '0', 
+            'price' => $minPrice ?? 0,
+            'weight' => $baseWeight ?? '0',
             'discount' => $request->discount ?? 0,
-            'stock_quantity' => $totalStock, // Assign the dynamically calculated total sum here
+            'stock_quantity' => $totalStock,
             'description' => $request->description,
             'additional_descriptions' => $request->additional_descriptions,
             'pictures' => $picturePaths,
@@ -164,24 +159,29 @@ class SellerProductController extends Controller
         return back()->with('success', 'Product updated successfully.');
     }
 
-    public function archive(Product $product) {
+    public function archive(Product $product)
+    {
         $product->delete();
         return back()->with('success', 'Product archived.');
     }
 
-    public function unarchive($id) {
+    public function unarchive($id)
+    {
         $product = Product::withTrashed()->findOrFail($id);
         $product->restore();
         return back()->with('success', 'Product unarchived.');
     }
 
-    public function forceDelete($id) {
+    public function forceDelete($id)
+    {
         $product = Product::withTrashed()->findOrFail($id);
-        
+
         if ($product->pictures && is_array($product->pictures)) {
-            foreach ($product->pictures as $pic) { Storage::disk('public')->delete($pic); }
+            foreach ($product->pictures as $pic) {
+                Storage::disk('public')->delete($pic);
+            }
         }
-        
+
         if ($product->variants && isset($product->variants['items']) && is_array($product->variants['items'])) {
             foreach ($product->variants['items'] as $variant) {
                 if (isset($variant['image']) && $variant['image']) {

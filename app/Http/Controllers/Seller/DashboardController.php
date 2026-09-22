@@ -1,13 +1,13 @@
 <?php
 
-namespace App\Http\Controllers;
+namespace App\Http\Controllers\Seller;
 
+use App\Http\Controllers\Controller;
 use App\Models\SellerApplication;
 use App\Models\SellerProfile;
-use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 
-class SellerController extends Controller
+class DashboardController extends Controller
 {
     public function index()
     {
@@ -21,8 +21,7 @@ class SellerController extends Controller
     {
         $latestApp = SellerApplication::where('user_id', Auth::id())->latest('version')->first();
 
-        // Only allow re-applying if the seller's latest application was rejected.
-        if (!$latestApp || $latestApp->status !== 'rejected') {
+        if (! $latestApp || $latestApp->status !== 'rejected') {
             return redirect()->route('seller.seller-dashboard');
         }
 

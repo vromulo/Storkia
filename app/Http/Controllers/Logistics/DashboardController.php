@@ -1,13 +1,13 @@
 <?php
 
-namespace App\Http\Controllers;
+namespace App\Http\Controllers\Logistics;
 
+use App\Http\Controllers\Controller;
 use App\Models\LogisticsApplication;
 use App\Models\LogisticsProfile;
-use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 
-class LogisticsController extends Controller
+class DashboardController extends Controller
 {
     public function index()
     {
