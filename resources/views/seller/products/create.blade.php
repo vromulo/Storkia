@@ -220,7 +220,7 @@
 
     <div x-data="{ sidebarOpen: localStorage.getItem('sellerSidebarOpen') !== 'false', imageModalOpen: false, imageModalSrc: '' }" class="h-screen w-full relative flex">
         
-        @include('components.seller-components.seller-sidebar')
+        @include('components.seller.sidebar')
 
         <main class="flex-1 h-screen overflow-y-auto custom-scrollbar relative" x-data="{ showContent: false }" x-init="setTimeout(() => showContent = true, 50)">
             <div class="p-8 lg:p-12" x-show="showContent" x-transition:enter="transition ease-out duration-500" x-transition:enter-start="opacity-0 translate-y-4" x-transition:enter-end="opacity-100 translate-y-0" x-cloak>

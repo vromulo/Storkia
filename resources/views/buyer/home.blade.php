@@ -20,10 +20,10 @@
         <div class="relative z-10 max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 pt-0 pb-6 lg:py-6 animate-fade-in-up">
             
             <!-- Hero Carousel Component -->
-            <x-hero-carousel />
+            <x-storefront.hero-carousel />
 
             <!-- Super Deals & Trends Component -->
-            <x-deals-trends :products="$products" />
+            <x-storefront.deals-trends :products="$products" />
 
             <!-- Products Grid Section -->
              <div class="mb-6 border-b border-border-subtle/80 pb-3">
@@ -34,7 +34,7 @@
 
             <div id="products-grid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-5 2xl:grid-cols-5 gap-5 lg:gap-6">
                 @forelse($products as $product)
-                    <x-seller-product-card :product="$product" />
+                    <x-storefront.seller-product-card :product="$product" />
                 @empty
                     <div class="col-span-full text-center py-12 text-text-muted font-medium text-sm">
                         No products available at the moment.

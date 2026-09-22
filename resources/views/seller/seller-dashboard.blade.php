@@ -66,7 +66,7 @@
          class="desktop-view h-screen w-full relative">
         
         <!-- Sidebar Component -->
-        @include('components.seller-components.seller-sidebar')
+        @include('components.seller.sidebar')
 
         <!-- Main Content Area with Animation Wrapper -->
         <main class="flex-1 h-screen overflow-y-auto custom-scrollbar relative"

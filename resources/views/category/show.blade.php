@@ -190,12 +190,12 @@
             </div>
 
             <!-- Products Component -->
-            <x-product-card :products="$products" />
+            <x-storefront.product-card :products="$products" />
 
         </div>
 
         <!-- Modal Component -->
-        <x-product-modal />
+        <x-storefront.product-modal />
 
     </div>
 

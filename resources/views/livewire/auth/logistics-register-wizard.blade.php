@@ -239,7 +239,7 @@
 
                 <div>
                     <label class="block text-xs uppercase tracking-wider font-bold text-text-muted mb-1.5">Province*</label>
-                    <x-searchable-select 
+                    <x-ui.searchable-select 
                         wire:model.live="province_code" 
                         :options="$provinces" 
                         placeholder="Select Province" 
@@ -253,7 +253,7 @@
 
                 <div>
                     <label class="block text-xs uppercase tracking-wider font-bold text-text-muted mb-1.5">Municipality / City*</label>
-                    <x-searchable-select 
+                    <x-ui.searchable-select 
                         wire:model.live="municipality_code" 
                         :options="$municipalities" 
                         placeholder="Select Municipality" 
@@ -268,7 +268,7 @@
 
                 <div>
                     <label class="block text-xs uppercase tracking-wider font-bold text-text-muted mb-1.5">Barangay*</label>
-                    <x-searchable-select 
+                    <x-ui.searchable-select 
                         wire:model.live="barangay_code" 
                         :options="$barangays" 
                         placeholder="Select Barangay" 

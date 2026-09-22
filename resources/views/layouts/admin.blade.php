@@ -73,7 +73,7 @@
             class="desktop-view h-screen w-full relative">
     
             <!-- Sidebar Component -->
-            @include('components.admin-sidebar')
+            @include('components.admin.sidebar')
     
             <!-- Main Content Area: this is where each Livewire full-page component renders -->
             <main class="flex-1 h-screen overflow-y-auto custom-scrollbar relative">

@@ -243,6 +243,6 @@ $categories = [
     ></div>
 
     <!-- The Mega Dropdown Component -->
-    <x-mega-dropdown-menu :categories="$categories" />
+    <x-storefront.mega-dropdown-menu :categories="$categories" />
 
 </div>

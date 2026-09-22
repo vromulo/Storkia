@@ -9,7 +9,7 @@
 
 <!-- Split Layout Canvas -->
 <div class="hidden lg:block lg:w-1/2 h-full">
-    <x-carousel />
+    <x-ui.carousel />
 </div>
 
 <!-- Right Canvas: Minimalist, Containerless Column -->

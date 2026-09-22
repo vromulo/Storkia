@@ -39,8 +39,8 @@
         :class="showHeader ? 'translate-y-0' : '-translate-y-full'"
         class="sticky top-0 z-50 flex flex-col w-full transition-transform duration-300 ease-in-out"
     >
-        @include('components.navbar')
-        <x-mega-menu />
+        @include('components.storefront.navbar')
+        <x-storefront.mega-menu />
     </header>
 
     <!-- Main Content Area -->
@@ -50,14 +50,14 @@
 
     <!-- Footer -->
     @if (!($hideFooter ?? false)) <!-- if $hideFooter is set to True, footer will be hidden -->
-        @include('components.footer')
+        @include('components.storefront.footer')
     @endif
 
     <!-- Scroll to Top Component (z-[60]) -->
-    <x-scroll-to-top />
+    <x-ui.scroll-to-top />
 
     <!-- Global Minimalist Toast (z-[100], layers over scroll-to-top) -->
-    <x-toast-notification />
+    <x-ui.toast-notification />
 
     @livewireScripts
 
