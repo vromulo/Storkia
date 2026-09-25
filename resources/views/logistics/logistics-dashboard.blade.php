@@ -1,148 +1,57 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Storkia - Logistics Dashboard</title>
-    @vite(['resources/css/app.css', 'resources/js/app.js'])
-    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
-    <style>
-        [x-cloak] { display: none !important; }
-        
-        /* Custom scrollbar for a cleaner UI */
-        .custom-scrollbar::-webkit-scrollbar { width: 4px; }
-        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
-        .custom-scrollbar::-webkit-scrollbar-thumb { background: var(--tw-colors-brand-light, #d1d5db); border-radius: 10px; }
-        .custom-scrollbar:hover::-webkit-scrollbar-thumb { background: var(--tw-colors-primary, #9ca3af); }
+@extends('layouts.logistics', ['title' => 'Storkia - Logistics Dashboard'])
 
-        /* Strict Mobile/Desktop Visibility Rules */
-        .mobile-view { display: flex; }
-        .desktop-view { display: none; }
-        @media (min-width: 768px) {
-            .mobile-view { display: none !important; }
-            .desktop-view { display: flex !important; }
-        }
-    </style>
-</head>
-<body class="m-0 p-0 h-screen w-screen font-sans antialiased text-text-main overflow-hidden bg-gradient-to-b from-surface via-surface to-brand-light/30 relative">
-    
-    <!-- Mobile Restricted View -->
-    <div class="mobile-view absolute inset-0 bg-surface/80 backdrop-blur-md z-40"></div>
-    
-    <div class="mobile-view flex-col items-center justify-center h-screen w-screen px-4 sm:px-6 py-8 z-50 relative overflow-y-auto">
-        <div class="bg-surface/95 backdrop-blur-xl rounded-3xl shadow-2xl shadow-black/10 border border-border-subtle w-full max-w-md p-6 sm:p-8 text-center flex flex-col items-center">
-            
-            <div class="w-20 h-20 bg-brand-light/40 text-primary-dark rounded-full flex items-center justify-center mb-5 shadow-inner">
-                <svg class="w-10 h-10" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                </svg>
-            </div>
-
-            <h2 class="text-2xl sm:text-3xl font-extrabold text-primary-dark mb-4 tracking-tight">Desktop Only</h2>
-            
-            <div class="bg-brand-light/20 border border-border-subtle rounded-2xl p-5 mb-8 w-full shadow-sm">
-                <p class="text-text-main text-sm sm:text-base leading-relaxed font-medium">
-                    You are accessing a <span class="font-bold text-primary-dark">Logistics Account</span>. 
-                    <br><br>
-                    <span class="text-text-muted">Please log in from a computer to access this dashboard interface.</span>
+@section('content')
+    <div class="max-w-7xl mx-auto">
+        @if($latestApp && $latestApp->status === 'pending')
+            <div class="mb-8 p-6 bg-yellow-50 border border-yellow-200 rounded-3xl shadow-xs">
+                <h3 class="text-base font-bold text-yellow-900">Hub Application Under Review</h3>
+                <p class="text-xs sm:text-sm text-yellow-800 mt-1">
+                    Your application for <strong>{{ $latestApp->business_name }}</strong> (revision v{{ $latestApp->version }}) is pending administrative approval. Dispatch and operational routing will unlock once verified.
                 </p>
             </div>
-            
-            <form method="POST" action="{{ route('logout') }}" class="w-full">
-                @csrf
-                <button type="submit" class="w-full flex items-center justify-center px-6 py-4 bg-red-500 text-white text-lg font-bold rounded-2xl shadow-md hover:bg-red-600 transition-all duration-200 cursor-pointer active:scale-95">
-                    <svg class="w-6 h-6 mr-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
-                    </svg>
-                    Logout
-                </button>
-            </form>
+        @elseif($latestApp && $latestApp->status === 'rejected')
+            <div class="mb-8 p-6 bg-red-50 border border-red-200 rounded-3xl shadow-xs flex justify-between items-center">
+                <div>
+                    <h3 class="text-base font-bold text-red-900">Application Rejected</h3>
+                    <p class="text-xs sm:text-sm text-red-800 mt-1">Reason: <em>"{{ $latestApp->rejection_reason }}"</em></p>
+                </div>
+                <a href="{{ route('logistics.reapply') }}" class="px-5 py-2.5 bg-primary text-white text-xs font-bold rounded-xl shadow-md">
+                    Update & Re-apply
+                </a>
+            </div>
+        @endif
+
+        <div class="flex justify-between items-center mb-8">
+            <div>
+                <h1 class="text-3xl font-bold text-primary-dark">Logistics Operations</h1>
+                <p class="text-primary mt-1 font-medium">Driver/Handler: {{ auth()->user()->first_name ?? 'User' }}</p>
+            </div>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div class="p-8 bg-surface/80 backdrop-blur-md rounded-2xl shadow-sm border border-border-subtle hover:border-primary/50 hover:shadow-md transition-all duration-300 group cursor-pointer">
+                <div class="flex items-center mb-4">
+                    <div class="p-3 bg-brand-light/40 rounded-xl text-primary mr-4 group-hover:scale-110 group-hover:bg-brand-light/60 transition-transform duration-300">
+                        <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
+                        </svg>
+                    </div>
+                    <h2 class="text-xl font-bold text-text-main">Parcels to Pick Up</h2>
+                </div>
+                <p class="text-text-muted">No pending pickups at this time.</p>
+            </div>
+
+            <div class="p-8 bg-surface/80 backdrop-blur-md rounded-2xl shadow-sm border border-border-subtle hover:border-primary/50 hover:shadow-md transition-all duration-300 group cursor-pointer">
+                <div class="flex items-center mb-4">
+                    <div class="p-3 bg-brand-light/40 rounded-xl text-primary mr-4 group-hover:scale-110 group-hover:bg-brand-light/60 transition-transform duration-300">
+                        <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                        </svg>
+                    </div>
+                    <h2 class="text-xl font-bold text-text-main">In Transit</h2>
+                </div>
+                <p class="text-text-muted">No active deliveries.</p>
+            </div>
         </div>
     </div>
-
-    <!-- Alpine State Wrapper -->
-    <div x-data="{ sidebarOpen: localStorage.getItem('sidebarOpen') !== 'false' }" 
-         x-init="$watch('sidebarOpen', val => localStorage.setItem('sidebarOpen', val))" 
-         class="desktop-view h-screen w-full relative">
-        
-        <!-- Sidebar Component -->
-        @include('components.logistics.sidebar')
-
-        <!-- Main Content Area with Animation Wrapper -->
-        <main class="flex-1 h-screen overflow-y-auto custom-scrollbar relative"
-              x-data="{ showContent: false }" 
-              x-init="setTimeout(() => showContent = true, 50)">
-            
-            <!-- Animated Inner Container -->
-            <div class="p-8 lg:p-12"
-                 x-show="showContent" 
-                 x-transition:enter="transition ease-out duration-500"
-                 x-transition:enter-start="opacity-0 translate-y-4"
-                 x-transition:enter-end="opacity-100 translate-y-0"
-                 x-cloak>
-                 
-                <div class="max-w-7xl mx-auto">
-
-                    @if($latestApp && $latestApp->status === 'pending')
-                        <div class="mb-8 p-6 bg-yellow-50 border border-yellow-200 rounded-3xl shadow-xs">
-                            <h3 class="text-base font-bold text-yellow-900">Hub Application Under Review</h3>
-                            <p class="text-xs sm:text-sm text-yellow-800 mt-1">
-                                Your application for <strong>{{ $latestApp->business_name }}</strong> (revision v{{ $latestApp->version }}) is pending administrative approval. Dispatch and operational routing will unlock once verified.
-                            </p>
-                        </div>
-                    @elseif($latestApp && $latestApp->status === 'rejected')
-                        <div class="mb-8 p-6 bg-red-50 border border-red-200 rounded-3xl shadow-xs flex justify-between items-center">
-                            <div>
-                                <h3 class="text-base font-bold text-red-900">Application Rejected</h3>
-                                <p class="text-xs sm:text-sm text-red-800 mt-1">Reason: <em>"{{ $latestApp->rejection_reason }}"</em></p>
-                            </div>
-                            <a href="{{ route('logistics.reapply') }}" class="px-5 py-2.5 bg-primary text-white text-xs font-bold rounded-xl shadow-md">
-                                Update & Re-apply
-                            </a>
-                        </div>
-                    @endif
-                    
-                    <!-- Header -->
-                    <div class="flex justify-between items-center mb-8">
-                        <div>
-                            <h1 class="text-3xl font-bold text-primary-dark">Logistics Operations</h1>
-                            <p class="text-primary mt-1 font-medium">Driver/Handler: {{ auth()->user()->first_name ?? 'User' }}</p>
-                        </div>
-                    </div>
-
-                    <!-- Action Grid -->
-                    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                        <!-- Card 1 -->
-                        <div class="p-8 bg-surface/80 backdrop-blur-md rounded-2xl shadow-sm border border-border-subtle hover:border-primary/50 hover:shadow-md transition-all duration-300 group cursor-pointer">
-                            <div class="flex items-center mb-4">
-                                <div class="p-3 bg-brand-light/40 rounded-xl text-primary mr-4 group-hover:scale-110 group-hover:bg-brand-light/60 transition-transform duration-300">
-                                    <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
-                                    </svg>
-                                </div>
-                                <h2 class="text-xl font-bold text-text-main">Parcels to Pick Up</h2>
-                            </div>
-                            <p class="text-text-muted">No pending pickups at this time.</p>
-                        </div>
-                        
-                        <!-- Card 2 -->
-                        <div class="p-8 bg-surface/80 backdrop-blur-md rounded-2xl shadow-sm border border-border-subtle hover:border-primary/50 hover:shadow-md transition-all duration-300 group cursor-pointer">
-                            <div class="flex items-center mb-4">
-                                <div class="p-3 bg-brand-light/40 rounded-xl text-primary mr-4 group-hover:scale-110 group-hover:bg-brand-light/60 transition-transform duration-300">
-                                    <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
-                                    </svg>
-                                </div>
-                                <h2 class="text-xl font-bold text-text-main">In Transit</h2>
-                            </div>
-                            <p class="text-text-muted">No active deliveries.</p>
-                        </div>
-                    </div>
-                    
-                </div>
-            </div>
-        </main>
-    </div>
-
-</body>
-</html>
+@endsection

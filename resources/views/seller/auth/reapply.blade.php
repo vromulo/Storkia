@@ -1,14 +1,10 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Storkia - Re-apply for Seller</title>
-    @vite(['resources/css/app.css', 'resources/js/app.js'])
-    @livewireStyles
-</head>
-<body class="bg-surface-subtle min-h-screen text-text-main font-sans antialiased">
-    <livewire:seller.reapply-application />
-    @livewireScripts
-</body>
-</html>
+@extends('layouts.auth-split', [
+    'title' => 'Storkia - Re-apply for Seller',
+    'mobilePrompt' => 'You are accessing the Seller Re-application. Please log in from a computer to access this interface.'
+])
+
+@section('content')
+    <div class="w-full h-full flex flex-col justify-center items-center p-6 overflow-y-auto bg-surface-subtle">
+        <livewire:seller.reapply-application />
+    </div>
+@endsection
