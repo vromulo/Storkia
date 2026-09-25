@@ -4,9 +4,8 @@ namespace App\Livewire\Seller;
 
 use App\Models\SellerApplication;
 use App\Models\SellerProfile;
+use App\Services\AddressService;
 use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Http;
 use Livewire\Component;
 use Livewire\WithFileUploads;
 
@@ -23,30 +22,21 @@ class ReapplyApplication extends Component
     public string $barangay = '';
     public string $street = '';
     public string $house_details = '';
-
     public string $business_name = '';
     public string $line_of_business = '';
-
     public $valid_id;
     public $business_permit;
-
     public array $provinces = [];
     public array $municipalities = [];
     public array $barangays = [];
-
     public ?SellerProfile $profile = null;
     public ?SellerApplication $latestApp = null;
     public bool $isSubmitted = false;
 
-    public function mount()
+    public function mount(AddressService $addressService)
     {
         $user = Auth::user();
-        // Read from the latest application. Reapplying is only allowed
-        // when that application was rejected — this mirrors the guard in
-        // SellerController::showReapply() so this component can't be
-        // reached directly to submit a duplicate/out-of-turn application.
         $this->latestApp = SellerApplication::where('user_id', $user->id)->latest('version')->firstOrFail();
-
         abort_unless($this->latestApp->status === 'rejected', 403);
 
         $this->contact_no = ltrim($this->latestApp->contact_no, '+63');
@@ -57,37 +47,25 @@ class ReapplyApplication extends Component
         $this->house_details = $this->latestApp->house_details ?? '';
         $this->business_name = $this->latestApp->business_name;
         $this->line_of_business = $this->latestApp->line_of_business;
-
-        $this->loadProvinces();
+        $this->provinces = $addressService->getProvinces();
     }
 
-    public function loadProvinces()
-    {
-        try {
-            $response = Http::get('https://psgc.gitlab.io/api/provinces');
-            if ($response->successful()) $this->provinces = $response->json();
-        } catch (\Exception $e) {}
-    }
-
-    public function updatedProvinceCode($code)
+    public function updatedProvinceCode($code, AddressService $addressService)
     {
         $this->municipality_code = '';
         $this->barangay_code = '';
         $this->municipalities = [];
         $this->barangays = [];
-        
+
         $prov = collect($this->provinces)->firstWhere('code', $code);
         $this->province = $prov ? $prov['name'] : '';
 
         if ($code) {
-            try {
-                $response = Http::get("https://psgc.gitlab.io/api/provinces/{$code}/cities-municipalities");
-                if ($response->successful()) $this->municipalities = $response->json();
-            } catch (\Exception $e) {}
+            $this->municipalities = $addressService->getMunicipalities($code);
         }
     }
 
-    public function updatedMunicipalityCode($code)
+    public function updatedMunicipalityCode($code, AddressService $addressService)
     {
         $this->barangay_code = '';
         $this->barangays = [];
@@ -96,10 +74,7 @@ class ReapplyApplication extends Component
         $this->municipality = $mun ? $mun['name'] : '';
 
         if ($code) {
-            try {
-                $response = Http::get("https://psgc.gitlab.io/api/cities-municipalities/{$code}/barangays");
-                if ($response->successful()) $this->barangays = $response->json();
-            } catch (\Exception $e) {}
+            $this->barangays = $addressService->getBarangays($code);
         }
     }
 
@@ -124,18 +99,16 @@ class ReapplyApplication extends Component
 
         $user = Auth::user();
         $formattedContactNo = '+63' . ltrim(preg_replace('/\D/', '', $this->contact_no), '0');
-
         $latestVersion = SellerApplication::where('user_id', $user->id)->max('version') ?? 1;
 
-        $idPath = $this->valid_id 
-            ? $this->valid_id->store('seller_documents/ids', 'public') 
+        $idPath = $this->valid_id
+            ? $this->valid_id->store('seller_documents/ids', 'public')
             : $this->latestApp->id_path;
-            
-        $permitPath = $this->business_permit 
-            ? $this->business_permit->store('seller_documents/permits', 'public') 
+
+        $permitPath = $this->business_permit
+            ? $this->business_permit->store('seller_documents/permits', 'public')
             : $this->latestApp->permit_path;
-            
-        // Create ONLY the new revision in seller_applications
+
         SellerApplication::create([
             'user_id' => $user->id,
             'version' => $latestVersion + 1,

@@ -2,15 +2,13 @@
 
 namespace App\Livewire\Auth;
 
-use App\Mail\RegistrationOtpMail;
 use App\Models\LogisticsApplication;
 use App\Models\RegistrationOtp;
 use App\Models\User;
+use App\Services\AddressService;
+use App\Services\OtpService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
-use Illuminate\Support\Facades\Http;
-use Illuminate\Support\Facades\Mail;
-use Illuminate\Support\Str;
 use Livewire\Component;
 use Livewire\WithFileUploads;
 
@@ -51,7 +49,7 @@ class LogisticsRegisterWizard extends Component
     public array $municipalities = [];
     public array $barangays = [];
 
-    // Step 4: Hub / Center Info
+    // Step 4: Hub Info
     public string $business_name = '';
 
     // Step 5: Documents
@@ -62,9 +60,9 @@ class LogisticsRegisterWizard extends Component
     public string $password = '';
     public string $password_confirmation = '';
 
-    public function mount()
+    public function mount(AddressService $addressService)
     {
-        $this->loadProvinces();
+        $this->provinces = $addressService->getProvinces();
     }
 
     public function updated($propertyName)
@@ -75,11 +73,7 @@ class LogisticsRegisterWizard extends Component
             $this->validateOnly($propertyName, $this->getStep2Rules(), $this->getStep2Messages());
         } elseif ($this->currentStep === 3) {
             if ($propertyName === 'contact_no') {
-                $this->validateOnly('contact_no', [
-                    'contact_no' => ['required', 'regex:/^9\d{2}\s?\d{3}\s?\d{4}$/']
-                ], [
-                    'contact_no.regex' => 'Please enter a valid 10-digit mobile number starting with 9.'
-                ]);
+                $this->validateOnly('contact_no', ['contact_no' => ['required', 'regex:/^9\d{2}\s?\d{3}\s?\d{4}$/']]);
             } else {
                 $this->validateOnly($propertyName, $this->getStep3Rules());
             }
@@ -99,15 +93,7 @@ class LogisticsRegisterWizard extends Component
         }
     }
 
-    public function loadProvinces()
-    {
-        try {
-            $response = Http::get('https://psgc.gitlab.io/api/provinces');
-            if ($response->successful()) $this->provinces = $response->json();
-        } catch (\Exception $e) {}
-    }
-
-    public function updatedProvinceCode($code)
+    public function updatedProvinceCode($code, AddressService $addressService)
     {
         $this->municipality_code = '';
         $this->barangay_code = '';
@@ -120,14 +106,11 @@ class LogisticsRegisterWizard extends Component
         $this->province = $prov ? $prov['name'] : '';
 
         if ($code) {
-            try {
-                $response = Http::get("https://psgc.gitlab.io/api/provinces/{$code}/cities-municipalities");
-                if ($response->successful()) $this->municipalities = $response->json();
-            } catch (\Exception $e) {}
+            $this->municipalities = $addressService->getMunicipalities($code);
         }
     }
 
-    public function updatedMunicipalityCode($code)
+    public function updatedMunicipalityCode($code, AddressService $addressService)
     {
         $this->barangay_code = '';
         $this->barangay = '';
@@ -137,10 +120,7 @@ class LogisticsRegisterWizard extends Component
         $this->municipality = $mun ? $mun['name'] : '';
 
         if ($code) {
-            try {
-                $response = Http::get("https://psgc.gitlab.io/api/cities-municipalities/{$code}/barangays");
-                if ($response->successful()) $this->barangays = $response->json();
-            } catch (\Exception $e) {}
+            $this->barangays = $addressService->getBarangays($code);
         }
     }
 
@@ -150,39 +130,40 @@ class LogisticsRegisterWizard extends Component
         $this->barangay = $brgy ? $brgy['name'] : '';
     }
 
-    public function sendCode(): void
+    public function sendCode(OtpService $otpService): void
     {
         $this->validateOnly('email', ['email' => ['required', 'email:rfc,dns']]);
-        if (User::where('email', $this->email)->exists()) {
-            $this->addError('email', 'This email is already registered.');
+
+        [$success, $error, $cooldown] = $otpService->sendOtp($this->email);
+
+        if (! $success) {
+            $this->addError('email', $error);
             return;
         }
-        $code = RegistrationOtp::generateCode();
-        try {
-            Mail::to($this->email)->send(new RegistrationOtpMail($code, RegistrationOtp::CODE_TTL_MINUTES));
-        } catch (\Throwable $e) { return; }
 
-        RegistrationOtp::updateOrCreate(['email' => $this->email], [
-            'code_hash' => Hash::make($code),
-            'attempts' => 0,
-            'last_sent_at' => now(),
-            'code_expires_at' => now()->addMinutes(RegistrationOtp::CODE_TTL_MINUTES),
-        ]);
         $this->code = '';
         $this->codeSent = true;
         $this->attemptsRemaining = RegistrationOtp::MAX_ATTEMPTS;
+        $this->resendCooldown = $cooldown;
     }
 
-    public function verifyCode(): void
+    public function resendCode(OtpService $otpService): void
+    {
+        $this->sendCode($otpService);
+    }
+
+    public function verifyCode(OtpService $otpService): void
     {
         $this->validateOnly('code', ['code' => ['required', 'digits:6']]);
-        $record = RegistrationOtp::where('email', $this->email)->first();
-        if (! $record || $record->isCodeExpired() || ! Hash::check($this->code, $record->code_hash)) {
-            $this->addError('code', "Invalid or expired code.");
+
+        [$valid, $error, $token, $remaining] = $otpService->verifyOtp($this->email, $this->code);
+
+        if (! $valid) {
+            $this->attemptsRemaining = $remaining;
+            $this->addError('code', $error);
             return;
         }
-        $token = Str::random(64);
-        $record->update(['verified_at' => now(), 'verification_token' => $token]);
+
         $this->verificationToken = $token;
         $this->currentStep = 2;
     }
@@ -237,7 +218,7 @@ class LogisticsRegisterWizard extends Component
                     if (!preg_match('/[\W_]/', $value)) $fail('Password must contain at least 1 special character.');
                 },
             ],
-            'password_confirmation' => ['required', 'same:password']
+            'password_confirmation' => ['required', 'same:password'],
         ];
     }
 
@@ -286,7 +267,6 @@ class LogisticsRegisterWizard extends Component
             $idPath = $this->valid_id->store('logistics_documents/ids', 'public');
             $permitPath = $this->business_permit->store('logistics_documents/permits', 'public');
 
-            // Stored strictly in logistics_applications; logistics_profiles created ONLY upon admin approval
             LogisticsApplication::create([
                 'user_id' => $user->id,
                 'version' => 1,

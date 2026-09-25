@@ -3,8 +3,8 @@
 namespace App\Livewire\Logistics;
 
 use App\Models\LogisticsApplication;
+use App\Services\AddressService;
 use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Facades\Http;
 use Livewire\Component;
 use Livewire\WithFileUploads;
 
@@ -22,18 +22,15 @@ class ReapplyLogisticsApplication extends Component
     public string $street = '';
     public string $house_details = '';
     public string $business_name = '';
-
     public $valid_id;
     public $business_permit;
-
     public array $provinces = [];
     public array $municipalities = [];
     public array $barangays = [];
-
     public ?LogisticsApplication $latestApp = null;
     public bool $isSubmitted = false;
 
-    public function mount()
+    public function mount(AddressService $addressService)
     {
         $user = Auth::user();
         $this->latestApp = LogisticsApplication::where('user_id', $user->id)->latest('version')->firstOrFail();
@@ -46,6 +43,41 @@ class ReapplyLogisticsApplication extends Component
         $this->street = $this->latestApp->street ?? '';
         $this->house_details = $this->latestApp->house_details ?? '';
         $this->business_name = $this->latestApp->business_name;
+        $this->provinces = $addressService->getProvinces();
+    }
+
+    public function updatedProvinceCode($code, AddressService $addressService)
+    {
+        $this->municipality_code = '';
+        $this->barangay_code = '';
+        $this->municipalities = [];
+        $this->barangays = [];
+
+        $prov = collect($this->provinces)->firstWhere('code', $code);
+        $this->province = $prov ? $prov['name'] : '';
+
+        if ($code) {
+            $this->municipalities = $addressService->getMunicipalities($code);
+        }
+    }
+
+    public function updatedMunicipalityCode($code, AddressService $addressService)
+    {
+        $this->barangay_code = '';
+        $this->barangays = [];
+
+        $mun = collect($this->municipalities)->firstWhere('code', $code);
+        $this->municipality = $mun ? $mun['name'] : '';
+
+        if ($code) {
+            $this->barangays = $addressService->getBarangays($code);
+        }
+    }
+
+    public function updatedBarangayCode($code)
+    {
+        $brgy = collect($this->barangays)->firstWhere('code', $code);
+        $this->barangay = $brgy ? $brgy['name'] : '';
     }
 
     public function reapply()
@@ -59,12 +91,12 @@ class ReapplyLogisticsApplication extends Component
         $formattedContactNo = '+63' . ltrim(preg_replace('/\D/', '', $this->contact_no), '0');
         $latestVersion = LogisticsApplication::where('user_id', $user->id)->max('version') ?? 1;
 
-        $idPath = $this->valid_id 
-            ? $this->valid_id->store('logistics_documents/ids', 'public') 
+        $idPath = $this->valid_id
+            ? $this->valid_id->store('logistics_documents/ids', 'public')
             : $this->latestApp->id_path;
 
-        $permitPath = $this->business_permit 
-            ? $this->business_permit->store('logistics_documents/permits', 'public') 
+        $permitPath = $this->business_permit
+            ? $this->business_permit->store('logistics_documents/permits', 'public')
             : $this->latestApp->permit_path;
 
         LogisticsApplication::create([

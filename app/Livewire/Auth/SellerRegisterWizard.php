@@ -2,16 +2,13 @@
 
 namespace App\Livewire\Auth;
 
-use App\Mail\RegistrationOtpMail;
 use App\Models\RegistrationOtp;
-use App\Models\SellerProfile;
+use App\Models\SellerApplication;
 use App\Models\User;
-use Carbon\Carbon;
+use App\Services\AddressService;
+use App\Services\OtpService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
-use Illuminate\Support\Facades\Http;
-use Illuminate\Support\Facades\Mail;
-use Illuminate\Support\Str;
 use Livewire\Component;
 use Livewire\WithFileUploads;
 
@@ -48,7 +45,6 @@ class SellerRegisterWizard extends Component
     public string $street = '';
     public string $house_details = '';
 
-    // API Arrays
     public array $provinces = [];
     public array $municipalities = [];
     public array $barangays = [];
@@ -65,14 +61,14 @@ class SellerRegisterWizard extends Component
     public string $password = '';
     public string $password_confirmation = '';
 
+    public function mount(AddressService $addressService)
+    {
+        $this->provinces = $addressService->getProvinces();
+    }
+
     public function updatedContactNo($value)
     {
         $this->contact_no = preg_replace('/\D/', '', $value);
-    }
-
-    public function mount()
-    {
-        $this->loadProvinces();
     }
 
     public function updated($propertyName)
@@ -83,11 +79,7 @@ class SellerRegisterWizard extends Component
             $this->validateOnly($propertyName, $this->getStep2Rules(), $this->getStep2Messages());
         } elseif ($this->currentStep === 3) {
             if ($propertyName === 'contact_no') {
-                $this->validateOnly('contact_no', [
-                    'contact_no' => ['required', 'regex:/^9\d{2}\s?\d{3}\s?\d{4}$/']
-                ], [
-                    'contact_no.regex' => 'Please enter a valid 10-digit mobile number starting with 9.'
-                ]);
+                $this->validateOnly('contact_no', ['contact_no' => ['required', 'regex:/^9\d{2}\s?\d{3}\s?\d{4}$/']]);
             } else {
                 $this->validateOnly($propertyName, $this->getStep3Rules());
             }
@@ -99,33 +91,15 @@ class SellerRegisterWizard extends Component
             if ($propertyName === 'password') {
                 $this->validateOnly('password', $this->getStep6Rules(), $this->getStep6Messages());
                 if (!empty($this->password_confirmation)) {
-                    $this->validateOnly('password_confirmation', [
-                        'password_confirmation' => ['same:password']
-                    ], [
-                        'password_confirmation.same' => 'The password confirmation does not match.'
-                    ]);
+                    $this->validateOnly('password_confirmation', ['password_confirmation' => ['same:password']]);
                 }
             } elseif ($propertyName === 'password_confirmation') {
-                $this->validateOnly('password_confirmation', [
-                    'password_confirmation' => ['required', 'same:password']
-                ], [
-                    'password_confirmation.required' => 'Please confirm your password.',
-                    'password_confirmation.same' => 'The password confirmation does not match.'
-                ]);
+                $this->validateOnly('password_confirmation', ['required', 'same:password']);
             }
         }
     }
 
-    // --- Address API Integration (PSGC) ---
-    public function loadProvinces()
-    {
-        try {
-            $response = Http::get('https://psgc.gitlab.io/api/provinces');
-            if ($response->successful()) $this->provinces = $response->json();
-        } catch (\Exception $e) {}
-    }
-
-    public function updatedProvinceCode($code)
+    public function updatedProvinceCode($code, AddressService $addressService)
     {
         $this->municipality_code = '';
         $this->barangay_code = '';
@@ -133,21 +107,16 @@ class SellerRegisterWizard extends Component
         $this->barangay = '';
         $this->municipalities = [];
         $this->barangays = [];
-        
+
         $prov = collect($this->provinces)->firstWhere('code', $code);
         $this->province = $prov ? $prov['name'] : '';
 
         if ($code) {
-            try {
-                $response = Http::get("https://psgc.gitlab.io/api/provinces/{$code}/cities-municipalities");
-                if ($response->successful()) {
-                    $this->municipalities = $response->json();
-                }
-            } catch (\Exception $e) {}
+            $this->municipalities = $addressService->getMunicipalities($code);
         }
     }
 
-    public function updatedMunicipalityCode($code)
+    public function updatedMunicipalityCode($code, AddressService $addressService)
     {
         $this->barangay_code = '';
         $this->barangay = '';
@@ -157,12 +126,7 @@ class SellerRegisterWizard extends Component
         $this->municipality = $mun ? $mun['name'] : '';
 
         if ($code) {
-            try {
-                $response = Http::get("https://psgc.gitlab.io/api/cities-municipalities/{$code}/barangays");
-                if ($response->successful()) {
-                    $this->barangays = $response->json();
-                }
-            } catch (\Exception $e) {}
+            $this->barangays = $addressService->getBarangays($code);
         }
     }
 
@@ -172,44 +136,46 @@ class SellerRegisterWizard extends Component
         $this->barangay = $brgy ? $brgy['name'] : '';
     }
 
-    // --- OTP Logic (Reused from Buyer) ---
-    public function sendCode(): void { 
+    public function sendCode(OtpService $otpService): void
+    {
         $this->validateOnly('email', ['email' => ['required', 'email:rfc,dns']]);
-        if (User::where('email', $this->email)->exists()) {
-            $this->addError('email', 'This email is already registered.');
+
+        [$success, $error, $cooldown] = $otpService->sendOtp($this->email);
+
+        if (! $success) {
+            $this->addError('email', $error);
             return;
         }
-        $this->issueNewCode();
-    }
-    
-    protected function issueNewCode(): void {
-        $code = RegistrationOtp::generateCode();
-        try {
-            Mail::to($this->email)->send(new RegistrationOtpMail($code, RegistrationOtp::CODE_TTL_MINUTES));
-        } catch (\Throwable $e) { return; }
 
-        RegistrationOtp::updateOrCreate(['email' => $this->email], [
-            'code_hash' => Hash::make($code),
-            'attempts' => 0, 'last_sent_at' => now(),
-            'code_expires_at' => now()->addMinutes(RegistrationOtp::CODE_TTL_MINUTES),
-        ]);
-        $this->code = ''; $this->codeSent = true; $this->attemptsRemaining = RegistrationOtp::MAX_ATTEMPTS;
+        $this->code = '';
+        $this->codeSent = true;
+        $this->attemptsRemaining = RegistrationOtp::MAX_ATTEMPTS;
+        $this->resendCooldown = $cooldown;
     }
 
-    public function verifyCode(): void {
+    public function resendCode(OtpService $otpService): void
+    {
+        $this->sendCode($otpService);
+    }
+
+    public function verifyCode(OtpService $otpService): void
+    {
         $this->validateOnly('code', ['code' => ['required', 'digits:6']]);
-        $record = RegistrationOtp::where('email', $this->email)->first();
-        if (! $record || $record->isCodeExpired() || ! Hash::check($this->code, $record->code_hash)) {
-            $this->addError('code', "Invalid or expired code."); return;
+
+        [$valid, $error, $token, $remaining] = $otpService->verifyOtp($this->email, $this->code);
+
+        if (! $valid) {
+            $this->attemptsRemaining = $remaining;
+            $this->addError('code', $error);
+            return;
         }
-        $token = Str::random(64);
-        $record->update(['verified_at' => now(), 'verification_token' => $token]);
+
         $this->verificationToken = $token;
         $this->currentStep = 2;
     }
 
-    // --- Progression Rules ---
-    protected function getStep2Rules(): array {
+    protected function getStep2Rules(): array
+    {
         return [
             'first_name' => ['required', 'string', 'regex:/^[A-Za-z\s]+$/'],
             'last_name' => ['required', 'string', 'regex:/^[A-Za-z\s]+$/'],
@@ -218,11 +184,14 @@ class SellerRegisterWizard extends Component
             'birthday' => ['required', 'date', 'before_or_equal:' . now()->subYears(18)->format('Y-m-d'), 'after_or_equal:' . now()->subYears(100)->format('Y-m-d')],
         ];
     }
-    protected function getStep2Messages(): array {
+
+    protected function getStep2Messages(): array
+    {
         return ['birthday.before_or_equal' => 'You must be at least 18 years old.'];
     }
 
-    protected function getStep3Rules(): array {
+    protected function getStep3Rules(): array
+    {
         return [
             'contact_no' => ['required', 'regex:/^9\d{2}\s?\d{3}\s?\d{4}$/'],
             'province_code' => ['required'],
@@ -231,36 +200,31 @@ class SellerRegisterWizard extends Component
         ];
     }
 
-    protected function getStep4Rules(): array {
+    protected function getStep4Rules(): array
+    {
         return ['business_name' => ['required', 'string'], 'line_of_business' => ['required', 'string']];
     }
 
-    protected function getStep5Rules(): array {
+    protected function getStep5Rules(): array
+    {
         return [
-            'valid_id' => ['required', 'file', 'mimes:jpg,jpeg,png,pdf', 'max:10240'], // 10MB Max
+            'valid_id' => ['required', 'file', 'mimes:jpg,jpeg,png,pdf', 'max:10240'],
             'business_permit' => ['required', 'file', 'mimes:jpg,jpeg,png,pdf', 'max:10240'],
         ];
     }
 
-    protected function getStep6Rules(): array {
+    protected function getStep6Rules(): array
+    {
         return [
-           'password' => [
-                'required',
-                'string',
-                'min:8',
+            'password' => [
+                'required', 'string', 'min:8',
                 function ($attr, $value, $fail) {
-                    if (!preg_match('/[A-Z]/', $value)) {
-                        $fail('Password must contain at least 1 uppercase letter.');
-                    }
-                    if (!preg_match('/[0-9]/', $value)) {
-                        $fail('Password must contain at least 1 number.');
-                    }
-                    if (!preg_match('/[\W_]/', $value)) {
-                        $fail('Password must contain at least 1 special character.');
-                    }
+                    if (!preg_match('/[A-Z]/', $value)) $fail('Password must contain at least 1 uppercase letter.');
+                    if (!preg_match('/[0-9]/', $value)) $fail('Password must contain at least 1 number.');
+                    if (!preg_match('/[\W_]/', $value)) $fail('Password must contain at least 1 special character.');
                 },
             ],
-            'password_confirmation' => ['required', 'same:password']
+            'password_confirmation' => ['required', 'same:password'],
         ];
     }
 
@@ -269,12 +233,12 @@ class SellerRegisterWizard extends Component
         return [
             'password.required' => 'Please enter a password.',
             'password.min' => 'Password must be at least 8 characters long.',
-            'password_confirmation.required' => 'Please confirm your password.',
             'password_confirmation.same' => 'The password confirmation does not match.',
         ];
     }
 
-    public function nextStep(int $step) {
+    public function nextStep(int $step)
+    {
         if ($step === 2) $this->validate($this->getStep2Rules(), $this->getStep2Messages());
         if ($step === 3) $this->validate($this->getStep3Rules());
         if ($step === 4) $this->validate($this->getStep4Rules());
@@ -283,19 +247,17 @@ class SellerRegisterWizard extends Component
         $this->currentStep = $step + 1;
     }
 
-    public function backToStep(int $step) {
+    public function backToStep(int $step)
+    {
         if ($step < $this->currentStep) $this->currentStep = $step;
     }
 
     public function register()
     {
-        // Final complete validation before submission
         $this->validate($this->getStep6Rules(), $this->getStep6Messages());
-
         $formattedContactNo = '+63' . ltrim($this->contact_no, '0');
 
         DB::transaction(function () use ($formattedContactNo) {
-            // 1. Create Base User (Role: Seller)
             $user = User::create([
                 'first_name' => ucwords(strtolower($this->first_name)),
                 'last_name' => ucwords(strtolower($this->last_name)),
@@ -308,12 +270,10 @@ class SellerRegisterWizard extends Component
                 'role' => 'Seller',
             ]);
 
-            // 2. Upload Files
             $idPath = $this->valid_id->store('seller_documents/ids', 'public');
             $permitPath = $this->business_permit->store('seller_documents/permits', 'public');
 
-            // 3. Store ONLY in seller_applications (DO NOT create SellerProfile yet)
-            \App\Models\SellerApplication::create([
+            SellerApplication::create([
                 'user_id' => $user->id,
                 'version' => 1,
                 'contact_no' => $formattedContactNo,
