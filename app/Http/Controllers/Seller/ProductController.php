@@ -3,8 +3,9 @@
 namespace App\Http\Controllers\Seller;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Seller\StoreProductRequest;
+use App\Http\Requests\Seller\UpdateProductRequest;
 use App\Models\Product;
-use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
 
 class ProductController extends Controller
@@ -32,25 +33,9 @@ class ProductController extends Controller
         return view('seller.products.archived', compact('products'));
     }
 
-    public function store(Request $request)
+    public function store(StoreProductRequest $request)
     {
-        $request->validate([
-            'name' => 'required|string|max:100',
-            'category' => 'nullable|string',
-            'subcategory' => 'required|string',
-            'discount' => 'nullable|numeric|min:0',
-            'description' => 'nullable|string',
-            'additional_descriptions' => 'nullable|string',
-            'pictures' => 'required|array',
-            'pictures.*' => 'image|mimes:jpeg,png,jpg,webp|max:5120',
-
-            // Variant Validations
-            'variant_title' => 'required|string|max:50',
-            'variant_names' => 'required|array',
-            'variant_names.*' => 'required|string|max:50',
-            'variant_pictures' => 'nullable|array',
-            'variant_pictures.*' => 'image|mimes:jpeg,png,jpg,webp|max:5120'
-        ]);
+        $validated = $request->validated();
 
         $picturePaths = [];
         if ($request->hasFile('pictures')) {
@@ -59,56 +44,56 @@ class ProductController extends Controller
             }
         }
 
-        $priceDependency = !empty($request->sub_variant_title) ? 'sub' : 'main';
+        $priceDependency = !empty($validated['sub_variant_title']) ? 'sub' : 'main';
         $variantsData = [
-            'title' => $request->variant_title,
-            'sub_title' => $request->sub_variant_title,
+            'title'            => $validated['variant_title'],
+            'sub_title'        => $validated['sub_variant_title'] ?? null,
             'price_dependency' => $priceDependency,
-            'items' => []
+            'items'            => []
         ];
 
         $minPrice = null;
         $baseWeight = null;
         $totalStock = 0;
 
-        if ($request->has('variant_names')) {
-            foreach ($request->variant_names as $vId => $vName) {
+        if (!empty($validated['variant_names'])) {
+            foreach ($validated['variant_names'] as $vId => $vName) {
                 $item = [
-                    'name' => $vName,
+                    'name'  => $vName,
                     'image' => null,
                     'price' => null,
-                    'weight' => null,
+                    'weight'=> null,
                     'stock' => null,
-                    'subs' => []
+                    'subs'  => []
                 ];
 
-                if ($request->hasFile("variant_pictures.$vId")) {
-                    $item['image'] = $request->file("variant_pictures.$vId")->store('variants', 'public');
+                if ($request->hasFile("variant_pictures.{$vId}")) {
+                    $item['image'] = $request->file("variant_pictures.{$vId}")->store('variants', 'public');
                 }
 
-                if ($variantsData['price_dependency'] === 'main') {
-                    $item['price'] = $request->variant_prices[$vId] ?? 0;
-                    $item['weight'] = $request->variant_weights[$vId] ?? '0';
-                    $item['stock'] = (int) ($request->variant_stocks[$vId] ?? 0);
+                if ($priceDependency === 'main') {
+                    $item['price']  = (float) ($validated['variant_prices'][$vId] ?? 0);
+                    $item['weight'] = (float) ($validated['variant_weights'][$vId] ?? 0);
+                    $item['stock']  = (int) ($validated['variant_stocks'][$vId] ?? 0);
 
                     $totalStock += $item['stock'];
                     if (is_null($minPrice) || $item['price'] < $minPrice) $minPrice = $item['price'];
                     if (is_null($baseWeight)) $baseWeight = $item['weight'];
                 }
 
-                if (!empty($request->sub_variant_names[$vId])) {
-                    foreach ($request->sub_variant_names[$vId] as $sId => $sName) {
+                if (!empty($validated['sub_variant_names'][$vId])) {
+                    foreach ($validated['sub_variant_names'][$vId] as $sId => $sName) {
                         $sub = [
-                            'name' => $sName,
+                            'name'  => $sName,
                             'price' => null,
-                            'weight' => null,
+                            'weight'=> null,
                             'stock' => null
                         ];
 
-                        if ($variantsData['price_dependency'] === 'sub') {
-                            $sub['price'] = $request->sub_variant_prices[$vId][$sId] ?? 0;
-                            $sub['weight'] = $request->sub_variant_weights[$vId][$sId] ?? '0';
-                            $sub['stock'] = (int) ($request->sub_variant_stocks[$vId][$sId] ?? 0);
+                        if ($priceDependency === 'sub') {
+                            $sub['price']  = (float) ($validated['sub_variant_prices'][$vId][$sId] ?? 0);
+                            $sub['weight'] = (float) ($validated['sub_variant_weights'][$vId][$sId] ?? 0);
+                            $sub['stock']  = (int) ($validated['sub_variant_stocks'][$vId][$sId] ?? 0);
 
                             $totalStock += $sub['stock'];
                             if (is_null($minPrice) || $sub['price'] < $minPrice) $minPrice = $sub['price'];
@@ -124,36 +109,30 @@ class ProductController extends Controller
         }
 
         Product::create([
-            'name' => $request->name,
-            'category' => $request->category,
-            'subcategory' => $request->subcategory,
-            'price' => $minPrice ?? 0,
-            'weight' => $baseWeight ?? '0',
-            'discount' => $request->discount ?? 0,
-            'stock_quantity' => $totalStock,
-            'description' => $request->description,
-            'additional_descriptions' => $request->additional_descriptions,
-            'pictures' => $picturePaths,
-            'variants' => count($variantsData['items']) > 0 ? $variantsData : null,
+            'name'                    => $validated['name'],
+            'category'                => $validated['category'] ?? null,
+            'subcategory'             => $validated['subcategory'],
+            'price'                   => $minPrice ?? 0,
+            'weight'                  => $baseWeight ?? '0',
+            'discount'                => $validated['discount'] ?? 0,
+            'stock_quantity'          => $totalStock,
+            'description'             => $validated['description'] ?? null,
+            'additional_descriptions' => $validated['additional_descriptions'] ?? null,
+            'pictures'                => $picturePaths,
+            'variants'                => count($variantsData['items']) > 0 ? $variantsData : null,
         ]);
 
         return redirect()->route('seller.products.index')->with('success', 'Product added successfully.');
     }
 
-    public function update(Request $request, Product $product)
+    public function update(UpdateProductRequest $request, Product $product)
     {
-        $request->validate([
-            'name' => 'required|string|max:100',
-            'discount' => 'nullable|numeric|min:0|max:100',
-            'stock_quantity' => 'required|integer|min:0',
-            'description' => 'nullable|string',
-        ]);
+        $validated = $request->validated();
 
         $product->update([
-            'name' => $request->name,
-            'discount' => $request->discount ?? 0,
-            'stock_quantity' => $request->stock_quantity,
-            'description' => $request->description,
+            'name'        => $validated['name'],
+            'discount'    => $validated['discount'] ?? 0,
+            'description' => $validated['description'] ?? null,
         ]);
 
         return back()->with('success', 'Product updated successfully.');
@@ -165,14 +144,14 @@ class ProductController extends Controller
         return back()->with('success', 'Product archived.');
     }
 
-    public function unarchive($id)
+    public function unarchive(int $id)
     {
         $product = Product::withTrashed()->findOrFail($id);
         $product->restore();
         return back()->with('success', 'Product unarchived.');
     }
 
-    public function forceDelete($id)
+    public function forceDelete(int $id)
     {
         $product = Product::withTrashed()->findOrFail($id);
 
