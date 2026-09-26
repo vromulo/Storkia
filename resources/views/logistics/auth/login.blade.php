@@ -7,7 +7,7 @@
     <x-auth.login-form 
         title="Logistics Operations" 
         subtitle="Sign in to your courier dashboard"
-        :submitRoute="route('logistics.login.post')"
+        expectedRole="Logistics"
         :registerRoute="route('logistics.register')"
         registerText="Apply for Logistics Hub"
         :showRegister="true"

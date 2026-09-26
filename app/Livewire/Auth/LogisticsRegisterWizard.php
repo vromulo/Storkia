@@ -88,7 +88,7 @@ class LogisticsRegisterWizard extends Component
                     $this->validateOnly('password_confirmation', ['password_confirmation' => ['same:password']]);
                 }
             } elseif ($propertyName === 'password_confirmation') {
-                $this->validateOnly('password_confirmation', ['required', 'same:password']);
+                $this->validateOnly('password_confirmation', ['password_confirmation' => ['required', 'same:password']]);
             }
         }
     }
