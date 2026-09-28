@@ -1,0 +1,132 @@
+body, table, td, p, a, li, blockquote {
+    -webkit-text-size-adjust: 100%;
+    -ms-text-size-adjust: 100%;
+}
+table, td {
+    mso-table-lspace: 0pt;
+    mso-table-rspace: 0pt;
+}
+.brand-font {
+    font-family: 'DM Serif Display', Georgia, 'Times New Roman', serif !important;
+}
+.body-font {
+    font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif !important;
+}
+
+.email-body {
+    margin: 0; 
+    padding: 0; 
+    background-color: #F5F5F4; 
+    font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; 
+    color: #292524; 
+    -webkit-font-smoothing: antialiased;
+}
+
+.email-wrapper-table {
+    background-color: #F5F5F4; 
+    padding: 40px 16px;
+}
+
+.email-card-table {
+    max-width: 500px; 
+    background-color: #ffffff; 
+    border: 1px solid #E7E5E4; 
+    border-radius: 24px; 
+    overflow: hidden; 
+    box-shadow: 0 4px 12px rgba(41, 37, 36, 0.05);
+}
+
+.header-cell {
+    background-color: #5D3140; 
+    padding: 28px 24px; 
+    border-bottom: 3px solid #CF4173;
+}
+
+.header-brand {
+    font-family: 'DM Serif Display', Georgia, serif; 
+    font-size: 38px; 
+    line-height: 1; 
+    color: #ffffff; 
+    letter-spacing: -0.5px; 
+    text-decoration: none; 
+    font-weight: normal; 
+    display: inline-block;
+}
+
+.card-body-cell {
+    padding: 36px 32px 28px; 
+    text-align: center;
+}
+
+.title-text {
+    font-family: 'Plus Jakarta Sans', sans-serif; 
+    font-size: 20px; 
+    font-weight: 700; 
+    color: #292524; 
+    margin: 0 0 8px 0;
+}
+
+.subtitle-text {
+    font-family: 'Plus Jakarta Sans', sans-serif; 
+    font-size: 14px; 
+    line-height: 1.6; 
+    color: #78716C; 
+    margin: 0 0 28px 0;
+}
+
+.otp-table {
+    margin-bottom: 28px;
+}
+
+.otp-box {
+    display: inline-block; 
+    background-color: #F5F5F4; 
+    border: 2px dashed #F6D8BD; 
+    border-radius: 16px; 
+    padding: 18px 32px;
+}
+
+.otp-text {
+    font-family: 'Plus Jakarta Sans', monospace; 
+    font-size: 32px; 
+    font-weight: 800; 
+    letter-spacing: 8px; 
+    color: #CF4173; 
+    text-indent: 10px; 
+    display: block;
+}
+
+.notice-box {
+    background-color: #FAFAF9; 
+    border: 1px solid #E7E5E4; 
+    border-radius: 12px; 
+    padding: 14px 16px; 
+    margin-bottom: 8px;
+}
+
+.notice-text {
+    font-family: 'Plus Jakarta Sans', sans-serif; 
+    font-size: 12px; 
+    line-height: 1.5; 
+    color: #78716C; 
+    margin: 0;
+}
+
+.notice-strong {
+    color: #292524;
+}
+
+.footer-cell {
+    padding: 20px 32px 24px; 
+    background-color: #ffffff; 
+    border-top: 1px solid #E7E5E4; 
+    text-align: center;
+}
+
+.footer-text {
+    font-family: 'Plus Jakarta Sans', sans-serif; 
+    font-size: 11px; 
+    line-height: 1.5; 
+    color: #78716C; 
+    margin: 0;
+}

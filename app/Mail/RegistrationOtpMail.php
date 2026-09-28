@@ -20,7 +20,7 @@ class RegistrationOtpMail extends Mailable
     public function envelope(): Envelope
     {
         return new Envelope(
-            subject: 'Your Stork verification code',
+            subject: 'Your Storkia verification code',
         );
     }
 

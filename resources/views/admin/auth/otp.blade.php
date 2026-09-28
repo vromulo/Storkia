@@ -4,28 +4,17 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Storkia - Admin OTP Authentication</title>
-    @vite(['resources/css/app.css', 'resources/js/app.js'])
+    @vite(['resources/css/app.css', 'resources/css/admin/auth/otp.css', 'resources/js/app.js'])
     <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
-    <style>
-        [x-cloak] { display: none !important; }
-        
-        /* Strict Mobile/Desktop Visibility Rules */
-        .mobile-view { display: flex; }
-        .desktop-view { display: none; }
-        @media (min-width: 768px) {
-            .mobile-view { display: none !important; }
-            .desktop-view { display: flex !important; }
-        }
-    </style>
 </head>
 <body class="m-0 p-0 h-screen w-screen font-sans antialiased text-text-main overflow-hidden bg-gradient-to-b from-surface via-surface to-brand-light/30 relative">
 
-    <!-- Logo Background Overlay[cite: 12] -->
+    <!-- Logo Background Overlay -->
     <div class="absolute inset-0 pointer-events-none z-0 opacity-5 overflow-hidden" aria-hidden="true">
         <svg class="w-full h-full" xmlns="http://www.w3.org/2000/svg" width="100%" height="100%">
             <defs>
                 <pattern id="stork-pattern-admin-otp" width="120" height="120" patternUnits="userSpaceOnUse" patternTransform="rotate(-15)">
-                    <image href="{{ asset('assets/storkia-minimized.png') }}" x="36" y="36" width="48" height="48" style="filter: brightness(0);" />
+                    <image href="{{ asset('assets/storkia-minimized.png') }}" x="36" y="36" width="48" height="48" class="stork-pattern-image" />
                 </pattern>
             </defs>
             <rect width="100%" height="100%" fill="url(#stork-pattern-admin-otp)" />

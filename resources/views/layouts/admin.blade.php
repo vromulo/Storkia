@@ -10,26 +10,9 @@
         <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
         <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0,1&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
         
-        @vite(['resources/css/app.css', 'resources/js/app.js'])
+        @vite(['resources/css/app.css', 'resources/css/layouts/admin.css', 'resources/js/app.js'])
         @livewireStyles
 
-        <style>
-            [x-cloak] { display: none !important; }
-    
-            /* Custom scrollbar for a cleaner UI */
-            .custom-scrollbar::-webkit-scrollbar { width: 4px; }
-            .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
-            .custom-scrollbar::-webkit-scrollbar-thumb { background: var(--tw-colors-brand-light, #d1d5db); border-radius: 10px; }
-            .custom-scrollbar:hover::-webkit-scrollbar-thumb { background: var(--tw-colors-primary, #9ca3af); }
-    
-            /* Strict Mobile/Desktop Visibility Rules */
-            .mobile-view { display: flex; }
-            .desktop-view { display: none; }
-            @media (min-width: 768px) {
-                .mobile-view { display: none !important; }
-                .desktop-view { display: flex !important; }
-            }
-        </style>
     </head>
     <body class="m-0 p-0 h-screen w-screen font-sans antialiased text-text-main overflow-hidden bg-gradient-to-b from-surface via-surface to-brand-light/30 relative">
         
@@ -67,7 +50,7 @@
             </div>
         </div>
  
-        <!-- Alpine State Wrapper (Alpine here comes from Livewire's bundled copy via @@livewireScripts below) -->
+        <!-- Alpine State Wrapper (Alpine here comes from Livewire's bundled copy via @livewireScripts below) -->
         <div x-data="{ sidebarOpen: localStorage.getItem('adminSidebarOpen') !== 'false' }"
             x-init="$watch('sidebarOpen', val => localStorage.setItem('adminSidebarOpen', val))"
             class="desktop-view h-screen w-full relative">

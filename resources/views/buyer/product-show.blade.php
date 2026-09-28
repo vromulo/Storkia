@@ -1,21 +1,15 @@
 @extends('layouts.app')
 
 @section('content')
-
-<!-- Cross-browser CSS to hide the up/down number arrows -->
-<style>
-    input[type="number"]::-webkit-inner-spin-button,
-    input[type="number"]::-webkit-outer-spin-button {
-        -webkit-appearance: none;
-        margin: 0;
-    }
-    input[type="number"] {
-        -moz-appearance: textfield; /* Firefox */
-    }
-</style>
+@vite(['resources/css/buyer/product-show.css', 'resources/js/buyer/product-show.js'])
 
 <!-- Alpine Data Wrapper for interactivity -->
-<div x-data="productApp()" class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 bg-gray-50 min-h-screen relative">
+<div x-data="productApp(
+    '{{ (!empty($product->pictures) && is_array($product->pictures)) ? asset('storage/' . $product->pictures[0]) : '' }}',
+    {{ $product->price ?? 0 }},
+    {{ $product->discount ?? 0 }},
+    {{ $product->stock_quantity ?? 0 }}
+)" class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 bg-gray-50 min-h-screen relative">
     
     <!-- Breadcrumbs -->
     <div class="text-sm text-gray-500 mb-6">
@@ -255,39 +249,4 @@
     </div>
 
 </div>
-
-<!-- Alpine Script for Interactivity -->
-<script>
-    function productApp() {
-        return {
-            defaultImage: '{{ (!empty($product->pictures) && is_array($product->pictures)) ? asset("storage/" . $product->pictures[0]) : "" }}',
-            mainImage: '{{ (!empty($product->pictures) && is_array($product->pictures)) ? asset("storage/" . $product->pictures[0]) : "" }}',
-            imageModalOpen: false,
-
-            basePrice: {{ $product->price ?? 0 }},
-            currentPrice: {{ $product->price ?? 0 }},
-            discount: {{ $product->discount ?? 0 }},
-            maxStock: {{ $product->stock_quantity ?? 0 }},
-            quantity: 1,
-            
-            selectedMain: null,
-            selectedSub: null,
-
-            setMainImage(url) {
-                if(url) this.mainImage = url;
-            },
-
-            get discountedPrice() {
-                if (this.discount > 0) {
-                    return this.currentPrice - (this.currentPrice * (this.discount / 100));
-                }
-                return this.currentPrice;
-            },
-
-            formatMoney(amount) {
-                return Number(amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-            }
-        }
-    }
-</script>
 @endsection

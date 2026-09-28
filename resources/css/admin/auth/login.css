@@ -1,0 +1,13 @@
+[x-cloak] { display: none !important; }
+
+/* Strict Mobile/Desktop Visibility Rules */
+.mobile-view { display: flex; }
+.desktop-view { display: none; }
+@media (min-width: 768px) {
+    .mobile-view { display: none !important; }
+    .desktop-view { display: flex !important; }
+}
+
+.stork-pattern-image {
+    filter: brightness(0);
+}

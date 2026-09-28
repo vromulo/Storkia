@@ -19,7 +19,7 @@ class AdminOtpMail extends Mailable
     public function envelope(): Envelope
     {
         return new Envelope(
-            subject: 'Stork Admin Portal - Login Verification',
+            subject: 'Storkia Admin Portal - Login Verification',
         );
     }
 

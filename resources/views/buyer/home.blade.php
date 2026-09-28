@@ -3,15 +3,7 @@
 @section('content')
     <!-- Alpine.js & Custom Styles -->
     <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
-    <style>
-        @keyframes fadeInUp {
-            from { opacity: 0; transform: translateY(15px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-        .animate-fade-in-up {
-            animation: fadeInUp 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-        }
-    </style>
+    @vite(['resources/css/buyer/home.css'])
 
     <!-- Main Container -->
     <div x-data="{ modalOpen: false, activeProduct: null }" class="relative bg-surface font-sans antialiased text-text-main overflow-x-hidden min-h-screen">

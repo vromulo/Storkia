@@ -1,0 +1,15 @@
+[x-cloak] { display: none !important; }
+
+/* Custom scrollbar for a cleaner UI */
+.custom-scrollbar::-webkit-scrollbar { width: 4px; }
+.custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+.custom-scrollbar::-webkit-scrollbar-thumb { background: var(--tw-colors-brand-light, #d1d5db); border-radius: 10px; }
+.custom-scrollbar:hover::-webkit-scrollbar-thumb { background: var(--tw-colors-primary, #9ca3af); }
+
+/* Strict Mobile/Desktop Visibility Rules */
+.mobile-view { display: flex; }
+.desktop-view { display: none; }
+@media (min-width: 768px) {
+    .mobile-view { display: none !important; }
+    .desktop-view { display: flex !important; }
+}

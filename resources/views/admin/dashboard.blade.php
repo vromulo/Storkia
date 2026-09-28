@@ -5,24 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Storkia - Admin Dashboard</title>
     @vite(['resources/css/app.css', 'resources/js/app.js'])
+    @vite(['resources/css/admin/dashboard.css'])
     <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
-    <style>
-        [x-cloak] { display: none !important; }
-        
-        /* Custom scrollbar for a cleaner UI */
-        .custom-scrollbar::-webkit-scrollbar { width: 4px; }
-        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
-        .custom-scrollbar::-webkit-scrollbar-thumb { background: var(--tw-colors-brand-light, #d1d5db); border-radius: 10px; }
-        .custom-scrollbar:hover::-webkit-scrollbar-thumb { background: var(--tw-colors-primary, #9ca3af); }
-
-        /* Strict Mobile/Desktop Visibility Rules */
-        .mobile-view { display: flex; }
-        .desktop-view { display: none; }
-        @media (min-width: 768px) {
-            .mobile-view { display: none !important; }
-            .desktop-view { display: flex !important; }
-        }
-    </style>
 </head>
 <body class="m-0 p-0 h-screen w-screen font-sans antialiased text-text-main overflow-hidden bg-gradient-to-b from-surface via-surface to-brand-light/30 relative">
     
