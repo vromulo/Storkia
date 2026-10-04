@@ -3,92 +3,129 @@
 ])
 
 @section('option-content')
-<div class="space-y-6">
-    <!-- Section Header -->
-    <div class="border-b border-border-subtle pb-4">
-        <h2 class="text-lg font-bold text-text-main">Account Management</h2>
-        <p class="text-xs text-text-muted mt-1">Review your login credentials, role permissions, and active status.</p>
+<div class="space-y-6 pt-0">
+
+    <!-- Header Title -->
+    <div class="pt-0 pb-2 text-center">
+        <h2 class="text-2xl sm:text-3xl font-extrabold text-text-main tracking-tight">
+            Manage My Account
+        </h2>
     </div>
 
-    <!-- Account Overview Summary Cards -->
-    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div class="p-4 bg-surface-subtle rounded-2xl border border-border-subtle space-y-1">
-            <span class="text-[11px] font-bold uppercase tracking-wider text-text-muted">Account ID</span>
-            <p class="text-sm font-semibold text-text-main">#{{ str_pad($user->id, 6, '0', STR_PAD_LEFT) }}</p>
+    <!-- 1. Username -->
+    <div class="flex items-center justify-between gap-4">
+        <div class="space-y-1">
+            <h3 class="text-sm sm:text-base font-bold text-text-main">
+                Full Name
+            </h3>
+            <p class="text-sm text-text-muted font-normal tracking-wide">
+                {{ trim(($user->first_name ?? '') . ' ' . ($user->last_name ?? '')) ?: 'User-' . str_pad($user->id, 6, '0', STR_PAD_LEFT) }}
+            </p>
         </div>
-
-        <div class="p-4 bg-surface-subtle rounded-2xl border border-border-subtle space-y-1">
-            <span class="text-[11px] font-bold uppercase tracking-wider text-text-muted">Primary Role</span>
-            <div class="flex items-center gap-2">
-                <span class="px-2.5 py-0.5 rounded-full text-xs font-bold bg-primary/10 text-primary border border-primary/20">
-                    {{ $user->role ?? 'Buyer' }}
-                </span>
-            </div>
-        </div>
-
-        <div class="p-4 bg-surface-subtle rounded-2xl border border-border-subtle space-y-1">
-            <span class="text-[11px] font-bold uppercase tracking-wider text-text-muted">Account Status</span>
-            <div class="flex items-center gap-2">
-                <span class="w-2 h-2 rounded-full bg-green-500"></span>
-                <span class="text-sm font-semibold text-green-700">Active & Verified</span>
-            </div>
-        </div>
-
-        <div class="p-4 bg-surface-subtle rounded-2xl border border-border-subtle space-y-1">
-            <span class="text-[11px] font-bold uppercase tracking-wider text-text-muted">Member Since</span>
-            <p class="text-sm font-semibold text-text-main">{{ $user->created_at ? $user->created_at->format('M d, Y') : 'Recent' }}</p>
-        </div>
-    </div>
-
-    <!-- Account Security & Credentials Section -->
-    <div class="border-t border-border-subtle pt-6 space-y-4">
-        <h3 class="text-sm font-bold text-text-main uppercase tracking-wider">Account Credentials</h3>
-
-        <div class="flex flex-col sm:flex-row sm:items-center justify-between p-4 bg-surface-subtle rounded-2xl border border-border-subtle gap-3">
-            <div>
-                <p class="text-xs font-bold text-text-main">Email Address</p>
-                <p class="text-sm text-text-muted">{{ $user->email }}</p>
-            </div>
-            <span class="text-xs text-green-700 font-semibold flex items-center gap-1">
-                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
-                </svg>
-                Verified
-            </span>
-        </div>
-
-        <div class="flex flex-col sm:flex-row sm:items-center justify-between p-4 bg-surface-subtle rounded-2xl border border-border-subtle gap-3">
-            <div>
-                <p class="text-xs font-bold text-text-main">Mobile Number</p>
-                <p class="text-sm text-text-muted">{{ $user->contact_no ?? 'No contact number added' }}</p>
-            </div>
-            <a href="{{ route('user.profile') }}" class="text-xs font-bold text-primary hover:text-primary-dark transition-colors">
-                Update
+        <div class="shrink-0 text-right">
+            <a href="{{ route('user.profile') }}" class="text-sm font-thin underline text-text-main hover:opacity-75 transition-opacity">
+                Edit
             </a>
         </div>
+    </div>
 
-        <div class="flex flex-col sm:flex-row sm:items-center justify-between p-4 bg-surface-subtle rounded-2xl border border-border-subtle gap-3">
-            <div>
-                <p class="text-xs font-bold text-text-main">Password</p>
-                <p class="text-sm text-text-muted">••••••••••••</p>
-            </div>
-            <a href="{{ route('user.change-password') }}" class="text-xs font-bold text-primary hover:text-primary-dark transition-colors">
+    <hr class="border-border-subtle" />
+
+    <!-- 2. Email -->
+    <div class="flex items-center justify-between gap-4">
+        <div class="space-y-1">
+            <h3 class="text-sm sm:text-base font-bold text-text-main">
+                Email
+            </h3>
+            @php
+                $email = $user->email ?? '';
+                $maskedEmail = $email;
+                if (str_contains($email, '@')) {
+                    [$name, $domain] = explode('@', $email, 2);
+                    $maskedEmail = substr($name, 0, 1) . str_repeat('*', max(strlen($name) - 2, 4)) . substr($name, -1) . '@' . $domain;
+                }
+            @endphp
+            <p class="text-sm text-text-muted font-normal tracking-wide">
+                {{ $maskedEmail }}
+            </p>
+        </div>
+        <div class="shrink-0 text-right">
+            <a href="{{ route('user.profile') }}" class="text-sm font-thin underline text-text-main hover:opacity-75 transition-opacity">
+                Edit
+            </a>
+        </div>
+    </div>
+
+    <hr class="border-border-subtle" />
+
+    <!-- 3. Phone Number -->
+    <div class="flex items-center justify-between gap-4">
+        <div class="space-y-1">
+            <h3 class="text-sm sm:text-base font-bold text-text-main">
+                Phone Number
+            </h3>
+            @php
+                $contact = $user->contact_no ?? '';
+                $maskedContact = 'Not linked';
+                if ($contact) {
+                    $cleanContact = preg_replace('/\D/', '', $contact);
+                    if (strlen($cleanContact) >= 8) {
+                        $maskedContact = substr($cleanContact, 0, 5) . '****' . substr($cleanContact, -3);
+                    } else {
+                        $maskedContact = $contact;
+                    }
+                }
+            @endphp
+            <p class="text-sm text-text-muted font-normal tracking-wide">
+                {{ $maskedContact }}
+            </p>
+        </div>
+        <div class="shrink-0 text-right flex items-center gap-2">
+            <a href="#" class="text-sm font-thin underline text-text-main hover:opacity-75 transition-opacity">
+                Verify
+            </a>
+            <span class="text-text-main text-xs font-light">|</span>
+            <a href="{{ route('user.profile') }}" class="text-sm font-thin underline text-text-main hover:opacity-75 transition-opacity">
+                Edit
+            </a>
+        </div>
+    </div>
+
+    <hr class="border-border-subtle" />
+
+    <!-- 4. Change Password -->
+    <div class="flex items-center justify-between gap-4">
+        <div class="space-y-1">
+            <h3 class="text-sm sm:text-base font-bold text-text-main">
                 Change Password
+            </h3>
+            <p class="text-sm text-text-muted font-normal tracking-widest">
+                ••••••••••
+            </p>
+        </div>
+        <div class="shrink-0 text-right">
+            <a href="{{ route('user.change-password') }}" class="text-sm font-thin underline text-text-main hover:opacity-75 transition-opacity">
+                Edit
             </a>
         </div>
     </div>
 
-    <!-- Danger Zone / Account Deactivation -->
-    <div class="border-t border-border-subtle pt-6">
-        <div class="p-5 bg-red-50/60 rounded-2xl border border-red-200 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-            <div>
-                <h4 class="text-sm font-bold text-red-900">Deactivate or Delete Account</h4>
-                <p class="text-xs text-red-800 mt-0.5">Permanently remove your account, active vouchers, and personal purchase history.</p>
-            </div>
-            <button type="button" class="px-4 py-2.5 bg-red-600 hover:bg-red-700 text-white font-bold text-xs rounded-xl shadow-xs transition-colors shrink-0 cursor-pointer">
-                Request Deactivation
-            </button>
+    <hr class="border-border-subtle" />
+
+    <!-- 5. Delete Account (With Chevron Arrow) -->
+    <div class="flex items-center justify-between group cursor-pointer hover:opacity-85 transition-opacity">
+        <div class="space-y-1">
+            <h3 class="text-base font-bold text-text-main">Delete Account</h3>
+            <p class="text-xs text-text-muted font-normal">
+                NOTE: Account will NOT BE RECOVERABLE once deleted.
+            </p>
+        </div>
+        <div class="text-text-muted shrink-0 pl-4">
+            <svg class="w-5 h-5 text-gray-400 group-hover:text-text-main transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+            </svg>
         </div>
     </div>
+
 </div>
 @endsection
