@@ -77,15 +77,32 @@
                                 <a href="{{ route('login') }}" class="block px-3 py-2 text-xs font-bold text-[#CF4173] rounded-lg hover:bg-gray-50 transition-colors">Sign in / Register</a>
                             @endguest
                             @auth
-                                <a href="#" class="block px-3 py-2 text-xs font-bold text-gray-800 rounded-lg hover:bg-gray-50 hover:text-[#CF4173] transition-colors">My account</a>
+                                <!-- User Header Profile Card -->
+                                <div class="px-3 py-2.5 bg-gray-50/80 rounded-lg border border-gray-100 mb-1 flex items-center justify-between gap-2">
+                                    <p class="text-xs font-bold text-gray-900 truncate">
+                                        {{ auth()->user()->first_name }} {{ auth()->user()->last_name }}
+                                    </p>
+                                    <div class="shrink-0 text-warning" title="Notice">
+                                        <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4 fill-none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+                                            <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v4m0 4h.01M12 3a9 9 0 100 18 9 9 0 000-18z" />
+                                        </svg>
+                                    </div>
+                                </div>
+
+                                <a href="{{ route('user.account') }}" class="block px-3 py-2 text-xs font-medium text-gray-600 rounded-lg hover:bg-gray-50 hover:text-[#CF4173] transition-colors">My Account</a>
+                                <a href="#" class="block px-3 py-2 text-xs font-medium text-gray-600 rounded-lg hover:bg-gray-50 hover:text-[#CF4173] transition-colors">My Orders</a>
+                                <a href="#" class="block px-3 py-2 text-xs font-medium text-gray-600 rounded-lg hover:bg-gray-50 hover:text-[#CF4173] transition-colors">My Messages</a>
+                                <a href="#" class="block px-3 py-2 text-xs font-medium text-gray-600 rounded-lg hover:bg-gray-50 hover:text-[#CF4173] transition-colors">My Vouchers</a>
+                                <a href="#" class="block px-3 py-2 text-xs font-medium text-gray-600 rounded-lg hover:bg-gray-50 hover:text-[#CF4173] transition-colors">Wishlist</a>
+
+                                <hr class="border-gray-100 my-1 mx-2">
+
                                 <form method="POST" action="{{ route('logout') }}" class="m-0">
                                     @csrf
                                     <button type="submit" class="w-full text-left px-3 py-2 text-xs font-bold text-red-600 rounded-lg hover:bg-red-50 transition-colors">Logout</button>
                                 </form>
                             @endauth
-                            <hr class="border-gray-100 my-1 mx-2">
-                            <a href="#" class="block px-3 py-2 text-xs font-medium text-gray-600 rounded-lg hover:bg-gray-50 hover:text-[#CF4173] transition-colors">My Orders</a>
-                            <a href="#" class="block px-3 py-2 text-xs font-medium text-gray-600 rounded-lg hover:bg-gray-50 hover:text-[#CF4173] transition-colors">My Messages</a>
+                            
                         </div>
                     </div>
                 </div>
