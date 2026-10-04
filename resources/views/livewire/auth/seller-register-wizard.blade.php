@@ -334,41 +334,217 @@
         {{-- STEP 5: Required Documents --}}
         @if ($currentStep === 5)
             <div class="space-y-6">
-                <!-- Valid ID -->
+                <!-- 1. Valid ID Dropzone -->
                 <div>
                     <div class="flex items-center justify-between mb-1.5">
-                        <label class="block text-xs uppercase tracking-wider font-bold text-text-muted">Valid Government ID*</label>
+                        <label class="block text-xs uppercase tracking-wider font-bold text-text-muted">
+                            Valid Government ID*
+                        </label>
                         <span class="text-[11px] text-text-muted">JPG, PNG, PDF (Max 10MB)</span>
                     </div>
-                    <div class="relative border-b {{ $errors->has('valid_id') ? 'border-danger' : 'border-border-subtle focus-within:border-text-main' }} py-2 transition-colors">
-                        <input type="file" wire:model="valid_id" accept=".jpg,.jpeg,.png,.pdf" class="w-full text-xs text-text-main file:mr-3 file:py-1.5 file:px-3 file:rounded-full file:border-0 file:text-xs file:font-semibold file:bg-surface-subtle file:text-primary-dark hover:file:bg-brand-light/40 cursor-pointer">
+
+                    <div 
+                        x-data="{ isDragging: false }"
+                        @dragover.prevent="isDragging = true"
+                        @dragleave.prevent="isDragging = false"
+                        @drop.prevent="
+                            isDragging = false;
+                            if ($event.dataTransfer.files.length > 0) {
+                                $refs.validIdInput.files = $event.dataTransfer.files;
+                                $refs.validIdInput.dispatchEvent(new Event('change', { bubbles: true }));
+                            }
+                        "
+                        :class="isDragging ? 'border-primary bg-brand-light/20' : 'border-border-subtle hover:border-text-main/50'"
+                        class="relative rounded-2xl border-2 border-dashed p-4 transition-all duration-200 overflow-hidden bg-surface group"
+                    >
+                        <!-- Livewire Upload Spinner Overlay -->
+                        <div 
+                            wire:loading.flex 
+                            wire:target="valid_id" 
+                            class="absolute inset-0 z-20 bg-surface/90 backdrop-blur-xs flex-col items-center justify-center space-y-1.5 p-4"
+                        >
+                            <svg class="animate-spin h-6 w-6 text-primary" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
+                            </svg>
+                            <p class="text-xs font-semibold text-primary-dark">Uploading Valid ID...</p>
+                        </div>
+
+                        <!-- Active Preview State -->
+                        @if ($valid_id)
+                            <div class="flex items-center justify-between gap-3">
+                                <div class="flex items-center gap-3 overflow-hidden">
+                                    @php
+                                        $validIdExt = strtolower(pathinfo($valid_id->getClientOriginalName(), PATHINFO_EXTENSION));
+                                    @endphp
+
+                                    @if(in_array($validIdExt, ['jpg', 'jpeg', 'png', 'webp']))
+                                        <img src="{{ $valid_id->temporaryUrl() }}" alt="Valid ID" class="w-12 h-12 object-cover rounded-xl border border-border-subtle shrink-0 shadow-xs">
+                                    @else
+                                        <div class="w-12 h-12 rounded-xl bg-danger/10 text-danger flex items-center justify-center shrink-0 border border-danger/20">
+                                            <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                                            </svg>
+                                        </div>
+                                    @endif
+
+                                    <div class="truncate">
+                                        <p class="text-xs font-bold text-text-main truncate" title="{{ $valid_id->getClientOriginalName() }}">
+                                            {{ $valid_id->getClientOriginalName() }}
+                                        </p>
+                                        <div class="flex items-center gap-2 mt-0.5">
+                                            <span class="text-[10px] text-text-muted">
+                                                {{ round($valid_id->getSize() / 1024, 1) }} KB
+                                            </span>
+                                            <span class="text-[10px] text-success font-semibold flex items-center gap-0.5">
+                                                <svg class="w-3 h-3" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path></svg>
+                                                Ready
+                                            </span>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <label for="valid_id_file" class="text-xs font-bold text-primary hover:text-primary-dark underline cursor-pointer shrink-0 px-2 py-1">
+                                    Change
+                                </label>
+                            </div>
+                        @else
+                            <!-- Empty Drop Target -->
+                            <label for="valid_id_file" class="flex flex-col items-center justify-center py-4 cursor-pointer">
+                                <div class="w-9 h-9 rounded-full bg-surface-subtle flex items-center justify-center mb-2 text-text-muted group-hover:text-primary group-hover:bg-brand-light/30 transition-colors">
+                                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                                    </svg>
+                                </div>
+                                <p class="text-xs text-text-main font-medium">
+                                    <span class="text-primary font-semibold underline">Browse file</span> or drag & drop here
+                                </p>
+                            </label>
+                        @endif
+
+                        <input 
+                            id="valid_id_file" 
+                            x-ref="validIdInput"
+                            type="file" 
+                            wire:model="valid_id" 
+                            class="hidden" 
+                            accept=".jpg,.jpeg,.png,.pdf" 
+                        />
                     </div>
-                    <div wire:loading wire:target="valid_id" class="text-xs text-primary font-medium mt-1">Uploading Valid ID...</div>
-                    @if ($valid_id)
-                        <p class="text-xs text-success mt-1.5 font-semibold flex items-center gap-1">✓ Attached: {{ $valid_id->getClientOriginalName() }}</p>
-                    @endif
                     @error('valid_id') <p class="text-danger text-xs mt-1.5 font-medium">{{ $message }}</p> @enderror
                 </div>
 
-                <!-- Business Permit -->
+                <!-- 2. Business Permit Dropzone -->
                 <div>
                     <div class="flex items-center justify-between mb-1.5">
-                        <label class="block text-xs uppercase tracking-wider font-bold text-text-muted">Business Permit / DTI / Mayor's Permit*</label>
+                        <label class="block text-xs uppercase tracking-wider font-bold text-text-muted">
+                            Business Permit / DTI / Mayor's Permit*
+                        </label>
                         <span class="text-[11px] text-text-muted">JPG, PNG, PDF (Max 10MB)</span>
                     </div>
-                    <div class="relative border-b {{ $errors->has('business_permit') ? 'border-danger' : 'border-border-subtle focus-within:border-text-main' }} py-2 transition-colors">
-                        <input type="file" wire:model="business_permit" accept=".jpg,.jpeg,.png,.pdf" class="w-full text-xs text-text-main file:mr-3 file:py-1.5 file:px-3 file:rounded-full file:border-0 file:text-xs file:font-semibold file:bg-surface-subtle file:text-primary-dark hover:file:bg-brand-light/40 cursor-pointer">
+
+                    <div 
+                        x-data="{ isDragging: false }"
+                        @dragover.prevent="isDragging = true"
+                        @dragleave.prevent="isDragging = false"
+                        @drop.prevent="
+                            isDragging = false;
+                            if ($event.dataTransfer.files.length > 0) {
+                                $refs.permitInput.files = $event.dataTransfer.files;
+                                $refs.permitInput.dispatchEvent(new Event('change', { bubbles: true }));
+                            }
+                        "
+                        :class="isDragging ? 'border-primary bg-brand-light/20' : 'border-border-subtle hover:border-text-main/50'"
+                        class="relative rounded-2xl border-2 border-dashed p-4 transition-all duration-200 overflow-hidden bg-surface group"
+                    >
+                        <!-- Livewire Upload Spinner Overlay -->
+                        <div 
+                            wire:loading.flex 
+                            wire:target="business_permit" 
+                            class="absolute inset-0 z-20 bg-surface/90 backdrop-blur-xs flex-col items-center justify-center space-y-1.5 p-4"
+                        >
+                            <svg class="animate-spin h-6 w-6 text-primary" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
+                            </svg>
+                            <p class="text-xs font-semibold text-primary-dark">Uploading Business Permit...</p>
+                        </div>
+
+                        <!-- Active Preview State -->
+                        @if ($business_permit)
+                            <div class="flex items-center justify-between gap-3">
+                                <div class="flex items-center gap-3 overflow-hidden">
+                                    @php
+                                        $permitExt = strtolower(pathinfo($business_permit->getClientOriginalName(), PATHINFO_EXTENSION));
+                                    @endphp
+
+                                    @if(in_array($permitExt, ['jpg', 'jpeg', 'png', 'webp']))
+                                        <img src="{{ $business_permit->temporaryUrl() }}" alt="Business Permit" class="w-12 h-12 object-cover rounded-xl border border-border-subtle shrink-0 shadow-xs">
+                                    @else
+                                        <div class="w-12 h-12 rounded-xl bg-danger/10 text-danger flex items-center justify-center shrink-0 border border-danger/20">
+                                            <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                                            </svg>
+                                        </div>
+                                    @endif
+
+                                    <div class="truncate">
+                                        <p class="text-xs font-bold text-text-main truncate" title="{{ $business_permit->getClientOriginalName() }}">
+                                            {{ $business_permit->getClientOriginalName() }}
+                                        </p>
+                                        <div class="flex items-center gap-2 mt-0.5">
+                                            <span class="text-[10px] text-text-muted">
+                                                {{ round($business_permit->getSize() / 1024, 1) }} KB
+                                            </span>
+                                            <span class="text-[10px] text-success font-semibold flex items-center gap-0.5">
+                                                <svg class="w-3 h-3" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path></svg>
+                                                Ready
+                                            </span>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <label for="permit_file" class="text-xs font-bold text-primary hover:text-primary-dark underline cursor-pointer shrink-0 px-2 py-1">
+                                    Change
+                                </label>
+                            </div>
+                        @else
+                            <!-- Empty Drop Target -->
+                            <label for="permit_file" class="flex flex-col items-center justify-center py-4 cursor-pointer">
+                                <div class="w-9 h-9 rounded-full bg-surface-subtle flex items-center justify-center mb-2 text-text-muted group-hover:text-primary group-hover:bg-brand-light/30 transition-colors">
+                                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                                    </svg>
+                                </div>
+                                <p class="text-xs text-text-main font-medium">
+                                    <span class="text-primary font-semibold underline">Browse file</span> or drag & drop here
+                                </p>
+                            </label>
+                        @endif
+
+                        <input 
+                            id="permit_file" 
+                            x-ref="permitInput"
+                            type="file" 
+                            wire:model="business_permit" 
+                            class="hidden" 
+                            accept=".jpg,.jpeg,.png,.pdf" 
+                        />
                     </div>
-                    <div wire:loading wire:target="business_permit" class="text-xs text-primary font-medium mt-1">Uploading Permit...</div>
-                    @if ($business_permit)
-                        <p class="text-xs text-success mt-1.5 font-semibold flex items-center gap-1">✓ Attached: {{ $business_permit->getClientOriginalName() }}</p>
-                    @endif
                     @error('business_permit') <p class="text-danger text-xs mt-1.5 font-medium">{{ $message }}</p> @enderror
                 </div>
 
+                <!-- Navigation Controls -->
                 <div class="flex items-center gap-3 pt-4">
-                    <button type="button" wire:click="backToStep(4)" class="py-3 px-5 text-text-muted hover:text-text-main text-sm font-medium transition-colors cursor-pointer">Back</button>
-                    <button type="button" wire:click="nextStep(5)" wire:loading.attr="disabled" class="flex-1 py-3.5 px-6 bg-primary-dark hover:bg-text-main text-surface text-sm font-semibold rounded-full shadow-xs hover:shadow-md transition-all duration-200 cursor-pointer active:scale-[0.99] disabled:opacity-60">
+                    <button type="button" wire:click="backToStep(4)" class="py-3 px-5 text-text-muted hover:text-text-main text-sm font-medium transition-colors cursor-pointer">
+                        Back
+                    </button>
+                    <button 
+                        type="button" 
+                        wire:click="nextStep(5)" 
+                        wire:loading.attr="disabled" 
+                        class="flex-1 py-3.5 px-6 bg-primary-dark hover:bg-text-main text-surface text-sm font-semibold rounded-full shadow-xs hover:shadow-md transition-all duration-200 cursor-pointer active:scale-[0.99] disabled:opacity-60"
+                    >
                         <span wire:loading.remove wire:target="valid_id, business_permit">Continue</span>
                         <span wire:loading wire:target="valid_id, business_permit">Processing Files...</span>
                     </button>
