@@ -16,7 +16,7 @@
     </head>
     <body class="m-0 p-0 h-screen w-screen font-sans antialiased text-text-main overflow-hidden bg-gradient-to-b from-surface via-surface to-brand-light/30 relative">
         
-        <!-- Mobile Restricted View (same guard used on the dashboard) -->
+        <!-- Mobile Restricted View -->
         <div class="mobile-view absolute inset-0 bg-surface/80 backdrop-blur-md z-40"></div>
 
         <div class="mobile-view flex-col items-center justify-center h-screen w-screen px-4 sm:px-6 py-8 z-50 relative overflow-y-auto">
@@ -50,7 +50,6 @@
             </div>
         </div>
  
-        <!-- Alpine State Wrapper (Alpine here comes from Livewire's bundled copy via @livewireScripts below) -->
         <div x-data="{ sidebarOpen: localStorage.getItem('adminSidebarOpen') !== 'false' }"
             x-init="$watch('sidebarOpen', val => localStorage.setItem('adminSidebarOpen', val))"
             class="desktop-view h-screen w-full relative">
@@ -58,9 +57,9 @@
             <!-- Sidebar Component -->
             @include('components.admin.sidebar')
     
-            <!-- Main Content Area: this is where each Livewire full-page component renders -->
             <main class="flex-1 h-screen overflow-y-auto custom-scrollbar relative">
-                {{ $slot }}
+                @yield('content')
+                {{ $slot ?? '' }}
             </main>
         </div>
     

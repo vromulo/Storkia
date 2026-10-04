@@ -10,6 +10,9 @@ class HomeController extends Controller
     public function index()
     {
         $products = Product::where('stock_quantity', '>', 0)
+            ->whereHas('approval', function ($query) {
+                $query->where('status', 'Approved');
+            })
             ->latest()
             ->get();
 

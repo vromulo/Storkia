@@ -8,7 +8,11 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
-    @vite(['resources/css/emails/registration-otp.css'])
+    
+    <!-- This connects your separate CSS file by injecting its contents into the email at runtime -->
+    <style type="text/css">
+        {!! file_get_contents(resource_path('css/emails/registration-otp.css')) !!}
+    </style>
 </head>
 <body class="email-body">
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" class="email-wrapper-table">

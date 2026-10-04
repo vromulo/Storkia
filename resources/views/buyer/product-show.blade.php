@@ -1,15 +1,48 @@
 @extends('layouts.app')
 
 @section('content')
-@vite(['resources/css/buyer/product-show.css', 'resources/js/buyer/product-show.js'])
+
+@php
+    $totalStock = 0;
+    if (isset($product->variants['items']) && is_array($product->variants['items'])) {
+        foreach ($product->variants['items'] as $item) {
+            if (isset($item['subs']) && count($item['subs']) > 0) {
+                foreach ($item['subs'] as $sub) {
+                    $totalStock += (int)($sub['stock'] ?? 0);
+                }
+            } else {
+                $totalStock += (int)($item['stock'] ?? 0);
+            }
+        }
+    } else {
+        $totalStock = (int)($product->stock_quantity ?? 0);
+    }
+    $firstPic = (!empty($product->pictures) && is_array($product->pictures)) ? asset('storage/' . $product->pictures[0]) : '';
+@endphp
 
 <!-- Alpine Data Wrapper for interactivity -->
-<div x-data="productApp(
-    '{{ (!empty($product->pictures) && is_array($product->pictures)) ? asset('storage/' . $product->pictures[0]) : '' }}',
-    {{ $product->price ?? 0 }},
-    {{ $product->discount ?? 0 }},
-    {{ $product->stock_quantity ?? 0 }}
-)" class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 bg-gray-50 min-h-screen relative">
+<div x-data="{
+    selectedMain: null,
+    selectedSub: null,
+    basePrice: {{ $product->price ?? 0 }},
+    discount: {{ $product->discount ?? 0 }},
+    totalStock: {{ $totalStock }},
+    activePrice: {{ $product->price ?? 0 }},
+    activeStock: {{ $totalStock }},
+    mainImage: '{{ $firstPic }}',
+    defaultImage: '{{ $firstPic }}',
+    quantity: 1,
+    imageModalOpen: false,
+    get discountedPrice() {
+        return this.discount > 0 ? this.activePrice - (this.activePrice * (this.discount / 100)) : this.activePrice;
+    },
+    formatMoney(value) {
+        return Number(value).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+    },
+    setMainImage(img) {
+        this.mainImage = img;
+    }
+}" class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 bg-gray-50 min-h-screen relative">
     
     <!-- Breadcrumbs -->
     <div class="text-sm text-gray-500 mb-6">
@@ -67,7 +100,7 @@
             <!-- Price Block -->
             <div class="bg-gray-50 px-6 py-4 rounded-lg mb-6 flex items-baseline gap-4 border border-gray-100">
                 <template x-if="discount > 0">
-                    <span class="text-gray-400 line-through text-lg" x-text="'₱' + formatMoney(currentPrice)"></span>
+                    <span class="text-gray-400 line-through text-lg" x-text="'₱' + formatMoney(activePrice)"></span>
                 </template>
                 
                 <span class="text-3xl font-bold text-primary" x-text="'₱' + formatMoney(discountedPrice)"></span>
@@ -86,21 +119,33 @@
                         <h3 class="text-gray-700 font-medium mb-3 capitalize">{{ $product->variants['title'] ?? 'Variants' }}</h3>
                         <div class="flex flex-wrap gap-2">
                             @foreach($product->variants['items'] as $vIndex => $item)
+                                @php
+                                    $hasSubs = isset($item['subs']) && count($item['subs']) > 0;
+                                    $itemStock = 0;
+                                    if ($hasSubs) {
+                                        foreach ($item['subs'] as $sb) { $itemStock += (int)($sb['stock'] ?? 0); }
+                                    } else {
+                                        $itemStock = (int)($item['stock'] ?? 0);
+                                    }
+                                @endphp
                                 <button 
                                     x-on:click="
                                         if (selectedMain === {{ $vIndex }}) {
                                             selectedMain = null;
                                             selectedSub = null;
-                                            currentPrice = basePrice;
+                                            activePrice = basePrice;
+                                            activeStock = totalStock;
                                             mainImage = defaultImage;
                                         } else {
                                             selectedMain = {{ $vIndex }};
                                             selectedSub = null;
-                                            currentPrice = {{ $item['price'] ?? $product->price }};
+                                            activePrice = {{ $item['price'] ?? $product->price }};
+                                            activeStock = {{ $itemStock }};
                                             @if(isset($item['image']) && $item['image'])
                                                 mainImage = '{{ asset('storage/' . $item['image']) }}';
                                             @endif
                                         }
+                                        quantity = 1;
                                     "
                                     :class="selectedMain === {{ $vIndex }} ? 'border-primary text-primary ring-1 ring-primary bg-primary-light/10' : 'border-gray-300 text-gray-700 hover:border-primary hover:text-primary'"
                                     class="px-4 py-2 border rounded focus:outline-none transition-all bg-white text-sm cursor-pointer">
@@ -117,11 +162,13 @@
                                 <h3 class="text-gray-700 font-medium mb-3 capitalize">{{ $product->variants['sub_title'] ?? 'Sub Variants' }}</h3>
                                 <div class="flex flex-wrap gap-2">
                                     @foreach($item['subs'] as $sIndex => $sub)
+                                        @php $subStock = (int)($sub['stock'] ?? 0); @endphp
                                         <button 
                                             x-on:click="
                                                 if (selectedSub === {{ $sIndex }}) {
                                                     selectedSub = null;
-                                                    currentPrice = {{ $item['price'] ?? $product->price }};
+                                                    activePrice = {{ $item['price'] ?? $product->price }};
+                                                    activeStock = {{ $itemStock }};
                                                     @if(isset($item['image']) && $item['image'])
                                                         mainImage = '{{ asset('storage/' . $item['image']) }}';
                                                     @else
@@ -129,11 +176,13 @@
                                                     @endif
                                                 } else {
                                                     selectedSub = {{ $sIndex }};
-                                                    currentPrice = {{ $sub['price'] ?? ($item['price'] ?? $product->price) }};
+                                                    activePrice = {{ $sub['price'] ?? ($item['price'] ?? $product->price) }};
+                                                    activeStock = {{ $subStock }};
                                                     @if(isset($sub['image']) && $sub['image'])
                                                         mainImage = '{{ asset('storage/' . $sub['image']) }}';
                                                     @endif
                                                 }
+                                                quantity = 1;
                                             "
                                             :class="selectedSub === {{ $sIndex }} ? 'border-primary text-primary ring-1 ring-primary bg-primary-light/10' : 'border-gray-300 text-gray-700 hover:border-primary hover:text-primary'"
                                             class="px-4 py-2 border rounded focus:outline-none transition-all bg-white text-sm cursor-pointer">
@@ -154,10 +203,10 @@
                 <div class="flex items-center border border-gray-300 rounded bg-white">
                     <button x-on:click="if(quantity > 1) quantity--" class="px-4 py-2 text-gray-600 hover:text-primary hover:bg-gray-50 transition-colors border-r border-gray-300 cursor-pointer">-</button>
                     <!-- Pure number input (spinners hidden by CSS in header) -->
-                    <input type="number" x-model="quantity" min="1" max="{{ $product->stock_quantity }}" class="w-16 text-center border-none focus:ring-0 text-gray-700 py-2">
-                    <button x-on:click="if(quantity < maxStock) quantity++" class="px-4 py-2 text-gray-600 hover:text-primary hover:bg-gray-50 transition-colors border-l border-gray-300 cursor-pointer">+</button>
+                    <input type="number" x-model="quantity" min="1" :max="activeStock" class="w-16 text-center border-none focus:ring-0 text-gray-700 py-2">
+                    <button x-on:click="if(quantity < activeStock) quantity++" class="px-4 py-2 text-gray-600 hover:text-primary hover:bg-gray-50 transition-colors border-l border-gray-300 cursor-pointer">+</button>
                 </div>
-                <span class="text-sm text-gray-500" x-text="maxStock + ' pieces available'"></span>
+                <span class="text-sm text-gray-500" x-text="activeStock + ' pieces available'"></span>
             </div>
 
             <div class="flex gap-4">
@@ -191,7 +240,9 @@
                 <svg class="w-8 h-8 text-gray-400" fill="currentColor" viewBox="0 0 24 24"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>
             </div>
             <div>
-                <h3 class="font-bold text-gray-900 text-lg cursor-pointer hover:text-primary transition-colors">Official Store</h3>
+                <h3 class="font-bold text-gray-900 text-lg cursor-pointer hover:text-primary transition-colors">
+                    {{ $product->user->sellerProfile->business_name ?? ($product->sellerProfile->business_name ?? 'Official Store') }}
+                </h3>
                 <p class="text-sm text-gray-500">Active just now</p>
             </div>
         </div>
@@ -210,7 +261,7 @@
         
         <div class="space-y-4 text-sm text-gray-600 px-4 mb-10">
             <div class="flex border-b border-gray-50 pb-2"><span class="w-40 text-gray-400">Weight</span><span>{{ $product->weight ?? 'Not specified' }}</span></div>
-            <div class="flex border-b border-gray-50 pb-2"><span class="w-40 text-gray-400">Stock</span><span x-text="maxStock"></span></div>
+            <div class="flex border-b border-gray-50 pb-2"><span class="w-40 text-gray-400">Stock</span><span x-text="activeStock"></span></div>
             <div class="flex border-b border-gray-50 pb-2"><span class="w-40 text-gray-400">Ships From</span><span>Local Warehouse</span></div>
         </div>
         

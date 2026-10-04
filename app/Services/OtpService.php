@@ -6,6 +6,7 @@ use App\Mail\RegistrationOtpMail;
 use App\Models\RegistrationOtp;
 use App\Models\User;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Str;
 
@@ -40,6 +41,7 @@ class OtpService
         try {
             Mail::to($email)->send(new RegistrationOtpMail($code, RegistrationOtp::CODE_TTL_MINUTES));
         } catch (\Throwable $e) {
+            Log::error('OTP Mail Error: ' . $e->getMessage());
             return [false, 'We could not send the verification email right now. Please try again shortly.', 0];
         }
 

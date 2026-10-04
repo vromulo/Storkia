@@ -79,7 +79,7 @@ class LoginForm extends Component
                 'remember' => $this->remember,
             ]
         );
-        $syntheticRequest->setLaravelSession(session());
+        $syntheticRequest->setLaravelSession(request()->session());
 
         try {
             return $authService->authenticate($syntheticRequest, $this->expectedRole);

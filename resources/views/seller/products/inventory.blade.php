@@ -10,6 +10,7 @@
                         <th class="p-4 font-bold">Product Name</th>
                         <th class="p-4 font-bold">Stock Quantity</th>
                         <th class="p-4 font-bold">Status</th>
+                        <th class="p-4 font-bold">Approval Status</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -26,9 +27,15 @@
                                     <span class="px-3 py-1 bg-red-100 text-red-700 rounded-full text-xs font-bold">Out of Stock</span>
                                 @endif
                             </td>
+                            <td class="p-4">
+                                @php $approvalStatus = $product->approval->status ?? 'Pending'; @endphp
+                                <span class="font-bold {{ $approvalStatus === 'Approved' ? 'text-green-600' : ($approvalStatus === 'Disapproved' ? 'text-red-600' : 'text-yellow-600') }}">
+                                    {{ $approvalStatus }}
+                                </span>
+                            </td>
                         </tr>
                     @empty
-                        <tr><td colspan="3" class="p-8 text-center text-text-muted">No inventory data available.</td></tr>
+                        <tr><td colspan="4" class="p-8 text-center text-text-muted">No inventory data available.</td></tr>
                     @endforelse
                 </tbody>
             </table>

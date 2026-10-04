@@ -3,6 +3,7 @@
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Admin\AuthController;
 use App\Http\Controllers\Admin\DocumentController;
+use App\Http\Controllers\Admin\SellerComplianceController;
 use App\Livewire\Admin\SellerApplications;
 use App\Livewire\Admin\LogisticsApplications;
 
@@ -27,5 +28,14 @@ Route::prefix('admin')->name('admin.')->group(function () {
 
         // Document Inspector
         Route::get('/applications/{entity}/{id}/documents/{type}', [DocumentController::class, 'view'])->name('applications.document');
+
+        // Seller Compliance & Reviews
+        Route::prefix('compliance')->name('compliance.')->group(function () {
+            Route::get('reviews', [SellerComplianceController::class, 'reviews'])->name('reviews');
+            Route::patch('reviews/{id}/approve', [SellerComplianceController::class, 'approve'])->name('approve');
+            Route::patch('reviews/{id}/disapprove', [SellerComplianceController::class, 'disapprove'])->name('disapprove');
+            Route::get('violations', [SellerComplianceController::class, 'violations'])->name('violations');
+            Route::get('warnings', [SellerComplianceController::class, 'warnings'])->name('warnings');
+        });
     });
 });

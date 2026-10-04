@@ -4,6 +4,8 @@ namespace App\Services;
 
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\MessageBag;
+use Illuminate\Support\ViewErrorBag;
 use Illuminate\Validation\ValidationException;
 
 class AuthService
@@ -32,7 +34,7 @@ class AuthService
         if ($user->role !== $expectedRole) {
             // Immediately log out to prevent unauthorized portal access
             Auth::logout();
-            $request->session()->invalidate();
+            $request->session()->invalidate();  
             $request->session()->regenerateToken();
 
             // Option B: Redirect to designated login page with warning notice
@@ -42,9 +44,13 @@ class AuthService
                 default     => ['route' => 'login', 'portal' => 'Buyer Storefront'],
             };
 
-            return redirect()->route($target['route'])->withErrors([
+            $errors = new MessageBag([
                 'email' => "You have a {$user->role} account. Please sign in through the {$target['portal']} instead."
             ]);
+
+            session()->flash('errors', (new ViewErrorBag)->put('default', $errors));
+
+            return redirect()->route($target['route']);
         }
 
         $request->session()->regenerate();

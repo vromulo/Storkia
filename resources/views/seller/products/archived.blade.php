@@ -8,6 +8,7 @@
                 <thead>
                     <tr class="bg-brand-light/30 text-text-muted text-sm border-b border-border-subtle">
                         <th class="p-4 font-bold">Product Name</th>
+                        <th class="p-4 font-bold">Approval Status</th>
                         <th class="p-4 font-bold">Date Archived</th>
                         <th class="p-4 font-bold text-right">Actions</th>
                     </tr>
@@ -16,6 +17,13 @@
                     @forelse($products as $product)
                         <tr class="border-b border-border-subtle hover:bg-brand-light/10 transition-colors text-sm">
                             <td class="p-4 font-medium text-text-muted">{{ $product->name }}</td>
+                            <td class="p-4">
+                                @php $approvalStatus = $product->approval->status ?? 'Pending'; @endphp
+                                <span class="px-2 py-1 rounded text-[10px] uppercase font-bold 
+                                    {{ $approvalStatus === 'Approved' ? 'bg-green-100 text-green-700' : ($approvalStatus === 'Disapproved' ? 'bg-red-100 text-red-700' : 'bg-yellow-100 text-yellow-700') }}">
+                                    {{ $approvalStatus }}
+                                </span>
+                            </td>
                             <td class="p-4 text-text-muted">{{ $product->deleted_at->format('M d, Y') }}</td>
                             <td class="p-4 text-right space-x-4">
                                 <form action="{{ route('seller.products.unarchive', $product->id) }}" method="POST" class="inline">
@@ -29,7 +37,7 @@
                             </td>
                         </tr>
                     @empty
-                        <tr><td colspan="3" class="p-8 text-center text-text-muted">No archived products found.</td></tr>
+                        <tr><td colspan="4" class="p-8 text-center text-text-muted">No archived products found.</td></tr>
                     @endforelse
                 </tbody>
             </table>

@@ -1,6 +1,25 @@
 @extends('layouts.seller', ['title' => 'Storkia - All Products'])
 
 @section('content')
+    @php
+        $categoriesList = [
+            'Pet' => [ ['name' => 'Dog Food & Treats'], ['name' => 'Cat Litter & Accessories'], ['name' => 'Aquariums & Fish Supplies'], ['name' => 'Bird Feeders & Food'], ['name' => 'Pet Grooming Products'], ['name' => 'Pet Health & Wellness'] ],
+            'Kids' => [ ['name' => 'Baby Clothes & Accessories'], ['name' => 'Toys & Games'], ['name' => 'Educational Materials'], ['name' => 'Strollers & Gear'], ['name' => 'Nursery Furniture'], ['name' => 'Safety and Health'] ],
+            'Electronics' => [ ['name' => 'Mobile Phones & Accessories'], ['name' => 'Laptops, Desktops & Monitors'], ['name' => 'Audio & Video Equipment'], ['name' => 'Smart Home Devices'], ['name' => 'Cameras & Photography'], ['name' => 'Wearable Technology'] ],
+            'Home & Garden' => [ ['name' => 'Kitchen Appliances'], ['name' => 'Furniture & Decor'], ['name' => 'Gardening Tools'], ['name' => 'Outdoor Living'], ['name' => 'Home Improvement Tools'], ['name' => 'Bedding & Bath'] ],
+            'Women\'s' => [ ['name' => 'Dresses & Skirts'], ['name' => 'Tops & Blouses'], ['name' => 'Activewear & Yoga Pants'], ['name' => 'Lingerie & Sleepwear'], ['name' => 'Jackets & Coats'], ['name' => 'Shoes & Accessories'] ],
+            'Men\'s' => [ ['name' => 'Suits & Blazers'], ['name' => 'Casual Shirts & Pants'], ['name' => 'Outerwear & Jackets'], ['name' => 'Activewear & Fitness Gear'], ['name' => 'Shoes & Accessories'], ['name' => 'Grooming Products'] ],
+            'Health & Beauty' => [ ['name' => 'Skincare Products'], ['name' => 'Haircare Solutions'], ['name' => 'Makeup & Cosmetics'], ['name' => 'Personal Care Appliances'], ['name' => 'Men\'s Grooming'], ['name' => 'Health Supplements'] ],
+            'Books & Media' => [ ['name' => 'Fiction & Non-Fiction Books'], ['name' => 'Magazines & Periodicals'], ['name' => 'Music CDs & Vinyl Records'], ['name' => 'Movie DVDs & Blu-ray'], ['name' => 'Video Games & Consoles'], ['name' => 'Educational DVDs'] ],
+            'Sports & Outdoors' => [ ['name' => 'Fitness Equipment'], ['name' => 'Camping & Hiking Gear'], ['name' => 'Sports Apparel'], ['name' => 'Cycling & Bikes'], ['name' => 'Water Sports'], ['name' => 'Team Sports Equipment'] ],
+            'Food & Gourmet' => [ ['name' => 'Baking Supplies & Ingredients'], ['name' => 'Coffee, Tea & Beverages'], ['name' => 'Snacks & Candy'], ['name' => 'Specialty Foods'], ['name' => 'Organic and Health Foods'], ['name' => 'Meal Kits & Prepped Foods'] ],
+            'Furniture & Office' => [ ['name' => 'Office Desks & Chairs'], ['name' => 'Storage Cabinets & Shelving'], ['name' => 'Conference & Meeting Furniture'], ['name' => 'Computer Tables & Workstations'], ['name' => 'Ergonomic Accessories'], ['name' => 'Office Lighting & Fixtures'] ],
+            'Jewelry & Watches' => [ ['name' => 'Necklaces & Pendants'], ['name' => 'Rings & Earrings'], ['name' => 'Bracelets & Bangles'], ['name' => 'Watches for Men & Women'], ['name' => 'Fashion Jewelry'], ['name' => 'Jewelry Storage & Care'] ]
+        ];
+        $sellerCategory = auth()->user()->sellerProfile->line_of_business ?? 'Pet';
+        $subcategories = $categoriesList[$sellerCategory] ?? $categoriesList['Pet'];
+    @endphp
+
     @if(session('success'))
         <div x-data="{ show: true }"
              x-init="setTimeout(() => show = false, 2000)"
@@ -41,6 +60,7 @@
                         <th class="p-4 font-bold">Subcategory</th>
                         <th class="p-4 font-bold">Price</th>
                         <th class="p-4 font-bold">Total Stock</th>
+                        <th class="p-4 font-bold">Approval Status</th>
                         <th class="p-4 font-bold text-right w-24 rounded-tr-2xl">Actions</th>
                     </tr>
                 </thead>
@@ -97,6 +117,13 @@
                                     {{ $totalStock }} in stock
                                 </span>
                             </td>
+                            <td class="p-4">
+                                @php $approvalStatus = $product->approval->status ?? 'Pending'; @endphp
+                                <span class="px-3 py-1 rounded-full text-xs font-bold 
+                                    {{ $approvalStatus === 'Approved' ? 'bg-green-100 text-green-700' : ($approvalStatus === 'Disapproved' ? 'bg-red-100 text-red-700' : 'bg-yellow-100 text-yellow-700') }}">
+                                    {{ $approvalStatus }}
+                                </span>
+                            </td>
                             <td class="p-4 text-right">
                                 <div class="relative inline-block text-left" @click.stop @click.away="menuOpen = false">
                                     <button @click.stop="menuOpen = !menuOpen" class="p-2 text-text-muted hover:text-primary hover:bg-brand-light/30 rounded-full transition-colors focus:outline-none cursor-pointer">
@@ -149,6 +176,21 @@
                                             </div>
 
                                             <div class="w-full md:w-1/2 p-6 md:p-8 space-y-6 flex flex-col">
+                                                
+                                                <!-- Rejection Notice in View Modal -->
+                                                @if(isset($product->approval) && $product->approval->status === 'Disapproved')
+                                                    <div class="p-4 bg-red-50 border-l-4 border-red-500 rounded-r-xl shadow-sm mb-4">
+                                                        <div class="flex items-start gap-3">
+                                                            <svg class="w-5 h-5 text-red-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+                                                            <div>
+                                                                <h4 class="text-sm font-bold text-red-900 uppercase tracking-wider">Product Disapproved</h4>
+                                                                <p class="text-xs text-red-800 mt-1 font-medium italic">Reason: "{{ $product->approval->remarks }}"</p>
+                                                                <button @click="viewModal = false; editModal = true" class="mt-2 text-xs font-bold text-red-700 underline cursor-pointer hover:text-red-900">Update Product & Resubmit</button>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                @endif
+
                                                 <div>
                                                     <h1 class="text-3xl font-extrabold text-primary-dark mb-1 leading-tight">{{ $product->name }}</h1>
                                                     <p class="text-sm text-text-muted font-bold mb-3">{{ $product->category }} &bull; {{ $product->subcategory ?? 'Uncategorized' }}</p>
@@ -299,54 +341,219 @@
                                                     <h3 class="font-bold text-text-muted text-xs uppercase tracking-wider mb-3">Product Description</h3>
                                                     <p class="text-sm text-text-main leading-relaxed whitespace-pre-line">{{ $product->description ?: 'No description provided.' }}</p>
                                                 </div>
+
+                                                <!-- Dedicated Spacer Element to force bottom padding in flex-overflow containers -->
+                                                <div class="h-6 md:h-8 w-full shrink-0"></div>
                                             </div>
                                         </div>
                                     </div>
                                 </div>
                             </template>
 
-                            <!-- Edit Modal -->
+                            <!-- Edit Modal (Expanded for Variant Editing) -->
                             <template x-teleport="body">
                                 <div x-show="editModal" x-cloak class="fixed inset-0 z-[120] flex items-center justify-center bg-black/60 backdrop-blur-md p-4 cursor-default">
-                                    <div @click.away="editModal = false" class="bg-white rounded-3xl w-full max-w-lg shadow-2xl overflow-hidden flex flex-col cursor-default">
-                                        <div class="flex justify-between items-center p-6 border-b border-border-subtle bg-surface">
+                                    <div @click.away="editModal = false" class="bg-white rounded-3xl w-full max-w-4xl shadow-2xl overflow-hidden flex flex-col cursor-default max-h-[90vh]">
+                                        <!-- Fixed Header -->
+                                        <div class="flex justify-between items-center p-6 border-b border-border-subtle bg-surface shrink-0">
                                             <h2 class="text-xl font-bold text-primary-dark">Update Product</h2>
                                             <button @click.stop="editModal = false" class="p-2 text-text-muted hover:text-red-500 rounded-full hover:bg-red-50 transition-colors cursor-pointer">
                                                 <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
                                             </button>
                                         </div>
-                                        <form action="{{ route('seller.products.update', $product->id) }}" method="POST" @click.stop class="p-6 space-y-5 overflow-y-auto max-h-[75vh] custom-scrollbar">
+                                        
+                                        <!-- Scrollable Body & Fixed Footer isolated inside Form -->
+                                        <form action="{{ route('seller.products.update', $product->id) }}" method="POST" enctype="multipart/form-data" @click.stop class="flex flex-col flex-1 overflow-hidden">
                                             @csrf @method('PUT')
-                                            <div>
-                                                <label class="block text-sm font-bold text-text-muted mb-1">Product Name</label>
-                                                <input type="text" name="name" value="{{ $product->name }}" required class="w-full p-3 rounded-xl border border-border-subtle focus:border-primary outline-none">
-                                            </div>
-                                            <div class="grid grid-cols-1 gap-4">
-                                                <div>
-                                                    <label class="block text-sm font-bold text-text-muted mb-1">Set Discount (%)</label>
-                                                    <div class="relative">
-                                                        <input type="number" step="0.01" min="0" max="100" name="discount" x-model="discountPercent" class="w-full pr-8 p-3 rounded-xl border border-border-subtle focus:border-primary outline-none">
-                                                        <span class="absolute right-3 top-3 text-text-muted font-bold">%</span>
+                                            
+                                            <!-- Scrollable Area -->
+                                            <div class="p-6 space-y-6 overflow-y-auto custom-scrollbar bg-surface/30 flex-1">
+                                                
+                                                <!-- Rejection Notice -->
+                                                @if(isset($product->approval) && $product->approval->status === 'Disapproved')
+                                                    <div class="p-4 bg-red-50 border-l-4 border-red-500 rounded-r-xl shadow-sm bg-white">
+                                                        <div class="flex items-start gap-3">
+                                                            <svg class="w-6 h-6 text-red-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+                                                            <div>
+                                                                <h4 class="text-sm font-bold text-red-900 uppercase tracking-wider">Disapproved ({{ $product->approval->disapproval_type }})</h4>
+                                                                <p class="text-xs text-red-800 mt-1 font-medium italic">Admin Feedback: "{{ $product->approval->remarks }}"</p>
+                                                                <p class="text-xs text-red-700 mt-2">Saving changes will automatically resubmit this product for review.</p>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                @endif
+
+                                                <div class="bg-white p-6 rounded-2xl border border-border-subtle shadow-sm space-y-5">
+                                                    <h3 class="text-lg font-bold text-primary-dark">Basic Information</h3>
+                                                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                                        <div>
+                                                            <label class="block text-sm font-bold text-text-muted mb-1">Product Name <span class="text-red-500">*</span></label>
+                                                            <input type="text" name="name" value="{{ $product->name }}" required class="w-full p-3 rounded-xl border border-border-subtle focus:border-primary outline-none text-sm">
+                                                        </div>
+                                                        
+                                                        <!-- Enhanced Subcategory Custom Dropdown -->
+                                                        <div x-data="{ 
+                                                                subDropdownOpen: false, 
+                                                                selectedSub: @js($product->subcategory ?? '') 
+                                                            }" 
+                                                            class="relative">
+                                                            <label class="block text-sm font-bold text-text-muted mb-1">Subcategory <span class="text-red-500">*</span></label>
+                                                            <input type="hidden" name="subcategory" :value="selectedSub" required>
+                                                            
+                                                            <button type="button" 
+                                                                    @click="subDropdownOpen = !subDropdownOpen" 
+                                                                    @click.away="subDropdownOpen = false" 
+                                                                    class="w-full p-3 rounded-xl border border-border-subtle focus:border-primary outline-none bg-surface cursor-pointer text-sm flex justify-between items-center transition-colors shadow-sm">
+                                                                <span x-text="selectedSub || 'Select a Subcategory'" :class="selectedSub ? 'text-text-main font-medium' : 'text-text-muted'"></span>
+                                                                <svg class="w-4 h-4 text-text-muted transition-transform duration-200" :class="subDropdownOpen ? 'rotate-180' : ''" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                                                                </svg>
+                                                            </button>
+                                                            
+                                                            <div x-show="subDropdownOpen" 
+                                                                 x-transition:enter="transition ease-out duration-100"
+                                                                 x-transition:enter-start="opacity-0 scale-95"
+                                                                 x-transition:enter-end="opacity-100 scale-100"
+                                                                 x-transition:leave="transition ease-in duration-75"
+                                                                 x-transition:leave-start="opacity-100 scale-100"
+                                                                 x-transition:leave-end="opacity-0 scale-95"
+                                                                 x-cloak
+                                                                 class="absolute z-[150] w-full mt-2 bg-white border border-border-subtle rounded-xl shadow-xl max-h-60 overflow-y-auto custom-scrollbar">
+                                                                @foreach($subcategories as $sub)
+                                                                    <div @click="selectedSub = @js($sub['name']); subDropdownOpen = false"
+                                                                         class="px-4 py-3 text-sm cursor-pointer transition-colors flex items-center justify-between"
+                                                                         :class="selectedSub === @js($sub['name']) ? 'bg-primary/10 text-primary font-bold' : 'text-text-main hover:bg-brand-light/30'">
+                                                                        {{ $sub['name'] }}
+                                                                        <svg x-show="selectedSub === @js($sub['name'])" class="w-4 h-4 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+                                                                        </svg>
+                                                                    </div>
+                                                                @endforeach
+                                                            </div>
+                                                        </div>
+                                                    </div>
+
+                                                    <div>
+                                                        <label class="block text-sm font-bold text-text-muted mb-1">Replace Main Pictures <span class="text-xs font-normal italic text-text-muted">(Leave blank to keep current)</span></label>
+                                                        <input type="file" name="pictures[]" multiple accept="image/*" class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface-subtle text-sm cursor-pointer file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-xs file:font-bold file:bg-primary/10 file:text-primary hover:file:bg-primary/20 transition-all">
+                                                    </div>
+
+                                                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                                        <div>
+                                                            <label class="block text-sm font-bold text-text-muted mb-1">Set Discount (%)</label>
+                                                            <div class="relative">
+                                                                <input type="number" step="0.01" min="0" max="100" name="discount" x-model="discountPercent" class="w-full pr-8 p-3 rounded-xl border border-border-subtle focus:border-primary outline-none text-sm">
+                                                                <span class="absolute right-3 top-3 text-text-muted font-bold">%</span>
+                                                            </div>
+                                                        </div>
+                                                        <div class="p-3 bg-brand-light/10 border border-brand-light/30 rounded-xl shadow-inner flex flex-col justify-center">
+                                                            <div class="flex justify-between items-center text-xs mb-1">
+                                                                <span class="text-text-muted">Base Price:</span>
+                                                                <span class="font-bold">₱<span x-text="basePrice"></span></span>
+                                                            </div>
+                                                            <div class="flex justify-between items-center">
+                                                                <span class="text-primary font-bold text-sm">Discounted Price:</span>
+                                                                <span class="text-lg font-bold text-red-500">₱<span x-text="editDiscountedPrice"></span></span>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                </div>
+
+                                                <!-- Inline Variant Editor -->
+                                                @if($product->variants && isset($product->variants['items']))
+                                                    <div class="bg-white p-6 rounded-2xl border border-border-subtle shadow-sm space-y-5">
+                                                        <h3 class="text-lg font-bold text-primary-dark">Edit Product Variants</h3>
+                                                        <div class="space-y-4">
+                                                            @foreach($product->variants['items'] as $vIndex => $item)
+                                                                <div class="p-4 rounded-xl border border-border-subtle bg-surface/50 space-y-4">
+                                                                    <div class="flex flex-col lg:flex-row gap-4">
+                                                                        <!-- Variant Name -->
+                                                                        <div class="flex-1">
+                                                                            <label class="block text-xs font-bold text-text-muted mb-1">{{ $product->variants['title'] ?? 'Variant' }} Name</label>
+                                                                            <input type="text" name="variant_names[{{ $vIndex }}]" value="{{ $item['name'] }}" required class="w-full p-2.5 text-sm rounded-lg border border-border-subtle focus:border-primary outline-none">
+                                                                        </div>
+                                                                        <!-- Variant Image Replacement -->
+                                                                        <div class="flex-1">
+                                                                            <label class="block text-xs font-bold text-text-muted mb-1">Replace Image <span class="font-normal italic">(Optional)</span></label>
+                                                                            <input type="file" name="variant_pictures[{{ $vIndex }}]" accept="image/*" class="w-full p-2 text-xs rounded-lg border border-border-subtle cursor-pointer file:mr-2 file:py-1 file:px-3 file:rounded-md file:border-0 file:bg-primary/10 file:text-primary bg-white">
+                                                                        </div>
+                                                                    </div>
+
+                                                                    @if($product->variants['price_dependency'] === 'main')
+                                                                        <div class="flex gap-3">
+                                                                            <div class="flex-1">
+                                                                                <label class="block text-xs font-bold text-text-muted mb-1">Price</label>
+                                                                                <div class="relative">
+                                                                                    <span class="absolute left-2.5 top-2.5 text-text-muted text-xs font-bold">₱</span>
+                                                                                    <input type="number" step="0.01" name="variant_prices[{{ $vIndex }}]" value="{{ $item['price'] }}" required class="w-full pl-6 p-2.5 text-sm rounded-lg border border-border-subtle focus:border-primary outline-none no-spinners">
+                                                                                </div>
+                                                                            </div>
+                                                                            <div class="flex-1">
+                                                                                <label class="block text-xs font-bold text-text-muted mb-1">Weight</label>
+                                                                                <div class="relative">
+                                                                                    <input type="number" step="0.01" name="variant_weights[{{ $vIndex }}]" value="{{ $item['weight'] }}" required class="w-full pr-8 p-2.5 text-sm rounded-lg border border-border-subtle focus:border-primary outline-none no-spinners">
+                                                                                    <span class="absolute right-2.5 top-2.5 text-text-muted text-xs font-bold">KG</span>
+                                                                                </div>
+                                                                            </div>
+                                                                            <div class="flex-1">
+                                                                                <label class="block text-xs font-bold text-text-muted mb-1">Stock</label>
+                                                                                <input type="number" name="variant_stocks[{{ $vIndex }}]" value="{{ $item['stock'] }}" required class="w-full p-2.5 text-sm rounded-lg border border-border-subtle focus:border-primary outline-none">
+                                                                            </div>
+                                                                        </div>
+                                                                    @endif
+
+                                                                    <!-- Subvariants -->
+                                                                    @if(isset($item['subs']) && count($item['subs']) > 0)
+                                                                        <div class="pt-4 border-t border-border-subtle space-y-3">
+                                                                            <label class="block text-xs font-bold text-text-muted uppercase tracking-wider">{{ $product->variants['sub_title'] ?? 'Sub Variants' }}</label>
+                                                                            @foreach($item['subs'] as $sIndex => $sub)
+                                                                                <div class="flex flex-wrap items-center gap-3 bg-white p-3 rounded-lg border border-border-subtle shadow-sm">
+                                                                                    <div class="flex-1 min-w-[120px]">
+                                                                                        <input type="text" name="sub_variant_names[{{ $vIndex }}][{{ $sIndex }}]" value="{{ $sub['name'] }}" required placeholder="Name" class="w-full p-2 text-xs rounded-md border border-border-subtle focus:border-primary outline-none">
+                                                                                    </div>
+                                                                                    <div class="w-24 relative">
+                                                                                        <span class="absolute left-2 top-2 text-text-muted text-[10px] font-bold">₱</span>
+                                                                                        <input type="number" step="0.01" name="sub_variant_prices[{{ $vIndex }}][{{ $sIndex }}]" value="{{ $sub['price'] }}" required placeholder="Price" class="w-full pl-5 p-2 text-xs rounded-md border border-border-subtle focus:border-primary outline-none no-spinners">
+                                                                                    </div>
+                                                                                    <div class="w-24 relative">
+                                                                                        <input type="number" step="0.01" name="sub_variant_weights[{{ $vIndex }}][{{ $sIndex }}]" value="{{ $sub['weight'] }}" required placeholder="Weight" class="w-full pr-7 p-2 text-xs rounded-md border border-border-subtle focus:border-primary outline-none no-spinners">
+                                                                                        <span class="absolute right-2 top-2 text-text-muted text-[10px] font-bold">KG</span>
+                                                                                    </div>
+                                                                                    <div class="w-20">
+                                                                                        <input type="number" name="sub_variant_stocks[{{ $vIndex }}][{{ $sIndex }}]" value="{{ $sub['stock'] }}" required placeholder="Stock" class="w-full p-2 text-xs rounded-md border border-border-subtle focus:border-primary outline-none">
+                                                                                    </div>
+                                                                                </div>
+                                                                            @endforeach
+                                                                        </div>
+                                                                    @endif
+                                                                </div>
+                                                            @endforeach
+                                                        </div>
+                                                    </div>
+                                                @endif
+
+                                                <div class="bg-white p-6 rounded-2xl border border-border-subtle shadow-sm space-y-4">
+                                                    <div>
+                                                        <label class="block text-sm font-bold text-text-muted mb-1">Standard Description</label>
+                                                        <textarea name="description" rows="4" class="w-full p-3 rounded-xl border border-border-subtle focus:border-primary outline-none custom-scrollbar text-sm">{{ $product->description }}</textarea>
+                                                    </div>
+                                                    <div>
+                                                        <label class="block text-sm font-bold text-text-muted mb-1">Additional Descriptions</label>
+                                                        <textarea name="additional_descriptions" rows="3" class="w-full p-3 rounded-xl border border-border-subtle focus:border-primary outline-none custom-scrollbar text-sm">{{ $product->additional_descriptions }}</textarea>
                                                     </div>
                                                 </div>
                                             </div>
-                                            <div class="p-4 bg-brand-light/10 border border-brand-light/30 rounded-xl shadow-inner">
-                                                <div class="flex justify-between items-center text-sm mb-1">
-                                                    <span class="text-text-muted">Base Price:</span>
-                                                    <span class="font-bold">₱<span x-text="basePrice"></span></span>
-                                                </div>
-                                                <div class="flex justify-between items-center">
-                                                    <span class="text-primary font-bold">New Discounted Price:</span>
-                                                    <span class="text-xl font-bold text-red-500">₱<span x-text="editDiscountedPrice"></span></span>
-                                                </div>
-                                            </div>
-                                            <div>
-                                                <label class="block text-sm font-bold text-text-muted mb-1">Description</label>
-                                                <textarea name="description" rows="3" class="w-full p-3 rounded-xl border border-border-subtle focus:border-primary outline-none custom-scrollbar">{{ $product->description }}</textarea>
-                                            </div>
-                                            <div class="pt-4 border-t border-border-subtle flex justify-end gap-3">
-                                                <button type="button" @click.stop="editModal = false" class="px-5 py-2.5 rounded-xl font-bold text-text-muted hover:bg-gray-100 transition-colors cursor-pointer">Cancel</button>
-                                                <button type="submit" class="px-5 py-2.5 bg-primary text-white rounded-xl shadow-md hover:bg-primary-dark transition-colors font-bold cursor-pointer">Save Changes</button>
+
+                                            <!-- Fixed Footer (Removed Sticky Class) -->
+                                            <div class="p-6 border-t border-border-subtle flex justify-end gap-3 bg-white shrink-0">
+                                                <button type="button" @click.stop="editModal = false" class="px-6 py-3 rounded-xl font-bold text-text-muted hover:bg-gray-100 transition-colors cursor-pointer text-sm">Cancel</button>
+                                                <button type="submit" class="px-6 py-3 bg-primary text-white rounded-xl shadow-md hover:bg-primary-dark transition-colors font-bold cursor-pointer text-sm">
+                                                    @if(isset($product->approval) && $product->approval->status === 'Disapproved')
+                                                        Save & Resubmit
+                                                    @else
+                                                        Save Changes
+                                                    @endif
+                                                </button>
                                             </div>
                                         </form>
                                     </div>
@@ -355,7 +562,7 @@
                         </tr>
                     @empty
                         <tr>
-                            <td colspan="6" class="p-12 text-center text-text-muted">
+                            <td colspan="7" class="p-12 text-center text-text-muted">
                                 <div class="flex flex-col items-center justify-center">
                                     <svg class="w-12 h-12 text-gray-300 mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" /></svg>
                                     <p>No products found. Add some to get started.</p>
