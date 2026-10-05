@@ -17,7 +17,7 @@
     </div>
     @endguest
 
-    <!-- Main Nav Container: changed max-w-7xl to max-w-[1600px] -->
+    <!-- Main Nav Container -->
     <div class="relative z-30 max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8">
         <div class="flex justify-between h-14 sm:h-16 items-center">
             <!-- Logo -->
@@ -49,7 +49,6 @@
                      class="relative flex items-center h-full">
                     
                     @guest
-                        <!-- Clickable link to login for guests -->
                         <a href="{{ route('login') }}" 
                         class="flex items-center text-white hover:text-[#F6D8BD] transition-colors cursor-pointer focus:outline-none"
                         aria-label="Sign in or Register">
@@ -60,7 +59,6 @@
                     @endguest
 
                     @auth
-                        <!-- Retains button behavior when logged in -->
                         <button type="button" 
                                 @click="open = !open" 
                                 class="flex items-center text-white hover:text-[#F6D8BD] transition-colors cursor-pointer focus:outline-none"
@@ -77,7 +75,6 @@
                                 <a href="{{ route('login') }}" class="block px-3 py-2 text-xs font-bold text-[#CF4173] rounded-lg hover:bg-gray-50 transition-colors">Sign in / Register</a>
                             @endguest
                             @auth
-                                <!-- User Header Profile Card -->
                                 <div class="px-3 py-2.5 bg-gray-50/80 rounded-lg border border-gray-100 mb-1 flex items-center justify-between gap-2">
                                     <p class="text-xs font-bold text-gray-900 truncate">
                                         {{ auth()->user()->first_name }} {{ auth()->user()->last_name }}
@@ -107,12 +104,23 @@
                     </div>
                 </div>
 
-                <!-- Cart -->
-                <a href="#" class="relative flex items-center text-white hover:text-[#F6D8BD] transition-colors">
+                <!-- Dynamic Cart Icon with Database Notification Badge -->
+                <a href="{{ route('cart.index') }}" class="relative flex items-center text-white hover:text-[#F6D8BD] transition-colors">
                     <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z" />
                     </svg>
-                    <span class="absolute -top-1.5 -right-2 text-[10px] font-bold rounded-full h-4 w-4 flex items-center justify-center border border-[#CF4173]" style="background-color: #F6D8BD; color: #5D3140;">3</span>
+                    
+                    @auth
+                        @php
+                            $cartCount = \App\Models\Cart::where('user_id', auth()->id())->count();
+                        @endphp
+                        
+                        @if($cartCount > 0)
+                            <span class="absolute -top-1.5 -right-2 text-[10px] font-bold rounded-full h-4 w-4 flex items-center justify-center border border-[#CF4173]" style="background-color: #F6D8BD; color: #5D3140;">
+                                {{ $cartCount > 99 ? '99+' : $cartCount }}
+                            </span>
+                        @endif
+                    @endauth
                 </a>
             </div>
         </div>

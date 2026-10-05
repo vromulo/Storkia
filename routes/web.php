@@ -6,6 +6,7 @@ use App\Http\Controllers\Buyer\HomeController;
 use App\Http\Controllers\Buyer\CategoryController;
 use App\Http\Controllers\Buyer\ProductController;
 use App\Http\Controllers\Buyer\AccountManagementController;
+use App\Http\Controllers\Buyer\CartController;
 
 // Storefront & Public Routes
 Route::get('/', [HomeController::class, 'index'])->name('home');
@@ -19,8 +20,14 @@ Route::middleware('guest')->group(function () {
     Route::get('/register', [AuthController::class, 'showRegister'])->name('register');
 });
 
-// Authenticated Actions
+// Authenticated Actions (Requires Login)
 Route::middleware('auth')->group(function () {
+    
+    // Cart Routes (Connected to DB & Controller)
+    Route::get('/cart', [CartController::class, 'index'])->name('cart.index');
+    Route::post('/cart', [CartController::class, 'store'])->name('cart.store');
+    Route::delete('/cart/{cart}', [CartController::class, 'destroy'])->name('cart.destroy');
+    
     Route::post('/logout', [AuthController::class, 'logout'])->name('logout');
 
     // Buyer Account Area (RESTful /user/* routes)
