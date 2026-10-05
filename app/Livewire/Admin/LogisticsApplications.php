@@ -135,4 +135,29 @@ class LogisticsApplications extends Component
             'history' => $this->selectedAppId ? LogisticsApplication::where('user_id', LogisticsApplication::find($this->selectedAppId)->user_id)->orderByDesc('version')->get() : collect(),
         ]);
     }
+
+    public function inspectDoc(string $type, int $appId)
+    {
+        $app = LogisticsApplication::findOrFail($appId);
+        $this->selectedAppId = $appId;
+        $path = $type === 'id' ? $app->id_path : $app->permit_path;
+        
+        $ext = strtolower(pathinfo($path, PATHINFO_EXTENSION));
+        $this->docModalType = in_array($ext, ['pdf']) ? 'pdf' : 'image';
+        $this->docModalTitle = ($type === 'id' ? 'Valid ID' : 'Business Permit') . " - {$app->business_name} (v{$app->version})";
+        
+        $this->docModalUrl = route('admin.applications.document', [
+            'entity' => 'logistics',
+            'id'     => $app->id,
+            'type'   => $type,
+        ]);
+        
+        $this->docModalOpen = true;
+    }
+
+    public function closeDocModal()
+    {
+        $this->docModalOpen = false;
+        $this->docModalUrl = '';
+    }
 }
