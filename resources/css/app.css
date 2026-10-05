@@ -30,4 +30,7 @@
   --color-border-subtle: #E7E5E4;  /* Stone 200 - Light dividers */
   --color-text-muted: #78716C;     /* Stone 500 - Secondary text/captions */
   --color-text-main: #292524;      /* Stone 800 - Main body text (softer than pure black) */
+
+  /* Custom Dark Grey (For button hovers & active sidebar options) */
+  --color-dark-grey: #44403C;
 }

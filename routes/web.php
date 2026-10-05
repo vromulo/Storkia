@@ -39,6 +39,13 @@ Route::middleware('auth')->group(function () {
         // Implemented Section
         Route::get('/account-management', [AccountManagementController::class, 'index'])->name('account-management');
 
+        // Patch Route (routes that UPDATE user data)
+        Route::patch('/account-management/name', [AccountManagementController::class, 'updateName'])->name('account-management.update-name');
+
+        Route::post('/account-management/email/request-otp', [AccountManagementController::class, 'requestEmailOtp'])->name('account-management.request-email-otp');
+        Route::post('/account-management/email/verify-otp', [AccountManagementController::class, 'verifyEmailOtp'])->name('account-management.verify-email-otp');
+        
+
         // Future Sections inheriting personal-center via buyer.option.coming-soon
         Route::view('/profile', 'buyer.option.coming-soon', ['title' => 'Profile'])->name('profile');
         Route::view('/addresses', 'buyer.option.coming-soon', ['title' => 'Address Book'])->name('addresses');
