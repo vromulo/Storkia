@@ -14,7 +14,7 @@
         <svg class="w-full h-full" xmlns="http://www.w3.org/2000/svg" width="100%" height="100%">
             <defs>
                 <pattern id="stork-pattern-admin-login" width="120" height="120" patternUnits="userSpaceOnUse" patternTransform="rotate(-15)">
-                    <image href="{{ asset('assets/storkia-minimized.png') }}" x="36" y="36" width="48" height="48" class="stork-pattern-image" />
+                    <image href="{{ asset('assets/storkia-minimized.webp') }}" x="36" y="36" width="48" height="48" class="stork-pattern-image" />
                 </pattern>
             </defs>
             <rect width="100%" height="100%" fill="url(#stork-pattern-admin-login)" />
@@ -56,7 +56,7 @@
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
                     </svg>
                 </div>
-                <img src="{{ asset('assets/storkia-maximized.png') }}" alt="Storkia" class="h-10 w-auto mx-auto mb-2" />
+                <img src="{{ asset('assets/storkia-maximized.webp') }}" alt="Storkia" class="h-10 w-auto mx-auto mb-2" />
                 <h3 class="mt-2 text-xl font-medium text-text-main">Admin Portal Access</h3>
                 <p class="mt-1 text-sm text-text-muted">Please sign in with your administrator credentials.</p>
             </div>

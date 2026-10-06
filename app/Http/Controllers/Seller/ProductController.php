@@ -8,9 +8,42 @@ use App\Http\Requests\Seller\UpdateProductRequest;
 use App\Models\Product;
 use App\Models\ProductApproval;
 use Illuminate\Support\Facades\Storage;
+use Intervention\Image\ImageManager;
+use Intervention\Image\Drivers\Gd\Driver;
+use Intervention\Image\Encoders\WebpEncoder;
 
 class ProductController extends Controller
 {
+    /**
+     * Helper method to convert, resize, and store images in WebP format
+     * Updated to use Intervention Image v4 syntax.
+     */
+    private function optimizeAndStoreImage($file, $folder)
+    {
+        $extension = $file->getClientOriginalExtension();
+        
+        // Skip conversion for vector graphics or animated gifs to preserve their nature
+        if (in_array(strtolower($extension), ['svg', 'gif'])) {
+            return $file->store($folder, 'public');
+        }
+
+        $filename = uniqid('img_') . '_' . time() . '.webp';
+        $path = $folder . '/' . $filename;
+        
+        // Initialize Intervention Image Manager with the GD driver (v4 syntax)
+        $manager = ImageManager::usingDriver(Driver::class);
+        
+        // Read (decode), resize (maintaining aspect ratio, only scaling down), and encode to WebP
+        $image = $manager->decode($file->getRealPath());
+        $image->scaleDown(width: 1200, height: 1200);
+        $encoded = $image->encode(new WebpEncoder(quality: 80));
+            
+        // Store the encoded string
+        Storage::disk('public')->put($path, $encoded->toString());
+        
+        return $path;
+    }
+
     public function index()
     {
         $products = Product::with('approval')->where('user_id', auth()->id())->latest()->paginate(10);
@@ -41,7 +74,7 @@ class ProductController extends Controller
         $picturePaths = [];
         if ($request->hasFile('pictures')) {
             foreach ($request->file('pictures') as $file) {
-                $picturePaths[] = $file->store('products', 'public');
+                $picturePaths[] = $this->optimizeAndStoreImage($file, 'products');
             }
         }
 
@@ -69,7 +102,7 @@ class ProductController extends Controller
                 ];
 
                 if ($request->hasFile("variant_pictures.{$vId}")) {
-                    $item['image'] = $request->file("variant_pictures.{$vId}")->store('variants', 'public');
+                    $item['image'] = $this->optimizeAndStoreImage($request->file("variant_pictures.{$vId}"), 'variants');
                 }
 
                 if ($priceDependency === 'main') {
@@ -122,7 +155,6 @@ class ProductController extends Controller
             'variants'                => count($variantsData['items']) > 0 ? $variantsData : null,
         ]);
 
-        // Push to independent Approval table
         ProductApproval::create([
             'product_id' => $product->id,
             'user_id'    => auth()->id(),
@@ -154,7 +186,7 @@ class ProductController extends Controller
             }
             $picturePaths = [];
             foreach ($request->file('pictures') as $file) {
-                $picturePaths[] = $file->store('products', 'public');
+                $picturePaths[] = $this->optimizeAndStoreImage($file, 'products');
             }
             $dataToUpdate['pictures'] = $picturePaths;
         }
@@ -175,7 +207,7 @@ class ProductController extends Controller
                         if (!empty($variantsData['items'][$vIndex]['image'])) {
                             Storage::disk('public')->delete($variantsData['items'][$vIndex]['image']);
                         }
-                        $variantsData['items'][$vIndex]['image'] = $request->file("variant_pictures.{$vIndex}")->store('variants', 'public');
+                        $variantsData['items'][$vIndex]['image'] = $this->optimizeAndStoreImage($request->file("variant_pictures.{$vIndex}"), 'variants');
                     }
 
                     if ($variantsData['price_dependency'] === 'main') {

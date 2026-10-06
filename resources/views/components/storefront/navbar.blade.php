@@ -23,8 +23,8 @@
             <!-- Logo -->
             <div class="flex-shrink-0 flex items-center">
                 <a href="/" class="flex items-center text-primary">
-                    <img src="{{ asset('assets/pink-storkia-minimized.png') }}" alt="Storkia" class="block md:hidden h-8 w-auto object-contain">
-                    <img src="{{ asset('assets/pink-storkia-maximized.png') }}" alt="Storkia" class="hidden md:block h-9 w-auto object-contain">
+                    <img src="{{ asset('assets/pink-storkia-minimized.webp') }}" alt="Storkia" class="block md:hidden h-8 w-auto object-contain">
+                    <img src="{{ asset('assets/pink-storkia-maximized.webp') }}" alt="Storkia" class="hidden md:block h-9 w-auto object-contain">
                 </a>
             </div>
 

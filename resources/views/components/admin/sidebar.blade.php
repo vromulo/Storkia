@@ -13,9 +13,9 @@
             @click="if (window.location.href.split('?')[0] === '{{ route('admin.dashboard') }}') { $event.preventDefault(); window.scrollTo({top: 0, behavior: 'smooth'}); }"
             class="flex items-center justify-center h-10 w-full overflow-hidden text-primary-dark transition-colors cursor-pointer">
             <!-- Full Logo when open -->
-            <img x-show="sidebarOpen" x-transition.opacity.duration.300ms src="{{ asset('assets/storkia-maximized.png') }}" alt="Storkia" class="h-8 w-auto" />
+            <img x-show="sidebarOpen" x-transition.opacity.duration.300ms src="{{ asset('assets/storkia-maximized.webp') }}" alt="Storkia" class="h-8 w-auto" />
             <!-- Icon/Initial when minimized -->
-            <img x-show="!sidebarOpen" x-cloak src="{{ asset('assets/storkia-minimized.png') }}" alt="S" class="h-8 w-auto" />
+            <img x-show="!sidebarOpen" x-cloak src="{{ asset('assets/storkia-minimized.webp') }}" alt="S" class="h-8 w-auto" />
         </a>
     </div>
 

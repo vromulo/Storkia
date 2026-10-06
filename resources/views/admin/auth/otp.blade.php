@@ -14,7 +14,7 @@
         <svg class="w-full h-full" xmlns="http://www.w3.org/2000/svg" width="100%" height="100%">
             <defs>
                 <pattern id="stork-pattern-admin-otp" width="120" height="120" patternUnits="userSpaceOnUse" patternTransform="rotate(-15)">
-                    <image href="{{ asset('assets/storkia-minimized.png') }}" x="36" y="36" width="48" height="48" class="stork-pattern-image" />
+                    <image href="{{ asset('assets/storkia-minimized.webp') }}" x="36" y="36" width="48" height="48" class="stork-pattern-image" />
                 </pattern>
             </defs>
             <rect width="100%" height="100%" fill="url(#stork-pattern-admin-otp)" />
@@ -56,7 +56,7 @@
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
                     </svg>
                 </div>
-                <img src="{{ asset('assets/storkia-maximized.png') }}" alt="Storkia" class="h-10 w-auto mx-auto mb-2" />
+                <img src="{{ asset('assets/storkia-maximized.webp') }}" alt="Storkia" class="h-10 w-auto mx-auto mb-2" />
                 <h3 class="mt-2 text-xl font-medium text-text-main">Two-Factor Authentication</h3>
                 <p class="mt-1 text-sm text-text-muted">Enter the 6-digit secure code sent to your device.</p>
             </div>

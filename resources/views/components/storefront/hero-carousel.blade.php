@@ -53,7 +53,7 @@
             x-transition:leave-start="opacity-100"
             x-transition:leave-end="opacity-0"
             class="absolute inset-0 w-full h-full bg-cover bg-center flex items-center"
-            style="background-image: url('{{ asset('assets/yeezy-preview.png') }}');"
+            style="background-image: url('{{ asset('assets/yeezy-preview.webp') }}');"
         >
             <div class="absolute inset-0 bg-black/60"></div>
             <div class="absolute -right-20 -top-20 w-[500px] h-[500px] bg-secondary opacity-15 rounded-full blur-3xl pointer-events-none"></div>

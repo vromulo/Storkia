@@ -20,7 +20,7 @@
     
     <!-- Home Icon Button -->
     <a href="/" wire:navigate class="absolute top-8 left-8 z-50 transition-transform duration-300 hover:scale-105 cursor-pointer">
-        <img src="/assets/storkia-minimized.png" alt="Home" class="w-12 h-12 object-contain drop-shadow-[0_4px_10px_rgba(0,0,0,0.6)]">
+        <img src="/assets/storkia-minimized.webp" alt="Home" class="w-12 h-12 object-contain drop-shadow-[0_4px_10px_rgba(0,0,0,0.6)]">
     </a>
 
     <!-- Slides Container -->
@@ -36,7 +36,7 @@
              x-transition:leave-end="opacity-0"
              class="absolute inset-0 w-full h-full">
             
-            <img src="/assets/carousel-slide-3.png" alt="Lightning Fast Delivery" class="absolute inset-0 w-full h-full object-cover" />
+            <img src="/assets/carousel-slide-3.webp" alt="Lightning Fast Delivery" class="absolute inset-0 w-full h-full object-cover" />
             <div class="absolute inset-0 bg-gradient-to-t from-black/90 via-black/40 to-transparent"></div>
             
             <div class="absolute bottom-24 left-10 md:left-16 max-w-lg text-left z-10">
@@ -60,7 +60,7 @@
              x-transition:leave-end="opacity-0"
              class="absolute inset-0 w-full h-full" style="display: none;">
             
-            <img src="/assets/carousel-slide-1.png" alt="Secure Handling" class="absolute inset-0 w-full h-full object-cover" />
+            <img src="/assets/carousel-slide-1.webp" alt="Secure Handling" class="absolute inset-0 w-full h-full object-cover" />
             <div class="absolute inset-0 bg-gradient-to-t from-black/90 via-black/40 to-transparent"></div>
             
             <div class="absolute bottom-24 left-10 md:left-16 max-w-lg text-left z-10">
@@ -84,7 +84,7 @@
              x-transition:leave-end="opacity-0"
              class="absolute inset-0 w-full h-full" style="display: none;">
             
-            <img src="/assets/carousel-slide-2.png" alt="Real-time Tracking" class="absolute inset-0 w-full h-full object-cover" />
+            <img src="/assets/carousel-slide-2.webp" alt="Real-time Tracking" class="absolute inset-0 w-full h-full object-cover" />
             <div class="absolute inset-0 bg-gradient-to-t from-black/90 via-black/40 to-transparent"></div>
             
             <div class="absolute bottom-24 left-10 md:left-16 max-w-lg text-left z-10">
