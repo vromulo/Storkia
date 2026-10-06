@@ -2,6 +2,8 @@
 
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Admin\AuthController;
+use App\Livewire\Admin\IdentityVerifications;
+
 use App\Http\Controllers\Admin\DocumentController;
 use App\Http\Controllers\Admin\SellerComplianceController;
 use App\Livewire\Admin\SellerApplications;
@@ -25,7 +27,8 @@ Route::prefix('admin')->name('admin.')->group(function () {
         // Applications Management
         Route::get('/applications/sellers', SellerApplications::class)->name('applications.sellers');
         Route::get('/applications/logistics', LogisticsApplications::class)->name('applications.logistics');
-
+        Route::get('/applications/identity', IdentityVerifications::class)->name('applications.identity');
+        
         // Document Inspector
         Route::get('/applications/{entity}/{id}/documents/{type}', [DocumentController::class, 'view'])->name('applications.document');
 

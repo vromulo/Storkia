@@ -40,6 +40,12 @@ class User extends Authenticatable
             'birthday' => 'date',
         ];
     }
+    
+    // Buyer
+    public function identityVerification()
+    {
+        return $this->hasOne(IdentityVerification::class)->latestOfMany();
+    }
 
     /**
      * The seller's current approved profile. Only exists once an

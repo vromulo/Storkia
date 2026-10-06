@@ -46,6 +46,7 @@
     <!-- Main Content Area -->
     <main class="flex-grow">
         @yield('content')
+        {{ $slot ?? '' }}
     </main>
 
     <!-- Footer -->

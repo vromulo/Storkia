@@ -7,6 +7,7 @@ use App\Http\Controllers\Buyer\CategoryController;
 use App\Http\Controllers\Buyer\ProductController;
 use App\Http\Controllers\Buyer\AccountManagementController;
 use App\Http\Controllers\Buyer\CartController;
+use App\Livewire\Buyer\IdentityVerificationFlow;
 
 // Storefront & Public Routes
 Route::get('/', [HomeController::class, 'index'])->name('home');
@@ -60,4 +61,6 @@ Route::middleware('auth')->group(function () {
         Route::view('/recently-viewed', 'buyer.option.coming-soon', ['title' => 'Recently Viewed'])->name('recently-viewed');
         Route::view('/following', 'buyer.option.coming-soon', ['title' => 'Following'])->name('following');
     });
+
+    Route::get('/identity-verification', IdentityVerificationFlow::class)->name('user.identity-verification');
 });

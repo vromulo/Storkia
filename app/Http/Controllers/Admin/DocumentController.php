@@ -14,12 +14,18 @@ class DocumentController extends Controller
     public function view(Request $request, string $entity, int $id, string $type): BinaryFileResponse
     {
         $application = match ($entity) {
+            'identity'  => \App\Models\IdentityVerification::findOrFail($id),
             'seller'    => SellerApplication::findOrFail($id),
             'logistics' => LogisticsApplication::findOrFail($id),
             default     => abort(404),
         };
 
-        $path = $type === 'id' ? $application->id_path : $application->permit_path;
+        $path = match($type) {
+            'id', 'front' => $application->front_image_path ?? $application->id_path,
+            'back'        => $application->back_image_path,
+            'permit'      => $application->permit_path,
+            default       => abort(404),
+        };
 
         if (! $path || ! Storage::disk('public')->exists($path)) {
             abort(404, 'File not found');

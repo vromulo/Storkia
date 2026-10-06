@@ -52,10 +52,7 @@
                 </svg>
             </button>
             <div x-show="activeDropdown === 'applications' && sidebarOpen" x-collapse x-cloak class="ml-6 pl-4 my-1 border-l-2 border-border-subtle/70 space-y-1">
-                <a href="#" class="block px-3 py-2 text-xs rounded-lg text-text-muted hover:text-text-main hover:bg-brand-light/25 transition-all whitespace-nowrap cursor-pointer">
-                    All Applications
-                </a>
-                <a href="#" class="block px-3 py-2 text-xs rounded-lg text-text-muted hover:text-text-main hover:bg-brand-light/25 transition-all whitespace-nowrap cursor-pointer">
+                <a href="{{ route('admin.applications.identity') }}" class="block px-3 py-2 text-xs rounded-lg text-text-muted hover:text-text-main hover:bg-brand-light/25 transition-all whitespace-nowrap cursor-pointer">
                     Buyer Applications
                 </a>
                 <a href="{{ route('admin.applications.sellers') }}" 

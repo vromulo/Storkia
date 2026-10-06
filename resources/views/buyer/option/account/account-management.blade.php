@@ -244,6 +244,10 @@
     <hr class="border-border-subtle" />
 
     <!-- 4. Identity Verification -->
+    @php
+        $verification = auth()->user()->identityVerification;
+        $verStatus = $verification ? $verification->status : 'not_started';
+    @endphp
     <div class="flex items-start justify-between gap-4 transition-all duration-200"
          :class="isDimmed('identity') ? 'opacity-40' : ''">
         <div>
@@ -251,17 +255,41 @@
                 Identity Verification
             </h3>
             <p class="text-sm text-text-muted font-normal tracking-wide mt-2">
-                Not started
+                @if ($verStatus === 'verified')
+                    Verified
+                @elseif ($verStatus === 'pending')
+                    Pending Review
+                @elseif ($verStatus === 'failed')
+                    Failed to verify
+                @else
+                    Not started
+                @endif
             </p>
         </div>
         <div class="shrink-0 text-right leading-none">
-            <button type="button"
-                    @click="toggle('identity')"
-                    :disabled="isDimmed('identity') || isSavingName || isSavingEmail"
-                    :class="(isDimmed('identity') || isSavingName || isSavingEmail) ? 'pointer-events-none cursor-not-allowed' : 'cursor-pointer'"
-                    class="text-sm font-light underline text-text-main hover:opacity-75 transition-opacity inline-block leading-none">
-                <span x-text="activeEdit === 'identity' ? 'Cancel' : 'Start'"></span>
-            </button>
+            @if ($verStatus === 'verified')
+                <span class="text-sm font-light text-text-muted/60 select-none cursor-default inline-block leading-none">
+                    Done
+                </span>
+            @elseif ($verStatus === 'pending')
+                <button type="button"
+                        disabled
+                        class="text-sm font-light underline text-text-muted/50 cursor-not-allowed select-none inline-block leading-none">
+                    Start
+                </button>
+            @elseif ($verStatus === 'failed')
+                <a href="{{ route('user.identity-verification') }}"
+                   :class="isEditing() ? 'pointer-events-none cursor-not-allowed' : 'cursor-pointer'"
+                   class="text-sm font-light underline text-text-main hover:opacity-75 transition-opacity inline-block leading-none">
+                    Re-verify
+                </a>
+            @else
+                <a href="{{ route('user.identity-verification') }}"
+                   :class="isEditing() ? 'pointer-events-none cursor-not-allowed' : 'cursor-pointer'"
+                   class="text-sm font-light underline text-text-main hover:opacity-75 transition-opacity inline-block leading-none">
+                    Start
+                </a>
+            @endif
         </div>
     </div>
 
