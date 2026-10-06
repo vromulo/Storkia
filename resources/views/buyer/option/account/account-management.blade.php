@@ -26,7 +26,7 @@
 )" class="space-y-6 pt-0 select-none">
 
     <!-- Header Title (Static) -->
-    <div class="pt-0 pb-2">
+    <div class="text-center pt-0 pb-2">
         <h2 class="text-3xl sm:text-4xl font-semibold text-text-main tracking-tight">
             Manage My Account
         </h2>

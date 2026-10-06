@@ -6,6 +6,7 @@ use App\Http\Controllers\Buyer\HomeController;
 use App\Http\Controllers\Buyer\CategoryController;
 use App\Http\Controllers\Buyer\ProductController;
 use App\Http\Controllers\Buyer\AccountManagementController;
+use App\Http\Controllers\Buyer\AddressController;
 use App\Http\Controllers\Buyer\CartController;
 use App\Livewire\Buyer\IdentityVerificationFlow;
 
@@ -49,7 +50,7 @@ Route::middleware('auth')->group(function () {
 
         // Future Sections inheriting personal-center via buyer.option.coming-soon
         Route::view('/profile', 'buyer.option.coming-soon', ['title' => 'Profile'])->name('profile');
-        Route::view('/addresses', 'buyer.option.coming-soon', ['title' => 'Address Book'])->name('addresses');
+        Route::get('/addresses', [AddressController::class, 'index'])->name('addresses');
         Route::view('/change-password', 'buyer.option.coming-soon', ['title' => 'Change Password'])->name('change-password');
 
         Route::view('/orders', 'buyer.option.coming-soon', ['title' => 'My Orders'])->name('orders');
