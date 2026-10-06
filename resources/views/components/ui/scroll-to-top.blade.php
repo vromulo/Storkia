@@ -13,7 +13,7 @@
         x-transition:leave-start="opacity-100 translate-y-0"
         x-transition:leave-end="opacity-0 translate-y-4"
         @click="window.scrollTo({ top: 0, behavior: 'smooth' })"
-        class="bg-primary text-surface p-3 rounded-full shadow-lg border border-primary-dark/20 hover:bg-primary-dark hover:scale-110 transition-all duration-300 focus:outline-none flex items-center justify-center cursor-pointer"
+        class="bg-black text-white p-3 rounded-full hover:bg-black/80 hover:scale-110 transition-all duration-300 focus:outline-none flex items-center justify-center cursor-pointer"
         aria-label="Scroll to top"
         x-cloak
     >

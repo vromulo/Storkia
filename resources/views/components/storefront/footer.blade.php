@@ -1,5 +1,4 @@
-<!-- Replaced gradient with solid dark maroon background, adjusted text colors to white for emphasis -->
-<footer class="bg-[#5a2e3f] border-t border-white/20 font-sans pt-16 pb-8">
+<footer class="bg-primary-dark border-t-16 border-primary font-sans pt-16 pb-8">
     <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <!-- Main Footer Grid -->
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-12 mb-12">

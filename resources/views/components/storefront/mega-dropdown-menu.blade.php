@@ -7,8 +7,9 @@
     x-cloak
     style="display: none;"
 >
-    <div class="mx-auto w-full max-w-[1292px] h-[450px] justify-center overflow-y-auto bg-surface relative border border-t-0 border-border-subtle rounded-b-2xl [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-track]:bg-surface-subtle [&::-webkit-scrollbar-thumb]:bg-border-subtle [&::-webkit-scrollbar-thumb]:rounded-full">
-
+    <!-- Card Container: Pure white surface with subtle borders & clean shadows -->
+    <div class="mx-auto w-full max-w-[1600px] h-[450px] overflow-y-auto bg-surface relative border border-t-0 border-border-subtle rounded-b-2xl shadow-xl [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-track]:bg-surface-subtle [&::-webkit-scrollbar-thumb]:bg-border-subtle [&::-webkit-scrollbar-thumb]:rounded-full">
+        
         <div class="p-8 lg:p-10 relative z-10">
             @foreach($categories as $categoryName => $subcategories)
                 @if(count($subcategories) > 0)
@@ -16,11 +17,10 @@
                         x-show="activeMenu === '{{ addslashes($categoryName) }}'"
                         class="grid grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4 md:gap-8"
                     >
-                        
                         <!-- View All Link -->
                         <a href="{{ url('/category/' . Str::slug($categoryName)) }}" class="flex flex-col items-center group text-center">
-                            <div class="w-16 h-16 md:w-24 md:h-24 rounded-full overflow-hidden mb-2 md:mb-4 border border-border-subtle group-hover:border-primary transition-colors duration-300 relative bg-[#1f2937] text-surface flex items-center justify-center shrink-0">
-                                <svg xmlns="http://www.w3.org/2000/svg" class="w-6 h-6 md:w-8 md:h-8 text-surface group-hover:scale-110 transition-all duration-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <div class="w-16 h-16 md:w-24 md:h-24 rounded-full overflow-hidden mb-2 md:mb-4 border border-border-subtle group-hover:border-primary transition-colors duration-300 relative bg-primary text-surface flex items-center justify-center shrink-0 shadow-xs">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="w-6 h-6 md:w-8 md:h-8 text-surface group-hover:scale-110 transition-transform duration-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                     <rect x="4" y="4" width="6" height="6" rx="0.5" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
                                     <rect x="14" y="4" width="6" height="6" rx="0.5" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
                                     <rect x="4" y="14" width="6" height="6" rx="0.5" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
@@ -35,7 +35,7 @@
                         <!-- Subcategories with Theme Icons -->
                         @foreach($subcategories as $sub)
                             <a href="{{ url('/category/' . Str::slug($categoryName) . '?subcategory=' . urlencode($sub['name'])) }}" class="flex flex-col items-center group text-center">
-                                <div class="w-16 h-16 md:w-24 md:h-24 rounded-full overflow-hidden mb-2 md:mb-4 border-2 border-transparent group-hover:border-white/50 transition-colors duration-300 relative bg-[#623040] text-white flex items-center justify-center shrink-0 [&>svg]:w-6 [&>svg]:h-6 md:[&>svg]:w-8 md:[&>svg]:h-8 [&>svg]:!text-white [&>svg]:!stroke-white [&>svg_*]:!stroke-white [&>svg]:group-hover:scale-110 [&>svg]:transition-all [&>svg]:duration-300">
+                                <div class="w-16 h-16 md:w-24 md:h-24 rounded-full overflow-hidden mb-2 md:mb-4 border border-border-subtle group-hover:border-primary/50 transition-colors duration-300 relative bg-surface-subtle text-text-main flex items-center justify-center shrink-0 [&>svg]:w-6 [&>svg]:h-6 md:[&>svg]:w-8 md:[&>svg]:h-8 [&>svg]:!text-text-main [&>svg]:!stroke-text-main [&>svg_*]:!stroke-text-main [&>svg]:group-hover:scale-110 [&>svg]:transition-transform [&>svg]:duration-300">
                                     @if(!empty($sub['icon']))
                                         {!! $sub['icon'] !!}
                                     @else
@@ -46,12 +46,11 @@
                                         >
                                     @endif
                                 </div>
-                                <span class="text-xs md:text-sm font-bold text-text-main group-hover:text-primary transition-colors leading-snug">
+                                <span class="text-xs md:text-sm font-medium text-text-muted group-hover:text-text-main transition-colors leading-snug">
                                     {{ $sub['name'] }}
                                 </span>
                             </a>
                         @endforeach
-                        
                     </div>
                 @endif
             @endforeach

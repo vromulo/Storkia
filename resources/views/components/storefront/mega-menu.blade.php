@@ -107,9 +107,10 @@ $categories = [
         activeMenu: null,
         showLeft: false,
         showRight: true,
+        closeTimer: null,
         init() {
             setTimeout(() => {
-                const activeLink = this.$refs.slider.querySelector('.active-category');
+                const activeLink = this.$refs.slider?.querySelector('.active-category');
                 if (activeLink) {
                     activeLink.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
                 }
@@ -119,11 +120,13 @@ $categories = [
         },
         updateArrows() {
             const el = this.$refs.slider;
+            if (!el) return;
             this.showLeft = el.scrollLeft > 0;
             this.showRight = Math.ceil(el.scrollLeft + el.clientWidth) < el.scrollWidth - 1;
         },
         scroll(direction) {
             const el = this.$refs.slider;
+            if (!el) return;
             const scrollAmount = el.clientWidth * 0.8; 
             el.scrollBy({ 
                 left: direction === 'left' ? -scrollAmount : scrollAmount, 
@@ -131,30 +134,23 @@ $categories = [
             });
         },
         setActive(name) {
+            clearTimeout(this.closeTimer);
             this.activeMenu = name;
+        },
+        scheduleClose() {
+            this.closeTimer = setTimeout(() => {
+                this.activeMenu = null;
+            }, 150);
         }
     }" 
-    @mouseleave="activeMenu = null"
-    class="w-full bg-[#5D3140] relative z-20"
+    @mouseenter="clearTimeout(closeTimer)"
+    @mouseleave="scheduleClose()"
+    class="w-full bg-surface relative z-20 border-b border-border-subtle"
 >
     <div class="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8">
-        <!-- Inner wrapper to contain absolute positioned fades and arrows -->
         <div class="relative w-full">
             
-            <!-- Left Gradient Fade -->
-            <div 
-                x-show="showLeft"
-                x-transition:enter="transition ease-out duration-300"
-                x-transition:enter-start="opacity-0"
-                x-transition:enter-end="opacity-100"
-                x-transition:leave="transition ease-in duration-200"
-                x-transition:leave-start="opacity-100"
-                x-transition:leave-end="opacity-0"
-                class="absolute left-0 top-0 bottom-0 w-16 md:w-12 bg-gradient-to-r from-[#5D3140] to-transparent z-10 pointer-events-none"
-                x-cloak
-            ></div>
-
-            <!-- Left Navigation Arrow (Shadow Removed) -->
+            <!-- Left Navigation Arrow -->
             <button 
                 type="button"
                 x-show="showLeft" 
@@ -165,7 +161,7 @@ $categories = [
                 x-transition:leave-start="opacity-100"
                 x-transition:leave-end="opacity-0"
                 @click="scroll('left')" 
-                class="absolute left-1 top-1/2 -translate-y-1/2 z-20 w-6 h-6 bg-black/30 backdrop-blur-sm rounded-full border border-white/30 text-white hover:text-[#F6D8BD] hover:border-[#F6D8BD] transition-colors flex items-center justify-center cursor-pointer"
+                class="absolute left-1 top-1/2 -translate-y-1/2 z-20 w-6 h-6 bg-surface/90 backdrop-blur-xs rounded-full border border-border-subtle text-text-main hover:text-primary hover:border-primary transition-colors flex items-center justify-center cursor-pointer shadow-2xs"
                 aria-label="Previous categories"
                 x-cloak
             >
@@ -174,7 +170,7 @@ $categories = [
                 </svg>
             </button>
 
-            <!-- Navigation Links Container -->
+            <!-- Category Links Container -->
             <nav 
                 x-ref="slider" 
                 @scroll.passive="updateArrows"
@@ -190,29 +186,16 @@ $categories = [
                         @mouseenter="setActive('{{ addslashes($categoryName) }}')"
                         @click="setActive('{{ addslashes($categoryName) }}')"
                         :class="activeMenu === '{{ addslashes($categoryName) }}' || {{ $isActive ? 'true' : 'false' }} 
-                            ? 'bg-surface text-text-main font-bold' 
-                            : 'text-white hover:bg-surface hover:text-text-main'"
-                        class="flex-shrink-0 text-sm font-medium px-3 sm:px-3.5 py-1 rounded-none transition-all duration-150 whitespace-nowrap cursor-pointer {{ $isActive ? 'active-category' : '' }}"
+                            ? 'text-primary font-bold border-b-2 border-primary bg-surface-subtle/60' 
+                            : 'text-text-muted hover:text-text-main hover:bg-surface-subtle'"
+                        class="flex-shrink-0 text-sm font-medium px-4 py-2 rounded-none transition-colors duration-150 whitespace-nowrap cursor-pointer {{ $isActive ? 'active-category' : '' }}"
                     >
                         {{ $categoryName }}
                     </a>
                 @endforeach
             </nav>
 
-            <!-- Right Gradient Fade -->
-            <div 
-                x-show="showRight" 
-                x-transition:enter="transition ease-out duration-300"
-                x-transition:enter-start="opacity-0"
-                x-transition:enter-end="opacity-100"
-                x-transition:leave="transition ease-in duration-200"
-                x-transition:leave-start="opacity-100"
-                x-transition:leave-end="opacity-0"
-                class="absolute right-0 top-0 bottom-0 w-16 md:w-12 bg-gradient-to-l from-[#5D3140] to-transparent z-10 pointer-events-none"
-                x-cloak
-            ></div>
-
-            <!-- Right Navigation Arrow (Shadow Removed) -->
+            <!-- Right Navigation Arrow -->
             <button 
                 type="button"
                 x-show="showRight" 
@@ -223,7 +206,7 @@ $categories = [
                 x-transition:leave-start="opacity-100"
                 x-transition:leave-end="opacity-0"
                 @click="scroll('right')" 
-                class="absolute right-1 top-1/2 -translate-y-1/2 z-20 w-6 h-6 bg-black/30 backdrop-blur-sm rounded-full border border-white/30 text-white hover:text-[#F6D8BD] hover:border-[#F6D8BD] transition-colors flex items-center justify-center cursor-pointer"
+                class="absolute right-1 top-1/2 -translate-y-1/2 z-20 w-6 h-6 bg-surface/90 backdrop-blur-xs rounded-full border border-border-subtle text-text-main hover:text-primary hover:border-primary transition-colors flex items-center justify-center cursor-pointer shadow-2xs"
                 aria-label="Next categories"
                 x-cloak
             >
@@ -231,18 +214,17 @@ $categories = [
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7" />
                 </svg>
             </button>
-            
+
         </div>
     </div>
+
+    <!-- Dropdown Content Component -->
+    <x-storefront.mega-dropdown-menu :categories="$categories" />
 
     <!-- Page Dark Overlay -->
     <div 
         x-show="activeMenu" 
-        class="hidden md:block absolute top-full left-0 w-full h-[100vh] bg-gray-900/60 z-40 pointer-events-none"
+        class="hidden md:block absolute top-full left-0 w-full h-[100vh] bg-black/40 backdrop-blur-2xs z-10 pointer-events-none"
         x-cloak
     ></div>
-
-    <!-- The Mega Dropdown Component -->
-    <x-storefront.mega-dropdown-menu :categories="$categories" />
-
 </div>
