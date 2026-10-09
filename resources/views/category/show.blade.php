@@ -118,10 +118,8 @@
     <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
     @vite(['resources/css/category/show.css'])
 
-    <!-- Main Wrapper with dynamic selectedSubcategory initial state -->
-    <div x-data="{ selectedSubcategory: '{{ addslashes($selectedSubcategory ?? 'All') }}', modalOpen: false, activeProduct: null }"
-         @filter-category.window="selectedSubcategory = $event.detail"
-         class="bg-surface font-sans antialiased text-text-main overflow-x-hidden min-h-screen">
+    <!-- Main Wrapper -->
+    <div x-data="{ modalOpen: false, activeProduct: null }" class="bg-surface font-sans antialiased text-text-main overflow-x-hidden min-h-screen">
         
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 animate-fade-in-up">
             
@@ -142,9 +140,8 @@
                 <div class="grid grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4 md:gap-8">
                     
                     <!-- View All Subcategory Option -->
-                    <button @click="selectedSubcategory = 'All'" class="flex flex-col items-center group text-center focus:outline-none">
-                        <div :class="selectedSubcategory === 'All' ? 'border-primary ring-2 ring-primary ring-offset-2' : 'border-border-subtle'" 
-                             class="w-16 h-16 md:w-24 md:h-24 rounded-full overflow-hidden mb-2 md:mb-4 border-2 group-hover:border-primary transition-colors duration-300 shadow-sm relative bg-[#1f2937] flex items-center justify-center shrink-0">
+                    <a href="?subcategory=All" class="flex flex-col items-center group text-center focus:outline-none">
+                        <div class="{{ $selectedSubcategory === 'All' ? 'border-primary ring-2 ring-primary ring-offset-2' : 'border-border-subtle' }} w-16 h-16 md:w-24 md:h-24 rounded-full overflow-hidden mb-2 md:mb-4 border-2 group-hover:border-primary transition-colors duration-300 shadow-sm relative bg-[#1f2937] flex items-center justify-center shrink-0">
                             <svg xmlns="http://www.w3.org/2000/svg" class="w-6 h-6 md:w-8 md:h-8 text-white group-hover:scale-110 transition-all duration-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                 <rect x="4" y="4" width="6" height="6" rx="0.5" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
                                 <rect x="14" y="4" width="6" height="6" rx="0.5" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
@@ -152,10 +149,10 @@
                                 <circle cx="17" cy="17" r="3" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
                             </svg>
                         </div>
-                        <span :class="selectedSubcategory === 'All' ? 'text-primary font-bold' : 'text-text-main font-bold'" class="text-xs md:text-sm group-hover:text-primary transition-colors leading-snug">
+                        <span class="{{ $selectedSubcategory === 'All' ? 'text-primary font-bold' : 'text-text-main font-bold' }} text-xs md:text-sm group-hover:text-primary transition-colors leading-snug">
                             View All
                         </span>
-                    </button>
+                    </a>
 
                     <!-- Render Subcategories with themed icon circle display -->
                     @foreach($subcategories as $sub)
@@ -164,25 +161,36 @@
                             // Enforce the icon lookup mapping over the database
                             $displayIcon = !empty($sub['icon']) ? $sub['icon'] : ($iconLookup[$subName] ?? null);
                         @endphp
-                        <button @click="selectedSubcategory = '{{ addslashes($subName) }}'" class="flex flex-col items-center group text-center focus:outline-none">
-                            <div :class="selectedSubcategory === '{{ addslashes($subName) }}' ? 'border-primary ring-2 ring-primary ring-offset-2' : 'border-border-subtle'" 
-                                 class="w-16 h-16 md:w-24 md:h-24 rounded-full overflow-hidden mb-2 md:mb-4 border-2 group-hover:border-primary transition-colors duration-300 shadow-sm relative bg-[#F6D8BD] flex items-center justify-center shrink-0">
+                        <a href="?subcategory={{ urlencode($subName) }}" class="flex flex-col items-center group text-center focus:outline-none">
+                            <div class="{{ $selectedSubcategory === $subName ? 'border-primary ring-2 ring-primary ring-offset-2' : 'border-border-subtle' }} w-16 h-16 md:w-24 md:h-24 rounded-full overflow-hidden mb-2 md:mb-4 border-2 group-hover:border-primary transition-colors duration-300 shadow-sm relative bg-[#F6D8BD] flex items-center justify-center shrink-0">
                                 @if($displayIcon)
                                     {!! $displayIcon !!}
                                 @else
                                     <img src="{{ $sub['image'] }}" alt="{{ $subName }}" class="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500">
                                 @endif
                             </div>
-                            <span :class="selectedSubcategory === '{{ addslashes($subName) }}' ? 'text-primary font-bold' : 'text-text-main font-bold'" class="text-xs md:text-sm group-hover:text-primary transition-colors leading-snug">
+                            <span class="{{ $selectedSubcategory === $subName ? 'text-primary font-bold' : 'text-text-main font-bold' }} text-xs md:text-sm group-hover:text-primary transition-colors leading-snug">
                                 {{ $subName }}
                             </span>
-                        </button>
+                        </a>
                     @endforeach
                 </div>
             </div>
 
-            <!-- Products Component -->
-            <x-storefront.product-card :products="$products" />
+            <!-- Products Output Component List -->
+            <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 md:gap-6">
+                @forelse($products as $product)
+                    <x-storefront.seller-product-card :product="$product" />
+                @empty
+                    <div class="col-span-full py-12 text-center text-text-muted">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="w-12 h-12 mx-auto mb-4 text-text-muted/50" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L5.6 15.12a2 2 0 00-1.144.135l-1.028.455a2 2 0 00-1.17 1.832v.458c0 1.105.895 2 2 2h15.484a2 2 0 002-2v-.458a2 2 0 00-1.17-1.832l-1.344-.596z" />
+                        </svg>
+                        <p class="text-lg font-medium">No products available in this category.</p>
+                        <p class="text-sm">Try checking out our other collections!</p>
+                    </div>
+                @endforelse
+            </div>
 
         </div>
 

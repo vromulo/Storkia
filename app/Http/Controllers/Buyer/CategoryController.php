@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Buyer;
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
+use App\Models\Product;
 
 class CategoryController extends Controller
 {
@@ -125,7 +126,15 @@ class CategoryController extends Controller
         }
 
         $selectedSubcategory = $request->query('subcategory', 'All');
-        $products = [];
+        
+        // Fetch products associated with this category and optional subcategory
+        $query = Product::where('category', $categoryName);
+        
+        if ($selectedSubcategory !== 'All') {
+            $query->where('subcategory', $selectedSubcategory);
+        }
+        
+        $products = $query->get();
 
         return view('category.show', [
             'categoryName' => $categoryName,
