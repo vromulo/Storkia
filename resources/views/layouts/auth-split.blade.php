@@ -9,29 +9,35 @@
 </head>
 <body class="m-0 p-0 h-screen w-screen font-sans antialiased text-text-main overflow-hidden bg-surface relative">
     
-    <!-- Mobile Guard -->
-    <div class="mobile-view absolute inset-0 bg-surface/80 backdrop-blur-md z-40"></div>
-    <div class="mobile-view flex-col items-center justify-center h-screen w-screen px-4 sm:px-6 py-8 z-50 relative overflow-y-auto">
-        <div class="bg-surface/95 backdrop-blur-xl rounded-3xl shadow-2xl shadow-black/10 border border-border-subtle w-full max-w-md p-6 sm:p-8 text-center flex flex-col items-center">
-            <div class="w-20 h-20 bg-brand-light/40 text-primary-dark rounded-full flex items-center justify-center mb-5 shadow-inner">
-                <svg class="w-10 h-10" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                </svg>
+    @php
+        $restrictMobile = $restrictMobile ?? true;
+    @endphp
+
+    @if($restrictMobile)
+        <!-- Mobile Guard for Seller & Logistics -->
+        <div class="mobile-view absolute inset-0 bg-surface/80 backdrop-blur-md z-40"></div>
+        <div class="mobile-view flex-col items-center justify-center h-screen w-screen px-4 sm:px-6 py-8 z-50 relative overflow-y-auto">
+            <div class="bg-surface/95 backdrop-blur-xl rounded-3xl shadow-2xl shadow-black/10 border border-border-subtle w-full max-w-md p-6 sm:p-8 text-center flex flex-col items-center">
+                <div class="w-20 h-20 bg-brand-light/40 text-primary-dark rounded-full flex items-center justify-center mb-5 shadow-inner">
+                    <svg class="w-10 h-10" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                    </svg>
+                </div>
+                <h2 class="text-2xl sm:text-3xl font-extrabold text-primary-dark mb-4 tracking-tight">Desktop Only</h2>
+                <div class="bg-brand-light/20 border border-border-subtle rounded-2xl p-5 mb-8 w-full shadow-sm">
+                    <p class="text-text-main text-sm sm:text-base leading-relaxed font-medium">
+                        {{ $mobilePrompt ?? 'Please log in from a computer to access this interface.' }}
+                    </p>
+                </div>
+                <a href="/" class="w-full flex items-center justify-center px-6 py-4 bg-primary text-white text-lg font-bold rounded-2xl shadow-md hover:bg-primary-dark transition-all duration-200 cursor-pointer active:scale-95">
+                    Return Home
+                </a>
             </div>
-            <h2 class="text-2xl sm:text-3xl font-extrabold text-primary-dark mb-4 tracking-tight">Desktop Only</h2>
-            <div class="bg-brand-light/20 border border-border-subtle rounded-2xl p-5 mb-8 w-full shadow-sm">
-                <p class="text-text-main text-sm sm:text-base leading-relaxed font-medium">
-                    {{ $mobilePrompt ?? 'Please log in from a computer to access this interface.' }}
-                </p>
-            </div>
-            <a href="/" class="w-full flex items-center justify-center px-6 py-4 bg-primary text-white text-lg font-bold rounded-2xl shadow-md hover:bg-primary-dark transition-all duration-200 cursor-pointer active:scale-95">
-                Return Home
-            </a>
         </div>
-    </div>
+    @endif
 
     <!-- Desktop Split Canvas -->
-    <div class="desktop-view h-full w-full flex">
+    <div class="{{ $restrictMobile ? 'desktop-view' : 'flex' }} h-full w-full flex">
         @yield('content')
     </div>
 

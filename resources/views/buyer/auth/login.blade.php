@@ -1,6 +1,6 @@
 @extends('layouts.auth-split', [
-    'title' => 'Storkia - Buyer Login',
-    'mobilePrompt' => 'Please access your account from a desktop browser.'
+    'title' => 'Storkia - Sign in',
+    'restrictMobile' => false
 ])
 
 @section('content')
