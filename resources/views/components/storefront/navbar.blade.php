@@ -28,22 +28,54 @@
                 </a>
             </div>
 
-            <!-- Search Bar: Expandable wide search -->
-            <div class="flex flex-1 max-w-4xl mx-3 sm:mx-6 md:mx-10">
-                <div class="relative w-full group">
-                    <!-- Search Input -->
-                    <input 
-                        type="text" 
-                        placeholder="Search products..." 
-                        class="w-full bg-surface-subtle focus:bg-white border border-transparent hover:border-text-main focus:border-text-main rounded-full py-2 sm:py-2.5 px-4 pl-11 outline-none text-text-main placeholder:text-text-muted text-sm font-normal transition-all duration-200"
-                    >
+            <!-- Search Bar: Expandable wide search with Alpine.js -->
+            <div class="flex flex-1 max-w-4xl mx-3 sm:mx-6 md:mx-10" x-data="searchComponent()">
+                <div class="relative w-full group" @click.away="showSuggestions = false">
+                    <!-- Search Form -->
+                    <form @submit.prevent="submitSearch" class="relative">
+                        <input 
+                            x-model="query"
+                            @input.debounce.300ms="fetchSuggestions"
+                            @focus="if(query.length > 0) showSuggestions = true"
+                            type="text" 
+                            name="q"
+                            autocomplete="off"
+                            placeholder="Search products..." 
+                            class="w-full bg-surface-subtle focus:bg-surface border border-transparent hover:border-text-main focus:border-text-main rounded-full py-2 sm:py-2.5 px-4 pl-11 outline-none text-text-main placeholder:text-text-muted text-sm font-normal transition-all duration-200"
+                        >
 
-                    <!-- Search Icon -->
-                    <div class="absolute left-4 top-1/2 -translate-y-1/2 text-text-muted group-hover:text-text-main group-focus-within:text-text-main transition-colors duration-150 pointer-events-none flex items-center justify-center">
-                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4.5 w-4.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.75">
-                            <circle cx="11" cy="11" r="7" stroke-linecap="round" stroke-linejoin="round" />
-                            <path stroke-linecap="round" stroke-linejoin="round" d="M16.5 16.5L21 21" />
-                        </svg>
+                        <!-- Search Icon -->
+                        <button type="submit" class="absolute left-4 top-1/2 -translate-y-1/2 text-text-muted group-hover:text-text-main group-focus-within:text-text-main transition-colors duration-150 flex items-center justify-center">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4.5 w-4.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.75">
+                                <circle cx="11" cy="11" r="7" stroke-linecap="round" stroke-linejoin="round" />
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M16.5 16.5L21 21" />
+                            </svg>
+                        </button>
+                    </form>
+
+                    <!-- Suggestions Dropdown -->
+                    <div x-show="showSuggestions && suggestions.length > 0" 
+                         x-transition
+                         x-cloak
+                         class="absolute w-full mt-1 bg-surface border border-border-subtle rounded-xl shadow-xl overflow-hidden z-50 max-h-[60vh] overflow-y-auto">
+                        <ul class="py-1">
+                            <template x-for="item in suggestions" :key="item.category || 'all'">
+                                <li>
+                                    <!-- Dynamic URL mapped to category selection -->
+                                    <a :href="'/search?q=' + encodeURIComponent(item.name) + (item.category ? '&category=' + encodeURIComponent(item.category) : '')" 
+                                       class="flex items-center px-4 py-2 hover:bg-surface-subtle transition-colors">
+                                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 text-text-muted mr-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                                        </svg>
+                                        <div>
+                                            <span class="text-sm text-text-main font-medium" x-text="item.name"></span>
+                                            <!-- Dynamically display category or 'All Categories' fallback -->
+                                            <span class="text-xs text-text-muted ml-2" x-text="item.category ? 'in ' + item.category : 'in All Categories'"></span>
+                                        </div>
+                                    </a>
+                                </li>
+                            </template>
+                        </ul>
                     </div>
                 </div>
             </div>
@@ -130,7 +162,7 @@
                             
                             @if($cartCount > 0)
                                 <span class="absolute -top-1.5 -right-2 text-[10px] font-bold rounded-full h-4 w-4 flex items-center justify-center border border-surface bg-primary text-surface">
-                                    {{ $cartCount > 99 ? '99+' : $cartCount }}
+                                    {{ $cartCount > 99 ? '99+' :$cartCount }}
                                 </span>
                             @endif
                         @endauth
@@ -143,4 +175,34 @@
             </div>
         </div>
     </div>
+
+    <!-- Alpine Search Script -->
+    <script>
+        document.addEventListener('alpine:init', () => {
+            Alpine.data('searchComponent', () => ({
+                query: new URLSearchParams(window.location.search).get('q') || '',
+                suggestions: [],
+                showSuggestions: false,
+                fetchSuggestions() {
+                    if (this.query.length < 2) {
+                        this.suggestions = [];
+                        this.showSuggestions = false;
+                        return;
+                    }
+                    
+                    fetch(`/search/suggestions?q=${encodeURIComponent(this.query)}`)
+                        .then(res => res.json())
+                        .then(data => {
+                            this.suggestions = data;
+                            this.showSuggestions = data.length > 0;
+                        });
+                },
+                submitSearch() {
+                    if (this.query.trim()) {
+                        window.location.href = `/search?q=${encodeURIComponent(this.query.trim())}`;
+                    }
+                }
+            }));
+        });
+    </script>
 </nav>

@@ -5,6 +5,7 @@ use App\Http\Controllers\Buyer\AuthController;
 use App\Http\Controllers\Buyer\HomeController;
 use App\Http\Controllers\Buyer\CategoryController;
 use App\Http\Controllers\Buyer\ProductController;
+use App\Http\Controllers\Buyer\SearchController;
 use App\Http\Controllers\Buyer\AccountManagementController;
 use App\Http\Controllers\Buyer\AddressController;
 use App\Http\Controllers\Buyer\CartController;
@@ -14,6 +15,10 @@ use App\Livewire\Buyer\IdentityVerificationFlow;
 Route::get('/', [HomeController::class, 'index'])->name('home');
 Route::get('/product/{product}', [ProductController::class, 'show'])->name('product.show');
 Route::get('/category/{slug}', [CategoryController::class, 'show'])->name('category.show');
+
+// Search Routes
+Route::get('/search', [SearchController::class, 'index'])->name('search.search');
+Route::get('/search/suggestions', [SearchController::class, 'suggestions'])->name('search.suggestions');
 
 // Buyer Authentication Routes
 Route::middleware('guest')->group(function () {
