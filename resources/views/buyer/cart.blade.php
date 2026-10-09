@@ -8,12 +8,12 @@
         // Pre-process Cart Items for Alpine.js State Management
         $alpineItems = [];
 
-        foreach ($cartItems as $item) {
-            $product = $item->product;
+        foreach ($cartItems as$item) {
+            $product =$item->product;
 
             // Default Fallbacks
-            $basePrice = $product->price;
-            $variantStock = $product->stock_quantity;
+            $basePrice =$product->price;
+            $variantStock =$product->stock_quantity;
 
             $variantImage = (!empty($product->pictures) && is_array($product->pictures))
                 ? asset('storage/' . $product->pictures[0])
@@ -21,26 +21,25 @@
 
             // Extract Variant Pricing & Stock
             if ($item->variant && isset($product->variants['items'])) {
-                foreach ($product->variants['items'] as $v) {
-                    if ($v['name'] === $item->variant) {
-                        if (!$item->sub_variant) {
-                            $basePrice = $v['price'] ?? $basePrice;
+                foreach ($product->variants['items'] as$v) {
+                    if ($v['name'] ===$item->variant) {
+                        if (!$item->sub_variant) {$basePrice = $v['price'] ?? $basePrice;
                             $variantStock = $v['stock'] ?? $variantStock;
 
-                            $variantImage = (isset($v['image']) && $v['image'])
+                            $variantImage = (isset($v['image']) &&$v['image'])
                                 ? asset('storage/' . $v['image'])
                                 : $variantImage;
                         } else {
                             if (isset($v['subs'])) {
-                                foreach ($v['subs'] as $sub) {
-                                    if ($sub['name'] === $item->sub_variant) {
-                                        $basePrice = $sub['price'] ?? $v['price'] ?? $basePrice;
+                                foreach ($v['subs'] as$sub) {
+                                    if ($sub['name'] ===$item->sub_variant) {
+                                        $basePrice =$sub['price'] ?? $v['price'] ?? $basePrice;
                                         $variantStock = $sub['stock'] ?? $variantStock;
 
-                                        $variantImage = (isset($sub['image']) && $sub['image'])
+                                        $variantImage = (isset($sub['image']) &&$sub['image'])
                                             ? asset('storage/' . $sub['image'])
                                             : (
-                                                (isset($v['image']) && $v['image'])
+                                                (isset($v['image']) &&$v['image'])
                                                     ? asset('storage/' . $v['image'])
                                                     : $variantImage
                                             );
@@ -53,17 +52,14 @@
             }
 
             // Apply Discount & Normalize Data
-            $finalPrice = $product->discount > 0
-                ? $basePrice - ($basePrice * ($product->discount / 100))
-                : $basePrice;
+            $finalPrice =$product->discount > 0
+                ? $basePrice - ($basePrice * ($product->discount / 100))                 :$basePrice;
 
-            $safeQuantity = min(
-                $item->quantity,
+            $safeQuantity = min($item->quantity,
                 max(1, $variantStock)
             );
 
-            if ($variantStock <= 0) {
-                $safeQuantity = 0;
+            if ($variantStock <= 0) {$safeQuantity = 0;
             }
 
             $alpineItems[] = [
@@ -72,8 +68,7 @@
                 'price' => $finalPrice,
                 'quantity' => $safeQuantity,
                 'maxStock' => $variantStock,
-                'selected' => $variantStock > 0,
-                'image' => $variantImage,
+                'selected' => $variantStock > 0,                 'image' =>$variantImage,
                 'basePrice' => $basePrice,
                 'isSyncing' => false,
             ];
@@ -84,7 +79,9 @@
             selectAll: true,
             items: @js($alpineItems),
             totalAmount: 0,
+            targetTotalAmount: 0,
             slideDirection: 'up',
+            animationFrame: null,
 
             get formattedTotalChars() {
                 return this.totalAmount
@@ -171,13 +168,48 @@
                     return sum + (i.price * q);
                 }, 0);
 
-                if (newTotal > this.totalAmount) {
+                newTotal = Math.round(newTotal * 100) / 100;
+
+                if (newTotal === this.targetTotalAmount) return;
+
+                if (newTotal > this.targetTotalAmount) {
                     this.slideDirection = 'up';
-                } else if (newTotal < this.totalAmount) {
+                } else if (newTotal < this.targetTotalAmount) {
                     this.slideDirection = 'down';
                 }
 
-                this.totalAmount = Math.round(newTotal * 100) / 100;
+                this.animateTotal(newTotal);
+            },
+
+            animateTotal(newTotal) {
+                if (this.totalAmount === 0 && this.targetTotalAmount === 0) {
+                    this.totalAmount = newTotal;
+                    this.targetTotalAmount = newTotal;
+                    return;
+                }
+
+                this.targetTotalAmount = newTotal;
+                let start = this.totalAmount;
+                let end = newTotal;
+                let duration = 300; 
+                let startTime = null;
+
+                if (this.animationFrame) cancelAnimationFrame(this.animationFrame);
+
+                const animate = (currentTime) => {
+                    if (!startTime) startTime = currentTime;
+                    let progress = Math.min((currentTime - startTime) / duration, 1);
+                    
+                    this.totalAmount = Number((start + (end - start) * progress).toFixed(2));
+
+                    if (progress < 1) {
+                        this.animationFrame = requestAnimationFrame(animate);
+                    } else {
+                        this.totalAmount = end;
+                    }
+                };
+                
+                this.animationFrame = requestAnimationFrame(animate);
             },
 
             increment(index) {
@@ -206,7 +238,7 @@
                 this.checkItem();
             }
         }"
-        @cart-updated.window="syncFromEvent($event.detail)"
+        x-on:cart-updated.window="syncFromEvent($event.detail)"
         class="bg-surface-subtle font-sans antialiased text-text-main min-h-screen relative pb-16"
     >
 
@@ -242,7 +274,7 @@
                 <div class="bg-surface border border-border-subtle p-4 sm:px-6 flex flex-col sm:flex-row sm:items-center justify-between mb-6 rounded-2xl shadow-sm relative">
                     <!-- Select All Checkbox -->
                     <div class="flex items-center">
-                        <input type="checkbox" x-model="selectAll" @change="toggleAll()" class="w-5 h-5 text-primary border-border-subtle rounded focus:ring-primary mr-4 cursor-pointer transition-colors shadow-xs">
+                        <input type="checkbox" x-model="selectAll" x-on:change="toggleAll()" class="w-5 h-5 text-primary border-border-subtle rounded focus:ring-primary mr-4 cursor-pointer transition-colors shadow-xs">
                         <div class="flex flex-col">
                             <span class="font-bold text-lg text-text-main leading-tight">ALL ITEMS</span>
                             <span class="text-xs text-text-muted font-medium"><span x-text="items.length"></span> items in cart</span>
@@ -284,23 +316,21 @@
 
                 <!-- Database Cart Items Loop -->
                 <div class="space-y-4">
-                    @forelse ($cartItems as $index => $item)
+                    @forelse($cartItems as $index => $item)
                         @php
-                            $product = $item->product;
-                            $sellerName = $product->user->sellerProfile->business_name ?? 'Official Store';
-                            $data = $alpineItems[$index] ?? [];
-                            $variantStock = $data['maxStock'] ?? $product->stock_quantity;
-                            $variantImage = $data['image'] ?? '';
-                            $basePrice = $data['basePrice'] ?? $product->price;
+                            $product =$item->product;
+                            $sellerName =$product->user->sellerProfile->business_name ?? 'Official Store';
+                            $data =$alpineItems[$index] ?? [];$variantStock = $data['maxStock'] ?? $product->stock_quantity;
+                            $variantImage = $data['image'] ?? '';$basePrice = $data['basePrice'] ?? $product->price;
                         @endphp
 
                         <div :class="items[{{ $index }}].selected ? 'border-primary ring-1 ring-primary/20 bg-surface' : 'border-border-subtle bg-surface hover:border-primary/40'" class="border p-5 flex flex-col md:flex-row md:items-start gap-6 rounded-xl shadow-xs transition-all group">
                             <!-- Checkbox & Image -->
                             <div class="flex items-center gap-4 shrink-0">
-                                <input type="checkbox" x-model="items[{{ $index }}].selected" @change="checkItem()" :disabled="items[{{ $index }}].maxStock <= 0" class="w-5 h-5 text-primary border-border-subtle rounded focus:ring-primary cursor-pointer shrink-0 mt-5 md:mt-0 transition-colors shadow-xs disabled:opacity-50 disabled:cursor-not-allowed">
+                                <input type="checkbox" x-model="items[{{ $index }}].selected" x-on:change="checkItem()" :disabled="items[{{ $index }}].maxStock <= 0" class="w-5 h-5 text-primary border-border-subtle rounded focus:ring-primary cursor-pointer shrink-0 mt-5 md:mt-0 transition-colors shadow-xs disabled:opacity-50 disabled:cursor-not-allowed">
                                 <div class="w-24 h-24 sm:w-28 sm:h-28 bg-surface-subtle border border-border-subtle relative rounded-lg overflow-hidden shrink-0">
                                     <img src="{{ $variantImage }}" alt="{{ $product->name }}" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500">
-                                    @if ($variantStock <= 5 && $variantStock > 0)
+                                    @if ($variantStock <= 5 &&$variantStock > 0)
                                         <div class="absolute bottom-0 left-0 right-0 bg-danger text-surface text-[10px] text-center font-bold py-0.5 shadow-sm">Only {{ $variantStock }} Left</div>
                                     @elseif ($variantStock == 0)
                                         <div class="absolute inset-0 bg-white/60 backdrop-blur-[2px] flex items-center justify-center">
@@ -346,7 +376,7 @@
                                         <span class="text-xs text-text-muted line-through font-bold">₱{{ number_format($basePrice, 2) }}</span>
                                     @endif
                                     <span class="text-lg sm:text-xl font-bold" :class="items[{{ $index }}].maxStock > 0 ? 'text-primary' : 'text-text-muted'">
-                                        ₱<span x-text="(items[{{ $index }}].price * (parseInt(items[{{ $index }}].quantity) || 1)).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})"></span>
+                                        ₱<span x-text="(items[{{ $index }}].price * (parseInt(items[{{$index }}].quantity) || 1)).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})"></span>
                                     </span>
                                 </div>
 
@@ -359,12 +389,12 @@
                                     <template x-if="items[{{ $index }}].maxStock > 0">
                                         <div class="flex items-center border border-border-subtle rounded-md bg-surface shadow-xs h-[34px] overflow-hidden w-[104px] shrink-0"
                                              :class="{'opacity-50': items[{{ $index }}].isSyncing}">
-                                            <button type="button" @click="decrement({{ $index }})" :disabled="items[{{ $index }}].isSyncing" class="w-8 text-text-main hover:text-primary hover:bg-surface-subtle transition-colors h-full flex items-center justify-center border-r border-border-subtle outline-none shrink-0" :class="{'cursor-not-allowed': items[{{ $index }}].isSyncing, 'cursor-pointer': !items[{{ $index }}].isSyncing}"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M20 12H4"></path></svg></button>
+                                            <button type="button" x-on:click="decrement({{ $index }})" :disabled="items[{{ $index }}].isSyncing" class="w-8 text-text-main hover:text-primary hover:bg-surface-subtle transition-colors h-full flex items-center justify-center border-r border-border-subtle outline-none shrink-0" :class="{'cursor-not-allowed': items[{{ $index }}].isSyncing, 'cursor-pointer': !items[{{$index }}].isSyncing}"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M20 12H4"></path></svg></button>
                                             
                                             <!-- Readonly input for forced tap-only interaction -->
                                             <input type="number" readonly x-model="items[{{ $index }}].quantity" class="flex-1 w-full h-full text-center border-none bg-transparent text-sm font-bold text-text-main focus:ring-0 p-0 outline-none select-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none">
                                             
-                                            <button type="button" @click="increment({{ $index }})" :disabled="items[{{ $index }}].isSyncing" class="w-8 text-text-main hover:text-primary hover:bg-surface-subtle transition-colors h-full flex items-center justify-center border-l border-border-subtle outline-none shrink-0" :class="{'cursor-not-allowed': items[{{ $index }}].isSyncing, 'cursor-pointer': !items[{{ $index }}].isSyncing}"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 4v16m8-8H4"></path></svg></button>
+                                            <button type="button" x-on:click="increment({{ $index }})" :disabled="items[{{ $index }}].isSyncing" class="w-8 text-text-main hover:text-primary hover:bg-surface-subtle transition-colors h-full flex items-center justify-center border-l border-border-subtle outline-none shrink-0" :class="{'cursor-not-allowed': items[{{ $index }}].isSyncing, 'cursor-pointer': !items[{{$index }}].isSyncing}"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 4v16m8-8H4"></path></svg></button>
                                         </div>
                                     </template>
 
@@ -402,7 +432,7 @@
                     You Might Like to Fill it With
                 </h2>
                 <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4 lg:gap-5">
-                    @forelse ($suggestedProducts as $product)
+                    @forelse($suggestedProducts as $product)
                         <x-storefront.seller-product-card :product="$product" />
                     @empty
                         <div class="col-span-full text-center text-text-muted py-8 text-sm font-medium">
