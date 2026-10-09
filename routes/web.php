@@ -71,8 +71,3 @@ Route::middleware('auth')->group(function () {
 
     Route::get('/identity-verification', IdentityVerificationFlow::class)->name('user.identity-verification');
 });
-
-Route::get('/tunnel-test', function () {
-    return response('Tunnel is working', 200)
-        ->header('Content-Type', 'text/plain');
-});
