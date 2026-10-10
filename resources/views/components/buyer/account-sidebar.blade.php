@@ -23,39 +23,38 @@
            x-transition:leave="transition-transform ease-in duration-250 transform"
            x-transition:leave-start="translate-x-0"
            x-transition:leave-end="-translate-x-full"
-           class="fixed inset-y-0 left-0 z-[100] w-72 max-w-[85vw] bg-surface shadow-2xl overflow-y-auto custom-scrollbar flex flex-col justify-between">
+           class="fixed inset-y-0 left-0 z-[100] w-72 max-w-[85vw] bg-surface shadow-2xl overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] flex flex-col justify-between">
 @else
     <!-- Desktop Static Docked Sidebar (>= 768px in Personal Center) -->
-    <aside class="hidden md:flex md:w-56 lg:w-64 shrink-0 bg-surface md:shadow-none overflow-y-auto custom-scrollbar flex-col justify-between">
+    <aside class="hidden md:flex md:w-56 lg:w-64 shrink-0 bg-surface md:shadow-none overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] flex-col justify-between">
 @endif
 
     <div>
         <!-- User Profile Card -->
-        <div class="p-6 pb-5 flex flex-col items-start border-b border-border-subtle/80 relative">
+        <div class="p-6 pb-5 flex items-center gap-3.5 border-b border-border-subtle/80 relative">
             @if ($isGlobal)
-                <!-- Mobile Close Button (✕) -->
+                <!-- Mobile Close / Back Button (<) -->
                 <button type="button" 
                         @click="mobileDrawerOpen = false" 
                         class="absolute top-4 right-4 p-1.5 text-text-muted hover:text-text-main rounded-lg transition-colors cursor-pointer"
                         aria-label="Close menu">
-                    <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                    <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7" />
                     </svg>
                 </button>
             @endif
 
             <!-- Circular User Avatar -->
-            <div class="w-14 h-14 rounded-full bg-brand-light/50 text-text-main border border-border-subtle flex items-center justify-center font-bold text-xl shadow-xs mb-3.5 shrink-0">
+            <div class="w-12 h-12 rounded-full bg-brand-light/50 text-text-main border border-border-subtle flex items-center justify-center font-bold text-lg shadow-xs shrink-0 select-none">
                 {{ strtoupper(substr(auth()->user()->first_name ?? 'U', 0, 1)) }}
             </div>
 
-            <!-- Name & Email -->
-            <h3 class="font-bold text-base text-text-main tracking-tight leading-snug">
-                {{ auth()->user()->first_name }} {{ auth()->user()->last_name }}
-            </h3>
-            <p class="text-xs text-text-muted truncate max-w-[210px] mt-0.5 font-normal">
-                {{ auth()->user()->email ?? 'user@example.com' }}
-            </p>
+            <!-- Name (Right side of avatar) -->
+            <div class="overflow-hidden flex-1 min-w-0 pr-6">
+                <h3 class="font-bold text-base text-text-main tracking-tight leading-snug truncate">
+                    {{ auth()->user()->first_name }} {{ auth()->user()->last_name }}
+                </h3>
+            </div>
         </div>
 
         <!-- Navigation Menu -->
