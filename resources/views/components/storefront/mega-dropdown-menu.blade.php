@@ -3,7 +3,7 @@
 <div 
     x-show="activeMenu"
     x-effect="if (activeMenu) $el.scrollTop = 0"
-    class="hidden md:block absolute top-full left-0 right-0 w-full z-50 bg-transparent"
+    class="hidden md:block absolute top-full left-0 right-0 w-full md:z-50 bg-transparent"
     x-cloak
     style="display: none;"
 >

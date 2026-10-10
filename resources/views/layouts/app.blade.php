@@ -37,11 +37,22 @@
             lastScroll = currentScroll;
         "
         :class="showHeader ? 'translate-y-0' : '-translate-y-full'"
-        class="sticky top-0 z-50 flex flex-col w-full transition-transform duration-300 ease-in-out"
+        class="sticky top-0 z-40 md:z-50 flex flex-col w-full transition-transform duration-300 ease-in-out"
     >
         @include('components.storefront.navbar')
         <x-storefront.mega-menu />
     </header>
+
+    @auth
+        <!-- Global Mobile Sidebar Drawer (< 768px) for Authenticated Users -->
+        <div class="md:hidden"
+            x-data="{ mobileDrawerOpen: false }"
+            @toggle-account-drawer.window="mobileDrawerOpen = !mobileDrawerOpen"
+            @close-account-drawer.window="mobileDrawerOpen = false"
+            @keydown.escape.window="mobileDrawerOpen = false">
+            <x-buyer.account-sidebar :is-global="true" />
+        </div>
+    @endauth
 
     <!-- Main Content Area -->
     <main class="flex-grow">

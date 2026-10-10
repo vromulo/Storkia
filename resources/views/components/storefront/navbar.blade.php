@@ -84,10 +84,10 @@
             <div class="flex items-center space-x-5 md:space-x-8">
                 <!-- Profile Menu -->
                 <div x-data="{ open: false, timer: null }" 
-                     @mouseenter="clearTimeout(timer); open = true" 
-                     @mouseleave="timer = setTimeout(() => { open = false }, 300)" 
-                     class="relative flex items-center h-full">
-                    
+                    @mouseenter="if (window.innerWidth >= 768) { clearTimeout(timer); open = true; }" 
+                    @mouseleave="if (window.innerWidth >= 768) { timer = setTimeout(() => { open = false; }, 300); }" 
+                    class="relative flex items-center h-full">
+
                     @guest
                         <a href="{{ route('login') }}" 
                         class="flex items-center text-text-main hover:text-primary transition-colors cursor-pointer focus:outline-none"
@@ -100,7 +100,7 @@
 
                     @auth
                         <button type="button" 
-                                @click="open = !open" 
+                                @click="window.innerWidth < 768 ? $dispatch('toggle-account-drawer') : (open = !open)" 
                                 class="flex items-center text-text-main hover:text-primary transition-colors cursor-pointer focus:outline-none"
                                 aria-label="User account menu">
                             <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
