@@ -47,6 +47,16 @@ class User extends Authenticatable
         return $this->hasOne(IdentityVerification::class)->latestOfMany();
     }
 
+    public function addresses()
+    {
+        return $this->hasMany(UserAddress::class)->latest('id');
+    }
+
+    public function defaultAddress()
+    {
+        return $this->hasOne(UserAddress::class)->where('is_default', true);
+    }
+
     /**
      * The seller's current approved profile. Only exists once an
      * application has been approved by an admin.

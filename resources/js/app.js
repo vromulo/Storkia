@@ -3,6 +3,7 @@ import imageUploader from './seller/image-uploader';
 import productTableRow from './seller/product-table-row';
 import searchableSelect from './common/searchable-select';
 import accountManager from './buyer/account-manager';
+import addressManager from './buyer/address-manager';
 
 document.addEventListener('alpine:init', () => {
     Alpine.data('variantManager', variantManager);
@@ -10,4 +11,5 @@ document.addEventListener('alpine:init', () => {
     Alpine.data('productTableRow', productTableRow);
     Alpine.data('searchableSelect', searchableSelect);
     Alpine.data('accountManager', accountManager);
+    Alpine.data('addressManager', addressManager);
 });

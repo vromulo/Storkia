@@ -53,10 +53,15 @@ Route::middleware('auth')->group(function () {
         Route::post('/account-management/email/request-otp', [AccountManagementController::class, 'requestEmailOtp'])->name('account-management.request-email-otp');
         Route::post('/account-management/email/verify-otp', [AccountManagementController::class, 'verifyEmailOtp'])->name('account-management.verify-email-otp');
         
+        // Address Book Routes (Connected to DB & Controller)
+        Route::get('/addresses', [AddressController::class, 'index'])->name('addresses');
+        Route::post('/addresses', [AddressController::class, 'store'])->name('addresses.store');
+        Route::put('/addresses/{id}', [AddressController::class, 'update'])->name('addresses.update');
+        Route::delete('/addresses/{id}', [AddressController::class, 'destroy'])->name('addresses.destroy');
+        Route::get('/addresses/psgc/municipalities/{provinceCode}', [AddressController::class, 'getMunicipalities'])->name('addresses.psgc.municipalities');
 
         // Future Sections inheriting personal-center via buyer.option.coming-soon
         Route::view('/profile', 'buyer.option.coming-soon', ['title' => 'Profile'])->name('profile');
-        Route::get('/addresses', [AddressController::class, 'index'])->name('addresses');
         Route::view('/change-password', 'buyer.option.coming-soon', ['title' => 'Change Password'])->name('change-password');
 
         Route::view('/orders', 'buyer.option.coming-soon', ['title' => 'My Orders'])->name('orders');
