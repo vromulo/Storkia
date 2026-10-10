@@ -5,10 +5,12 @@ namespace App\Http\Controllers\Buyer;
 use App\Http\Controllers\Controller;
 use App\Mail\RegistrationOtpMail;
 use App\Models\EmailChangeRequest;
+use App\Models\RegistrationOtp;
 use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Str;
 
 class AccountManagementController extends Controller
 {
@@ -196,6 +198,181 @@ class AccountManagementController extends Controller
             'message'      => 'Email updated successfully.',
             'email'        => $updatedEmail,
             'masked_email' => $maskedEmail,
+        ]);
+    }
+
+    /**
+     * Send OTP to the user's current email before allowing password change
+     */
+    public function requestPasswordOtp(Request $request)
+    {
+        /** @var \App\Models\User $user */
+        $user = auth()->user();
+
+        $sessionKey = "pwd_otp_{$user->id}";
+        $existing = session()->get($sessionKey);
+
+        if ($existing && !empty($existing['last_sent_at'])) {
+            $lastSentAt = \Carbon\Carbon::parse($existing['last_sent_at']);
+            $unlockAt = $lastSentAt->copy()->addSeconds(60);
+
+            if (now()->lt($unlockAt)) {
+                $diff = (int) now()->diffInSeconds($unlockAt);
+                return response()->json([
+                    'success'  => false,
+                    'message'  => "Please wait {$diff}s before requesting a new code.",
+                    'cooldown' => $diff,
+                ], 429);
+            }
+        }
+
+        $code = (string) random_int(100000, 999999);
+
+        try {
+            Mail::to($user->email)->send(new RegistrationOtpMail($code, 10));
+        } catch (\Throwable $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'We could not send the verification email right now. Please try again.',
+            ], 500);
+        }
+
+        session()->put($sessionKey, [
+            'code_hash'    => Hash::make($code),
+            'attempts'     => 0,
+            'last_sent_at' => now()->toDateTimeString(),
+            'expires_at'   => now()->addMinutes(10)->toDateTimeString(),
+        ]);
+
+        $maskedEmail = $user->email;
+        if (str_contains($user->email, '@')) {
+            [$name, $domain] = explode('@', $user->email, 2);
+            $maskedEmail = substr($name, 0, 1) . str_repeat('*', max(strlen($name) - 2, 3)) . substr($name, -1) . '@' . $domain;
+        }
+
+        return response()->json([
+            'success'      => true,
+            'message'      => 'Verification code sent.',
+            'masked_email' => $maskedEmail,
+            'cooldown'     => 60,
+        ]);
+    }
+
+    /**
+     * Verify the 6-digit OTP code to unlock password form
+     */
+    public function verifyPasswordOtp(Request $request)
+    {
+        $request->validate([
+            'code' => ['required', 'digits:6'],
+        ]);
+
+        /** @var \App\Models\User $user */
+        $user = auth()->user();
+        $sessionKey = "pwd_otp_{$user->id}";
+        $data = session()->get($sessionKey);
+
+        if (! $data) {
+            return response()->json([
+                'success' => false,
+                'message' => 'No active verification code found. Please request a new code.',
+            ], 422);
+        }
+
+        if (now()->isAfter($data['expires_at'])) {
+            session()->forget($sessionKey);
+            return response()->json([
+                'success' => false,
+                'message' => 'The verification code has expired. Please request a new one.',
+            ], 422);
+        }
+
+        if ($data['attempts'] >= 5) {
+            session()->forget($sessionKey);
+            return response()->json([
+                'success' => false,
+                'message' => 'Too many invalid attempts. Please request a new code.',
+            ], 422);
+        }
+
+        if (! Hash::check($request->code, $data['code_hash'])) {
+            $data['attempts']++;
+            session()->put($sessionKey, $data);
+            $remaining = max(0, 5 - $data['attempts']);
+            return response()->json([
+                'success' => false,
+                'message' => "Invalid code. {$remaining} attempt(s) remaining.",
+            ], 422);
+        }
+
+        // Clean up OTP and issue temporary unlock token
+        session()->forget($sessionKey);
+        $token = Str::random(40);
+        session()->put("pwd_unlock_token_{$user->id}", [
+            'token'      => $token,
+            'expires_at' => now()->addMinutes(15),
+        ]);
+
+        return response()->json([
+            'success'      => true,
+            'unlock_token' => $token,
+            'message'      => 'Identity verified successfully.',
+        ]);
+    }
+
+    /**
+     * Update Password via AJAX with full validation
+     */
+    public function updatePassword(Request $request)
+    {
+        /** @var \App\Models\User $user */
+        $user = auth()->user();
+
+        $tokenData = session()->get("pwd_unlock_token_{$user->id}");
+        if (! $tokenData || $tokenData['token'] !== $request->input('unlock_token') || now()->isAfter($tokenData['expires_at'])) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Verification expired. Please verify your identity again.',
+            ], 403);
+        }
+
+        $validated = $request->validate([
+            'password' => [
+                'required',
+                'string',
+                'min:8',
+                function ($attribute, $value, $fail) {
+                    if (!preg_match('/[A-Z]/', $value)) {
+                        $fail('Password must contain at least 1 uppercase letter.');
+                    }
+                    if (!preg_match('/[0-9]/', $value)) {
+                        $fail('Password must contain at least 1 number.');
+                    }
+                    if (!preg_match('/[\W_]/', $value)) {
+                        $fail('Password must contain at least 1 special character.');
+                    }
+                },
+            ],
+            'password_confirmation' => ['required', 'same:password'],
+        ], [
+            'password.required'              => 'Please enter a new password.',
+            'password.min'                   => 'Password must be at least 8 characters long.',
+            'password_confirmation.required' => 'Please confirm your password.',
+            'password_confirmation.same'     => 'The password confirmation does not match.',
+        ]);
+
+        $user->update([
+            'password'            => Hash::make($validated['password']),
+            'password_changed_at' => now(),
+        ]);
+
+        session()->forget("pwd_unlock_token_{$user->id}");
+
+        return response()->json([
+            'success'             => true,
+            'message'             => 'Password updated successfully.',
+            'password_changed_at' => $user->password_changed_at->toISOString(),
+            'formatted_time'      => $user->formattedPasswordLastUpdated(),
         ]);
     }
 }

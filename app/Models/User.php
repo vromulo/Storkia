@@ -19,7 +19,8 @@ use Illuminate\Notifications\Notifiable;
     'birthday', 
     'email', 
     'password',
-    'role' // NEW: Added role to fillable attributes
+    'password_changed_at',
+    'role'
 ])]
 #[Hidden(['password', 'remember_token'])] // EXISTING
 class User extends Authenticatable
@@ -38,7 +39,32 @@ class User extends Authenticatable
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
             'birthday' => 'date',
+            'password_changed_at' => 'datetime',
         ];
+    }
+
+    public function formattedPasswordLastUpdated(): string
+    {
+        if (! $this->password_changed_at) {
+            return 'Never updated';
+        }
+
+        $now = now();
+        $diffSeconds = $this->password_changed_at->diffInSeconds($now);
+
+        if ($diffSeconds < 60) {
+            return 'Last updated a few seconds ago';
+        }
+
+        if ($this->password_changed_at->isToday()) {
+            return 'Last updated ' . $this->password_changed_at->diffForHumans();
+        }
+
+        if ($this->password_changed_at->isYesterday()) {
+            return 'Last updated yesterday';
+        }
+
+        return 'Last updated ' . $this->password_changed_at->format('m/d/Y');
     }
     
     // Buyer

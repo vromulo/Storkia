@@ -53,6 +53,10 @@ Route::middleware('auth')->group(function () {
         Route::post('/account-management/email/request-otp', [AccountManagementController::class, 'requestEmailOtp'])->name('account-management.request-email-otp');
         Route::post('/account-management/email/verify-otp', [AccountManagementController::class, 'verifyEmailOtp'])->name('account-management.verify-email-otp');
         
+        Route::post('/account-management/password/request-otp', [AccountManagementController::class, 'requestPasswordOtp'])->name('account-management.request-password-otp');
+        Route::post('/account-management/password/verify-otp', [AccountManagementController::class, 'verifyPasswordOtp'])->name('account-management.verify-password-otp');
+        Route::patch('/account-management/password', [AccountManagementController::class, 'updatePassword'])->name('account-management.update-password');
+
         // Address Book Routes (Connected to DB & Controller)
         Route::get('/addresses', [AddressController::class, 'index'])->name('addresses');
         Route::post('/addresses', [AddressController::class, 'store'])->name('addresses.store');
