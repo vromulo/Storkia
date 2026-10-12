@@ -61,7 +61,7 @@
     </main>
 
     <!-- Footer -->
-    @if (!($hideFooter ?? false)) <!-- if $hideFooter is set to True, footer will be hidden -->
+    @if (!($hideFooter ?? false) && !request()->routeIs('user.*')) <!-- if $hideFooter is set to True, footer will be hidden -->
         @include('components.storefront.footer')
     @endif
 

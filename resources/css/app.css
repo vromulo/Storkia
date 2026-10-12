@@ -33,4 +33,7 @@
 
   /* Custom Dark Grey (For button hovers & active sidebar options) */
   --color-dark-grey: #44403C;
+
+  /* Dedicated Price Color */
+  --color-price: #DC2626;
 }

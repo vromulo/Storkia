@@ -4,6 +4,7 @@ import productTableRow from './seller/product-table-row';
 import searchableSelect from './common/searchable-select';
 import accountManager from './buyer/account-manager';
 import addressManager from './buyer/address-manager';
+import cartPageManager from './buyer/cart-manager';
 
 document.addEventListener('alpine:init', () => {
     Alpine.data('variantManager', variantManager);
@@ -12,4 +13,5 @@ document.addEventListener('alpine:init', () => {
     Alpine.data('searchableSelect', searchableSelect);
     Alpine.data('accountManager', accountManager);
     Alpine.data('addressManager', addressManager);
+    Alpine.data('cartPageManager', cartPageManager);
 });

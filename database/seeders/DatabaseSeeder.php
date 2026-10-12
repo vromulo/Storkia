@@ -4,6 +4,7 @@ namespace Database\Seeders;
 
 use App\Models\Admin;
 use App\Models\Product;
+use App\Models\ProductApproval;
 use App\Models\SellerApplication;
 use App\Models\SellerProfile;
 use App\Models\User;
@@ -53,48 +54,40 @@ class DatabaseSeeder extends Seeder
             ]
         );
 
-        // 3. Batch Generate Buyers (20 Users)
-        $firstNames = ['John', 'Maria', 'Carlo', 'Patricia', 'Angelo', 'Bea', 'Miguel', 'Camille', 'Paolo', 'Alyssa'];
-        $lastNames = ['Santos', 'Reyes', 'Cruz', 'Bautista', 'Ocampo', 'Garcia', 'Mendoza', 'Torres', 'Tomas', 'Aquino'];
-
-        for ($i = 1; $i <= 20; $i++) {
+        // 3. Batch Generate Buyers
+        $firstNames = ['John', 'Maria', 'Carlo', 'Patricia', 'Angelo'];
+        $lastNames = ['Santos', 'Reyes', 'Cruz', 'Bautista', 'Ocampo'];
+        for ($i = 1; $i <= 5; $i++) {
             $fName = $firstNames[array_rand($firstNames)];
             $lName = $lastNames[array_rand($lastNames)];
-
             User::create([
                 'first_name' => $fName,
                 'last_name' => $lName,
                 'middle_initial' => chr(rand(65, 90)),
                 'sex' => rand(0, 1) ? 'male' : 'female',
                 'contact_no' => '+639' . rand(100000000, 999999999),
-                'birthday' => Carbon::now()->subYears(rand(19, 45))->subDays(rand(1, 365))->format('Y-m-d'),
+                'birthday' => Carbon::now()->subYears(rand(19, 45))->format('Y-m-d'),
                 'email' => strtolower("{$fName}.{$lName}{$i}") . '@example.com',
                 'password' => Hash::make('password'),
                 'role' => 'Buyer',
             ]);
         }
 
-        // 4. Batch Generate Sellers (Approved, Pending, and Rejected)
+        // 4. Batch Generate Sellers
         $stores = [
             ['Apex Gear Co.', 'Electronics', 'approved'],
-            ['Lumina Boutique', 'Fashion & Apparel', 'approved'],
-            ['Artisan Hearth', 'Home & Living', 'approved'],
+            ['Lumina Boutique', 'Women\'s', 'approved'],
             ['Pawfect Paws PH', 'Pet', 'approved'],
-            ['Pure Botanicals', 'Health & Beauty', 'approved'],
-            ['Kiddie Wonderland', 'Kids & Baby', 'approved'],
-            ['Summit Outfitter', 'Sports & Outdoors', 'approved'],
-            ['Manila Coffee Roasters', 'Food & Beverages', 'approved'],
-            ['Verde Living', 'Home & Living', 'approved'],
-            ['Silicon Haven', 'Electronics', 'pending'],
-            ['Daily Glow Organics', 'Health & Beauty', 'rejected'],
         ];
+
+        $approvedSellers = [];
 
         foreach ($stores as $index => [$businessName, $lineOfBusiness, $status]) {
             $sellerUser = User::create([
                 'first_name' => 'Merchant',
                 'last_name' => (string) ($index + 1),
                 'middle_initial' => 'S',
-                'sex' => $index % 2 === 0 ? 'male' : 'female',
+                'sex' => 'female',
                 'contact_no' => '+639' . rand(100000000, 999999999),
                 'birthday' => '1990-03-25',
                 'email' => "seller{$index}@storkia.com",
@@ -102,7 +95,6 @@ class DatabaseSeeder extends Seeder
                 'role' => 'Seller',
             ]);
 
-            // Version 1 Application Snapshot
             SellerApplication::create([
                 'user_id' => $sellerUser->id,
                 'version' => 1,
@@ -117,12 +109,10 @@ class DatabaseSeeder extends Seeder
                 'id_path' => 'seller_documents/ids/sample_id.jpg',
                 'permit_path' => 'seller_documents/permits/sample_permit.jpg',
                 'status' => $status,
-                'rejection_reason' => $status === 'rejected' ? 'Submitted business permit is blurry and unreadable.' : null,
-                'reviewed_by' => $status !== 'pending' ? $admin->id : null,
-                'reviewed_at' => $status !== 'pending' ? now() : null,
+                'reviewed_by' => $admin->id,
+                'reviewed_at' => now(),
             ]);
 
-            // Seller Profile is populated ONLY if approved (no status column present)
             if ($status === 'approved') {
                 SellerProfile::create([
                     'user_id' => $sellerUser->id,
@@ -137,42 +127,57 @@ class DatabaseSeeder extends Seeder
                     'id_path' => 'seller_documents/ids/sample_id.jpg',
                     'permit_path' => 'seller_documents/permits/sample_permit.jpg',
                 ]);
+
+                $approvedSellers[] = $sellerUser;
             }
         }
 
-        // 5. Batch Generate Products matching products table migration
-        $productCatalog = [
-            ['name' => 'Minimalist Linen Everyday Shirt', 'price' => 750.00, 'weight' => '300g', 'stock' => 50],
-            ['name' => 'Relaxed Fit Chino Trousers', 'price' => 1190.00, 'weight' => '500g', 'stock' => 35],
-            ['name' => 'Wireless Noise-Canceling Earbuds', 'price' => 2499.00, 'weight' => '150g', 'stock' => 80],
-            ['name' => 'Compact Mechanical Keyboard 75%', 'price' => 3200.00, 'weight' => '850g', 'stock' => 25],
-            ['name' => 'Aromatherapy Ceramic Diffuser', 'price' => 680.00, 'weight' => '400g', 'stock' => 40],
-            ['name' => 'Ceramic Stoneware Coffee Mug (350ml)', 'price' => 280.00, 'weight' => '320g', 'stock' => 100],
-            ['name' => 'Ergonomic Reflective Dog Harness', 'price' => 450.00, 'weight' => '250g', 'stock' => 60],
-            ['name' => 'Interactive Cat Scratcher Lounge', 'price' => 590.00, 'weight' => '1.2kg', 'stock' => 20],
-            ['name' => 'Organic Rosehip Facial Oil 30ml', 'price' => 420.00, 'weight' => '90g', 'stock' => 75],
-            ['name' => 'Gentle Hydrating Milk Cleanser 150ml', 'price' => 360.00, 'weight' => '180g', 'stock' => 90],
-            ['name' => 'Wooden Montessori Puzzle Board', 'price' => 480.00, 'weight' => '600g', 'stock' => 45],
-            ['name' => 'Insulated Stainless Steel Flask (1L)', 'price' => 890.00, 'weight' => '450g', 'stock' => 110],
-            ['name' => 'Single-Origin Benguet Arabica Beans 250g', 'price' => 380.00, 'weight' => '260g', 'stock' => 65],
-            ['name' => 'Cold Brew Concentrate Bottle (500ml)', 'price' => 299.00, 'weight' => '650g', 'stock' => 30],
-            ['name' => 'Non-Slip Eco Yoga Mat 6mm', 'price' => 950.00, 'weight' => '1kg', 'stock' => 40],
+        // 5. Generate Products Assigned to Sellers
+        $catalog = [
+            ['Apex Gear Co.', 'Wireless Noise-Canceling Earbuds', 2499.00, 'Electronics', 'Audio & Video Equipment', 15],
+            ['Apex Gear Co.', 'Compact Mechanical Keyboard 75%', 3200.00, 'Electronics', 'Laptops, Desktops & Monitors', 10],
+            ['Lumina Boutique', 'Minimalist Linen Everyday Shirt', 750.00, 'Women\'s', 'Tops & Blouses', 20],
+            ['Lumina Boutique', 'Relaxed Fit Chino Trousers', 1190.00, 'Women\'s', 'Activewear & Yoga Pants', 25],
+            ['Pawfect Paws PH', 'Ergonomic Reflective Dog Harness', 450.00, 'Pet', 'Dog Food & Treats', 30],
+            ['Pawfect Paws PH', 'Interactive Cat Scratcher Lounge', 590.00, 'Pet', 'Cat Litter & Accessories', 12],
         ];
 
-        foreach ($productCatalog as $item) {
-            Product::create([
-                'name' => $item['name'],
-                'description' => "High-quality {$item['name']}. Carefully inspected for durability and performance.",
-                'additional_descriptions' => 'Includes 7-day replacement warranty. Store in a cool, dry place.',
-                'price' => $item['price'],
-                'weight' => $item['weight'],
-                'discount' => rand(0, 1) ? rand(5, 20) : 0,
-                'pictures' => ['products/sample_1.jpg', 'products/sample_2.jpg'],
-                'variants' => [
-                    ['name' => 'Standard', 'sku' => 'SKU-' . rand(1000, 9999), 'price' => $item['price']]
+        foreach ($catalog as $item) {
+            [$storeName, $prodName, $price, $category, $subcategory, $discount] = $item;
+            
+            $sellerProfile = SellerProfile::where('business_name', $storeName)->first();
+            $sellerId = $sellerProfile ? $sellerProfile->user_id : $approvedSellers[0]->id;
+
+            $product = Product::create([
+                'user_id'        => $sellerId,
+                'name'           => $prodName,
+                'category'       => $category,
+                'subcategory'    => $subcategory,
+                'description'    => "High quality {$prodName} guaranteed by {$storeName}.",
+                'price'          => $price,
+                'weight'         => '500g',
+                'discount'       => $discount,
+                'pictures'       => [],
+                'variants'       => [
+                    'title' => 'Color',
+                    'price_dependency' => 'main',
+                    'items' => [
+                        ['name' => 'Standard Black', 'price' => $price, 'weight' => 0.5, 'stock' => 50, 'subs' => []],
+                        ['name' => 'Warm Cream', 'price' => $price, 'weight' => 0.5, 'stock' => 30, 'subs' => []],
+                    ]
                 ],
-                'stock_quantity' => $item['stock'],
+                'stock_quantity' => 80,
+            ]);
+
+            ProductApproval::create([
+                'product_id'  => $product->id,
+                'user_id'     => $sellerId,
+                'status'      => 'Approved',
+                'reviewed_by' => $admin->id,
             ]);
         }
+
+        // 6. Seed Cart Items
+        $this->call(CartSeeder::class);
     }
 }

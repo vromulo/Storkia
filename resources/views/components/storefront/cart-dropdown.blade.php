@@ -193,15 +193,16 @@
 
                     <!-- Item Details -->
                     <div class="flex-1 min-w-0 pr-1">
-                        <a href="{{ route('product.show', $product->id) }}" class="text-xs font-semibold text-text-main line-clamp-1 leading-snug hover:text-primary transition-colors" title="{{ $product->name }}">{{ $product->name }}</a>
-                        @if ($item->variant || $item->sub_variant)
-                            <p class="text-[11px] text-text-muted truncate mt-0.5">{{ implode(' · ', array_filter([$item->variant,$item->sub_variant])) }}</p>
-                        @endif
+                        <a href="{{ route('product.show', $product->id) }}" class="text-xs font-semibold text-text-main line-clamp-1 leading-snug hover:text-primary transition-colors" title="{{ $product->name }}">
+                            {{ $product->name }}
+                        </a>
 
                         <!-- Price & Stepper Row -->
                         <div class="mt-1.5 flex items-center justify-between">
-                            <span class="text-sm font-bold text-text-main">₱{{ number_format($itemPrice, 2) }}</span>
-                            
+                            <span class="text-sm font-bold text-price">
+                                ₱{{ number_format($itemPrice, 2) }}
+                            </span>
+
                             <template x-if="items[{{ $index }}].maxStock > 0">
                                 <div class="flex items-center border border-border-subtle rounded-md bg-surface shadow-xs h-[26px] overflow-hidden w-[72px] shrink-0"
                                      :class="{'opacity-50': items[{{ $index }}].isSyncing}">
@@ -241,14 +242,16 @@
         </div>
 
         <!-- Footer Total -->
-        <div class="px-5 pt-3 pb-2 border-t border-border-subtle flex items-center justify-between">
+        <div class="px-5 pt-3 pb-2 border-t border-border-subtle flex items-center justify-between group/total hover:bg-surface-subtle/40 transition-colors">
             <span class="text-sm font-bold text-text-main">Total</span>
-            <span class="text-base font-extrabold text-text-main">₱<span x-text="totalAmount.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})">{{ number_format($totalAmount, 2) }}</span></span>
+            <span class="text-base font-extrabold text-price">
+                ₱<span x-text="totalAmount.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})">{{ number_format($totalAmount, 2) }}</span>
+            </span>
         </div>
 
         <!-- Action Buttons -->
         <div class="p-5 pt-2 space-y-2.5">
-            <a href="{{ route('cart.index') }}" class="w-full py-2.5 px-4 bg-primary hover:bg-primary-dark text-white text-xs font-bold rounded-xl shadow-xs transition-colors flex items-center justify-center cursor-pointer">Checkout</a>
+            <a href="{{ route('cart.index') }}" class="w-full py-2.5 px-4 bg-text-main hover:bg-dark-grey text-surface text-xs font-bold rounded-xl shadow-xs transition-colors flex items-center justify-center cursor-pointer active:scale-[0.99]">Checkout</a>
             <a href="{{ route('cart.index') }}" class="w-full py-2.5 px-4 bg-surface border border-border-subtle hover:border-text-main text-text-main text-xs font-bold rounded-xl transition-colors flex items-center justify-center cursor-pointer">View cart</a>
         </div>
     @else

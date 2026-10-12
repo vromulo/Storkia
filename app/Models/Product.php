@@ -6,6 +6,8 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasOne;
+use App\Models\SellerProfile;
+use App\Models\User;
 
 class Product extends Model
 {
@@ -39,5 +41,23 @@ class Product extends Model
     public function approval(): HasOne
     {
         return $this->hasOne(ProductApproval::class);
+    }
+
+    public function seller()
+    {
+        return $this->belongsTo(User::class, 'user_id');
+    }
+
+    public function sellerProfile(): \Illuminate\Database\Eloquent\Relations\HasOneThrough
+    {
+        // Links Product -> User -> SellerProfile
+        return $this->hasOneThrough(
+            SellerProfile::class,
+            User::class,
+            'id',        // Foreign key on users table (users.id)
+            'user_id',   // Foreign key on seller_profiles table (seller_profiles.user_id)
+            'user_id',   // Local key on products table (products.user_id)
+            'id'         // Local key on users table
+        );
     }
 }

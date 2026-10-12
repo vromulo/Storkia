@@ -1,4 +1,4 @@
-@extends('buyer.personal-center', [
+@extends('buyer.account-settings', [
     'pageTitle' => 'My Address Book',
     'pageSubtitle' => 'Manage your saved addresses and delivery preferences.'
 ])

@@ -59,6 +59,15 @@
 
         <!-- Navigation Menu -->
         <nav class="p-3 space-y-1 text-xs">
+
+            <!-- Personal Center (Direct Link) -->
+            <div>
+                <a href="{{ route('user.account') }}"
+                class="block px-3 py-2.5 font-bold text-sm sm:text-base tracking-tight text-text-main cursor-pointer select-none">
+                    Personal Center
+                </a>
+            </div>
+
             <!-- 1. My Account (Dropdown) -->
             <div x-data="{ open: {{ request()->routeIs('user.profile', 'user.addresses', 'user.change-password', 'user.account-management') ? 'true' : 'false' }} }">
                 <button type="button" 
@@ -94,15 +103,60 @@
                 </div>
             </div>
 
-            <!-- 2. My Orders (Direct Link) -->
-            <div>
-                <a href="{{ route('user.orders') }}"
-                   class="flex items-center gap-3 px-3 py-2.5 rounded-xl font-semibold transition-colors {{ request()->routeIs('user.orders') ? 'bg-primary/10 text-primary font-bold' : 'text-text-main hover:bg-surface-subtle' }}">
-                    <svg class="w-4.5 h-4.5 text-text-muted shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z" />
+            <!-- 2. My Orders (Dropdown) -->
+            <div x-data="{ 
+                open: {{ request()->routeIs('user.orders*') || (request()->routeIs('user.orders') && request()->has('status')) ? 'true' : 'false' }} 
+            }">
+                <button type="button" 
+                        @click="open = !open" 
+                        class="w-full flex items-center justify-between px-3 py-2.5 rounded-xl font-semibold text-text-main hover:bg-surface-subtle transition-colors cursor-pointer">
+                    <div class="flex items-center gap-3">
+                        <svg class="w-4.5 h-4.5 text-text-muted shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z" />
+                        </svg>
+                        <span>My Orders</span>
+                    </div>
+                    <svg class="w-4 h-4 text-text-muted transition-transform duration-200" :class="open ? 'rotate-180' : ''" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
                     </svg>
-                    <span>My Orders</span>
-                </a>
+                </button>
+                <div x-show="open" x-collapse class="mt-1 space-y-0.5 pl-6" x-cloak>
+                    <!-- All Orders -->
+                    <a href="{{ route('user.orders') }}"
+                       class="block px-3 py-2 rounded-lg font-medium transition-colors {{ request()->routeIs('user.orders') && !request()->has('status') ? 'bg-primary/10 text-primary font-bold' : 'text-text-muted hover:text-text-main hover:bg-surface-subtle' }}">
+                        All Orders
+                    </a>
+
+                    <!-- Unpaid Orders -->
+                    <a href="{{ route('user.orders', ['status' => 'unpaid']) }}"
+                       class="block px-3 py-2 rounded-lg font-medium transition-colors {{ request()->routeIs('user.orders') && request('status') === 'unpaid' ? 'bg-primary/10 text-primary font-bold' : 'text-text-muted hover:text-text-main hover:bg-surface-subtle' }}">
+                        Unpaid Orders
+                    </a>
+
+                    <!-- Processing Orders -->
+                    <a href="{{ route('user.orders', ['status' => 'processing']) }}"
+                       class="block px-3 py-2 rounded-lg font-medium transition-colors {{ request()->routeIs('user.orders') && request('status') === 'processing' ? 'bg-primary/10 text-primary font-bold' : 'text-text-muted hover:text-text-main hover:bg-surface-subtle' }}">
+                        Processing Orders
+                    </a>
+
+                    <!-- Shipped Orders -->
+                    <a href="{{ route('user.orders', ['status' => 'shipped']) }}"
+                       class="block px-3 py-2 rounded-lg font-medium transition-colors {{ request()->routeIs('user.orders') && request('status') === 'shipped' ? 'bg-primary/10 text-primary font-bold' : 'text-text-muted hover:text-text-main hover:bg-surface-subtle' }}">
+                        Shipped Orders
+                    </a>
+
+                    <!-- Review Orders -->
+                    <a href="{{ route('user.orders', ['status' => 'review']) }}"
+                       class="block px-3 py-2 rounded-lg font-medium transition-colors {{ request()->routeIs('user.orders') && request('status') === 'review' ? 'bg-primary/10 text-primary font-bold' : 'text-text-muted hover:text-text-main hover:bg-surface-subtle' }}">
+                        Review Orders
+                    </a>
+
+                    <!-- Return Orders -->
+                    <a href="{{ route('user.orders', ['status' => 'returns']) }}"
+                       class="block px-3 py-2 rounded-lg font-medium transition-colors {{ request()->routeIs('user.orders') && request('status') === 'returns' ? 'bg-primary/10 text-primary font-bold' : 'text-text-muted hover:text-text-main hover:bg-surface-subtle' }}">
+                        Return Orders
+                    </a>
+                </div>
             </div>
 
             <!-- 3. My Assets (Dropdown) -->

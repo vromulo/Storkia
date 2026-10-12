@@ -1,49 +1,45 @@
-@extends('layouts.app')
+@extends('layouts.app', ['title' => 'Shopping Cart - Storkia'])
 
 @section('content')
-    <!-- Alpine.js & Custom Styles -->
-    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+@php
+    $cartItems = collect();
+    $groupedCart = collect();
+    $initialAlpineData = [];
 
-    @php
-        // Pre-process Cart Items for Alpine.js State Management
-        $alpineItems = [];
+    if (auth()->check()) {
+        $cartItems = \App\Models\Cart::with(['product.sellerProfile'])
+            ->where('user_id', auth()->id())
+            ->latest()
+            ->get();
 
-        foreach ($cartItems as$item) {
-            $product =$item->product;
+        // Group cart items by seller/store name
+        $groupedCart = $cartItems->groupBy(function($item) {
+            return $item->product->sellerProfile->business_name 
+                ?? $item->product->user->first_name 
+                ?? 'Storkia Direct';
+        });
 
-            // Default Fallbacks
-            $basePrice =$product->price;
-            $variantStock =$product->stock_quantity;
+        foreach ($cartItems as $item) {
+            $product = $item->product;
+            if (!$product) continue;
 
-            $variantImage = (!empty($product->pictures) && is_array($product->pictures))
-                ? asset('storage/' . $product->pictures[0])
-                : 'https://placehold.co/150x150/F6D8BD/5D3140?text=Product';
+            $basePrice = (float) ($product->price ?? 0);
+            $stock = (int) ($product->stock_quantity ?? 0);
+            $image = (!empty($product->pictures) && is_array($product->pictures)) 
+                ? asset('storage/' . $product->pictures[0]) 
+                : null;
 
-            // Extract Variant Pricing & Stock
             if ($item->variant && isset($product->variants['items'])) {
-                foreach ($product->variants['items'] as$v) {
-                    if ($v['name'] ===$item->variant) {
-                        if (!$item->sub_variant) {$basePrice = $v['price'] ?? $basePrice;
-                            $variantStock = $v['stock'] ?? $variantStock;
-
-                            $variantImage = (isset($v['image']) &&$v['image'])
-                                ? asset('storage/' . $v['image'])
-                                : $variantImage;
-                        } else {
-                            if (isset($v['subs'])) {
-                                foreach ($v['subs'] as$sub) {
-                                    if ($sub['name'] ===$item->sub_variant) {
-                                        $basePrice =$sub['price'] ?? $v['price'] ?? $basePrice;
-                                        $variantStock = $sub['stock'] ?? $variantStock;
-
-                                        $variantImage = (isset($sub['image']) &&$sub['image'])
-                                            ? asset('storage/' . $sub['image'])
-                                            : (
-                                                (isset($v['image']) &&$v['image'])
-                                                    ? asset('storage/' . $v['image'])
-                                                    : $variantImage
-                                            );
-                                    }
+                foreach ($product->variants['items'] as $v) {
+                    if ($v['name'] === $item->variant) {
+                        if (!$item->sub_variant) {
+                            $basePrice = (float) ($v['price'] ?? $basePrice);
+                            $stock = (int) ($v['stock'] ?? $stock);$image = (isset($v['image']) &&$v['image']) ? asset('storage/' . $v['image']) :$image;
+                        } elseif (isset($v['subs'])) {
+                            foreach ($v['subs'] as$sub) {
+                                if ($sub['name'] ===$item->sub_variant) {
+                                    $basePrice = (float) ($sub['price'] ?? $v['price'] ?? $basePrice);
+                                    $stock = (int) ($sub['stock'] ?? $stock);$image = (isset($sub['image']) &&$sub['image']) ? asset('storage/' . $sub['image']) :$image;
                                 }
                             }
                         }
@@ -51,396 +47,472 @@
                 }
             }
 
-            // Apply Discount & Normalize Data
-            $finalPrice =$product->discount > 0
-                ? $basePrice - ($basePrice * ($product->discount / 100))                 :$basePrice;
+            $discountPercent = (float) ($product->discount ?? 0);
+            $effectivePrice =$discountPercent > 0 
+                ? $basePrice - ($basePrice * ($discountPercent / 100)) 
+                :$basePrice;
 
-            $safeQuantity = min($item->quantity,
-                max(1, $variantStock)
-            );
+            $storeName =$item->product->sellerProfile->business_name 
+                ?? $item->product->user->first_name 
+                ?? 'Storkia Direct';
 
-            if ($variantStock <= 0) {$safeQuantity = 0;
-            }
-
-            $alpineItems[] = [
-                'id' => $item->id,
-                'user_id' => $item->user_id,
-                'price' => $finalPrice,
-                'quantity' => $safeQuantity,
-                'maxStock' => $variantStock,
-                'selected' => $variantStock > 0,                 'image' =>$variantImage,
-                'basePrice' => $basePrice,
-                'isSyncing' => false,
+            $initialAlpineData[] = [
+                'id'              => $item->id,
+                'store'           => $storeName,
+                'title'           => $product->name,
+                'variant'         => implode(' / ', array_filter([$item->variant,$item->sub_variant])),
+                'image'           => $image,
+                'originalPrice'   => $basePrice,
+                'discountedPrice' => $effectivePrice,
+                'discountPercent' => $discountPercent,
+                'quantity'        => (int) $item->quantity,
+                'maxStock'        => $stock,
+                'selected'        => true,
+                'isSyncing'       => false,
             ];
         }
-    @endphp
+    }
+@endphp
 
-    <div x-data="{
-            selectAll: true,
-            items: @js($alpineItems),
-            totalAmount: 0,
-            targetTotalAmount: 0,
-            slideDirection: 'up',
-            animationFrame: null,
+<div 
+    x-data="cartPageManager(@js($initialAlpineData))" 
+    class="min-h-screen bg-surface-subtle/40 pb-16 lg:pb-20 pt-4"
+>
+    <!-- Wider Container -->
+    <div class="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 space-y-6">
 
-            get formattedTotalChars() {
-                return this.totalAmount
-                    .toLocaleString('en-US', {
-                        minimumFractionDigits: 2,
-                        maximumFractionDigits: 2
-                    })
-                    .split('')
-                    .reverse();
-            },
+        <!-- 1. Header Stepper (Cart > Place Order > Pay > Order Complete) -->
+        <nav aria-label="Checkout Stepper" class="w-full bg-surface border border-border-subtle rounded-2xl p-4 sm:p-5 shadow-xs select-none">
+            <div class="flex items-center justify-between max-w-3xl mx-auto">
+                <!-- Step 1: Cart (Active) -->
+                <div class="flex items-center gap-2 text-primary font-bold">
+                    <span class="w-7 h-7 rounded-full bg-primary text-surface text-xs font-bold flex items-center justify-center shadow-xs">1</span>
+                    <span class="text-sm font-sans tracking-tight">Cart</span>
+                </div>
+                <div class="flex-1 h-[2px] bg-primary/20 mx-3 sm:mx-6 rounded-full"></div>
 
-            get selectedCount() {
-                return this.items.filter(i => i.selected).length;
-            },
+                <!-- Step 2: Place Order -->
+                <div class="flex items-center gap-2 text-text-muted font-medium">
+                    <span class="w-7 h-7 rounded-full bg-surface-subtle border border-border-subtle text-text-muted text-xs font-bold flex items-center justify-center">2</span>
+                    <span class="text-sm font-sans tracking-tight hidden sm:inline">Place Order</span>
+                </div>
+                <div class="flex-1 h-[2px] bg-border-subtle mx-3 sm:mx-6 rounded-full"></div>
 
-            get activeItems() {
-                return this.items.filter(i => i.maxStock > 0);
-            },
+                <!-- Step 3: Pay -->
+                <div class="flex items-center gap-2 text-text-muted font-medium">
+                    <span class="w-7 h-7 rounded-full bg-surface-subtle border border-border-subtle text-text-muted text-xs font-bold flex items-center justify-center">3</span>
+                    <span class="text-sm font-sans tracking-tight hidden sm:inline">Pay</span>
+                </div>
+                <div class="flex-1 h-[2px] bg-border-subtle mx-3 sm:mx-6 rounded-full"></div>
 
-            async syncDatabase(cartId, quantity, index) {
-                if (this.items[index].isSyncing) return;
-                this.items[index].isSyncing = true;
-
-                try {
-                    const updateUrl = `{{ route('cart.update', ':id') }}`.replace(':id', cartId);
-                    const token = document.querySelector('meta[name=\'csrf-token\']')?.getAttribute('content') || `{{ csrf_token() }}`;
-                    
-                    const response = await fetch(updateUrl, {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                            'Accept': 'application/json',
-                            'X-Requested-With': 'XMLHttpRequest',
-                            'X-CSRF-TOKEN': token
-                        },
-                        body: JSON.stringify({ 
-                            _method: 'PATCH',
-                            quantity: parseInt(quantity) 
-                        })
-                    });
-
-                    const data = await response.json();
-
-                    if (response.ok && data.success) {
-                        window.dispatchEvent(new CustomEvent('cart-updated', { 
-                            detail: { 
-                                id: data.id, 
-                                user_id: data.user_id,
-                                quantity: data.quantity 
-                            } 
-                        }));
-                    } else {
-                        console.error('Failed to sync cart quantity:', data);
-                    }
-                } catch (error) {
-                    console.error('Fetch error during sync:', error);
-                } finally {
-                    this.items[index].isSyncing = false;
-                }
-            },
-
-            syncFromEvent(detail) {
-                let item = this.items.find(i => i.id === detail.id);
-                if (item && item.user_id === detail.user_id && item.quantity !== detail.quantity) {
-                    item.quantity = detail.quantity;
-                    this.calculateTotal();
-                }
-            },
-
-            toggleAll() {
-                this.activeItems.forEach(i => i.selected = this.selectAll);
-                this.calculateTotal();
-            },
-
-            checkItem() {
-                this.selectAll = this.activeItems.length > 0 && this.activeItems.every(i => i.selected);
-                this.calculateTotal();
-            },
-
-            calculateTotal() {
-                let newTotal = this.items.filter(i => i.selected).reduce((sum, i) => {
-                    let q = parseInt(i.quantity);
-                    if (isNaN(q) || q < 1) q = 1;
-                    return sum + (i.price * q);
-                }, 0);
-
-                newTotal = Math.round(newTotal * 100) / 100;
-
-                if (newTotal === this.targetTotalAmount) return;
-
-                if (newTotal > this.targetTotalAmount) {
-                    this.slideDirection = 'up';
-                } else if (newTotal < this.targetTotalAmount) {
-                    this.slideDirection = 'down';
-                }
-
-                this.animateTotal(newTotal);
-            },
-
-            animateTotal(newTotal) {
-                if (this.totalAmount === 0 && this.targetTotalAmount === 0) {
-                    this.totalAmount = newTotal;
-                    this.targetTotalAmount = newTotal;
-                    return;
-                }
-
-                this.targetTotalAmount = newTotal;
-                let start = this.totalAmount;
-                let end = newTotal;
-                let duration = 300; 
-                let startTime = null;
-
-                if (this.animationFrame) cancelAnimationFrame(this.animationFrame);
-
-                const animate = (currentTime) => {
-                    if (!startTime) startTime = currentTime;
-                    let progress = Math.min((currentTime - startTime) / duration, 1);
-                    
-                    this.totalAmount = Number((start + (end - start) * progress).toFixed(2));
-
-                    if (progress < 1) {
-                        this.animationFrame = requestAnimationFrame(animate);
-                    } else {
-                        this.totalAmount = end;
-                    }
-                };
-                
-                this.animationFrame = requestAnimationFrame(animate);
-            },
-
-            increment(index) {
-                if (this.items[index].isSyncing) return;
-                let limit = Math.min(parseInt(this.items[index].maxStock), 1000000);
-                let current = parseInt(this.items[index].quantity) || 1;
-
-                if (current < limit) {
-                    this.items[index].quantity = current + 1;
-                    this.calculateTotal();
-                    this.syncDatabase(this.items[index].id, this.items[index].quantity, index);
-                }
-            },
-
-            decrement(index) {
-                if (this.items[index].isSyncing) return;
-                let current = parseInt(this.items[index].quantity) || 1;
-                if (current > 1) {
-                    this.items[index].quantity = current - 1;
-                    this.calculateTotal();
-                    this.syncDatabase(this.items[index].id, this.items[index].quantity, index);
-                }
-            },
-
-            init() {
-                this.checkItem();
-            }
-        }"
-        x-on:cart-updated.window="syncFromEvent($event.detail)"
-        class="bg-surface-subtle font-sans antialiased text-text-main min-h-screen relative pb-16"
-    >
-
-        <div class="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 py-6">
-            <!-- Progress Steps -->
-            <div class="flex items-center justify-center mb-10 overflow-x-auto pb-2 [&::-webkit-scrollbar]:hidden text-sm">
-                <div class="flex items-center space-x-2 sm:space-x-4 shrink-0">
-                    <div class="flex items-center text-primary-dark font-bold">
-                        <span class="w-6 h-6 rounded-full bg-primary-dark text-surface flex items-center justify-center text-[11px] mr-2 shadow-xs">1</span>
-                        <span class="tracking-wide">Cart</span>
-                    </div>
-                    <svg class="w-4 h-4 text-border-subtle" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7" /></svg>
-                    <div class="flex items-center text-text-muted font-medium">
-                        <span class="w-6 h-6 rounded-full bg-surface border border-border-subtle text-text-muted flex items-center justify-center text-[11px] mr-2">2</span>
-                        <span>Place Order</span>
-                    </div>
-                    <svg class="w-4 h-4 text-border-subtle" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7" /></svg>
-                    <div class="flex items-center text-text-muted font-medium">
-                        <span class="w-6 h-6 rounded-full bg-surface border border-border-subtle text-text-muted flex items-center justify-center text-[11px] mr-2">3</span>
-                        <span>Pay</span>
-                    </div>
-                    <svg class="w-4 h-4 text-border-subtle" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7" /></svg>
-                    <div class="flex items-center text-text-muted font-medium">
-                        <span class="w-6 h-6 rounded-full bg-surface border border-border-subtle text-text-muted flex items-center justify-center text-[11px] mr-2">4</span>
-                        <span>Order Complete</span>
-                    </div>
+                <!-- Step 4: Order Complete -->
+                <div class="flex items-center gap-2 text-text-muted font-medium">
+                    <span class="w-7 h-7 rounded-full bg-surface-subtle border border-border-subtle text-text-muted text-xs font-bold flex items-center justify-center">4</span>
+                    <span class="text-sm font-sans tracking-tight hidden sm:inline">Order Complete</span>
                 </div>
             </div>
+        </nav>
 
-            <!-- Main Cart Container -->
-            <div class="w-full mb-12 relative">
-                <!-- Action Header -->
-                <div class="bg-surface border border-border-subtle p-4 sm:px-6 flex flex-col sm:flex-row sm:items-center justify-between mb-6 rounded-2xl shadow-sm relative">
-                    <!-- Select All Checkbox -->
-                    <div class="flex items-center">
-                        <input type="checkbox" x-model="selectAll" x-on:change="toggleAll()" class="w-5 h-5 text-primary border-border-subtle rounded focus:ring-primary mr-4 cursor-pointer transition-colors shadow-xs">
-                        <div class="flex flex-col">
-                            <span class="font-bold text-lg text-text-main leading-tight">ALL ITEMS</span>
-                            <span class="text-xs text-text-muted font-medium"><span x-text="items.length"></span> items in cart</span>
+        @if($cartItems->isEmpty())
+            <!-- Empty Cart Slate -->
+            <div class="bg-surface border border-border-subtle rounded-3xl p-16 text-center max-w-xl mx-auto shadow-xs my-10">
+                <div class="w-20 h-20 rounded-full bg-surface-subtle text-text-muted flex items-center justify-center mx-auto mb-4 border border-border-subtle">
+                    <svg class="w-9 h-9" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z" />
+                    </svg>
+                </div>
+                <h2 class="text-2xl font-serif font-bold text-primary-dark mb-2">Your Shopping Cart is Empty</h2>
+                <p class="text-text-muted text-sm mb-6">Looks like you haven't added anything to your cart yet.</p>
+                <a href="/" class="inline-flex px-8 py-3.5 bg-primary hover:bg-primary-dark text-surface font-semibold text-sm rounded-full transition-colors shadow-xs">
+                    Start Shopping
+                </a>
+            </div>
+        @else
+            <!-- Main Content Grid: Cart Items (Left) vs Summary Panel (Right) -->
+            <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+                
+                <!-- LEFT COLUMN: Global Select All + Store Grouped Cards -->
+                <div class="lg:col-span-8 space-y-4">
+                    
+                    <!-- Global Master Checkbox Bar -->
+                    <div class="bg-surface rounded-2xl border border-border-subtle p-4 sm:p-5 flex items-center justify-between shadow-xs">
+                        <label class="flex items-center gap-3.5 cursor-pointer select-none">
+                            <input 
+                                type="checkbox" 
+                                :checked="isAllSelected"
+                                @change="toggleSelectAll($event.target.checked)"
+                                class="w-5 h-5 rounded-md text-primary focus:ring-primary/30 border-border-subtle cursor-pointer"
+                            >
+                            <span class="text-base font-bold text-text-main font-sans tracking-tight">
+                                ALL ITEMS (<span x-text="items.length"></span>)
+                            </span>
+                        </label>
+                        <div class="text-xs text-text-muted font-medium">
+                            <span x-text="selectedCount"></span> of <span x-text="items.length"></span> selected
                         </div>
                     </div>
 
-                    <!-- Total Price & Checkout -->
-                    <div class="flex flex-col sm:flex-row sm:items-center gap-4 sm:gap-8 mt-4 sm:mt-0 w-full sm:w-auto">
-                        <div class="text-right flex flex-row sm:flex-col justify-between sm:justify-end items-center sm:items-end w-full sm:w-auto border-t sm:border-t-0 border-border-subtle pt-3 sm:pt-0">
-                            <span class="text-[11px] text-text-muted font-bold uppercase tracking-wider mb-0 sm:mb-0.5">Total Amount</span>
-                            
-                            <!-- Sliding Padlock Animation Wrapper for Total Amount -->
-                            <div class="flex flex-row-reverse justify-start items-center h-8 sm:h-10 overflow-hidden font-black text-primary text-2xl sm:text-3xl leading-none tabular-nums tracking-wide">
-                                <template x-for="(char, index) in formattedTotalChars" :key="index">
-                                    <div class="relative flex items-center justify-center h-full overflow-hidden">
-                                        <span class="invisible" x-text="char"></span>
-                                        <template x-if="slideDirection === 'up'">
-                                            <template x-for="c in [char]" :key="'up-' + index + '-' + c">
-                                                <span class="absolute inset-0 flex items-center justify-center" x-text="c" x-transition:enter="transition-transform ease-out duration-300" x-transition:enter-start="translate-y-full" x-transition:enter-end="translate-y-0" x-transition:leave="transition-transform ease-in duration-300" x-transition:leave-start="translate-y-0" x-transition:leave-end="-translate-y-full"></span>
-                                            </template>
+                    <!-- Store Grouped Items Loop -->
+                    @foreach ($groupedCart as $storeName => $itemsInStore)
+                        <div class="bg-surface rounded-2xl border border-border-subtle shadow-xs overflow-hidden">
+                            <!-- Store Header -->
+                            <div class="p-4 sm:px-6 bg-surface-subtle/50 border-b border-border-subtle flex items-center gap-3.5 select-none">
+                                <input 
+                                    type="checkbox" 
+                                    :checked="isStoreSelected('{{ addslashes($storeName) }}')"
+                                    @change="toggleStore('{{ addslashes($storeName) }}',$event.target.checked)"
+                                    class="w-5 h-5 rounded-md text-primary focus:ring-primary/30 border-border-subtle cursor-pointer"
+                                >
+                                <div class="flex items-center gap-2">
+                                    <svg class="w-5 h-5 text-text-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
+                                    </svg>
+                                    <span class="font-bold text-sm sm:text-base text-primary-dark">
+                                        {{ $storeName }}
+                                    </span>
+                                </div>
+                            </div>
+
+                            <!-- Products under this Store -->
+                            <div class="divide-y divide-border-subtle/60">
+                                @foreach ($itemsInStore as $cartItem)
+                                    @php
+                                        $alpineIndex = $cartItems->search(fn($ci) => $ci->id === $cartItem->id);
+                                    @endphp
+                                    <div class="p-4 sm:p-6 flex items-start gap-4 hover:bg-surface-subtle/20 transition-colors">
+                                        
+                                        <!-- Item Checkbox -->
+                                        <div class="pt-2 sm:pt-4">
+                                            <input 
+                                                type="checkbox" 
+                                                x-model="items[{{ $alpineIndex }}].selected"
+                                                class="w-5 h-5 rounded-md text-primary focus:ring-primary/30 border-border-subtle cursor-pointer"
+                                            >
+                                        </div>
+
+                                        <!-- Product Image -->
+                                        <a href="{{ route('product.show', $cartItem->product->id) }}" class="w-20 h-20 sm:w-28 sm:h-28 rounded-xl bg-surface-subtle border border-border-subtle overflow-hidden shrink-0 flex items-center justify-center p-1.5 group">
+                                            @if($initialAlpineData[$alpineIndex]['image'])
+                                                <img 
+                                                    src="{{ $initialAlpineData[$alpineIndex]['image'] }}" 
+                                                    alt="{{ $cartItem->product->name }}" 
+                                                    class="w-full h-full object-contain group-hover:scale-105 transition-transform"
+                                                >
+                                            @else
+                                                <svg class="w-8 h-8 text-text-muted/40" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                                                </svg>
+                                            @endif
+                                        </a>
+
+                                        <!-- Item Details & Stepper -->
+                                        <div class="flex-1 min-w-0 flex flex-col justify-between self-stretch">
+                                            <div>
+                                                <a href="{{ route('product.show', $cartItem->product->id) }}" class="text-sm sm:text-base font-semibold text-text-main line-clamp-2 hover:text-primary transition-colors leading-snug">
+                                                    {{ $cartItem->product->name }}
+                                                </a>
+
+                                                @if(!empty($initialAlpineData[$alpineIndex]['variant']))
+                                                    <div class="inline-flex items-center gap-1 mt-1.5 px-2.5 py-1 rounded-md bg-surface-subtle text-xs text-text-muted font-medium border border-border-subtle">
+                                                        <span>{{ $initialAlpineData[$alpineIndex]['variant'] }}</span>
+                                                    </div>
+                                                @endif
+                                            </div>
+
+                                            <div class="mt-4 flex flex-wrap items-end justify-between gap-3">
+                                                <!-- Pricing -->
+                                                <div class="flex items-baseline gap-2 font-sans">
+                                                    <span 
+                                                        class="text-base sm:text-lg font-semibold tracking-tight"
+                                                        :class="items[{{ $alpineIndex }}].discountPercent > 0 ? 'text-price' : 'text-text-main'"
+                                                    >
+                                                        ₱<span x-text="(items[{{ $alpineIndex }}].discountedPrice * items[{{ $alpineIndex }}].quantity).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})"></span>
+                                                    </span>
+
+                                                    <template x-if="items[{{ $alpineIndex }}].discountPercent > 0">
+                                                        <div class="flex items-center gap-1.5">
+                                                            <span class="text-xs text-text-muted font-normal line-through">
+                                                                ₱<span x-text="(items[{{ $alpineIndex }}].originalPrice * items[{{ $alpineIndex }}].quantity).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})"></span>
+                                                            </span>
+                                                            <span class="text-[10px] font-semibold text-price bg-red-50 border border-red-200 px-1.5 py-0.5 rounded">
+                                                                -<span x-text="Math.round(items[{{ $alpineIndex }}].discountPercent)"></span>%
+                                                            </span>
+                                                        </div>
+                                                    </template>
+                                                </div>
+
+                                                <!-- Stepper Quantity & Delete -->
+                                                <div class="flex items-center gap-4">
+                                                    <div class="flex items-center border border-border-subtle rounded-lg bg-surface h-8 overflow-hidden w-24">
+                                                        <button 
+                                                            type="button" 
+                                                            @click="decrement({{ $alpineIndex }})"
+                                                            :disabled="items[{{ $alpineIndex }}].isSyncing"
+                                                            class="w-7 h-full flex items-center justify-center text-text-main hover:bg-surface-subtle border-r border-border-subtle transition-colors cursor-pointer"
+                                                        >
+                                                            <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M20 12H4" /></svg>
+                                                        </button>
+                                                        <input 
+                                                            type="number" 
+                                                            readonly 
+                                                            x-model="items[{{ $alpineIndex }}].quantity" 
+                                                            class="w-full text-center text-xs font-bold text-text-main outline-none bg-transparent select-none p-0 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                                                        >
+                                                        <button 
+                                                            type="button" 
+                                                            @click="increment({{ $alpineIndex }})"
+                                                            :disabled="items[{{ $alpineIndex }}].isSyncing"
+                                                            class="w-7 h-full flex items-center justify-center text-text-main hover:bg-surface-subtle border-l border-border-subtle transition-colors cursor-pointer"
+                                                        >
+                                                            <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" /></svg>
+                                                        </button>
+                                                    </div>
+
+                                                    <!-- Remove Button -->
+                                                    <form action="{{ route('cart.destroy', $cartItem->id) }}" method="POST" class="m-0 inline" onsubmit="return confirm('Remove this item from your cart?');">
+                                                        @csrf
+                                                        @method('DELETE')
+                                                        <button type="submit" class="text-text-muted hover:text-danger p-1 transition-colors cursor-pointer" title="Remove item">
+                                                            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
+                                                                <path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                                            </svg>
+                                                        </button>
+                                                    </form>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                @endforeach
+                            </div>
+                        </div>
+                    @endforeach
+                </div>
+
+                <!-- RIGHT COLUMN: Desktop Sidebar (>= 1024px) vs. Mobile Bottom Dock (< 1024px) -->
+                <div class="lg:col-span-4" 
+                     x-data="{ mobileSummaryOpen: false }"
+                     @resize.window.debounce.100ms="if (window.innerWidth >= 1024) mobileSummaryOpen = false">
+                    
+                    <!-- ============================================================ -->
+                    <!-- 1. DESKTOP ONLY SIDEBAR (>= 1024px)                          -->
+                    <!-- Strictly unaffected by mobile toggles, always visible         -->
+                    <!-- ============================================================ -->
+                    <div class="hidden lg:block bg-surface rounded-2xl border border-border-subtle p-6 shadow-xs sticky top-24 select-none space-y-6">
+                        <div>
+                            <h3 class="text-xl font-serif font-bold text-primary-dark">Order Summary</h3>
+                            <p class="text-xs text-text-muted mt-0.5">Proceed to checkout and select your shipping address.</p>
+                        </div>
+
+                        <!-- Selected Items Thumbnail Strip -->
+                        <div>
+                            <div class="text-xs font-bold text-text-muted uppercase tracking-wider mb-2.5">
+                                Selected Items (<span x-text="selectedCount"></span>)
+                            </div>
+                            <div class="flex items-center gap-2 overflow-x-auto pt-2.5 pb-2 pr-2 min-h-[56px] [scrollbar-width:thin] [&::-webkit-scrollbar]:h-1.5 [&::-webkit-scrollbar-button]:hidden [&::-webkit-scrollbar-button]:w-0 [&::-webkit-scrollbar-button]:h-0 [&::-webkit-scrollbar-button]:[display:none]">
+                                <template x-for="item in selectedItems" :key="item.id">
+                                    <div class="relative w-12 h-12 rounded-xl bg-surface-subtle border border-border-subtle shrink-0 flex items-center justify-center p-1 group">
+                                        <template x-if="item.image">
+                                            <img :src="item.image" :alt="item.title" class="w-full h-full object-contain rounded-lg">
                                         </template>
-                                        <template x-if="slideDirection === 'down'">
-                                            <template x-for="c in [char]" :key="'down-' + index + '-' + c">
-                                                <span class="absolute inset-0 flex items-center justify-center" x-text="c" x-transition:enter="transition-transform ease-out duration-300" x-transition:enter-start="-translate-y-full" x-transition:enter-end="translate-y-0" x-transition:leave="transition-transform ease-in duration-300" x-transition:leave-start="translate-y-0" x-transition:leave-end="translate-y-full"></span>
-                                            </template>
+                                        <template x-if="!item.image">
+                                            <svg class="w-4 h-4 text-text-muted/40" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                                            </svg>
                                         </template>
+                                        <!-- Small 'x' remove button -->
+                                        <button 
+                                            type="button"
+                                            @click.stop="item.selected = false"
+                                            title="Remove from selection"
+                                            class="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-text-main hover:bg-price text-surface flex items-center justify-center transition-colors shadow-xs cursor-pointer z-10"
+                                        >
+                                            <svg class="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3">
+                                                <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+                                            </svg>
+                                        </button>
                                     </div>
                                 </template>
-                                <span class="mr-1">₱</span>
+                                <template x-if="selectedCount === 0">
+                                    <span class="text-xs text-text-muted italic">No items selected</span>
+                                </template>
                             </div>
                         </div>
 
-                        <button type="button" :disabled="selectedCount === 0" :class="selectedCount === 0 ? 'bg-surface-subtle text-text-muted cursor-not-allowed border border-border-subtle shadow-none' : 'bg-primary hover:bg-primary-dark text-white border border-transparent shadow-md hover:shadow-lg'" class="px-8 py-3.5 font-bold rounded-xl transition-all duration-300 flex items-center justify-center shrink-0 w-full sm:w-auto h-12">
-                            <span x-text="'Checkout (' + selectedCount + ')'"></span>
-                            <svg class="w-4 h-4 ml-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7"></path></svg>
-                        </button>
+                        <!-- Price Breakdown -->
+                        <div class="space-y-3 pt-3 border-t border-border-subtle/70 text-sm">
+                            <div class="flex items-center justify-between text-text-muted">
+                                <span>Retail Price:</span>
+                                <span class="font-semibold text-text-main">
+                                    ₱<span x-text="retailTotal.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})"></span>
+                                </span>
+                            </div>
+
+                            <div class="flex items-center justify-between text-text-muted">
+                                <span>Promotions / Savings:</span>
+                                <span class="font-bold text-price">
+                                    -₱<span x-text="savingsTotal.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})"></span>
+                                </span>
+                            </div>
+
+                            <div class="flex items-center justify-between pt-3 border-t border-border-subtle text-base font-bold text-text-main">
+                                <span>Estimated Price:</span>
+                                <span 
+                                    class="text-2xl font-extrabold font-serif"
+                                    :class="savingsTotal > 0 ? 'text-price' : 'text-text-main'"
+                                >
+                                    ₱<span x-text="estimatedTotal.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})"></span>
+                                </span>
+                            </div>
+                        </div>
+
+                        <!-- Desktop Checkout CTA -->
+                       <div class="pt-0">
+                            <form action="#" method="GET">
+                                <button 
+                                    type="submit"
+                                    :disabled="selectedCount === 0"
+                                    :class="selectedCount === 0 
+                                        ? 'bg-surface-subtle text-text-muted cursor-not-allowed border border-border-subtle' 
+                                        : 'bg-text-main hover:bg-dark-grey text-surface cursor-pointer shadow-xs active:scale-[0.99]'"
+                                    class="w-full py-3.5 px-6 font-bold text-sm rounded-xl transition-all flex items-center justify-center gap-2"
+                                >
+                                    <span>Checkout Now</span>
+                                    <span x-show="selectedCount > 0" x-text="'(' + selectedCount + ')'"></span>
+                                </button>
+                            </form>
+                            <p class="text-[11px] text-text-muted text-center mt-2">
+                                Taxes and shipping vouchers computed during checkout.
+                            </p>
+                        </div>
+                    </div>
+
+                    <!-- ============================================================ -->
+                    <!-- 2. MOBILE & TABLET BOTTOM DOCK (< 1024px)                    -->
+                    <!-- No backdrop overlay, pushes up smoothly on toggle            -->
+                    <!-- ============================================================ -->
+                    <div class="lg:hidden fixed inset-x-0 bottom-0 z-40 bg-surface border-t border-border-subtle px-4 py-2 sm:px-5 sm:py-2.5 shadow-[0_-4px_25px_rgba(0,0,0,0.12)] select-none">                        
+                        <!-- Slide-Up Details Panel (Expands upward without backdrop) -->
+                        <div x-show="mobileSummaryOpen" x-collapse x-cloak class="mb-3">
+                            <div class="space-y-4 pb-3 border-b border-border-subtle/70">
+                                
+                                <!-- Selected Items Thumbnail Strip -->
+                                <div>
+                                    <div class="text-xs font-bold text-text-muted uppercase tracking-wider mb-2">
+                                        Selected Items (<span x-text="selectedCount"></span>)
+                                    </div>
+                                    <div class="flex items-center gap-2 overflow-x-auto pt-2.5 pb-1 pr-2 min-h-[52px] [scrollbar-width:thin] [&::-webkit-scrollbar]:h-1.5 [&::-webkit-scrollbar-button]:hidden [&::-webkit-scrollbar-button]:w-0 [&::-webkit-scrollbar-button]:h-0 [&::-webkit-scrollbar-button]:[display:none]">
+                                        <template x-for="item in selectedItems" :key="item.id">
+                                            <div class="relative w-11 h-11 rounded-xl bg-surface-subtle border border-border-subtle shrink-0 flex items-center justify-center p-1 group">
+                                                <template x-if="item.image">
+                                                    <img :src="item.image" :alt="item.title" class="w-full h-full object-contain rounded-lg">
+                                                </template>
+                                                <template x-if="!item.image">
+                                                    <svg class="w-4 h-4 text-text-muted/40" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                                                    </svg>
+                                                </template>
+                                                <button 
+                                                    type="button"
+                                                    @click.stop="item.selected = false"
+                                                    title="Remove from selection"
+                                                    class="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-text-main hover:bg-price text-surface flex items-center justify-center transition-colors shadow-xs cursor-pointer z-10"
+                                                >
+                                                    <svg class="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3">
+                                                        <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+                                                    </svg>
+                                                </button>
+                                            </div>
+                                        </template>
+                                        <template x-if="selectedCount === 0">
+                                            <span class="text-xs text-text-muted italic">No items selected</span>
+                                        </template>
+                                    </div>
+                                </div>
+
+                                <!-- Detailed Price Breakdown (Retail & Savings) -->
+                                <div class="space-y-1.5 text-xs sm:text-sm">
+                                    <div class="flex items-center justify-between text-text-muted">
+                                        <span>Retail Price:</span>
+                                        <span class="font-semibold text-text-main">
+                                            ₱<span x-text="retailTotal.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})"></span>
+                                        </span>
+                                    </div>
+
+                                    <div class="flex items-center justify-between text-text-muted">
+                                        <span>Promotions / Savings:</span>
+                                        <span class="font-bold text-price">
+                                            -₱<span x-text="savingsTotal.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})"></span>
+                                        </span>
+                                    </div>
+                                </div>
+
+                            </div>
+                        </div>
+
+                        <!-- Sticky Bottom Bar Row: Total + Toggle Arrow + Checkout CTA -->
+                        <div class="flex items-center justify-between gap-3">
+                            <div>
+                                <div class="flex items-center gap-1.5 sm:gap-2">
+                                    <span class="text-xs font-semibold text-text-muted">Total:</span>
+                                    <span 
+                                        class="text-lg sm:text-xl font-extrabold font-serif"
+                                        :class="savingsTotal > 0 ? 'text-price' : 'text-text-main'"
+                                    >
+                                        ₱<span x-text="estimatedTotal.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})"></span>
+                                    </span>
+
+                                    <!-- Chevron Toggle Arrow: points up initially, rotates down 180° when expanded -->
+                                    <button 
+                                        type="button" 
+                                        @click="mobileSummaryOpen = !mobileSummaryOpen"
+                                        class="p-1 text-text-muted hover:text-primary transition-colors cursor-pointer rounded-full hover:bg-surface-subtle"
+                                        aria-label="Toggle Summary Details"
+                                    >
+                                        <svg 
+                                            class="w-4 h-4 sm:w-5 sm:h-5 transition-transform duration-300"
+                                            :class="mobileSummaryOpen ? 'rotate-180' : ''" 
+                                            fill="none" 
+                                            viewBox="0 0 24 24" 
+                                            stroke="currentColor" 
+                                            stroke-width="2.5"
+                                        >
+                                            <path stroke-linecap="round" stroke-linejoin="round" d="M5 15l7-7 7 7" />
+                                        </svg>
+                                    </button>
+                                </div>
+
+                                <template x-if="savingsTotal > 0">
+                                    <span class="text-[11px] sm:text-xs text-price font-bold block leading-tight mt-0.5">
+                                        Saved: ₱<span x-text="savingsTotal.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})"></span>
+                                    </span>
+                                </template>
+                            </div>
+
+                            <!-- Mobile/Tablet Checkout Button -->
+                            <div>
+                                <form action="#" method="GET" class="m-0">
+                                    <button 
+                                        type="submit"
+                                        :disabled="selectedCount === 0"
+                                        :class="selectedCount === 0 
+                                            ? 'bg-surface-subtle text-text-muted cursor-not-allowed border border-border-subtle' 
+                                            : 'bg-text-main hover:bg-dark-grey text-surface cursor-pointer shadow-xs active:scale-[0.98]'"
+                                        class="py-2.5 px-6 font-bold text-xs sm:text-sm rounded-xl transition-all flex items-center justify-center gap-1.5"
+                                    >
+                                        <span>Checkout</span>
+                                        <span x-show="selectedCount > 0" x-text="'(' + selectedCount + ')'"></span>
+                                    </button>
+                                </form>
+                            </div>
+
+                        </div>
+
                     </div>
                 </div>
 
-                <!-- Database Cart Items Loop -->
-                <div class="space-y-4">
-                    @forelse($cartItems as $index => $item)
-                        @php
-                            $product =$item->product;
-                            $sellerName =$product->user->sellerProfile->business_name ?? 'Official Store';
-                            $data =$alpineItems[$index] ?? [];$variantStock = $data['maxStock'] ?? $product->stock_quantity;
-                            $variantImage = $data['image'] ?? '';$basePrice = $data['basePrice'] ?? $product->price;
-                        @endphp
-
-                        <div :class="items[{{ $index }}].selected ? 'border-primary ring-1 ring-primary/20 bg-surface' : 'border-border-subtle bg-surface hover:border-primary/40'" class="border p-5 flex flex-col md:flex-row md:items-start gap-6 rounded-xl shadow-xs transition-all group">
-                            <!-- Checkbox & Image -->
-                            <div class="flex items-center gap-4 shrink-0">
-                                <input type="checkbox" x-model="items[{{ $index }}].selected" x-on:change="checkItem()" :disabled="items[{{ $index }}].maxStock <= 0" class="w-5 h-5 text-primary border-border-subtle rounded focus:ring-primary cursor-pointer shrink-0 mt-5 md:mt-0 transition-colors shadow-xs disabled:opacity-50 disabled:cursor-not-allowed">
-                                <div class="w-24 h-24 sm:w-28 sm:h-28 bg-surface-subtle border border-border-subtle relative rounded-lg overflow-hidden shrink-0">
-                                    <img src="{{ $variantImage }}" alt="{{ $product->name }}" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500">
-                                    @if ($variantStock <= 5 &&$variantStock > 0)
-                                        <div class="absolute bottom-0 left-0 right-0 bg-danger text-surface text-[10px] text-center font-bold py-0.5 shadow-sm">Only {{ $variantStock }} Left</div>
-                                    @elseif ($variantStock == 0)
-                                        <div class="absolute inset-0 bg-white/60 backdrop-blur-[2px] flex items-center justify-center">
-                                            <span class="bg-text-main text-white text-[10px] font-bold px-2 py-1 rounded shadow-md uppercase tracking-wider">Out of Stock</span>
-                                        </div>
-                                    @endif
-                                </div>
-                            </div>
-
-                            <!-- Item Details -->
-                            <div class="flex-1 mt-1 min-w-0">
-                                <div class="text-xs font-bold text-primary-dark uppercase mb-1 flex items-center gap-1">
-                                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z"></path></svg>
-                                    {{ $sellerName }}
-                                </div>
-                                <a href="{{ route('product.show', $product->id) }}" class="text-sm sm:text-base font-bold text-text-main hover:text-primary transition-colors cursor-pointer mb-2 line-clamp-2 block pr-4">{{ $product->name }}</a>
-                                
-                                <div class="flex flex-wrap items-center gap-3 mt-2">
-                                    @if ($item->variant)
-                                        <div class="bg-surface-subtle border border-border-subtle px-3 py-1.5 rounded-md text-text-main flex items-center gap-1.5 text-xs font-semibold">
-                                            <span>{{ $item->variant }}</span>
-                                            @if ($item->sub_variant)
-                                                <span class="text-text-muted">|</span>
-                                                <span>{{ $item->sub_variant }}</span>
-                                            @endif
-                                        </div>
-                                    @endif
-
-                                    @if ($product->discount > 0)
-                                        <span class="text-[10px] font-bold px-2 py-1 bg-primary/10 text-primary border border-primary/20 rounded-md tracking-wide">{{ $product->discount }}% OFF</span>
-                                    @endif
-                                    
-                                    <span class="text-[11px] font-bold px-2 py-1 rounded-md {{ $variantStock > 5 ? 'bg-success/10 text-success' : 'bg-danger/10 text-danger' }}">
-                                        <span x-text="items[{{ $index }}].maxStock > 0 ? items[{{ $index }}].maxStock + ' in stock' : 'Unavailable'"></span>
-                                    </span>
-                                </div>
-                            </div>
-
-                            <!-- Price & Actions -->
-                            <div class="flex items-center justify-between md:justify-end gap-6 mt-4 md:mt-0 md:w-1/3 md:pt-1">
-                                <div class="flex flex-col text-right">
-                                    @if ($product->discount > 0)
-                                        <span class="text-xs text-text-muted line-through font-bold">₱{{ number_format($basePrice, 2) }}</span>
-                                    @endif
-                                    <span class="text-lg sm:text-xl font-bold" :class="items[{{ $index }}].maxStock > 0 ? 'text-primary' : 'text-text-muted'">
-                                        ₱<span x-text="(items[{{ $index }}].price * (parseInt(items[{{$index }}].quantity) || 1)).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})"></span>
-                                    </span>
-                                </div>
-
-                                <div class="flex flex-col gap-3 items-end">
-                                    <template x-if="items[{{ $index }}].maxStock <= 0">
-                                        <div class="px-3 py-1.5 bg-surface-subtle text-text-muted text-xs font-bold rounded-lg border border-border-subtle cursor-not-allowed">Out of Stock</div>
-                                    </template>
-
-                                    <!-- Stepper Input (Readonly to prevent manual typing overrides) -->
-                                    <template x-if="items[{{ $index }}].maxStock > 0">
-                                        <div class="flex items-center border border-border-subtle rounded-md bg-surface shadow-xs h-[34px] overflow-hidden w-[104px] shrink-0"
-                                             :class="{'opacity-50': items[{{ $index }}].isSyncing}">
-                                            <button type="button" x-on:click="decrement({{ $index }})" :disabled="items[{{ $index }}].isSyncing" class="w-8 text-text-main hover:text-primary hover:bg-surface-subtle transition-colors h-full flex items-center justify-center border-r border-border-subtle outline-none shrink-0" :class="{'cursor-not-allowed': items[{{ $index }}].isSyncing, 'cursor-pointer': !items[{{$index }}].isSyncing}"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M20 12H4"></path></svg></button>
-                                            
-                                            <!-- Readonly input for forced tap-only interaction -->
-                                            <input type="number" readonly x-model="items[{{ $index }}].quantity" class="flex-1 w-full h-full text-center border-none bg-transparent text-sm font-bold text-text-main focus:ring-0 p-0 outline-none select-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none">
-                                            
-                                            <button type="button" x-on:click="increment({{ $index }})" :disabled="items[{{ $index }}].isSyncing" class="w-8 text-text-main hover:text-primary hover:bg-surface-subtle transition-colors h-full flex items-center justify-center border-l border-border-subtle outline-none shrink-0" :class="{'cursor-not-allowed': items[{{ $index }}].isSyncing, 'cursor-pointer': !items[{{$index }}].isSyncing}"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 4v16m8-8H4"></path></svg></button>
-                                        </div>
-                                    </template>
-
-                                    <!-- Action Icons -->
-                                    <div class="flex items-center gap-1.5 text-text-muted mt-1">
-                                        <button class="p-1.5 hover:text-primary hover:bg-primary/10 rounded-md transition-colors outline-none" title="Find Similar"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg></button>
-                                        <button class="p-1.5 hover:text-primary hover:bg-primary/10 rounded-md transition-colors outline-none" title="Move to Wishlist"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z"></path></svg></button>
-                                        
-                                        <!-- Delete Form -->
-                                        <form action="{{ route('cart.destroy', $item->id) }}" method="POST" class="inline m-0 p-0">
-                                            @csrf
-                                            @method('DELETE')
-                                            <button type="submit" class="p-1.5 hover:text-danger hover:bg-danger/10 rounded-md transition-colors outline-none cursor-pointer" title="Delete Item"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg></button>
-                                        </form>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    @empty
-                        <div class="bg-surface border border-border-subtle p-10 text-center text-text-muted rounded-xl shadow-xs">
-                            <div class="w-16 h-16 bg-surface-subtle border border-border-subtle rounded-full flex items-center justify-center mx-auto mb-4 shadow-sm">
-                                <svg class="w-8 h-8 text-border-subtle" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z"></path></svg>
-                            </div>
-                            <p class="text-xl font-bold text-text-main tracking-tight">Your cart is currently empty</p>
-                            <p class="text-sm mt-2 mb-6 font-medium">Looks like you haven't added anything yet.</p>
-                            <a href="{{ route('home') }}" class="inline-block px-8 py-3 bg-primary text-white font-bold rounded-xl hover:bg-primary-dark transition-all shadow-md hover:shadow-lg">Continue Shopping</a>
-                        </div>
-                    @endforelse
-                </div>
             </div>
+        @endif
 
-            <!-- You Might Like Section -->
-            <div class="mt-16 border-t border-border-subtle/80 pt-10">
-                <h2 class="text-center text-xl sm:text-2xl font-black font-sans text-text-main mb-8">
-                    You Might Like to Fill it With
-                </h2>
-                <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4 lg:gap-5">
-                    @forelse($suggestedProducts as $product)
-                        <x-storefront.seller-product-card :product="$product" />
-                    @empty
-                        <div class="col-span-full text-center text-text-muted py-8 text-sm font-medium">
-                            No suggestions available at this time.
-                        </div>
-                    @endforelse
-                </div>
-            </div>
-        </div>
     </div>
+</div>
 @endsection

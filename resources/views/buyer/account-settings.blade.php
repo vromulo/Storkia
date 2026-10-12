@@ -8,6 +8,7 @@
         <div class="hidden md:block mb-6">
             @php
                 $currentLabel = match(true) {
+                    request()->routeIs('user.account') => 'Personal Center',
                     request()->routeIs('user.account-management') => 'Account Management',
                     request()->routeIs('user.profile') => 'Profile',
                     request()->routeIs('user.addresses') => 'Address Book',
@@ -24,11 +25,6 @@
 
             <nav class="flex items-center space-x-2 text-xs text-text-muted mb-3 select-none" aria-label="Breadcrumb">
                 <a href="/" class="hover:text-primary transition-colors">Home</a>
-                <span class="text-border-subtle">/</span>
-                
-                <span class="text-text-muted font-normal cursor-default">
-                    Personal Center
-                </span>
 
                 @if($currentLabel)
                     <span class="text-border-subtle">/</span>

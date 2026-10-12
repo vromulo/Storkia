@@ -44,7 +44,10 @@ Route::middleware('auth')->group(function () {
             return redirect()->route('user.account-management');
         })->name('account');
 
-        // Implemented Section
+        // Personal Center Dashboard
+        Route::view('/account', 'buyer.option.account.personal-center')->name('account');
+        
+        // Account Settings / Credentials Section
         Route::get('/account-management', [AccountManagementController::class, 'index'])->name('account-management');
 
         // Patch Route (routes that UPDATE user data)
@@ -64,7 +67,7 @@ Route::middleware('auth')->group(function () {
         Route::delete('/addresses/{id}', [AddressController::class, 'destroy'])->name('addresses.destroy');
         Route::get('/addresses/psgc/municipalities/{provinceCode}', [AddressController::class, 'getMunicipalities'])->name('addresses.psgc.municipalities');
 
-        // Future Sections inheriting personal-center via buyer.option.coming-soon
+        // Future Sections inheriting account-settings via buyer.option.coming-soon
         Route::view('/profile', 'buyer.option.coming-soon', ['title' => 'Profile'])->name('profile');
         Route::view('/change-password', 'buyer.option.coming-soon', ['title' => 'Change Password'])->name('change-password');
 

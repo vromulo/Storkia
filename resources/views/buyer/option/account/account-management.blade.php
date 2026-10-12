@@ -1,4 +1,4 @@
-@extends('buyer.personal-center', [
+@extends('buyer.account-settings', [
     'pageTitle' => 'My Account',
     'pageSubtitle' => 'Manage your personal settings, security, and account status.'
 ])

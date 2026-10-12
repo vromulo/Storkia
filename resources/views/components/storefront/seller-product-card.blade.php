@@ -40,7 +40,7 @@
                         $discountedPrice = $product->price - ($product->price * ($product->discount / 100));
                     @endphp
                     <div class="flex items-baseline gap-2">
-                        <span class="text-lg font-bold text-text-main">
+                        <span class="text-lg font-bold text-price">
                             ₱{{ number_format($discountedPrice, 2) }}
                         </span>
                         <span class="text-xs text-text-muted line-through">
