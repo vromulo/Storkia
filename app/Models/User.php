@@ -110,11 +110,6 @@ class User extends Authenticatable
         return $this->hasOne(SellerApplication::class)->latestOfMany('version');
     }
 
-
-
-
-    
-
     public function logisticsProfile()
     {
         return $this->hasOne(LogisticsProfile::class);
@@ -128,5 +123,11 @@ class User extends Authenticatable
     public function latestLogisticsApplication()
     {
         return $this->hasOne(LogisticsApplication::class)->latestOfMany('version');
+    }
+
+    // NEW: Messages relationship required by MessageController
+    public function messages()
+    {
+        return $this->hasMany(Message::class, 'user_id');
     }
 }

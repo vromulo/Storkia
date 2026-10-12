@@ -152,15 +152,15 @@
             <span x-show="sidebarOpen" x-transition.opacity.duration.300ms class="ml-3">Reviews & Feedback</span>
         </a>
 
-        <!-- Chat / Messages -->
-        <a href="#"
+        <!-- Messages -->
+        <a href="{{ route('seller.messages.seller-messages') }}"
             @click="activeDropdown = null"
-            class="flex items-center px-3 py-3 rounded-xl transition-all duration-200 font-medium group whitespace-nowrap text-sm cursor-pointer {{ request()->is('seller/chat*') ? 'text-primary font-bold bg-brand-light/20' : 'text-text-muted hover:bg-brand-light/30 hover:text-primary' }}"
-            :title="!sidebarOpen ? 'Chat / Messages' : ''">
-            <svg class="w-6 h-6 flex-shrink-0 transition-colors {{ request()->is('seller/chat*') ? 'text-primary' : 'text-text-muted group-hover:text-primary' }}" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            class="flex items-center px-3 py-3 rounded-xl transition-all duration-200 font-medium group whitespace-nowrap text-sm cursor-pointer {{ request()->is('seller/messages*') ? 'text-primary font-bold bg-brand-light/20' : 'text-text-muted hover:bg-brand-light/30 hover:text-primary' }}"
+            :title="!sidebarOpen ? 'Messages' : ''">
+            <svg class="w-6 h-6 flex-shrink-0 transition-colors {{ request()->is('seller/messages*') ? 'text-primary' : 'text-text-muted group-hover:text-primary' }}" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
             </svg>
-            <span x-show="sidebarOpen" x-transition.opacity.duration.300ms class="ml-3">Chat / Messages</span>
+            <span x-show="sidebarOpen" x-transition.opacity.duration.300ms class="ml-3">Messages</span>
         </a>
 
         <!-- Account -->

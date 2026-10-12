@@ -127,10 +127,10 @@
                                 </div>
 
                                 <a href="{{ route('user.account') }}" class="block px-3 py-2 text-xs font-medium text-text-main rounded-lg hover:bg-surface-subtle hover:text-primary transition-colors">My Account</a>
-                                <a href="#" class="block px-3 py-2 text-xs font-medium text-text-muted rounded-lg hover:bg-surface-subtle hover:text-primary transition-colors">My Orders</a>
-                                <a href="#" class="block px-3 py-2 text-xs font-medium text-text-muted rounded-lg hover:bg-surface-subtle hover:text-primary transition-colors">My Messages</a>
-                                <a href="#" class="block px-3 py-2 text-xs font-medium text-text-muted rounded-lg hover:bg-surface-subtle hover:text-primary transition-colors">My Vouchers</a>
-                                <a href="#" class="block px-3 py-2 text-xs font-medium text-text-muted rounded-lg hover:bg-surface-subtle hover:text-primary transition-colors">Wishlist</a>
+                                <a href="#" class="block px-3 py-2 text-xs font-medium text-text-main rounded-lg hover:bg-surface-subtle hover:text-primary transition-colors">My Orders</a>
+                                <a href="{{ route('user.messages.buyer-messages') }}" class="block px-3 py-2 text-xs font-medium text-text-main rounded-lg hover:bg-surface-subtle hover:text-primary transition-colors">My Messages</a>
+                                <a href="#" class="block px-3 py-2 text-xs font-medium text-text-main rounded-lg hover:bg-surface-subtle hover:text-primary transition-colors">My Vouchers</a>
+                                <a href="#" class="block px-3 py-2 text-xs font-medium text-text-main rounded-lg hover:bg-surface-subtle hover:text-primary transition-colors">Wishlist</a>
 
                                 <hr class="border-border-subtle my-1 mx-2">
 
