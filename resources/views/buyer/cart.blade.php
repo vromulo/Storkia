@@ -364,7 +364,31 @@
                                     class="text-2xl font-extrabold font-serif"
                                     :class="savingsTotal > 0 ? 'text-price' : 'text-text-main'"
                                 >
-                                    ₱<span x-text="estimatedTotal.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})"></span>
+                                    ₱<span 
+                                        x-data="{
+                                            displayValue: estimatedTotal,
+                                            animate(target) {
+                                                let start = this.displayValue;
+                                                let end = target;
+                                                let duration = 400;
+                                                let startTime = null;
+                                                let step = (timestamp) => {
+                                                    if (!startTime) startTime = timestamp;
+                                                    let progress = Math.min((timestamp - startTime) / duration, 1);
+                                                    let ease = 1 - Math.pow(1 - progress, 3);
+                                                    this.displayValue = start + (end - start) * ease;
+                                                    if (progress < 1) {
+                                                        window.requestAnimationFrame(step);
+                                                    } else {
+                                                        this.displayValue = end;
+                                                    }
+                                                };
+                                                window.requestAnimationFrame(step);
+                                            }
+                                        }"
+                                        x-init="$watch('estimatedTotal', value => animate(value))"
+                                        x-text="displayValue.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})"
+                                    ></span>
                                 </span>
                             </div>
                         </div>
@@ -413,7 +437,7 @@
                                                 <template x-if="!item.image">
                                                     <svg class="w-4 h-4 text-text-muted/40" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                                                    </svg>
+                                                </svg>
                                                 </template>
                                                 <button 
                                                     type="button"
@@ -462,7 +486,31 @@
                                         class="text-lg sm:text-xl font-extrabold font-serif"
                                         :class="savingsTotal > 0 ? 'text-price' : 'text-text-main'"
                                     >
-                                        ₱<span x-text="estimatedTotal.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})"></span>
+                                        ₱<span 
+                                            x-data="{
+                                                displayValue: estimatedTotal,
+                                                animate(target) {
+                                                    let start = this.displayValue;
+                                                    let end = target;
+                                                    let duration = 400;
+                                                    let startTime = null;
+                                                    let step = (timestamp) => {
+                                                        if (!startTime) startTime = timestamp;
+                                                        let progress = Math.min((timestamp - startTime) / duration, 1);
+                                                        let ease = 1 - Math.pow(1 - progress, 3);
+                                                        this.displayValue = start + (end - start) * ease;
+                                                        if (progress < 1) {
+                                                            window.requestAnimationFrame(step);
+                                                        } else {
+                                                            this.displayValue = end;
+                                                        }
+                                                    };
+                                                    window.requestAnimationFrame(step);
+                                                }
+                                            }"
+                                            x-init="$watch('estimatedTotal', value => animate(value))"
+                                            x-text="displayValue.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})"
+                                        ></span>
                                     </span>
 
                                     <!-- Chevron Toggle Arrow: points up initially, rotates down 180° when expanded -->
