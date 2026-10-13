@@ -1,6 +1,9 @@
 <div x-data="{ 
         activeSlide: parseInt(sessionStorage.getItem('storkiaCarouselSlide')) || 1, 
         timer: null,
+        loaded1: false,
+        loaded2: false,
+        loaded3: false,
         startTimer() {
             this.timer = setInterval(() => { 
                 this.activeSlide = this.activeSlide === 3 ? 1 : this.activeSlide + 1; 
@@ -13,6 +16,9 @@
         }
      }"
      x-init="
+        if ($refs.img1?.complete) loaded1 = true;
+        if ($refs.img2?.complete) loaded2 = true;
+        if ($refs.img3?.complete) loaded3 = true;
         $watch('activeSlide', value => sessionStorage.setItem('storkiaCarouselSlide', value));
         startTimer();
      "
@@ -36,7 +42,14 @@
              x-transition:leave-end="opacity-0"
              class="absolute inset-0 w-full h-full">
             
-            <img src="/assets/carousel-slide-3.webp" alt="Lightning Fast Delivery" class="absolute inset-0 w-full h-full object-cover" />
+            <!-- Skeleton Loader -->
+            <div x-show="!loaded1" class="absolute inset-0 bg-gray-800/80 animate-pulse pointer-events-none"></div>
+
+            <img x-ref="img1" src="/assets/carousel-slide-3.webp" alt="Lightning Fast Delivery" 
+                 x-on:load="loaded1 = true" x-on:error="loaded1 = true"
+                 :class="loaded1 ? 'opacity-100' : 'opacity-0'"
+                 class="absolute inset-0 w-full h-full object-cover transition-opacity duration-700" />
+                 
             <div class="absolute inset-0 bg-gradient-to-t from-black/90 via-black/40 to-transparent"></div>
             
             <div class="absolute bottom-24 left-10 md:left-16 max-w-lg text-left z-10">
@@ -60,7 +73,14 @@
              x-transition:leave-end="opacity-0"
              class="absolute inset-0 w-full h-full" style="display: none;">
             
-            <img src="/assets/carousel-slide-1.webp" alt="Secure Handling" class="absolute inset-0 w-full h-full object-cover" />
+            <!-- Skeleton Loader -->
+            <div x-show="!loaded2" class="absolute inset-0 bg-gray-800/80 animate-pulse pointer-events-none"></div>
+
+            <img x-ref="img2" src="/assets/carousel-slide-1.webp" alt="Secure Handling" 
+                 x-on:load="loaded2 = true" x-on:error="loaded2 = true"
+                 :class="loaded2 ? 'opacity-100' : 'opacity-0'"
+                 class="absolute inset-0 w-full h-full object-cover transition-opacity duration-700" />
+                 
             <div class="absolute inset-0 bg-gradient-to-t from-black/90 via-black/40 to-transparent"></div>
             
             <div class="absolute bottom-24 left-10 md:left-16 max-w-lg text-left z-10">
@@ -84,7 +104,14 @@
              x-transition:leave-end="opacity-0"
              class="absolute inset-0 w-full h-full" style="display: none;">
             
-            <img src="/assets/carousel-slide-2.webp" alt="Real-time Tracking" class="absolute inset-0 w-full h-full object-cover" />
+            <!-- Skeleton Loader -->
+            <div x-show="!loaded3" class="absolute inset-0 bg-gray-800/80 animate-pulse pointer-events-none"></div>
+
+            <img x-ref="img3" src="/assets/carousel-slide-2.webp" alt="Real-time Tracking" 
+                 x-on:load="loaded3 = true" x-on:error="loaded3 = true"
+                 :class="loaded3 ? 'opacity-100' : 'opacity-0'"
+                 class="absolute inset-0 w-full h-full object-cover transition-opacity duration-700" />
+                 
             <div class="absolute inset-0 bg-gradient-to-t from-black/90 via-black/40 to-transparent"></div>
             
             <div class="absolute bottom-24 left-10 md:left-16 max-w-lg text-left z-10">

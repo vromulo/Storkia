@@ -1,16 +1,31 @@
 @props(['product'])
 
-<div class="group relative flex flex-col cursor-pointer">
+<div 
+    x-data="{ imageLoaded: false }" 
+    x-init="if ($refs.img?.complete) imageLoaded = true"
+    class="group relative flex flex-col cursor-pointer"
+>
     <!-- Clickable Product Link Wrapper -->
     <a href="{{ route('product.show', $product->id) }}" class="block">
         
         <!-- Image Container: Enlarged preview area -->
         <div class="relative w-full aspect-square bg-surface-subtle rounded-2xl overflow-hidden mb-3 border border-border-subtle/60 flex items-center justify-center transition-all duration-300 group-hover:shadow-sm">
             @if(!empty($product->pictures) && is_array($product->pictures))
+                
+                <!-- Skeleton Loader -->
+                <div 
+                    x-show="!imageLoaded" 
+                    class="absolute inset-0 bg-gray-200/80 animate-pulse z-10 pointer-events-none"
+                ></div>
+
                 <img 
+                    x-ref="img"
                     src="{{ asset('storage/' . $product->pictures[0]) }}" 
                     alt="{{ $product->name }}" 
-                    class="w-full h-full object-contain p-2 sm:p-3 group-hover:scale-105 transition-transform duration-300"
+                    x-on:load="imageLoaded = true"
+                    x-on:error="imageLoaded = true"
+                    :class="imageLoaded ? 'opacity-100' : 'opacity-0'"
+                    class="w-full h-full object-contain p-2 sm:p-3 group-hover:scale-105 transition-all duration-300"
                 >
             @else
                 <svg class="w-14 h-14 text-text-muted/40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -20,7 +35,7 @@
 
             <!-- Optional Discount Tag -->
             @if($product->discount > 0)
-                <span class="absolute top-2.5 left-2.5 bg-primary text-surface text-xs font-bold px-2 py-0.5 rounded-md shadow-xs">
+                <span class="absolute top-2.5 left-2.5 bg-primary text-surface text-xs font-bold px-2 py-0.5 rounded-md shadow-xs z-20">
                     -{{ number_format($product->discount, 0) }}%
                 </span>
             @endif
@@ -60,7 +75,7 @@
     <button 
         type="button" 
         @click.stop
-        class="absolute top-2.5 right-2.5 z-10 w-8 h-8 rounded-full bg-surface shadow-xs border border-border-subtle flex items-center justify-center text-text-main hover:text-primary transition-colors cursor-pointer"
+        class="absolute top-2.5 right-2.5 z-20 w-8 h-8 rounded-full bg-surface shadow-xs border border-border-subtle flex items-center justify-center text-text-main hover:text-primary transition-colors cursor-pointer"
         aria-label="Add to wishlist"
     >
         <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">

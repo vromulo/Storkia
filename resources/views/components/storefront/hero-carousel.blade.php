@@ -4,6 +4,14 @@
         totalSlides: 4,
         timer: null,
         isPaused: false,
+        imageLoaded: false,
+        init() {
+            this.startTimer();
+            // Preload the background image for the first slide
+            const img = new Image();
+            img.src = '{{ asset('assets/yeezy-preview.webp') }}';
+            img.onload = () => { this.imageLoaded = true; };
+        },
         startTimer() {
             this.timer = setInterval(() => {
                 if (!this.isPaused) {
@@ -35,10 +43,9 @@
             this.activeSlide = this.activeSlide === 1 ? this.totalSlides : this.activeSlide - 1;
         }
     }"
-    x-init="startTimer()"
+    class="relative -mx-4 sm:-mx-6 lg:mx-0 w-auto lg:w-full rounded-none lg:rounded-2xl overflow-hidden mb-8 shadow-sm border-y lg:border border-border-subtle h-[340px] sm:h-[400px] bg-primary-dark select-none"
     @mouseenter="if (!isPaused) stopTimer()"
     @mouseleave="if (!isPaused) startTimer()"
-    class="relative -mx-4 sm:-mx-6 lg:mx-0 w-auto lg:w-full rounded-none lg:rounded-2xl overflow-hidden mb-8 shadow-sm border-y lg:border border-border-subtle h-[340px] sm:h-[400px] bg-primary-dark select-none"
 >
     <!-- Slides Container -->
     <div class="relative w-full h-full">
@@ -52,25 +59,37 @@
             x-transition:leave="transition ease-in duration-500"
             x-transition:leave-start="opacity-100"
             x-transition:leave-end="opacity-0"
-            class="absolute inset-0 w-full h-full bg-cover bg-center flex items-center"
-            style="background-image: url('{{ asset('assets/yeezy-preview.webp') }}');"
+            class="absolute inset-0 w-full h-full"
         >
-            <div class="absolute inset-0 bg-black/60"></div>
-            <div class="absolute -right-20 -top-20 w-[500px] h-[500px] bg-secondary opacity-15 rounded-full blur-3xl pointer-events-none"></div>
-            
-            <div class="relative z-10 p-8 sm:p-12 lg:p-16 w-full md:w-2/3">
-                <span class="inline-block px-3 py-1 bg-primary text-surface text-xs font-bold uppercase rounded-full mb-3 tracking-wider">
-                    Limited Offer
-                </span>
-                <h2 class="text-3xl sm:text-4xl md:text-5xl font-serif text-white font-bold leading-tight mb-3 drop-shadow-md">
-                    Grab Up to 50% Off On <br class="hidden md:block">Selected Items
-                </h2>
-                <p class="text-gray-100 mb-6 text-sm sm:text-base drop-shadow-md max-w-lg">
-                    Fast delivery. Exclusive deals. Verified brands right to your doorstep.
-                </p>
-                <a href="#products-grid" class="inline-flex px-8 py-3 bg-primary hover:bg-primary-dark text-white font-bold text-sm rounded-full transition-colors duration-300 shadow-md">
-                    Shop Now
-                </a>
+            <!-- Skeleton Loader -->
+            <div 
+                x-show="!imageLoaded" 
+                class="absolute inset-0 w-full h-full bg-gray-700/50 animate-pulse z-20"
+            ></div>
+
+            <!-- Actual Content -->
+            <div 
+                :class="imageLoaded ? 'opacity-100' : 'opacity-0'"
+                class="absolute inset-0 w-full h-full bg-cover bg-center flex items-center transition-opacity duration-700"
+                style="background-image: url('{{ asset('assets/yeezy-preview.webp') }}');"
+            >
+                <div class="absolute inset-0 bg-black/60"></div>
+                <div class="absolute -right-20 -top-20 w-[500px] h-[500px] bg-secondary opacity-15 rounded-full blur-3xl pointer-events-none"></div>
+                
+                <div class="relative z-10 p-8 sm:p-12 lg:p-16 w-full md:w-2/3">
+                    <span class="inline-block px-3 py-1 bg-primary text-surface text-xs font-bold uppercase rounded-full mb-3 tracking-wider">
+                        Limited Offer
+                    </span>
+                    <h2 class="text-3xl sm:text-4xl md:text-5xl font-serif text-white font-bold leading-tight mb-3 drop-shadow-md">
+                        Grab Up to 50% Off On <br class="hidden md:block">Selected Items
+                    </h2>
+                    <p class="text-gray-100 mb-6 text-sm sm:text-base drop-shadow-md max-w-lg">
+                        Fast delivery. Exclusive deals. Verified brands right to your doorstep.
+                    </p>
+                    <a href="#products-grid" class="inline-flex px-8 py-3 bg-primary hover:bg-primary-dark text-white font-bold text-sm rounded-full transition-colors duration-300 shadow-md">
+                        Shop Now
+                    </a>
+                </div>
             </div>
         </div>
 
@@ -209,7 +228,7 @@
             </svg>
         </button>
 
-        <!-- Pause / Resume Toggle Button (Right Side of the Right Arrow) -->
+        <!-- Pause / Resume Toggle Button -->
         <button 
             type="button" 
             @click="togglePause()"
@@ -217,12 +236,12 @@
             class="w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-black/40 hover:bg-black/70 backdrop-blur-sm border border-white/25 text-white flex items-center justify-center transition-all duration-200 cursor-pointer focus:outline-none active:scale-95 shadow-md"
             aria-label="Toggle Carousel Autoplay"
         >
-            <!-- Pause Icon (shown when playing) -->
+            <!-- Pause Icon -->
             <svg x-show="!isPaused" xmlns="http://www.w3.org/2000/svg" class="w-4 h-4 sm:w-4.5 sm:h-4.5" fill="currentColor" viewBox="0 0 24 24">
                 <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/>
             </svg>
             
-            <!-- Play Icon (shown when paused) -->
+            <!-- Play Icon -->
             <svg x-show="isPaused" x-cloak xmlns="http://www.w3.org/2000/svg" class="w-4 h-4 sm:w-4.5 sm:h-4.5 translate-x-[1px]" fill="currentColor" viewBox="0 0 24 24">
                 <path d="M8 5v14l11-7z"/>
             </svg>
