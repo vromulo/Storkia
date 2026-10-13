@@ -34,12 +34,16 @@
                     if ($v['name'] === $item->variant) {
                         if (!$item->sub_variant) {
                             $basePrice = (float) ($v['price'] ?? $basePrice);
-                            $stock = (int) ($v['stock'] ?? $stock);$image = (isset($v['image']) &&$v['image']) ? asset('storage/' . $v['image']) :$image;
-                        } elseif (isset($v['subs'])) {
-                            foreach ($v['subs'] as$sub) {
-                                if ($sub['name'] ===$item->sub_variant) {
-                                    $basePrice = (float) ($sub['price'] ?? $v['price'] ?? $basePrice);
-                                    $stock = (int) ($sub['stock'] ?? $stock);$image = (isset($sub['image']) &&$sub['image']) ? asset('storage/' . $sub['image']) :$image;
+                            $stock = (int) ($v['stock'] ?? $stock);
+                            $image = (isset($v['image']) && $v['image']) ? asset('storage/' . $v['image']) : $image;
+                        } else {
+                            if (isset($v['subs'])) {
+                                foreach ($v['subs'] as $sub) {
+                                    if ($sub['name'] === $item->sub_variant) {
+                                        $basePrice = (float) ($sub['price'] ?? $v['price'] ?? $basePrice);
+                                        $stock = (int) ($sub['stock'] ?? $stock);
+                                        $image = (isset($sub['image']) && $sub['image']) ? asset('storage/' . $sub['image']) : ((isset($v['image']) && $v['image']) ? asset('storage/' . $v['image']) : $image);
+                                    }
                                 }
                             }
                         }
@@ -48,11 +52,11 @@
             }
 
             $discountPercent = (float) ($product->discount ?? 0);
-            $effectivePrice =$discountPercent > 0 
+            $effectivePrice = $discountPercent > 0 
                 ? $basePrice - ($basePrice * ($discountPercent / 100)) 
-                :$basePrice;
+                : $basePrice;
 
-            $storeName =$item->product->sellerProfile->business_name 
+            $storeName = $item->product->sellerProfile->business_name 
                 ?? $item->product->user->first_name 
                 ?? 'Storkia Direct';
 
@@ -60,7 +64,7 @@
                 'id'              => $item->id,
                 'store'           => $storeName,
                 'title'           => $product->name,
-                'variant'         => implode(' / ', array_filter([$item->variant,$item->sub_variant])),
+                'variant'         => implode(' / ', array_filter([$item->variant, $item->sub_variant])),
                 'image'           => $image,
                 'originalPrice'   => $basePrice,
                 'discountedPrice' => $effectivePrice,
