@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use App\Models\Cart;
 use App\Models\Product;
+use App\Events\CartQuantityUpdated;
 
 class CartController extends Controller
 {
@@ -42,6 +43,8 @@ class CartController extends Controller
         if ($cart) {
             $newQuantity = min($cart->quantity + $request->quantity, 1000000);
             $cart->update(['quantity' => $newQuantity]);
+            
+            broadcast(new CartQuantityUpdated($cart->id, $cart->user_id, $cart->quantity));
         } else {
             Cart::create([
                 'user_id'     => auth()->id(),
@@ -70,6 +73,8 @@ class CartController extends Controller
         ]);
 
         $cart->update(['quantity' => $request->quantity]);
+        
+        broadcast(new CartQuantityUpdated($cart->id, $cart->user_id, $cart->quantity));
 
         return response()->json([
             'success'  => true, 

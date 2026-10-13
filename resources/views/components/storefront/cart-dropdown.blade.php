@@ -1,7 +1,6 @@
 @php
     $cartItems = collect();
-    $alpineItems = [];
-    $totalAmount = 0;
+    $alpineItems = [];$totalAmount = 0;
     
     if (auth()->check()) {
         $cartItems = \App\Models\Cart::with('product')
@@ -10,28 +9,27 @@
             ->take(6)
             ->get();
             
-        foreach ($cartItems as $item) {
-            $product = $item->product;
+        foreach ($cartItems as$item) {
+            $product =$item->product;
             if (!$product) continue;
 
-            $basePrice = $product->price ?? 0;
-            $variantStock = $product->stock_quantity ?? 0;
+            $basePrice =$product->price ?? 0;
+            $variantStock =$product->stock_quantity ?? 0;
             $variantImage = (!empty($product->pictures) && is_array($product->pictures)) ? asset('storage/' . $product->pictures[0]) : null;
 
             if ($item->variant && isset($product->variants['items'])) {
-                foreach ($product->variants['items'] as $v) {
-                    if ($v['name'] === $item->variant) {
-                        if (!$item->sub_variant) {
-                            $basePrice = $v['price'] ?? $basePrice;
+                foreach ($product->variants['items'] as$v) {
+                    if ($v['name'] ===$item->variant) {
+                        if (!$item->sub_variant) {$basePrice = $v['price'] ?? $basePrice;
                             $variantStock = $v['stock'] ?? $variantStock;
-                            $variantImage = (isset($v['image']) && $v['image']) ? asset('storage/' . $v['image']) : $variantImage;
+                            $variantImage = (isset($v['image']) &&$v['image']) ? asset('storage/' . $v['image']) :$variantImage;
                         } else {
                             if (isset($v['subs'])) {
-                                foreach ($v['subs'] as $sub) {
-                                    if ($sub['name'] === $item->sub_variant) {
-                                        $basePrice = $sub['price'] ?? $v['price'] ?? $basePrice;
+                                foreach ($v['subs'] as$sub) {
+                                    if ($sub['name'] ===$item->sub_variant) {
+                                        $basePrice =$sub['price'] ?? $v['price'] ?? $basePrice;
                                         $variantStock = $sub['stock'] ?? $variantStock;
-                                        $variantImage = (isset($sub['image']) && $sub['image']) ? asset('storage/' . $sub['image']) : ((isset($v['image']) && $v['image']) ? asset('storage/' . $v['image']) : $variantImage);
+                                        $variantImage = (isset($sub['image']) && $sub['image']) ? asset('storage/' . $sub['image']) : ((isset($v['image']) &&$v['image']) ? asset('storage/' . $v['image']) :$variantImage);
                                     }
                                 }
                             }
@@ -40,14 +38,13 @@
                 }
             }
 
-            $itemPrice = $basePrice;
+            $itemPrice =$basePrice;
             if (($product->discount ?? 0) > 0) {
-                $itemPrice = $itemPrice - ($itemPrice * ($product->discount / 100));
+                $itemPrice =$itemPrice - ($itemPrice * ($product->discount / 100));
             }
 
-            $safeQuantity = min($item->quantity, max(1, $variantStock));
-            if ($variantStock <= 0) {
-                $safeQuantity = 0;
+            $safeQuantity = min($item->quantity, max(1,$variantStock));
+            if ($variantStock <= 0) {$safeQuantity = 0;
             }
 
             $alpineItems[] = [
@@ -72,6 +69,21 @@
     x-data="{
         items: @js($alpineItems),
         totalAmount: {{ $totalAmount }},
+
+        init() {
+            @if(auth()->check())
+            if (typeof window.Echo !== 'undefined') {
+                window.Echo.private('cart.{{ auth()->id() }}')
+                    .listen('.CartQuantityUpdated', (e) => {
+                        this.syncFromEvent({
+                            id: e.cart_id,
+                            user_id: e.user_id,
+                            quantity: e.quantity
+                        });
+                    });
+            }
+            @endif
+        },
 
         calculateTotal() {
             let newTotal = this.items.reduce((sum, i) => {

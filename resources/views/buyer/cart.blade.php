@@ -80,6 +80,25 @@
 
 <div 
     x-data="cartPageManager(@js($initialAlpineData))" 
+    @if(auth()->check())
+    x-init="
+        if (typeof window.Echo !== 'undefined') {
+            window.Echo.private('cart.{{ auth()->id() }}')
+                .listen('.CartQuantityUpdated', (e) => {
+                    let item = items.find(i => i.id === e.cart_id);
+                    if (item && item.quantity !== e.quantity) {
+                        item.quantity = e.quantity;
+                    }
+                });
+        }
+    "
+    @endif
+    @cart-updated.window="
+        let item = items.find(i => i.id === $event.detail.id);
+        if (item && item.quantity !== $event.detail.quantity) {
+            item.quantity = $event.detail.quantity;
+        }
+    "
     class="min-h-screen bg-surface-subtle/40 pb-16 lg:pb-20 pt-4"
 >
     <!-- Wider Container -->
