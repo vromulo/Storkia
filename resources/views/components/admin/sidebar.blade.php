@@ -21,7 +21,14 @@
 
     <!-- Navigation Links -->
     <nav x-data="{ 
-        activeDropdown: '{{ request()->is('admin/applications*') ? 'applications' : (request()->is('admin/users*') ? 'users' : (request()->is('admin/compliance*') ? 'compliance' : (request()->is('admin/complaints*') ? 'complaints' : (request()->is('admin/reports*') ? 'reports' : (request()->is('admin/settings*') ? 'settings' : null))))) }}' 
+        activeDropdown: '{{ match(true) {
+            request()->is('admin/applications*') => 'applications',
+            request()->is('admin/users*') => 'users',
+            request()->is('admin/complaints*') => 'complaints',
+            request()->is('admin/reports*') => 'reports',
+            request()->is('admin/settings*') => 'settings',
+            default => null,
+        } }}'
     }" class="flex-1 overflow-y-auto overflow-x-hidden p-3 space-y-1.5 custom-scrollbar">
 
         <!-- Dashboard -->
