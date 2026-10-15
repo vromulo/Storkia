@@ -22,17 +22,17 @@
         <div class="mobile-view flex-col items-center justify-center h-screen w-screen px-4 sm:px-6 py-8 z-50 relative overflow-y-auto">
             <div class="bg-surface/95 backdrop-blur-xl rounded-3xl shadow-2xl shadow-black/10 border border-border-subtle w-full max-w-md p-6 sm:p-8 text-center flex flex-col items-center">
     
-                <div class="w-20 h-20 bg-brand-light/40 text-primary-dark rounded-full flex items-center justify-center mb-5 shadow-inner">
+                <div class="w-20 h-20 bg-brand-light/40 text-primary rounded-full flex items-center justify-center mb-5 shadow-inner">
                     <svg class="w-10 h-10" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
                     </svg>
                 </div>
     
-                <h2 class="text-2xl sm:text-3xl font-extrabold text-primary-dark mb-4 tracking-tight">Desktop Only</h2>
+                <h2 class="text-2xl sm:text-3xl font-extrabold text-primary mb-4 tracking-tight">Desktop Only</h2>
     
                 <div class="bg-brand-light/20 border border-border-subtle rounded-2xl p-5 mb-8 w-full shadow-sm">
                     <p class="text-text-main text-sm sm:text-base leading-relaxed font-medium">
-                        You are accessing an <span class="font-bold text-primary-dark">Administrative Account</span>.
+                        You are accessing an <span class="font-bold text-primary">Administrative Account</span>.
                         <br><br>
                         <span class="text-text-muted">Please log in from a computer to access this dashboard interface.</span>
                     </p>

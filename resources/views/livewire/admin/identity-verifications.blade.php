@@ -1,7 +1,7 @@
 <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 w-full py-6">
     <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-8">
         <div>
-            <h1 class="text-2xl sm:text-3xl font-bold text-primary-dark">Buyer Identity Verifications</h1>
+            <h1 class="text-2xl sm:text-3xl font-bold text-primary">Buyer Identity Verifications</h1>
             <p class="text-text-muted text-xs sm:text-sm mt-1">Review government ID proofs and verify customer identities.</p>
         </div>
         <div class="w-full md:w-72">
@@ -67,7 +67,7 @@
         <div class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs">
             <div class="bg-surface rounded-3xl max-w-2xl w-full p-6 shadow-2xl border border-border-subtle space-y-5">
                 <div class="flex items-center justify-between border-b border-border-subtle pb-3">
-                    <h3 class="font-bold text-base text-primary-dark">Identity Verification - {{ $currentItem->user->first_name }} {{ $currentItem->user->last_name }}</h3>
+                    <h3 class="font-bold text-base text-primary">Identity Verification - {{ $currentItem->user->first_name }} {{ $currentItem->user->last_name }}</h3>
                     <button type="button" wire:click="$set('detailModalOpen', false)" class="text-text-muted hover:text-danger">&times;</button>
                 </div>
                 <div class="grid grid-cols-2 gap-4 text-xs">

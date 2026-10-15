@@ -3,7 +3,7 @@
     <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-8">
         <div>
             <div class="flex items-center gap-3">
-                <h1 class="text-2xl sm:text-3xl font-bold text-primary-dark">Seller Applications</h1>
+                <h1 class="text-2xl sm:text-3xl font-bold text-primary">Seller Applications</h1>
             </div>
             <p class="text-text-muted text-xs sm:text-sm mt-1">Review, inspect documents, and manage seller onboardings.</p>
         </div>
@@ -89,7 +89,7 @@
             <div class="bg-surface rounded-3xl max-w-3xl w-full p-6 sm:p-8 shadow-2xl border border-border-subtle max-h-[90vh] overflow-y-auto space-y-6 my-auto">
                 <div class="flex items-center justify-between border-b border-border-subtle pb-4">
                     <div>
-                        <h2 class="text-xl font-bold text-primary-dark">{{ $currentApp->business_name }}</h2>
+                        <h2 class="text-xl font-bold text-primary">{{ $currentApp->business_name }}</h2>
                         <p class="text-xs text-text-muted">Application Revision v{{ $currentApp->version }} • Submitted {{ $currentApp->created_at->format('M d, Y h:i A') }}</p>
                     </div>
                     <button type="button" wire:click="$set('detailModalOpen', false)" class="text-text-muted hover:text-danger p-1">
@@ -182,7 +182,7 @@
         <div class="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/70 backdrop-blur-xs">
             <div class="bg-surface rounded-3xl max-w-4xl w-full p-4 sm:p-6 shadow-2xl border border-border-subtle flex flex-col h-[85vh]">
                 <div class="flex items-center justify-between pb-3 border-b border-border-subtle">
-                    <h3 class="font-bold text-sm text-primary-dark truncate">{{ $docModalTitle }}</h3>
+                    <h3 class="font-bold text-sm text-primary truncate">{{ $docModalTitle }}</h3>
                     <div class="flex items-center gap-2">
                         <a href="{{ $docModalUrl }}" target="_blank" class="text-xs font-bold text-primary hover:underline px-2 py-1">Open in Tab</a>
                         <button type="button" wire:click="closeDocModal" class="p-1 rounded-lg hover:bg-surface-subtle text-text-muted hover:text-text-main cursor-pointer">

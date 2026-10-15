@@ -2,7 +2,7 @@
     <!-- Header -->
     <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-8">
         <div>
-            <h1 class="text-2xl sm:text-3xl font-bold text-primary-dark">Seller Compliance</h1>
+            <h1 class="text-2xl sm:text-3xl font-bold text-primary">Seller Compliance</h1>
             <p class="text-text-muted text-xs sm:text-sm mt-1">Review catalog submissions, verify variant details, and enforce listing compliance.</p>
         </div>
         <div class="w-full md:w-72">
