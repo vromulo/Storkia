@@ -11,17 +11,19 @@ Route::middleware('guest')->group(function () {
     Route::get('/seller/register', [AuthController::class, 'showRegister'])->name('seller.register');
 });
 
-Route::middleware('auth')->group(function () {
+// Authenticated Seller Routes (Strictly Restricted to Role: Seller)
+Route::middleware(['auth', 'role:Seller'])->group(function () {
+    // Dashboard & Status Gate
     Route::get('/seller/dashboard', [DashboardController::class, 'index'])->name('seller.seller-dashboard');
     Route::get('/seller/reapply', [DashboardController::class, 'showReapply'])->name('seller.reapply');
 
+    // Approved Seller Operations
     Route::prefix('seller')->name('seller.')->middleware('seller.approved')->group(function () {
         Route::get('/products', [ProductController::class, 'index'])->name('products.index');
         Route::get('/products/create', [ProductController::class, 'create'])->name('products.create');
         Route::post('/products', [ProductController::class, 'store'])->name('products.store');
         Route::put('/products/{product}', [ProductController::class, 'update'])->name('products.update');
         Route::delete('/products/{product}/archive', [ProductController::class, 'archive'])->name('products.archive');
-
         Route::get('/products/inventory', [ProductController::class, 'inventory'])->name('products.inventory');
         Route::get('/products/archived', [ProductController::class, 'archived'])->name('products.archived');
         Route::patch('/products/{id}/unarchive', [ProductController::class, 'unarchive'])->name('products.unarchive');

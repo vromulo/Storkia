@@ -99,14 +99,26 @@
                     @endguest
 
                     @auth
-                        <!-- Direct Link to Personal Center -->
-                        <a href="{{ route('user.account') }}" 
-                        class="flex items-center text-text-main hover:text-primary transition-colors cursor-pointer focus:outline-none"
-                        aria-label="Personal Center">
-                            <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-                            </svg>
-                        </a>
+                        <!-- Role-Aware Profile Direct Link -->
+                        @if(auth()->user()->role === 'Buyer')
+                            <a href="{{ route('user.account') }}" class="flex items-center text-text-main hover:text-primary transition-colors cursor-pointer focus:outline-none" aria-label="Personal Center">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                                </svg>
+                            </a>
+                        @elseif(auth()->user()->role === 'Seller')
+                            <a href="{{ route('seller.seller-dashboard') }}" class="flex items-center text-text-main hover:text-primary transition-colors cursor-pointer focus:outline-none" title="Seller Portal">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                                </svg>
+                            </a>
+                        @elseif(auth()->user()->role === 'Logistics')
+                            <a href="{{ route('logistics.logistics-dashboard') }}" class="flex items-center text-text-main hover:text-primary transition-colors cursor-pointer focus:outline-none" title="Logistics Operations">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                                </svg>
+                            </a>
+                        @endif
                     @endauth
                     
                     <div x-show="open" x-cloak class="absolute right-0 top-full mt-2 w-48 bg-surface border border-border-subtle rounded-xl shadow-xl z-50 overflow-hidden">
@@ -119,59 +131,67 @@
                                     <p class="text-xs font-bold text-text-main truncate">
                                         {{ auth()->user()->first_name }} {{ auth()->user()->last_name }}
                                     </p>
-                                    <div class="shrink-0 text-warning" title="Notice">
-                                        <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4 fill-none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
-                                            <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v4m0 4h.01M12 3a9 9 0 100 18 9 9 0 000-18z" />
-                                        </svg>
-                                    </div>
+                                    <span class="text-[10px] font-bold px-1.5 py-0.5 rounded bg-primary/10 text-primary uppercase">
+                                        {{ auth()->user()->role }}
+                                    </span>
                                 </div>
 
-                                <a href="{{ route('user.account-management') }}" class="block px-3 py-2 text-xs font-medium text-text-main rounded-lg hover:bg-surface-subtle hover:text-primary transition-colors">My Account</a>
-                                <a href="#" class="block px-3 py-2 text-xs font-medium text-text-main rounded-lg hover:bg-surface-subtle hover:text-primary transition-colors">My Orders</a>
-                                <a href="{{ route('user.messages.buyer-messages') }}" class="block px-3 py-2 text-xs font-medium text-text-main rounded-lg hover:bg-surface-subtle hover:text-primary transition-colors">My Messages</a>
-                                <a href="#" class="block px-3 py-2 text-xs font-medium text-text-main rounded-lg hover:bg-surface-subtle hover:text-primary transition-colors">My Vouchers</a>
-                                <a href="#" class="block px-3 py-2 text-xs font-medium text-text-main rounded-lg hover:bg-surface-subtle hover:text-primary transition-colors">Wishlist</a>
+                                @if(auth()->user()->role === 'Buyer')
+                                    <a href="{{ route('user.account-management') }}" class="block px-3 py-2 text-xs font-medium text-text-main rounded-lg hover:bg-surface-subtle hover:text-primary transition-colors">My Account</a>
+                                    <a href="{{ route('user.orders') }}" class="block px-3 py-2 text-xs font-medium text-text-main rounded-lg hover:bg-surface-subtle hover:text-primary transition-colors">My Orders</a>
+                                    <a href="{{ route('user.messages.buyer-messages') }}" class="block px-3 py-2 text-xs font-medium text-text-main rounded-lg hover:bg-surface-subtle hover:text-primary transition-colors">My Messages</a>
+                                    <a href="{{ route('user.coupons') }}" class="block px-3 py-2 text-xs font-medium text-text-main rounded-lg hover:bg-surface-subtle hover:text-primary transition-colors">My Vouchers</a>
+                                    <a href="{{ route('user.wishlist') }}" class="block px-3 py-2 text-xs font-medium text-text-main rounded-lg hover:bg-surface-subtle hover:text-primary transition-colors">Wishlist</a>
+                                @elseif(auth()->user()->role === 'Seller')
+                                    <a href="{{ route('seller.seller-dashboard') }}" class="block px-3 py-2 text-xs font-bold text-primary rounded-lg hover:bg-surface-subtle transition-colors">Seller Dashboard</a>
+                                    <a href="{{ route('seller.products.index') }}" class="block px-3 py-2 text-xs font-medium text-text-main rounded-lg hover:bg-surface-subtle hover:text-primary transition-colors">Products Catalog</a>
+                                    <a href="{{ route('seller.messages.seller-messages') }}" class="block px-3 py-2 text-xs font-medium text-text-main rounded-lg hover:bg-surface-subtle hover:text-primary transition-colors">Customer Messages</a>
+                                @elseif(auth()->user()->role === 'Logistics')
+                                    <a href="{{ route('logistics.logistics-dashboard') }}" class="block px-3 py-2 text-xs font-bold text-primary rounded-lg hover:bg-surface-subtle transition-colors">Logistics Operations</a>
+                                @endif
 
                                 <hr class="border-border-subtle my-1 mx-2">
 
                                 <form method="POST" action="{{ route('logout') }}" class="m-0">
                                     @csrf
-                                    <button type="submit" class="w-full text-left px-3 py-2 text-xs font-bold text-danger rounded-lg hover:bg-danger/10 transition-colors">Logout</button>
+                                    <button type="submit" class="w-full text-left px-3 py-2 text-xs font-bold text-danger rounded-lg hover:bg-danger/10 transition-colors cursor-pointer">Logout</button>
                                 </form>
                             @endauth
                         </div>
                     </div>
                 </div>
 
-                <!-- Cart Icon Wrapper with Hover Dropdown -->
-                <div 
-                    x-data="{ cartOpen: false, cartTimer: null }"
-                    @mouseenter="clearTimeout(cartTimer); cartOpen = true"
-                    @mouseleave="cartTimer = setTimeout(() => { cartOpen = false }, 250)"
-                    class="relative flex items-center h-full"
-                >
-                    <a href="{{ route('cart.index') }}" class="relative flex items-center text-text-main hover:text-primary transition-colors" aria-label="Shopping Cart">
-                        <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z" />
-                        </svg>
-                        
-                        @auth
-                            @php
-                                $cartCount = \App\Models\Cart::where('user_id', auth()->id())->count();
-                            @endphp
+                <!-- Cart Icon -->
+                @if(!auth()->check() || auth()->user()->role === 'Buyer')
+                    <div 
+                        x-data="{ cartOpen: false, cartTimer: null }"
+                        @mouseenter="clearTimeout(cartTimer); cartOpen = true"
+                        @mouseleave="cartTimer = setTimeout(() => { cartOpen = false }, 250)"
+                        class="relative flex items-center h-full"
+                    >
+                        <a href="{{ route('cart.index') }}" class="relative flex items-center text-text-main hover:text-primary transition-colors" aria-label="Shopping Cart">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z" />
+                            </svg>
                             
-                            @if($cartCount > 0)
-                                <span class="absolute -top-1.5 -right-2 text-[10px] font-bold rounded-full h-4 w-4 flex items-center justify-center border border-surface bg-primary text-surface">
-                                    {{ $cartCount > 99 ? '99+' :$cartCount }}
-                                </span>
-                            @endif
-                        @endauth
-                    </a>
+                            @auth
+                                @php
+                                    $cartCount = \App\Models\Cart::where('user_id', auth()->id())->count();
+                                @endphp
+                                
+                                @if($cartCount > 0)
+                                    <span class="absolute -top-1.5 -right-2 text-[10px] font-bold rounded-full h-4 w-4 flex items-center justify-center border border-surface bg-primary text-surface">
+                                        {{ $cartCount > 99 ? '99+' :$cartCount }}
+                                    </span>
+                                @endif
+                            @endauth
+                        </a>
 
-                    <!-- Render Popover -->
-                    <x-storefront.cart-dropdown />
-                </div>
-
+                        <!-- Render Popover -->
+                        <x-storefront.cart-dropdown />
+                    </div>
+                @endif
+                
             </div>
         </div>
     </div>

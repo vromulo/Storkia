@@ -11,8 +11,8 @@ Route::middleware('guest')->group(function () {
     Route::get('/logistics/register', [AuthController::class, 'showRegister'])->name('logistics.register');
 });
 
-// Authenticated Logistics Routes
-Route::middleware('auth')->group(function () {
+// Authenticated Logistics Routes (Strictly Restricted to Role: Logistics)
+Route::middleware(['auth', 'role:Logistics'])->group(function () {
     // Dashboard & Status Gate
     Route::get('/logistics/dashboard', [DashboardController::class, 'index'])->name('logistics.logistics-dashboard');
     Route::get('/logistics/reapply', [DashboardController::class, 'showReapply'])->name('logistics.reapply');
