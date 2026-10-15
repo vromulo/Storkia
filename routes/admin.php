@@ -21,7 +21,7 @@ Route::prefix('admin')->name('admin.')->group(function () {
     // Admin Authenticated Routes
     Route::middleware('auth:admin')->group(function () {
         Route::post('/logout', [AuthController::class, 'logout'])->name('logout');
-        Route::view('/dashboard', 'admin.dashboard')->name('dashboard');
+        Route::get('/dashboard', \App\Livewire\Admin\Dashboard::class)->name('dashboard');
 
         // Applications Management
         Route::get('/applications/sellers', SellerApplications::class)->name('applications.sellers');
