@@ -6,13 +6,6 @@
 @section('option-content')
 <div x-data="addressManager({{ Js::from($addresses) }}, {{ Js::from($provinces) }})" class="space-y-8 pt-0 select-none">
 
-    <!-- Centered Header Title -->
-    <div class="text-center pt-2">
-        <h2 class="text-2xl sm:text-3xl font-extrabold text-text-main uppercase tracking-tight">
-            MY ADDRESS BOOK
-        </h2>
-    </div>
-
     <!-- Action Section: + ADD NEW ADDRESS Button -->
     <div class="pt-2 flex items-center justify-end">
         <button type="button"

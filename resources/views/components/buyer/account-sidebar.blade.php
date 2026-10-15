@@ -92,10 +92,6 @@
                        class="block px-3 py-2 rounded-lg font-medium transition-colors {{ request()->routeIs('user.addresses') ? 'bg-primary/10 text-primary font-bold' : 'text-text-muted hover:text-text-main hover:bg-surface-subtle' }}">
                         Address Book
                     </a>
-                    <a href="{{ route('user.change-password') }}"
-                       class="block px-3 py-2 rounded-lg font-medium transition-colors {{ request()->routeIs('user.change-password') ? 'bg-primary/10 text-primary font-bold' : 'text-text-muted hover:text-text-main hover:bg-surface-subtle' }}">
-                        Change Password
-                    </a>
                     <a href="{{ route('user.account-management') }}"
                        class="block px-3 py-2 rounded-lg font-medium transition-colors {{ request()->routeIs('user.account-management') ? 'bg-primary/10 text-primary font-bold' : 'text-text-muted hover:text-text-main hover:bg-surface-subtle' }}">
                         Account Management

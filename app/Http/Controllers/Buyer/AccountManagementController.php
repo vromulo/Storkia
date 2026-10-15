@@ -258,6 +258,67 @@ class AccountManagementController extends Controller
         ]);
     }
 
+    public function updatePhone(Request $request)
+    {
+        /** @var \App\Models\User $user */
+        $user = auth()->user();
+
+        // Normalize input digits
+        $cleanContact = preg_replace('/\D/', '', (string) $request->input('contact_no'));
+        if (str_starts_with($cleanContact, '63')) {
+            $cleanContact = substr($cleanContact, 2);
+        }
+        $cleanContact = ltrim($cleanContact, '0');
+
+        $request->merge(['clean_contact' => $cleanContact]);
+
+        $request->validate([
+            'clean_contact' => ['required', 'regex:/^9\d{9}$/'],
+        ], [
+            'clean_contact.required' => 'Please enter your phone number.',
+            'clean_contact.regex'    => 'Please enter a valid 10-digit mobile number starting with 9 (e.g., 912 345 6789).',
+        ]);
+
+        $formattedNumber = '+63' . $cleanContact;
+
+        // Check if phone number is already registered to another user
+        if (User::where('contact_no', $formattedNumber)->where('id', '!=', $user->id)->exists()) {
+            if ($request->wantsJson() || $request->ajax()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'This phone number is already registered to another account.',
+                    'errors'  => [
+                        'contact_no' => ['This phone number is already registered to another account.']
+                    ]
+                ], 422);
+            }
+
+            return back()->withErrors(['contact_no' => 'This phone number is already registered to another account.']);
+        }
+
+        $user->update([
+            'contact_no' => $formattedNumber,
+        ]);
+
+        // Raw-digit masking: 63912****789
+        $cleanForMask = preg_replace('/\D/', '', $formattedNumber);
+        $maskedPhone = substr($cleanForMask, 0, 5) . '****' . substr($cleanForMask, -3);
+
+        if ($request->wantsJson() || $request->ajax()) {
+            return response()->json([
+                'success'      => true,
+                'message'      => 'Phone number updated successfully.',
+                'phone'        => $formattedNumber,
+                'masked_phone' => $maskedPhone,
+                'raw_phone'    => $cleanContact,
+            ]);
+        }
+
+        return redirect()
+            ->route('user.account-management')
+            ->with('success', 'Phone number updated successfully.');
+    }
+
     /**
      * Verify the 6-digit OTP code to unlock password form
      */

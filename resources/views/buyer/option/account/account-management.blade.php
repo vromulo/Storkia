@@ -13,26 +13,52 @@
         $maskedEmail = substr($name, 0, 1) . str_repeat('*', max(strlen($name) - 2, 4)) . substr($name, -1) . '@' . $domain;
     }
     $passwordLastUpdated = $user->formattedPasswordLastUpdated();
+
+    // Phone formatting & initial state
+    $contact = $user->contact_no ?? '';
+    $cleanContact = preg_replace('/\D/', '', $contact);
+    if (str_starts_with($cleanContact, '63')) {
+        $cleanContact = substr($cleanContact, 2);
+    }
+    $cleanContact = ltrim($cleanContact, '0');
+
+    $hasPhone = !empty($cleanContact);
+    $maskedContact = 'Not provided';
+    $formattedPhone = '';
+
+    if ($hasPhone) {
+        $fullDigits = '63' . $cleanContact;
+        if (strlen($fullDigits) >= 8) {
+            $maskedContact = substr($fullDigits, 0, 5) . '****' . substr($fullDigits, -3);
+        } else {
+            $maskedContact = $fullDigits;
+        }
+
+        $formattedPhone = substr($cleanContact, 0, 3);
+        if (strlen($cleanContact) > 3) {
+            $formattedPhone .= ' ' . substr($cleanContact, 3, 3);
+        }
+        if (strlen($cleanContact) > 6) {
+            $formattedPhone .= ' ' . substr($cleanContact, 6, 4);
+        }
+    }
 @endphp
 
 <div x-data="accountManager(
-    {{ $errors->hasAny(['first_name', 'last_name']) ? "'username'" : ($errors->has('email') ? "'email'" : 'null') }},
+    {{ $errors->hasAny(['first_name', 'last_name']) ? "'username'" : ($errors->has('email') ? "'email'" : ($errors->has('clean_contact') ? "'phone'" : 'null')) }},
     {
         first_name: @js($user->first_name ?? ''),
         last_name: @js($user->last_name ?? ''),
         full_name: @js($initialFullName),
         email: @js($rawEmail),
         masked_email: @js($maskedEmail),
-        password_last_updated: @js($passwordLastUpdated)
+        password_last_updated: @js($passwordLastUpdated),
+        phone_raw: @js($cleanContact),
+        formatted_phone: @js($formattedPhone),
+        masked_phone: @js($maskedContact),
+        has_phone: @js($hasPhone)
     }
 )" class="space-y-6 pt-0 select-none">
-
-    <!-- Header Title -->
-    <div class="pt-0 pb-2">
-        <h2 class="text-3xl sm:text-4xl font-semibold text-text-main tracking-tight">
-            Manage My Account
-        </h2>
-    </div>
 
     <!-- 1. Full Name Row -->
     <div class="transition-all duration-200"
@@ -54,8 +80,8 @@
             <div class="shrink-0 text-right leading-none">
                 <button type="button"
                         @click="toggle('username')"
-                        :disabled="isDimmed('username') || isSavingName || isSavingEmail || isSavingPassword"
-                        :class="(isDimmed('username') || isSavingName || isSavingEmail || isSavingPassword) ? 'pointer-events-none cursor-not-allowed' : 'cursor-pointer'"
+                        :disabled="isDimmed('username') || isSavingName || isSavingEmail || isSavingPassword || isSavingPhone"
+                        :class="(isDimmed('username') || isSavingName || isSavingEmail || isSavingPassword || isSavingPhone) ? 'pointer-events-none cursor-not-allowed' : 'cursor-pointer'"
                         class="text-sm font-light underline text-text-main hover:opacity-75 transition-opacity inline-block leading-none">
                     <span x-text="activeEdit === 'username' ? 'Cancel' : 'Edit'"></span>
                 </button>
@@ -151,8 +177,8 @@
             <div class="shrink-0 text-right leading-none">
                 <button type="button"
                         @click="toggle('email')"
-                        :disabled="isDimmed('email') || isSavingEmail || isSavingName || isSavingPassword"
-                        :class="(isDimmed('email') || isSavingEmail || isSavingName || isSavingPassword) ? 'pointer-events-none cursor-not-allowed' : 'cursor-pointer'"
+                        :disabled="isDimmed('email') || isSavingEmail || isSavingName || isSavingPassword || isSavingPhone"
+                        :class="(isDimmed('email') || isSavingEmail || isSavingName || isSavingPassword || isSavingPhone) ? 'pointer-events-none cursor-not-allowed' : 'cursor-pointer'"
                         class="text-sm font-light underline text-text-main hover:opacity-75 transition-opacity inline-block leading-none">
                     <span x-text="activeEdit === 'email' ? 'Cancel' : 'Edit'"></span>
                 </button>
@@ -202,102 +228,126 @@
 
     <hr class="border-border-subtle" />
 
-    <!-- 3. Phone Number -->
-    <div class="flex items-start justify-between gap-4 transition-all duration-200"
+    <!-- 3. Phone Number Row (Functional + Auto-Formatting + Add/Edit Toggle) -->
+    <div class="transition-all duration-200"
          :class="isDimmed('phone') ? 'opacity-40' : ''">
-        <div>
-            <h3 class="text-base sm:text-lg font-semibold text-text-main leading-none">
-                Phone Number
-            </h3>
-            @php
-                $contact = $user->contact_no ?? '';
-                $maskedContact = 'Not linked';
-                if ($contact) {
-                    $cleanContact = preg_replace('/\D/', '', $contact);
-                    if (strlen($cleanContact) >= 8) {
-                        $maskedContact = substr($cleanContact, 0, 5) . '****' . substr($cleanContact, -3);
-                    } else {
-                        $maskedContact = $contact;
-                    }
-                }
-            @endphp
-            <p class="text-sm text-text-muted font-normal tracking-wide mt-2">
-                {{ $maskedContact }}
-            </p>
+
+        <div class="flex items-start justify-between gap-4">
+            <div>
+                <h3 class="text-base sm:text-lg font-semibold text-text-main leading-none">
+                    Phone Number
+                </h3>
+
+                <!-- Subtitle: Shown only in edit/add state -->
+                <p x-show="activeEdit === 'phone'" x-cloak class="text-xs sm:text-sm text-text-muted mt-2">
+                    This will be used for account security purposes.
+                </p>
+
+                <!-- Value: Shown only in default state -->
+                <p x-show="activeEdit !== 'phone'" class="text-sm text-text-muted font-normal tracking-wide mt-2">
+                    <span x-text="hasPhone ? maskedPhone : 'Not provided'"></span>
+                </p>
+            </div>
+
+            <!-- Action Buttons: Verify (Non-clickable) | Add / Edit / Cancel -->
+            <div class="shrink-0 text-right flex items-center gap-2 leading-none">
+                <!-- Verify button only shown when phone exists and NOT in active edit state -->
+                <template x-if="hasPhone && activeEdit !== 'phone'">
+                    <div class="flex items-center gap-2 leading-none">
+                        <button type="button"
+                                tabindex="-1"
+                                :disabled="true"
+                                class="text-sm font-light underline text-text-main opacity-50 cursor-not-allowed pointer-events-none transition-opacity leading-none">
+                            Verify
+                        </button>
+                        <span class="text-text-muted text-xs font-light">|</span>
+                    </div>
+                </template>
+
+                <button type="button"
+                        @click="toggle('phone')"
+                        :disabled="isDimmed('phone') || isSavingName || isSavingEmail || isSavingPassword || isSavingPhone"
+                        :class="(isDimmed('phone') || isSavingName || isSavingEmail || isSavingPassword || isSavingPhone) ? 'pointer-events-none cursor-not-allowed' : 'cursor-pointer'"
+                        class="text-sm font-light underline text-text-main hover:opacity-75 transition-opacity inline-block leading-none">
+                    <span x-text="activeEdit === 'phone' ? 'Cancel' : (hasPhone ? 'Edit' : 'Add')"></span>
+                </button>
+            </div>
         </div>
-        <div class="shrink-0 text-right flex items-center gap-2 leading-none">
-            <button type="button"
-                    :disabled="isEditing() || isSavingName || isSavingEmail || isSavingPassword"
-                    :class="(isEditing() || isSavingName || isSavingEmail || isSavingPassword) ? 'pointer-events-none cursor-not-allowed' : 'cursor-pointer hover:opacity-75'"
-                    class="text-sm font-light underline text-text-main transition-opacity leading-none">
-                Verify
-            </button>
-            <span class="text-text-muted text-xs font-light">|</span>
-            <button type="button"
-                    @click="toggle('phone')"
-                    :disabled="isDimmed('phone') || isSavingName || isSavingEmail || isSavingPassword"
-                    :class="(isDimmed('phone') || isSavingName || isSavingEmail || isSavingPassword) ? 'pointer-events-none cursor-not-allowed' : 'cursor-pointer'"
-                    class="text-sm font-light underline text-text-main hover:opacity-75 transition-opacity inline-block leading-none">
-                <span x-text="activeEdit === 'phone' ? 'Cancel' : 'Edit'"></span>
-            </button>
+
+        <!-- Phone Number Form (Inline AJAX + 3 Bouncing Dots) -->
+        <div x-show="activeEdit === 'phone'" x-cloak class="mt-4">
+            <form action="{{ route('user.account-management.update-phone') }}"
+                  method="POST"
+                  @submit.prevent="submitPhone($event)"
+                  class="space-y-4">
+                @csrf
+                @method('PATCH')
+
+                <div class="w-full">
+                    <div class="border rounded-xl p-3 bg-surface transition-colors flex items-center"
+                         :class="phoneErrors.phone ? 'border-danger' : 'border-neutral-400 focus-within:border-text-main'">
+                        <span class="text-base font-normal text-text-muted pr-2 select-none shrink-0">+63</span>
+                        <input type="tel"
+                               id="phone_number"
+                               name="contact_no"
+                               x-model="formattedPhone"
+                               @input="formatPhoneInput($event)"
+                               placeholder="9XX XXX XXXX"
+                               maxlength="12"
+                               required
+                               :disabled="isSavingPhone"
+                               class="w-full bg-transparent outline-none text-text-main text-base font-normal placeholder:text-text-muted/40 disabled:opacity-60">
+                    </div>
+                    <template x-if="phoneErrors.phone">
+                        <p class="text-danger text-xs mt-1.5 font-medium" x-text="phoneErrors.phone"></p>
+                    </template>
+                </div>
+
+                <!-- Save Action Button with 3 Bouncing Dots -->
+                <div class="pt-1">
+                    <button type="submit"
+                            :disabled="isSavingPhone"
+                            :class="isSavingPhone ? 'pointer-events-none opacity-80' : 'cursor-pointer active:scale-95'"
+                            class="h-10 w-20 flex items-center justify-center bg-text-main hover:bg-dark-grey text-surface font-semibold text-sm rounded-xl transition-colors select-none">
+                        <span x-show="!isSavingPhone">Save</span>
+                        <span x-show="isSavingPhone" x-cloak class="inline-flex items-center justify-center gap-1">
+                            <span class="w-1.5 h-1.5 bg-surface rounded-full animate-bounce" style="animation-delay: -0.32s;"></span>
+                            <span class="w-1.5 h-1.5 bg-surface rounded-full animate-bounce" style="animation-delay: -0.16s;"></span>
+                            <span class="w-1.5 h-1.5 bg-surface rounded-full animate-bounce"></span>
+                        </span>
+                    </button>
+                </div>
+            </form>
         </div>
     </div>
 
     <hr class="border-border-subtle" />
 
     <!-- 4. Identity Verification -->
-    @php
-        $verification = auth()->user()->identityVerification;
-        $verStatus = $verification ? $verification->status : 'not_started';
-    @endphp
     <div class="flex items-start justify-between gap-4 transition-all duration-200"
-         :class="typeof isDimmed === 'function' && isDimmed('identity') ? 'opacity-40' : ''">
+         :class="isDimmed('identity') ? 'opacity-40' : ''">
         <div>
             <h3 class="text-base sm:text-lg font-semibold text-text-main leading-none">
                 Identity Verification
             </h3>
             <p class="text-sm text-text-muted font-normal tracking-wide mt-2">
-                @if ($verStatus === 'verified')
-                    Verified
-                @elseif ($verStatus === 'pending')
-                    Pending Review
-                @elseif ($verStatus === 'failed')
-                    Failed to verify
-                @else
-                    Not started
-                @endif
+                Not started
             </p>
         </div>
         <div class="shrink-0 text-right leading-none">
-            @if ($verStatus === 'verified')
-                <span class="text-sm font-light text-text-muted/60 select-none cursor-default inline-block leading-none">
-                    Done
-                </span>
-            @elseif ($verStatus === 'pending')
-                <button type="button"
-                        disabled
-                        class="text-sm font-light underline text-text-muted/50 cursor-not-allowed select-none inline-block leading-none">
-                    Start
-                </button>
-            @elseif ($verStatus === 'failed')
-                <a href="{{ route('user.identity-verification') }}"
-                   :class="typeof isEditing === 'function' && isEditing() ? 'pointer-events-none cursor-not-allowed' : 'cursor-pointer'"
-                   class="text-sm font-light underline text-text-main hover:opacity-75 transition-opacity inline-block leading-none">
-                    Re-verify
-                </a>
-            @else
-                <a href="{{ route('user.identity-verification') }}"
-                   :class="typeof isEditing === 'function' && isEditing() ? 'pointer-events-none cursor-not-allowed' : 'cursor-pointer'"
-                   class="text-sm font-light underline text-text-main hover:opacity-75 transition-opacity inline-block leading-none">
-                    Start
-                </a>
-            @endif
+            <button type="button"
+                    @click="toggle('identity')"
+                    :disabled="isDimmed('identity') || isSavingName || isSavingEmail || isSavingPassword || isSavingPhone"
+                    :class="(isDimmed('identity') || isSavingName || isSavingEmail || isSavingPassword || isSavingPhone) ? 'pointer-events-none cursor-not-allowed' : 'cursor-pointer'"
+                    class="text-sm font-light underline text-text-main hover:opacity-75 transition-opacity inline-block leading-none">
+                <span x-text="activeEdit === 'identity' ? 'Cancel' : 'Start'"></span>
+            </button>
         </div>
     </div>
 
     <hr class="border-border-subtle" />
 
-    <!-- 5. Change Password -->
+    <!-- 5. Password Row -->
     <div class="transition-all duration-200"
          :class="isDimmed('password') ? 'opacity-40' : ''">
 
@@ -306,8 +356,7 @@
                 <h3 class="text-base sm:text-lg font-semibold text-text-main leading-none">
                     Password
                 </h3>
-                <!-- Status text hidden when editing/creating new password -->
-                <p x-show="activeEdit !== 'password'" class="text-sm text-text-muted font-normal tracking-wide mt-2">
+                <p class="text-sm text-text-muted font-normal tracking-wide mt-2">
                     <span x-text="passwordLastUpdated"></span>
                 </p>
             </div>
@@ -315,89 +364,95 @@
             <div class="shrink-0 text-right leading-none">
                 <button type="button"
                         @click="handlePasswordClick()"
-                        :disabled="isDimmed('password') || isSendingPasswordCode || isSavingName || isSavingEmail || isSavingPassword"
-                        :class="(isDimmed('password') || isSendingPasswordCode || isSavingName || isSavingEmail || isSavingPassword) 
-                            ? 'opacity-60 cursor-not-allowed pointer-events-none' 
-                            : 'cursor-pointer hover:opacity-75'"
-                        class="text-sm font-light underline text-text-main transition-all inline-flex items-center gap-1.5 leading-none">
-                    
-                    <!-- Normal Update / Cancel Text -->
-                    <span x-show="!isSendingPasswordCode" x-text="activeEdit === 'password' ? 'Cancel' : 'Update'"></span>
-
-                    <!-- Sending Code State  -->
-                    <span x-show="isSendingPasswordCode" x-cloak class="no-underline">
-                        Sending code...
-                    </span>
+                        :disabled="isDimmed('password') || isSavingName || isSavingEmail || isSavingPassword || isSavingPhone"
+                        :class="(isDimmed('password') || isSavingName || isSavingEmail || isSavingPassword || isSavingPhone) ? 'pointer-events-none cursor-not-allowed' : 'cursor-pointer'"
+                        class="text-sm font-light underline text-text-main hover:opacity-75 transition-opacity inline-block leading-none">
+                    <span x-text="activeEdit === 'password' ? 'Cancel' : 'Update'"></span>
                 </button>
             </div>
         </div>
 
-        <!-- Vertically Stacked New Password & Confirm Password Form -->
-        <div x-show="activeEdit === 'password'" x-cloak class="mt-5">
+        <!-- Password Form -->
+        <div x-show="activeEdit === 'password'" x-cloak class="mt-4">
             <form action="{{ route('user.account-management.update-password') }}"
                   method="POST"
                   @submit.prevent="submitPassword($event)"
-                  class="space-y-4 max-w-xl"
-                  x-data="{ showNewPass: false, showConfirmPass: false }">
+                  class="space-y-4">
                 @csrf
                 @method('PATCH')
 
-                <!-- 1. New Password Field (Stacked with Label Outside) -->
-                <div>
-                    <label for="new_password" class="block text-xs font-semibold text-text-main mb-1.5">
-                        New password
-                    </label>
-                    <div class="relative border border-neutral-400 focus-within:border-text-main rounded-xl p-3 bg-surface transition-colors flex items-center"
-                         :class="passwordErrors.password ? 'border-danger' : ''">
-                        <input :type="showNewPass ? 'text' : 'password'"
-                               id="new_password"
-                               name="password"
-                               x-model="newPassword"
-                               @input="validatePasswordClientSide()"
-                               required
-                               :disabled="isSavingPassword"
-                               class="w-full bg-transparent outline-none text-text-main text-base font-normal pr-8 disabled:opacity-60">
-                        <button type="button" 
-                                @click="showNewPass = !showNewPass" 
-                                class="absolute right-3.5 text-text-muted hover:text-text-main transition-colors focus:outline-none cursor-pointer">
-                            <svg x-show="!showNewPass" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
-                            <svg x-show="showNewPass" x-cloak class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l18 18"/></svg>
-                        </button>
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3.5" x-data="{ showNewPass: false, showConfirmPass: false }">
+                    <div>
+                        <div class="relative border rounded-xl p-3 bg-surface transition-colors"
+                             :class="passwordErrors.password ? 'border-danger' : 'border-neutral-400 focus-within:border-text-main'">
+                            <label for="new_password" class="block text-xs font-normal text-text-muted">
+                                New password
+                            </label>
+                            <input :type="showNewPass ? 'text' : 'password'"
+                                   id="new_password"
+                                   name="password"
+                                   x-model="newPassword"
+                                   @input="validatePasswordClientSide()"
+                                   required
+                                   placeholder="New password"
+                                   :disabled="isSavingPassword"
+                                   class="w-full bg-transparent outline-none text-text-main text-base font-normal pt-1 pr-8 placeholder:text-text-muted/40 disabled:opacity-60">
+                            <button type="button" 
+                                    @click="showNewPass = !showNewPass" 
+                                    class="absolute right-3 top-6 text-text-muted hover:text-text-main transition-colors focus:outline-none cursor-pointer">
+                                <svg x-show="!showNewPass" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
+                                <svg x-show="showNewPass" x-cloak class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l18 18"/></svg>
+                            </button>
+                        </div>
+                        <template x-if="passwordErrors.password">
+                            <p class="text-danger text-xs mt-1.5 font-medium" x-text="passwordErrors.password"></p>
+                        </template>
+
+                        <div class="mt-2 grid grid-cols-2 gap-1.5 text-[11px] text-text-muted">
+                            <span class="flex items-center gap-1" :class="newPassword.length >= 8 ? 'text-success font-semibold' : ''">
+                                <span x-text="newPassword.length >= 8 ? '✓' : '•'"></span> 8+ characters
+                            </span>
+                            <span class="flex items-center gap-1" :class="/[A-Z]/.test(newPassword) ? 'text-success font-semibold' : ''">
+                                <span x-text="/[A-Z]/.test(newPassword) ? '✓' : '•'"></span> 1 uppercase
+                            </span>
+                            <span class="flex items-center gap-1" :class="/[0-9]/.test(newPassword) ? 'text-success font-semibold' : ''">
+                                <span x-text="/[0-9]/.test(newPassword) ? '✓' : '•'"></span> 1 number
+                            </span>
+                            <span class="flex items-center gap-1" :class="/[\W_]/.test(newPassword) ? 'text-success font-semibold' : ''">
+                                <span x-text="/[\W_]/.test(newPassword) ? '✓' : '•'"></span> 1 special symbol
+                            </span>
+                        </div>
                     </div>
-                    <template x-if="passwordErrors.password">
-                        <p class="text-danger text-xs mt-1.5 font-medium" x-text="passwordErrors.password"></p>
-                    </template>
+
+                    <div>
+                        <div class="relative border rounded-xl p-3 bg-surface transition-colors"
+                             :class="passwordErrors.password_confirmation ? 'border-danger' : 'border-neutral-400 focus-within:border-text-main'">
+                            <label for="confirm_password" class="block text-xs font-normal text-text-muted">
+                                Confirm password
+                            </label>
+                            <input :type="showConfirmPass ? 'text' : 'password'"
+                                   id="confirm_password"
+                                   name="password_confirmation"
+                                   x-model="confirmPassword"
+                                   @input="validatePasswordClientSide()"
+                                   required
+                                   placeholder="Confirm password"
+                                   :disabled="isSavingPassword"
+                                   class="w-full bg-transparent outline-none text-text-main text-base font-normal pt-1 pr-8 placeholder:text-text-muted/40 disabled:opacity-60">
+                            <button type="button" 
+                                    @click="showConfirmPass = !showConfirmPass" 
+                                    class="absolute right-3 top-6 text-text-muted hover:text-text-main transition-colors focus:outline-none cursor-pointer">
+                                <svg x-show="!showConfirmPass" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
+                                <svg x-show="showConfirmPass" x-cloak class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l18 18"/></svg>
+                            </button>
+                        </div>
+                        <template x-if="passwordErrors.password_confirmation">
+                            <p class="text-danger text-xs mt-1.5 font-medium" x-text="passwordErrors.password_confirmation"></p>
+                        </template>
+                    </div>
                 </div>
 
-                <!-- 2. Confirm Password Field (Stacked with Label Outside) -->
-                <div>
-                    <label for="confirm_password" class="block text-xs font-semibold text-text-main mb-1.5">
-                        Confirm password
-                    </label>
-                    <div class="relative border border-neutral-400 focus-within:border-text-main rounded-xl p-3 bg-surface transition-colors flex items-center"
-                         :class="passwordErrors.password_confirmation ? 'border-danger' : ''">
-                        <input :type="showConfirmPass ? 'text' : 'password'"
-                               id="confirm_password"
-                               name="password_confirmation"
-                               x-model="confirmPassword"
-                               @input="validatePasswordClientSide()"
-                               required
-                               :disabled="isSavingPassword"
-                               class="w-full bg-transparent outline-none text-text-main text-base font-normal pr-8 disabled:opacity-60">
-                        <button type="button" 
-                                @click="showConfirmPass = !showConfirmPass" 
-                                class="absolute right-3.5 text-text-muted hover:text-text-main transition-colors focus:outline-none cursor-pointer">
-                            <svg x-show="!showConfirmPass" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
-                            <svg x-show="showConfirmPass" x-cloak class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l18 18"/></svg>
-                        </button>
-                    </div>
-                    <template x-if="passwordErrors.password_confirmation">
-                        <p class="text-danger text-xs mt-1.5 font-medium" x-text="passwordErrors.password_confirmation"></p>
-                    </template>
-                </div>
-
-                <!-- Update Password Button with 3 Bouncing Dots -->
-                <div class="pt-2">
+                <div class="pt-1">
                     <button type="submit"
                             :disabled="isSavingPassword"
                             :class="isSavingPassword ? 'pointer-events-none opacity-80' : 'cursor-pointer active:scale-95'"
@@ -418,7 +473,7 @@
 
     <!-- 6. Delete Account Row -->
     <div class="flex items-start justify-between transition-all duration-200"
-         :class="(isEditing() || isSavingName || isSavingEmail || isSavingPassword) ? 'opacity-40 pointer-events-none cursor-not-allowed' : 'group cursor-pointer hover:opacity-80'">
+         :class="(isEditing() || isSavingName || isSavingEmail || isSavingPassword || isSavingPhone) ? 'opacity-40 pointer-events-none cursor-not-allowed' : 'group cursor-pointer hover:opacity-80'">
         <div>
             <h3 class="text-base sm:text-lg font-semibold text-text-main leading-none">
                 Delete Account
@@ -434,7 +489,7 @@
         </div>
     </div>
 
-    <!-- Reusable OTP Modal: Used for Email Verification -->
+    <!-- Reusable Email OTP Modal -->
     <x-ui.otp-modal 
         show="showOtpModal" 
         close="closeOtpModal()" 
@@ -451,7 +506,7 @@
         inputId="otp_hidden_input" 
     />
 
-    <!-- Reusable OTP Modal: Used for Password Change Verification -->
+    <!-- Reusable Password OTP Modal -->
     <x-ui.otp-modal 
         show="showPasswordOtpModal" 
         close="closePasswordOtpModal()" 

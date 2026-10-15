@@ -2,24 +2,36 @@ export default function accountManager(initialEdit = null, userData = {}) {
     return {
         activeEdit: initialEdit,
 
-        // ----------------------------------------------------
-        // Name State
-        // ----------------------------------------------------
+        // --- 1. Full Name State ---
         isSavingName: false,
         firstName: userData.first_name || '',
         lastName: userData.last_name || '',
         fullName: userData.full_name || '',
         nameErrors: { first_name: null, last_name: null },
 
-        // ----------------------------------------------------
-        // Email State
-        // ----------------------------------------------------
+        // --- 2. Email State ---
         isSavingEmail: false,
         email: userData.email || '',
         maskedEmail: userData.masked_email || '',
         emailErrors: { email: null },
 
-        // Email OTP Modal State
+        // --- 3. Phone State ---
+        isSavingPhone: false,
+        phoneRaw: userData.phone_raw || '',
+        formattedPhone: userData.formatted_phone || '',
+        maskedPhone: userData.masked_phone || '',
+        hasPhone: Boolean(userData.has_phone),
+        phoneErrors: { phone: null },
+
+        // --- 4. Password State ---
+        isSavingPassword: false,
+        passwordLastUpdated: userData.password_last_updated || 'Never updated',
+        passwordUnlockToken: null,
+        newPassword: '',
+        confirmPassword: '',
+        passwordErrors: { password: null, password_confirmation: null },
+
+        // --- Email OTP Modal State ---
         showOtpModal: false,
         otpCode: '',
         otpMaskedEmail: '',
@@ -29,18 +41,7 @@ export default function accountManager(initialEdit = null, userData = {}) {
         resendCooldown: 0,
         timerInterval: null,
 
-        // ----------------------------------------------------
-        // Password State
-        // ----------------------------------------------------
-        isSendingPasswordCode: false,
-        isSavingPassword: false,
-        passwordLastUpdated: userData.password_last_updated || 'Never updated',
-        newPassword: '',
-        confirmPassword: '',
-        passwordUnlockToken: null,
-        passwordErrors: { password: null, password_confirmation: null },
-
-        // Password OTP Modal State
+        // --- Password OTP Modal State ---
         showPasswordOtpModal: false,
         passwordOtpCode: '',
         passwordOtpMaskedEmail: '',
@@ -50,9 +51,6 @@ export default function accountManager(initialEdit = null, userData = {}) {
         passwordResendCooldown: 0,
         passwordTimerInterval: null,
 
-        // ----------------------------------------------------
-        // Toggle & View State Helpers
-        // ----------------------------------------------------
         toggle(field) {
             this.activeEdit = (this.activeEdit === field) ? null : field;
             if (this.activeEdit !== 'username') {
@@ -61,6 +59,10 @@ export default function accountManager(initialEdit = null, userData = {}) {
             }
             if (this.activeEdit !== 'email') {
                 this.emailErrors.email = null;
+            }
+            if (this.activeEdit !== 'phone') {
+                this.phoneErrors.phone = null;
+                this.formattedPhone = this.formatNumber(this.phoneRaw);
             }
             if (this.activeEdit !== 'password') {
                 this.passwordErrors.password = null;
@@ -78,15 +80,113 @@ export default function accountManager(initialEdit = null, userData = {}) {
             return this.isEditing() && this.activeEdit !== field;
         },
 
-        getCsrfToken() {
-            return document.querySelector('meta[name="csrf-token"]')?.getAttribute('content')
-                || document.querySelector('input[name="_token"]')?.value
-                || '';
+        // --- Phone Formatting & Submission ---
+        formatPhoneInput(event) {
+            let digits = event.target.value.replace(/\D/g, '');
+            if (digits.startsWith('63')) {
+                digits = digits.substring(2);
+            } else if (digits.startsWith('0')) {
+                digits = digits.substring(1);
+            }
+            digits = digits.slice(0, 10);
+
+            this.phoneRaw = digits;
+            this.formattedPhone = this.formatNumber(digits);
+            event.target.value = this.formattedPhone;
+
+            if (this.phoneErrors) {
+                this.phoneErrors.phone = null;
+            }
         },
 
-        // ----------------------------------------------------
-        // Full Name Actions
-        // ----------------------------------------------------
+        formatNumber(digits) {
+            if (!digits) return '';
+            let clean = String(digits).replace(/\D/g, '').slice(0, 10);
+            let formatted = '';
+            if (clean.length > 0) formatted += clean.substring(0, Math.min(3, clean.length));
+            if (clean.length > 3) formatted += ' ' + clean.substring(3, Math.min(6, clean.length));
+            if (clean.length > 6) formatted += ' ' + clean.substring(6, 10);
+            return formatted;
+        },
+
+        async submitPhone(event) {
+            const form = event.target;
+            this.isSavingPhone = true;
+            this.phoneErrors.phone = null;
+
+            const digits = this.phoneRaw || this.formattedPhone.replace(/\D/g, '');
+            if (!digits) {
+                this.phoneErrors.phone = 'Please enter your phone number.';
+                this.isSavingPhone = false;
+                return;
+            }
+            if (!/^9\d{9}$/.test(digits)) {
+                this.phoneErrors.phone = 'Please enter a valid 10-digit mobile number starting with 9.';
+                this.isSavingPhone = false;
+                return;
+            }
+
+            const formData = new FormData(form);
+            formData.set('contact_no', digits);
+
+            try {
+                const response = await fetch(form.action, {
+                    method: 'POST',
+                    headers: {
+                        'Accept': 'application/json',
+                        'X-Requested-With': 'XMLHttpRequest',
+                        'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.getAttribute('content')
+                            || formData.get('_token'),
+                    },
+                    body: formData,
+                });
+
+                const data = await response.json();
+
+                if (response.ok && data.success) {
+                    this.hasPhone = true;
+                    this.maskedPhone = data.masked_phone;
+                    this.phoneRaw = data.raw_phone;
+                    this.formattedPhone = this.formatNumber(data.raw_phone);
+                    this.activeEdit = null;
+
+                    window.dispatchEvent(new CustomEvent('toast', {
+                        detail: {
+                            title: 'Success',
+                            message: data.message || 'Phone number updated successfully.',
+                            type: 'success'
+                        }
+                    }));
+                } else if (response.status === 422) {
+                    if (data.errors) {
+                        this.phoneErrors.phone = data.errors.contact_no ? data.errors.contact_no[0] : (data.errors.clean_contact ? data.errors.clean_contact[0] : null);
+                    } else if (data.message) {
+                        this.phoneErrors.phone = data.message;
+                    }
+                } else {
+                    window.dispatchEvent(new CustomEvent('toast', {
+                        detail: {
+                            title: 'Error',
+                            message: data.message || 'Unable to update phone number.',
+                            type: 'danger'
+                        }
+                    }));
+                }
+            } catch (err) {
+                console.error(err);
+                window.dispatchEvent(new CustomEvent('toast', {
+                    detail: {
+                        title: 'Error',
+                        message: 'A network error occurred. Please try again.',
+                        type: 'danger'
+                    }
+                }));
+            } finally {
+                this.isSavingPhone = false;
+            }
+        },
+
+        // --- Full Name Submission ---
         async submitName(event) {
             const form = event.target;
             const formData = new FormData(form);
@@ -100,7 +200,8 @@ export default function accountManager(initialEdit = null, userData = {}) {
                     headers: {
                         'Accept': 'application/json',
                         'X-Requested-With': 'XMLHttpRequest',
-                        'X-CSRF-TOKEN': this.getCsrfToken() || formData.get('_token'),
+                        'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.getAttribute('content')
+                            || formData.get('_token'),
                     },
                     body: formData,
                 });
@@ -125,33 +226,24 @@ export default function accountManager(initialEdit = null, userData = {}) {
                 }
             } catch (err) {
                 console.error(err);
-                window.dispatchEvent(new CustomEvent('toast', {
-                    detail: { title: 'Error', message: 'A network error occurred.', type: 'danger' }
-                }));
             } finally {
                 this.isSavingName = false;
             }
         },
 
-        // ----------------------------------------------------
-        // Email Actions & OTP
-        // ----------------------------------------------------
+        // --- Email OTP & Verification ---
         startCooldown(seconds) {
             this.resendCooldown = seconds;
             if (this.timerInterval) clearInterval(this.timerInterval);
             this.timerInterval = setInterval(() => {
-                if (this.resendCooldown > 0) {
-                    this.resendCooldown--;
-                } else {
-                    clearInterval(this.timerInterval);
-                }
+                if (this.resendCooldown > 0) this.resendCooldown--;
+                else clearInterval(this.timerInterval);
             }, 1000);
         },
 
         async submitEmail(event) {
             const form = event.target;
             const formData = new FormData(form);
-
             this.isSavingEmail = true;
             this.emailErrors.email = null;
 
@@ -161,13 +253,12 @@ export default function accountManager(initialEdit = null, userData = {}) {
                     headers: {
                         'Accept': 'application/json',
                         'X-Requested-With': 'XMLHttpRequest',
-                        'X-CSRF-TOKEN': this.getCsrfToken() || formData.get('_token'),
+                        'X-CSRF-TOKEN': formData.get('_token'),
                     },
                     body: formData,
                 });
 
                 const data = await response.json();
-
                 if (response.ok && data.success) {
                     this.otpMaskedEmail = data.masked_email;
                     this.otpCode = '';
@@ -176,15 +267,10 @@ export default function accountManager(initialEdit = null, userData = {}) {
                     this.startCooldown(data.cooldown || 60);
 
                     this.$nextTick(() => {
-                        const input = document.getElementById('otp_hidden_input');
-                        if (input) input.focus();
+                        document.getElementById('otp_hidden_input')?.focus();
                     });
                 } else if (response.status === 422) {
-                    if (data.errors?.email) {
-                        this.emailErrors.email = data.errors.email[0];
-                    } else if (data.message) {
-                        this.emailErrors.email = data.message;
-                    }
+                    this.emailErrors.email = data.errors?.email?.[0] || data.message;
                 } else {
                     window.dispatchEvent(new CustomEvent('toast', {
                         detail: { title: 'Error', message: data.message || 'Unable to send code.', type: 'danger' }
@@ -192,9 +278,6 @@ export default function accountManager(initialEdit = null, userData = {}) {
                 }
             } catch (err) {
                 console.error(err);
-                window.dispatchEvent(new CustomEvent('toast', {
-                    detail: { title: 'Error', message: 'A network error occurred.', type: 'danger' }
-                }));
             } finally {
                 this.isSavingEmail = false;
             }
@@ -204,10 +287,7 @@ export default function accountManager(initialEdit = null, userData = {}) {
             this.otpCode = event.target.value.replace(/\D/g, '').slice(0, 6);
             event.target.value = this.otpCode;
             this.otpError = null;
-
-            if (this.otpCode.length === 6 && !this.isVerifyingOtp) {
-                this.verifyOtp();
-            }
+            if (this.otpCode.length === 6 && !this.isVerifyingOtp) this.verifyOtp();
         },
 
         async verifyOtp() {
@@ -215,19 +295,19 @@ export default function accountManager(initialEdit = null, userData = {}) {
             this.otpError = null;
 
             try {
+                const token = document.querySelector('input[name="_token"]')?.value;
                 const response = await fetch('/user/account-management/email/verify-otp', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
                         'Accept': 'application/json',
                         'X-Requested-With': 'XMLHttpRequest',
-                        'X-CSRF-TOKEN': this.getCsrfToken(),
+                        'X-CSRF-TOKEN': token,
                     },
                     body: JSON.stringify({ code: this.otpCode }),
                 });
 
                 const data = await response.json();
-
                 if (response.ok && data.success) {
                     this.email = data.email;
                     this.maskedEmail = data.masked_email;
@@ -241,13 +321,9 @@ export default function accountManager(initialEdit = null, userData = {}) {
                     this.otpError = data.message || 'Invalid verification code.';
                     this.otpCode = '';
                     const input = document.getElementById('otp_hidden_input');
-                    if (input) {
-                        input.value = '';
-                        input.focus();
-                    }
+                    if (input) { input.value = ''; input.focus(); }
                 }
             } catch (err) {
-                console.error(err);
                 this.otpError = 'Network error. Please try again.';
             } finally {
                 this.isVerifyingOtp = false;
@@ -256,24 +332,23 @@ export default function accountManager(initialEdit = null, userData = {}) {
 
         async resendOtp() {
             if (this.resendCooldown > 0 || this.isResendingOtp) return;
-
             this.isResendingOtp = true;
             this.otpError = null;
 
             try {
+                const token = document.querySelector('input[name="_token"]')?.value;
                 const response = await fetch('/user/account-management/email/request-otp', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
                         'Accept': 'application/json',
                         'X-Requested-With': 'XMLHttpRequest',
-                        'X-CSRF-TOKEN': this.getCsrfToken(),
+                        'X-CSRF-TOKEN': token,
                     },
                     body: JSON.stringify({ email: this.email }),
                 });
 
                 const data = await response.json();
-
                 if (response.ok && data.success) {
                     this.otpCode = '';
                     this.startCooldown(data.cooldown || 60);
@@ -296,15 +371,10 @@ export default function accountManager(initialEdit = null, userData = {}) {
             this.otpError = null;
         },
 
-        // ----------------------------------------------------
-        // Change Password Workflow
-        // ----------------------------------------------------
+        // --- Password Flow ---
         async handlePasswordClick() {
             if (this.activeEdit === 'password') {
-                this.activeEdit = null;
-                this.newPassword = '';
-                this.confirmPassword = '';
-                this.passwordErrors = { password: null, password_confirmation: null };
+                this.toggle('password');
                 return;
             }
 
@@ -313,63 +383,122 @@ export default function accountManager(initialEdit = null, userData = {}) {
                 return;
             }
 
-            await this.requestPasswordOtp();
+            this.isSavingPassword = true;
+            try {
+                const token = document.querySelector('input[name="_token"]')?.value;
+                const response = await fetch('/user/account-management/password/request-otp', {
+                    method: 'POST',
+                    headers: {
+                        'Accept': 'application/json',
+                        'X-Requested-With': 'XMLHttpRequest',
+                        'X-CSRF-TOKEN': token,
+                    }
+                });
+
+                const data = await response.json();
+                if (response.ok && data.success) {
+                    this.passwordOtpMaskedEmail = data.masked_email;
+                    this.passwordOtpCode = '';
+                    this.passwordOtpError = null;
+                    this.showPasswordOtpModal = true;
+                    this.startPasswordCooldown(data.cooldown || 60);
+
+                    this.$nextTick(() => {
+                        document.getElementById('password_otp_hidden_input')?.focus();
+                    });
+                } else {
+                    window.dispatchEvent(new CustomEvent('toast', {
+                        detail: { title: 'Notice', message: data.message || 'Please wait before requesting a new code.', type: 'info' }
+                    }));
+                }
+            } catch (err) {
+                console.error(err);
+            } finally {
+                this.isSavingPassword = false;
+            }
         },
 
         startPasswordCooldown(seconds) {
             this.passwordResendCooldown = seconds;
             if (this.passwordTimerInterval) clearInterval(this.passwordTimerInterval);
             this.passwordTimerInterval = setInterval(() => {
-                if (this.passwordResendCooldown > 0) {
-                    this.passwordResendCooldown--;
-                } else {
-                    clearInterval(this.passwordTimerInterval);
-                }
+                if (this.passwordResendCooldown > 0) this.passwordResendCooldown--;
+                else clearInterval(this.passwordTimerInterval);
             }, 1000);
         },
 
-        async requestPasswordOtp() {
-            if (this.isSendingPasswordCode) return;
+        onPasswordOtpInput(event) {
+            this.passwordOtpCode = event.target.value.replace(/\D/g, '').slice(0, 6);
+            event.target.value = this.passwordOtpCode;
+            this.passwordOtpError = null;
+            if (this.passwordOtpCode.length === 6 && !this.isVerifyingPasswordOtp) this.verifyPasswordOtp();
+        },
 
-            this.isSendingPasswordCode = true;
+        async verifyPasswordOtp() {
+            this.isVerifyingPasswordOtp = true;
             this.passwordOtpError = null;
 
             try {
-                const response = await fetch('/user/account-management/password/request-otp', {
+                const token = document.querySelector('input[name="_token"]')?.value;
+                const response = await fetch('/user/account-management/password/verify-otp', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
                         'Accept': 'application/json',
                         'X-Requested-With': 'XMLHttpRequest',
-                        'X-CSRF-TOKEN': this.getCsrfToken(),
+                        'X-CSRF-TOKEN': token,
+                    },
+                    body: JSON.stringify({ code: this.passwordOtpCode }),
+                });
+
+                const data = await response.json();
+                if (response.ok && data.success) {
+                    this.passwordUnlockToken = data.unlock_token;
+                    this.showPasswordOtpModal = false;
+                    this.activeEdit = 'password';
+                } else {
+                    this.passwordOtpError = data.message || 'Invalid code.';
+                    this.passwordOtpCode = '';
+                    const input = document.getElementById('password_otp_hidden_input');
+                    if (input) { input.value = ''; input.focus(); }
+                }
+            } catch (err) {
+                this.passwordOtpError = 'Network error. Please try again.';
+            } finally {
+                this.isVerifyingPasswordOtp = false;
+            }
+        },
+
+        async resendPasswordOtp() {
+            if (this.passwordResendCooldown > 0 || this.isResendingPasswordOtp) return;
+            this.isResendingPasswordOtp = true;
+            this.passwordOtpError = null;
+
+            try {
+                const token = document.querySelector('input[name="_token"]')?.value;
+                const response = await fetch('/user/account-management/password/request-otp', {
+                    method: 'POST',
+                    headers: {
+                        'Accept': 'application/json',
+                        'X-Requested-With': 'XMLHttpRequest',
+                        'X-CSRF-TOKEN': token,
                     }
                 });
 
                 const data = await response.json();
-
-                if (!response.ok || !data.success) {
+                if (response.ok && data.success) {
+                    this.passwordOtpCode = '';
+                    this.startPasswordCooldown(data.cooldown || 60);
                     window.dispatchEvent(new CustomEvent('toast', {
-                        detail: { title: 'Error', message: data.message || 'Unable to send code.', type: 'danger' }
+                        detail: { title: 'Notice', message: 'A new code has been sent.', type: 'info' }
                     }));
-                    return;
+                } else {
+                    this.passwordOtpError = data.message || 'Unable to resend code.';
                 }
-
-                this.passwordOtpMaskedEmail = data.masked_email;
-                this.passwordOtpCode = '';
-                this.showPasswordOtpModal = true;
-                this.startPasswordCooldown(data.cooldown || 60);
-
-                this.$nextTick(() => {
-                    const el = document.getElementById('password_otp_hidden_input');
-                    if (el) el.focus();
-                });
             } catch (err) {
                 console.error(err);
-                window.dispatchEvent(new CustomEvent('toast', {
-                    detail: { title: 'Error', message: 'Network error. Please try again.', type: 'danger' }
-                }));
             } finally {
-                this.isSendingPasswordCode = false;
+                this.isResendingPasswordOtp = false;
             }
         },
 
@@ -379,108 +508,9 @@ export default function accountManager(initialEdit = null, userData = {}) {
             this.passwordOtpError = null;
         },
 
-        async resendPasswordOtp() {
-            if (this.passwordResendCooldown > 0 || this.isResendingPasswordOtp) return;
-            this.isResendingPasswordOtp = true;
-            this.passwordOtpError = null;
-
-            try {
-                const response = await fetch('/user/account-management/password/request-otp', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Accept': 'application/json',
-                        'X-Requested-With': 'XMLHttpRequest',
-                        'X-CSRF-TOKEN': this.getCsrfToken(),
-                    }
-                });
-
-                const data = await response.json();
-
-                if (response.ok && data.success) {
-                    this.passwordOtpCode = '';
-                    const el = document.getElementById('password_otp_hidden_input');
-                    if (el) {
-                        el.value = '';
-                        el.focus();
-                    }
-                    this.startPasswordCooldown(data.cooldown || 60);
-                    window.dispatchEvent(new CustomEvent('toast', {
-                        detail: { title: 'Notice', message: 'A new code has been sent.', type: 'info' }
-                    }));
-                } else {
-                    this.passwordOtpError = data.message || 'Failed to resend code.';
-                }
-            } catch (err) {
-                console.error(err);
-                this.passwordOtpError = 'Network error while resending.';
-            } finally {
-                this.isResendingPasswordOtp = false;
-            }
-        },
-
-        onPasswordOtpInput(event) {
-            this.passwordOtpCode = event.target.value.replace(/\D/g, '').slice(0, 6);
-            event.target.value = this.passwordOtpCode;
-            this.passwordOtpError = null;
-
-            if (this.passwordOtpCode.length === 6 && !this.isVerifyingPasswordOtp) {
-                this.verifyPasswordOtp();
-            }
-        },
-
-        async verifyPasswordOtp() {
-            if (this.isVerifyingPasswordOtp) return;
-            this.isVerifyingPasswordOtp = true;
-            this.passwordOtpError = null;
-
-            try {
-                const response = await fetch('/user/account-management/password/verify-otp', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Accept': 'application/json',
-                        'X-Requested-With': 'XMLHttpRequest',
-                        'X-CSRF-TOKEN': this.getCsrfToken(),
-                    },
-                    body: JSON.stringify({ code: this.passwordOtpCode }),
-                });
-
-                const data = await response.json();
-
-                if (!response.ok || !data.success) {
-                    this.passwordOtpError = data.message || 'Verification failed.';
-                    this.passwordOtpCode = '';
-                    const el = document.getElementById('password_otp_hidden_input');
-                    if (el) {
-                        el.value = '';
-                        el.focus();
-                    }
-                    return;
-                }
-
-                this.passwordUnlockToken = data.unlock_token;
-                this.closePasswordOtpModal();
-                this.activeEdit = 'password';
-
-                this.$nextTick(() => {
-                    const el = document.getElementById('new_password');
-                    if (el) el.focus();
-                });
-            } catch (err) {
-                console.error(err);
-                this.passwordOtpError = 'Network error during verification.';
-            } finally {
-                this.isVerifyingPasswordOtp = false;
-            }
-        },
-
         validatePasswordClientSide() {
-            this.passwordErrors = { password: null, password_confirmation: null };
-
-            if (this.newPassword && this.newPassword.length < 8) {
-                this.passwordErrors.password = 'Password must be at least 8 characters long.';
-            }
+            this.passwordErrors.password = null;
+            this.passwordErrors.password_confirmation = null;
 
             if (this.confirmPassword && this.newPassword !== this.confirmPassword) {
                 this.passwordErrors.password_confirmation = 'The password confirmation does not match.';
@@ -488,59 +518,46 @@ export default function accountManager(initialEdit = null, userData = {}) {
         },
 
         async submitPassword(event) {
-            this.validatePasswordClientSide();
-            if (this.passwordErrors.password || this.passwordErrors.password_confirmation) {
-                return;
-            }
-
-            this.isSavingPassword = true;
             const form = event.target;
+            this.isSavingPassword = true;
+            this.passwordErrors.password = null;
+            this.passwordErrors.password_confirmation = null;
+
+            const formData = new FormData(form);
+            formData.append('unlock_token', this.passwordUnlockToken);
 
             try {
                 const response = await fetch(form.action, {
                     method: 'POST',
                     headers: {
-                        'Content-Type': 'application/json',
                         'Accept': 'application/json',
                         'X-Requested-With': 'XMLHttpRequest',
-                        'X-CSRF-TOKEN': this.getCsrfToken(),
+                        'X-CSRF-TOKEN': formData.get('_token'),
                     },
-                    body: JSON.stringify({
-                        _method: 'PATCH',
-                        unlock_token: this.passwordUnlockToken,
-                        password: this.newPassword,
-                        password_confirmation: this.confirmPassword,
-                    }),
+                    body: formData,
                 });
 
                 const data = await response.json();
+                if (response.ok && data.success) {
+                    this.passwordLastUpdated = data.formatted_time || 'Last updated a few seconds ago';
+                    this.activeEdit = null;
+                    this.newPassword = '';
+                    this.confirmPassword = '';
+                    this.passwordUnlockToken = null;
 
-                if (!response.ok || !data.success) {
-                    if (data.errors) {
-                        this.passwordErrors.password = data.errors.password?.[0] || null;
-                        this.passwordErrors.password_confirmation = data.errors.password_confirmation?.[0] || null;
-                    } else {
-                        window.dispatchEvent(new CustomEvent('toast', {
-                            detail: { title: 'Error', message: data.message || 'Unable to update password.', type: 'danger' }
-                        }));
-                    }
-                    return;
+                    window.dispatchEvent(new CustomEvent('toast', {
+                        detail: { title: 'Success', message: data.message, type: 'success' }
+                    }));
+                } else if (response.status === 422 && data.errors) {
+                    this.passwordErrors.password = data.errors.password?.[0] || null;
+                    this.passwordErrors.password_confirmation = data.errors.password_confirmation?.[0] || null;
+                } else {
+                    window.dispatchEvent(new CustomEvent('toast', {
+                        detail: { title: 'Error', message: data.message || 'Unable to update password.', type: 'danger' }
+                    }));
                 }
-
-                this.passwordLastUpdated = 'Last updated a few seconds ago';
-                this.activeEdit = null;
-                this.newPassword = '';
-                this.confirmPassword = '';
-                this.passwordUnlockToken = null;
-
-                window.dispatchEvent(new CustomEvent('toast', {
-                    detail: { title: 'Success', message: data.message || 'Password updated successfully.', type: 'success' }
-                }));
             } catch (err) {
                 console.error(err);
-                window.dispatchEvent(new CustomEvent('toast', {
-                    detail: { title: 'Error', message: 'Network error. Please try again.', type: 'danger' }
-                }));
             } finally {
                 this.isSavingPassword = false;
             }

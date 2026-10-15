@@ -33,11 +33,11 @@ Route::middleware('auth')->group(function () {
     Route::post('/logout', [AuthController::class, 'logout'])->name('logout');
 
     Route::prefix('user')->name('user.')->group(function () {
-        Route::get('/account', function () { return redirect()->route('user.account-management'); })->name('account');
         Route::view('/account', 'buyer.option.account.personal-center')->name('account');
         
         Route::get('/account-management', [AccountManagementController::class, 'index'])->name('account-management');
         Route::patch('/account-management/name', [AccountManagementController::class, 'updateName'])->name('account-management.update-name');
+        Route::patch('/account-management/phone', [AccountManagementController::class, 'updatePhone'])->name('account-management.update-phone');
         Route::post('/account-management/email/request-otp', [AccountManagementController::class, 'requestEmailOtp'])->name('account-management.request-email-otp');
         Route::post('/account-management/email/verify-otp', [AccountManagementController::class, 'verifyEmailOtp'])->name('account-management.verify-email-otp');
         Route::post('/account-management/password/request-otp', [AccountManagementController::class, 'requestPasswordOtp'])->name('account-management.request-password-otp');
