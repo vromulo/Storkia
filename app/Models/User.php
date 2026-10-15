@@ -43,6 +43,11 @@ class User extends Authenticatable
         ];
     }
 
+    public function setEmailAttribute(string $value): void
+    {
+        $this->attributes['email'] = strtolower(trim($value));
+    }
+
     public function formattedPasswordLastUpdated(): string
     {
         if (! $this->password_changed_at) {

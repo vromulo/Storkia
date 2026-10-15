@@ -29,11 +29,6 @@ class UserAddress extends Model
         'is_default' => 'boolean',
     ];
 
-    public function setEmailAttribute(string $value): void
-    {
-        $this->attributes['email'] = strtolower(trim($value));
-    }
-
     public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);

@@ -58,7 +58,7 @@
                                 </h3>
 
                                 <!-- Price Row -->
-                                <<div class="flex items-baseline gap-1.5 mt-1">
+                                <div class="flex items-baseline gap-1.5 mt-1">
                                     <span class="text-sm sm:text-base font-extrabold text-price">
                                         ₱{{ number_format($discounted, 2) }}
                                     </span>

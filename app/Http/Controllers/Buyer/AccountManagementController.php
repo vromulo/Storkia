@@ -61,28 +61,46 @@ class AccountManagementController extends Controller
         /** @var \App\Models\User $user */
         $user = auth()->user();
 
+        // 1. Sanitize input before running Laravel validation rules
+        $cleanEmail = strtolower(trim((string) $request->input('email')));
+        $request->merge(['email' => $cleanEmail]);
+
         $validated = $request->validate([
             'email' => [
                 'required',
                 'email:rfc,dns',
                 'max:255',
-                'unique:users,email,' . $user->id,
             ],
         ], [
             'email.required' => 'Please enter your email address.',
             'email.email'    => 'Please enter a valid email address.',
-            'email.unique'   => 'This email address is already registered.',
         ]);
 
-        $newEmail = strtolower(trim($validated['email']));
+        $newEmail = $validated['email'];
 
-        if ($newEmail === strtolower($user->email)) {
+        // 2. Prevent changing to the exact current email address
+        if ($newEmail === strtolower(trim($user->email))) {
             return response()->json([
                 'success' => false,
                 'message' => 'This is already your current email address.',
+                'errors'  => [
+                    'email' => ['This is already your current email address.'],
+                ],
             ], 422);
         }
 
+        // 3. Strict case-insensitive uniqueness check excluding the current user
+        if (User::whereRaw('LOWER(TRIM(email)) = ?', [$newEmail])->where('id', '!=', $user->id)->exists()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'This email address is already in use.',
+                'errors'  => [
+                    'email' => ['This email address is already in use.'],
+                ],
+            ], 422);
+        }
+
+        // 4. Rate-limiting resend cooldown check
         $existing = EmailChangeRequest::where('user_id', $user->id)
             ->where('new_email', $newEmail)
             ->first();
@@ -95,6 +113,7 @@ class AccountManagementController extends Controller
             ], 429);
         }
 
+        // 5. Generate and dispatch verification OTP
         $code = EmailChangeRequest::generateCode();
 
         try {
@@ -173,16 +192,18 @@ class AccountManagementController extends Controller
             ], 422);
         }
 
+        $targetEmail = strtolower(trim($changeRequest->new_email));
+
         // Final uniqueness check before applying
-        if (User::where('email', $changeRequest->new_email)->where('id', '!=', $user->id)->exists()) {
+        if (User::whereRaw('LOWER(TRIM(email)) = ?', [$targetEmail])->where('id', '!=', $user->id)->exists()) {
             return response()->json([
                 'success' => false,
-                'message' => 'This email address is already in use by another account.',
+                'message' => 'This email address is already in use.',
             ], 422);
         }
 
-        // Apply new email
-        $user->update(['email' => $changeRequest->new_email]);
+        // Apply new email (User model mutator will trim and lowercase)
+        $user->update(['email' => $targetEmail]);
         $updatedEmail = $user->email;
         $changeRequest->delete();
 
