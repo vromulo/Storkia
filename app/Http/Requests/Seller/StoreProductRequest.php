@@ -6,22 +6,16 @@ use Illuminate\Foundation\Http\FormRequest;
 
 class StoreProductRequest extends FormRequest
 {
-    /**
-     * Determine if the user is authorized to make this request.
-     */
     public function authorize(): bool
     {
         return $this->user() && $this->user()->role === 'Seller' && (bool) $this->user()->sellerProfile;
     }
 
-    /**
-     * Get the validation rules that apply to the request.
-     *
-     * @return array<string, \Illuminate\Contracts\Validation\ValidationRule|array<mixed>|string>
-     */
     public function rules(): array
     {
-        return [
+        $hasSubVariants = $this->filled('sub_variant_title');
+
+        $rules = [
             'name'                    => ['required', 'string', 'max:100'],
             'category'                => ['nullable', 'string'],
             'subcategory'             => ['required', 'string'],
@@ -38,40 +32,48 @@ class StoreProductRequest extends FormRequest
             'variant_names.*'         => ['required', 'string', 'max:50'],
             'variant_pictures'        => ['nullable', 'array'],
             'variant_pictures.*'      => ['nullable', 'image', 'mimes:jpeg,png,jpg,webp', 'max:5120'],
-
-            // When no sub-variants are present (price depends on main variant)
-            'variant_prices'          => ['nullable', 'array'],
-            'variant_prices.*'        => ['nullable', 'numeric', 'min:0'],
-            'variant_weights'         => ['nullable', 'array'],
-            'variant_weights.*'       => ['nullable', 'numeric', 'min:0'],
-            'variant_stocks'          => ['nullable', 'array'],
-            'variant_stocks.*'        => ['nullable', 'integer', 'min:0'],
-
-            // When sub-variants are present
-            'sub_variant_names'       => ['nullable', 'array'],
-            'sub_variant_names.*'     => ['nullable', 'array'],
-            'sub_variant_names.*.*'   => ['nullable', 'string', 'max:50'],
-            'sub_variant_prices'      => ['nullable', 'array'],
-            'sub_variant_prices.*'    => ['nullable', 'array'],
-            'sub_variant_prices.*.*'  => ['nullable', 'numeric', 'min:0'],
-            'sub_variant_weights'     => ['nullable', 'array'],
-            'sub_variant_weights.*'   => ['nullable', 'array'],
-            'sub_variant_weights.*.*' => ['nullable', 'numeric', 'min:0'],
-            'sub_variant_stocks'      => ['nullable', 'array'],
-            'sub_variant_stocks.*'    => ['nullable', 'array'],
-            'sub_variant_stocks.*.*'  => ['nullable', 'integer', 'min:0'],
         ];
+
+        if (! $hasSubVariants) {
+            $rules['variant_prices']    = ['required', 'array'];
+            $rules['variant_prices.*']  = ['required', 'numeric', 'min:0'];
+            $rules['variant_weights']   = ['required', 'array'];
+            $rules['variant_weights.*'] = ['required', 'numeric', 'min:0'];
+            $rules['variant_stocks']    = ['required', 'array'];
+            $rules['variant_stocks.*']  = ['required', 'integer', 'min:0'];
+        } else {
+            $rules['sub_variant_names']       = ['required', 'array'];
+            $rules['sub_variant_names.*']     = ['required', 'array', 'min:1'];
+            $rules['sub_variant_names.*.*']   = ['required', 'string', 'max:50'];
+            $rules['sub_variant_prices']      = ['required', 'array'];
+            $rules['sub_variant_prices.*']    = ['required', 'array', 'min:1'];
+            $rules['sub_variant_prices.*.*']  = ['required', 'numeric', 'min:0'];
+            $rules['sub_variant_weights']     = ['required', 'array'];
+            $rules['sub_variant_weights.*']   = ['required', 'array', 'min:1'];
+            $rules['sub_variant_weights.*.*'] = ['required', 'numeric', 'min:0'];
+            $rules['sub_variant_stocks']      = ['required', 'array'];
+            $rules['sub_variant_stocks.*']    = ['required', 'array', 'min:1'];
+            $rules['sub_variant_stocks.*.*']  = ['required', 'integer', 'min:0'];
+        }
+
+        return $rules;
     }
 
-    /**
-     * Custom validation attribute names.
-     */
     public function attributes(): array
     {
         return [
-            'variant_title'    => 'variant title',
-            'variant_names.*'  => 'variant name',
-            'pictures.*'       => 'product picture',
+            'variant_title'          => 'variant title',
+            'sub_variant_title'      => 'sub-variant title',
+            'variant_names.*'        => 'variant name',
+            'variant_prices.*'       => 'variant price',
+            'variant_weights.*'      => 'variant weight',
+            'variant_stocks.*'       => 'variant stock',
+            'sub_variant_names.*.*'  => 'sub-variant name',
+            'sub_variant_prices.*.*' => 'sub-variant price',
+            'sub_variant_weights.*.*'=> 'sub-variant weight',
+            'sub_variant_stocks.*.*' => 'sub-variant stock',
+            'pictures.*'             => 'product picture',
+            'variant_pictures.*'     => 'variant picture',
         ];
     }
 }

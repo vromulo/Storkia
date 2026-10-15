@@ -35,5 +35,17 @@ Route::middleware(['auth', 'role:Seller'])->group(function () {
         Route::get('/messages/fetch/{userId}', [\App\Http\Controllers\Seller\SellerMessageController::class, 'fetchMessages'])->name('messages.fetch');
         Route::post('/messages', [\App\Http\Controllers\Seller\SellerMessageController::class, 'store'])->name('messages.store');
         Route::patch('/messages/{contactId}/read', [\App\Http\Controllers\Seller\SellerMessageController::class, 'markAsRead'])->name('messages.read');
+
+        // Notification Routes
+        Route::patch('/notifications/mark-all-read', function () {
+            auth()->user()->unreadNotifications->markAsRead();
+            return back()->with('success', 'All notifications marked as read.');
+        })->name('notifications.markAllRead');
+
+        Route::patch('/notifications/{id}/read', function ($id) {
+            $notification = auth()->user()->notifications()->findOrFail($id);
+            $notification->markAsRead();
+            return back();
+        })->name('notifications.markRead');
     });
 });

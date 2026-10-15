@@ -89,6 +89,7 @@ class ProductController extends Controller
         $minPrice = null;
         $baseWeight = null;
         $totalStock = 0;
+        $uploadedVariantFiles = $request->file('variant_pictures') ?? [];
 
         if (!empty($validated['variant_names'])) {
             foreach ($validated['variant_names'] as $vId => $vName) {
@@ -101,7 +102,10 @@ class ProductController extends Controller
                     'subs'  => []
                 ];
 
-                if ($request->hasFile("variant_pictures.{$vId}")) {
+                // Direct array key lookup handles large JS timestamps robustly
+                if (isset($uploadedVariantFiles[$vId])) {
+                    $item['image'] = $this->optimizeAndStoreImage($uploadedVariantFiles[$vId], 'variants');
+                } elseif ($request->hasFile("variant_pictures.{$vId}")) {
                     $item['image'] = $this->optimizeAndStoreImage($request->file("variant_pictures.{$vId}"), 'variants');
                 }
 
@@ -133,9 +137,11 @@ class ProductController extends Controller
                             if (is_null($minPrice) || $sub['price'] < $minPrice) $minPrice = $sub['price'];
                             if (is_null($baseWeight)) $baseWeight = $sub['weight'];
                         }
+
                         $item['subs'][] = $sub;
                     }
                 }
+
                 $variantsData['items'][] = $item;
             }
         }

@@ -29,9 +29,6 @@
             <form method="POST" action="{{ route('logout') }}" class="w-full">
                 @csrf
                 <button type="submit" class="w-full flex items-center justify-center px-6 py-4 bg-red-500 text-white text-lg font-bold rounded-2xl shadow-md hover:bg-red-600 transition-all duration-200 cursor-pointer active:scale-95">
-                    <svg class="w-6 h-6 mr-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
-                    </svg>
                     Logout
                 </button>
             </form>
@@ -45,18 +42,122 @@
         
         <x-seller.sidebar />
 
-        <main class="flex-1 h-screen overflow-y-auto custom-scrollbar relative"
-              x-data="{ showContent: false }"
-              x-init="setTimeout(() => showContent = true, 50)">
-            <div class="p-8 lg:p-12"
-                 x-show="showContent"
-                 x-transition:enter="transition ease-out duration-500"
-                 x-transition:enter-start="opacity-0 translate-y-4"
-                 x-transition:enter-end="opacity-100 translate-y-0"
-                 x-cloak>
-                @yield('content')
-            </div>
-        </main>
+        <!-- Portal View Wrapper with Top Navigation Bar -->
+        <div class="flex-1 flex flex-col h-screen overflow-hidden">
+            <!-- Global Top Header Bar -->
+            <header class="h-20 bg-surface/90 backdrop-blur-md border-b border-border-subtle px-8 flex items-center justify-between shrink-0 z-30">
+                <div>
+                    <h2 class="text-sm font-bold text-text-muted">
+                        {{ auth()->user()->sellerProfile?->business_name ?? 'Seller Portal' }}
+                    </h2>
+                </div>
+
+                <div class="flex items-center gap-4">
+                    @php
+                        $unreadNotifications = auth()->user()->unreadNotifications;
+                        $unreadCount = $unreadNotifications->count();
+                        $recentNotifications = auth()->user()->notifications()->take(6)->get();
+                    @endphp
+
+                    <!-- Notification Center Dropdown -->
+                    <div x-data="{ notifOpen: false }" @click.away="notifOpen = false" class="relative">
+                        <button type="button" 
+                                @click="notifOpen = !notifOpen" 
+                                class="p-2.5 rounded-xl bg-surface-subtle hover:bg-brand-light/30 text-text-muted hover:text-primary transition-colors relative cursor-pointer focus:outline-none">
+                            <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+                            </svg>
+                            @if($unreadCount > 0)
+                                <span class="absolute top-1.5 right-1.5 w-4 h-4 rounded-full bg-red-500 text-white text-[10px] font-extrabold flex items-center justify-center border-2 border-white">
+                                    {{ $unreadCount > 9 ? '9+' : $unreadCount }}
+                                </span>
+                            @endif
+                        </button>
+
+                        <!-- Notification Dropdown Panel -->
+                        <div x-show="notifOpen" 
+                             x-cloak 
+                             x-transition:enter="transition ease-out duration-150"
+                             x-transition:enter-start="opacity-0 scale-95 -translate-y-1"
+                             x-transition:enter-end="opacity-100 scale-100 translate-y-0"
+                             x-transition:leave="transition ease-in duration-100"
+                             x-transition:leave-start="opacity-100 scale-100 translate-y-0"
+                             x-transition:leave-end="opacity-0 scale-95 -translate-y-1"
+                             class="absolute right-0 mt-3 w-80 sm:w-96 bg-surface border border-border-subtle rounded-2xl shadow-2xl z-50 overflow-hidden">
+                            
+                            <div class="p-4 border-b border-border-subtle flex items-center justify-between bg-surface-subtle">
+                                <span class="font-bold text-sm text-primary-dark">Notifications</span>
+                                @if($unreadCount > 0)
+                                    <form method="POST" action="{{ route('seller.notifications.markAllRead') }}">
+                                        @csrf @method('PATCH')
+                                        <button type="submit" class="text-xs font-bold text-primary hover:underline cursor-pointer">
+                                            Mark all as read
+                                        </button>
+                                    </form>
+                                @endif
+                            </div>
+
+                            <div class="max-h-80 overflow-y-auto divide-y divide-border-subtle/60 custom-scrollbar">
+                                @forelse($recentNotifications as $notif)
+                                    @php
+                                        $data = $notif->data;
+                                        $isUnread = is_null($notif->read_at);
+                                    @endphp
+                                    <div class="p-4 transition-colors {{ $isUnread ? 'bg-brand-light/10' : 'bg-surface' }}">
+                                        <div class="flex items-start justify-between gap-2">
+                                            <h4 class="text-xs font-bold {{ ($data['type'] ?? '') === 'danger' ? 'text-danger' : (($data['type'] ?? '') === 'warning' ? 'text-yellow-600' : 'text-primary') }}">
+                                                {{ $data['title'] ?? 'Notice' }}
+                                            </h4>
+                                            <span class="text-[10px] text-text-muted shrink-0">{{ $notif->created_at->diffForHumans() }}</span>
+                                        </div>
+                                        <p class="text-xs text-text-main mt-1 leading-relaxed">{{ $data['message'] ?? '' }}</p>
+                                        @if($isUnread)
+                                            <div class="mt-2 text-right">
+                                                <form method="POST" action="{{ route('seller.notifications.markRead', $notif->id) }}">
+                                                    @csrf @method('PATCH')
+                                                    <button type="submit" class="text-[10px] font-bold text-text-muted hover:text-primary cursor-pointer">
+                                                        Dismiss
+                                                    </button>
+                                                </form>
+                                            </div>
+                                        @endif
+                                    </div>
+                                @empty
+                                    <div class="p-8 text-center text-text-muted text-xs">
+                                        No notifications at this time.
+                                    </div>
+                                @endforelse
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Store Profile Badge -->
+                    <div class="flex items-center gap-3 pl-2 border-l border-border-subtle">
+                        <div class="w-9 h-9 rounded-full bg-primary/10 text-primary font-bold text-xs flex items-center justify-center border border-primary/20">
+                            {{ strtoupper(substr(auth()->user()->first_name ?? 'S', 0, 1)) }}
+                        </div>
+                        <div class="text-left hidden sm:block">
+                            <span class="text-xs font-bold text-text-main block leading-tight">{{ auth()->user()->first_name }} {{ auth()->user()->last_name }}</span>
+                            <span class="text-[10px] text-text-muted block">{{ auth()->user()->sellerProfile?->line_of_business ?? 'Seller' }}</span>
+                        </div>
+                    </div>
+                </div>
+            </header>
+
+            <!-- Scrollable Content Socket -->
+            <main class="flex-1 overflow-y-auto custom-scrollbar relative"
+                  x-data="{ showContent: false }"
+                  x-init="setTimeout(() => showContent = true, 50)">
+                <div class="p-8 lg:p-12"
+                     x-show="showContent"
+                     x-transition:enter="transition ease-out duration-500"
+                     x-transition:enter-start="opacity-0 translate-y-4"
+                     x-transition:enter-end="opacity-100 translate-y-0"
+                     x-cloak>
+                    @yield('content')
+                </div>
+            </main>
+        </div>
     </div>
 
     @livewireScripts

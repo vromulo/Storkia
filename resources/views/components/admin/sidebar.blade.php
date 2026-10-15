@@ -90,36 +90,16 @@
         </div>
 
         <!-- Seller Compliance -->
-        @php $isComplianceActive = request()->is('admin/compliance*'); @endphp
-        <div>
-            <button @click="if(!sidebarOpen) { sidebarOpen = true; activeDropdown = 'compliance'; } else { activeDropdown = activeDropdown === 'compliance' ? null : 'compliance'; }" 
-                    class="flex items-center justify-between w-full px-3 py-3 rounded-xl transition-all duration-200 font-medium group whitespace-nowrap text-sm cursor-pointer {{ $isComplianceActive ? 'text-primary font-bold bg-brand-light/20' : 'text-text-muted hover:bg-brand-light/30 hover:text-primary' }}" 
-                    :title="!sidebarOpen ? 'Seller Compliance' : ''">
-                <div class="flex items-center">
-                    <svg class="w-6 h-6 flex-shrink-0 transition-colors {{ $isComplianceActive ? 'text-primary' : 'text-text-muted group-hover:text-primary' }}" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
-                    </svg>
-                    <span x-show="sidebarOpen" x-transition.opacity.duration.300ms class="ml-3">Seller Compliance</span>
-                </div>
-                <svg x-show="sidebarOpen" class="w-4 h-4 transition-transform duration-200 text-text-muted group-hover:text-primary" :class="{'rotate-180': activeDropdown === 'compliance'}" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
-                </svg>
-            </button>
-            <div x-show="activeDropdown === 'compliance' && sidebarOpen" x-collapse x-cloak class="ml-6 pl-4 my-1 border-l-2 border-border-subtle/70 space-y-1">
-                <a href="{{ route('admin.compliance.reviews') }}" 
-                   class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ request()->routeIs('admin.compliance.reviews') ? 'bg-primary/10 text-primary font-bold shadow-xs' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">
-                   Product Reviews
-                </a>
-                <a href="{{ route('admin.compliance.violations') }}" 
-                   class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ request()->routeIs('admin.compliance.violations') ? 'bg-primary/10 text-primary font-bold shadow-xs' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">
-                   Violations
-                </a>
-                <a href="{{ route('admin.compliance.warnings') }}" 
-                   class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ request()->routeIs('admin.compliance.warnings') ? 'bg-primary/10 text-primary font-bold shadow-xs' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">
-                   Warnings
-                </a>
-            </div>
-        </div>
+        @php $isComplianceActive = request()->is('admin/compliance*') || request()->routeIs('admin.compliance.*'); @endphp
+        <a href="{{ route('admin.compliance.index') }}" 
+           @click="activeDropdown = null" 
+           class="flex items-center px-3 py-3 rounded-xl transition-all duration-200 font-bold group whitespace-nowrap text-sm cursor-pointer {{ $isComplianceActive ? 'bg-brand-light/60 text-primary shadow-xs' : 'text-text-muted hover:bg-brand-light/30 hover:text-primary' }}" 
+           :title="!sidebarOpen ? 'Seller Compliance' : ''">
+            <svg class="w-6 h-6 flex-shrink-0 transition-colors {{ $isComplianceActive ? 'text-primary' : 'text-text-muted group-hover:text-primary' }}" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+            </svg>
+            <span x-show="sidebarOpen" x-transition.opacity.duration.300ms class="ml-3">Seller Compliance</span>
+        </a>
 
         <!-- Complaints & Disputes -->
         @php $isComplaintsActive = request()->is('admin/complaints*'); @endphp
