@@ -54,7 +54,14 @@ class RegisterWizard extends Component
 
     public function sendCode(OtpService $otpService): void
     {
+        $this->email = strtolower(trim($this->email));
+
         $this->validateOnly('email', ['email' => ['required', 'email:rfc,dns']]);
+
+        if (User::whereRaw('LOWER(TRIM(email)) = ?', [$this->email])->exists()) {
+            $this->addError('email', 'This email address is already in use.');
+            return;
+        }
 
         [$success, $error, $cooldown] = $otpService->sendOtp($this->email);
 
@@ -81,6 +88,7 @@ class RegisterWizard extends Component
 
     public function verifyCode(OtpService $otpService): void
     {
+        $this->email = strtolower(trim($this->email));
         $this->validateOnly('code', ['code' => ['required', 'digits:6']]);
 
         [$valid, $error, $token, $remaining] = $otpService->verifyOtp($this->email, $this->code);
@@ -159,6 +167,8 @@ class RegisterWizard extends Component
     {
         $this->validate($this->getStep3Rules(), $this->getStep3Messages());
 
+        $this->email = strtolower(trim($this->email));
+
         $record = RegistrationOtp::where('email', $this->email)
             ->where('verification_token', $this->verificationToken)
             ->first();
@@ -171,8 +181,8 @@ class RegisterWizard extends Component
             return;
         }
 
-        if (User::where('email', $this->email)->exists()) {
-            $this->addError('password', 'This email was just registered. Please sign in instead.');
+        if (User::whereRaw('LOWER(TRIM(email)) = ?', [$this->email])->exists()) {
+            $this->addError('password', 'This email address is already in use. Please sign in instead.');
             return;
         }
 
@@ -188,7 +198,9 @@ class RegisterWizard extends Component
                 'password' => Hash::make($this->password),
                 'role' => 'Buyer',
             ]);
+
             $record->delete();
+
             Auth::login($user);
         });
 

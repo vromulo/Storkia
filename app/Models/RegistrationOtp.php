@@ -47,6 +47,11 @@ class RegistrationOtp extends Model
         return $this->verified_at !== null;
     }
 
+    public function setEmailAttribute(string $value): void
+    {
+        $this->attributes['email'] = strtolower(trim($value));
+    }
+
     /**
      * Whether this email is currently "held" by a session that verified it
      * but hasn't finished registration yet. Used to block a second session

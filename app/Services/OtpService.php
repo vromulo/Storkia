@@ -19,8 +19,11 @@ class OtpService
      */
     public function sendOtp(string $email): array
     {
-        if (User::where('email', $email)->exists()) {
-            return [false, 'This email is already registered.', 0];
+        $email = strtolower(trim($email));
+
+        // Enforce case-insensitive and trimmed uniqueness check
+        if (User::whereRaw('LOWER(TRIM(email)) = ?', [$email])->exists()) {
+            return [false, 'This email address is already in use.', 0];
         }
 
         $existing = RegistrationOtp::where('email', $email)->first();
@@ -68,6 +71,12 @@ class OtpService
      */
     public function verifyOtp(string $email, string $code): array
     {
+        $email = strtolower(trim($email));
+
+        if (User::whereRaw('LOWER(TRIM(email)) = ?', [$email])->exists()) {
+            return [false, 'This email address is already in use.', null, 0];
+        }
+
         $record = RegistrationOtp::where('email', $email)->first();
 
         if (! $record) {

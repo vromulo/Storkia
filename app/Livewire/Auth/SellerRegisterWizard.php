@@ -138,12 +138,23 @@ class SellerRegisterWizard extends Component
 
     public function sendCode(OtpService $otpService): void
     {
+        $this->email = strtolower(trim($this->email));
+
         $this->validateOnly('email', ['email' => ['required', 'email:rfc,dns']]);
+
+        if (User::whereRaw('LOWER(TRIM(email)) = ?', [$this->email])->exists()) {
+            $this->addError('email', 'This email address is already in use.');
+            return;
+        }
 
         [$success, $error, $cooldown] = $otpService->sendOtp($this->email);
 
         if (! $success) {
-            $this->addError('email', $error);
+            $this->addError($cooldown > 0 ? 'code' : 'email', $error);
+            if ($cooldown > 0) {
+                $this->resendCooldown = $cooldown;
+                $this->codeSent = true;
+            }
             return;
         }
 
@@ -151,6 +162,7 @@ class SellerRegisterWizard extends Component
         $this->codeSent = true;
         $this->attemptsRemaining = RegistrationOtp::MAX_ATTEMPTS;
         $this->resendCooldown = $cooldown;
+        $this->resetErrorBag();
     }
 
     public function resendCode(OtpService $otpService): void
@@ -160,6 +172,7 @@ class SellerRegisterWizard extends Component
 
     public function verifyCode(OtpService $otpService): void
     {
+        $this->email = strtolower(trim($this->email));
         $this->validateOnly('code', ['code' => ['required', 'digits:6']]);
 
         [$valid, $error, $token, $remaining] = $otpService->verifyOtp($this->email, $this->code);
@@ -172,6 +185,7 @@ class SellerRegisterWizard extends Component
 
         $this->verificationToken = $token;
         $this->currentStep = 2;
+        $this->resetErrorBag();
     }
 
     protected function getStep2Rules(): array
@@ -255,13 +269,36 @@ class SellerRegisterWizard extends Component
     public function register()
     {
         $this->validate($this->getStep6Rules(), $this->getStep6Messages());
+
+        $this->email = strtolower(trim($this->email));
+
+        $record = RegistrationOtp::where('email', $this->email)
+            ->where('verification_token', $this->verificationToken)
+            ->first();
+
+        if (! $record || ! $record->isVerified() || ! $record->isReservationActive()) {
+            $this->addError('password', 'Your email verification has expired. Please verify your email again.');
+            $this->currentStep = 1;
+            $this->codeSent = false;
+            $this->verificationToken = null;
+            return;
+        }
+
+        if (User::whereRaw('LOWER(TRIM(email)) = ?', [$this->email])->exists()) {
+            $this->addError('email', 'This email address is already in use.');
+            $this->currentStep = 1;
+            $this->codeSent = false;
+            $this->verificationToken = null;
+            return;
+        }
+
         $formattedContactNo = '+63' . ltrim($this->contact_no, '0');
 
         DB::transaction(function () use ($formattedContactNo) {
             $user = User::create([
-                'first_name' => ucwords(strtolower($this->first_name)),
-                'last_name' => ucwords(strtolower($this->last_name)),
-                'middle_initial' => $this->middle_initial ? strtoupper($this->middle_initial) : null,
+                'first_name' => ucwords(strtolower(trim($this->first_name))),
+                'last_name' => ucwords(strtolower(trim($this->last_name))),
+                'middle_initial' => $this->middle_initial ? strtoupper(trim($this->middle_initial)) : null,
                 'sex' => $this->sex,
                 'email' => $this->email,
                 'contact_no' => $formattedContactNo,
