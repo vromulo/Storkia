@@ -1,4 +1,10 @@
-@props(['product'])
+@props(['product', 'fromCategory' => null])
+
+@php
+    $productShowUrl = $fromCategory 
+        ? route('product.show', [$product->id, 'from_category' => $fromCategory]) 
+        : route('product.show', $product->id);
+@endphp
 
 <div 
     x-data="{ imageLoaded: false }" 
@@ -6,7 +12,7 @@
     class="group relative flex flex-col cursor-pointer"
 >
     <!-- Clickable Product Link Wrapper -->
-    <a href="{{ route('product.show', $product->id) }}" class="block">
+    <a href="{{ $productShowUrl }}" class="block">
         
         <!-- Image Container: Enlarged preview area -->
         <div class="relative w-full aspect-square bg-surface-subtle rounded-2xl overflow-hidden mb-3 border border-border-subtle/60 flex items-center justify-center transition-all duration-300 group-hover:shadow-sm">
@@ -35,7 +41,7 @@
 
             <!-- Optional Discount Tag -->
             @if($product->discount > 0)
-                <span class="absolute top-2.5 left-2.5 bg-primary text-surface text-xs font-bold px-2 py-0.5 rounded-md shadow-xs z-20">
+                <span class="absolute top-2.5 left-2.5 bg-price text-surface text-xs font-bold px-2 py-0.5 rounded-md shadow-xs z-20">
                     -{{ number_format($product->discount, 0) }}%
                 </span>
             @endif

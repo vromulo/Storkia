@@ -3,9 +3,9 @@
 namespace App\Http\Controllers\Buyer;
 
 use App\Http\Controllers\Controller;
+use App\Models\Product;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
-use App\Models\Product;
 
 class CategoryController extends Controller
 {
@@ -126,21 +126,50 @@ class CategoryController extends Controller
         }
 
         $selectedSubcategory = $request->query('subcategory', 'All');
-        
-        // Fetch products associated with this category and optional subcategory
-        $query = Product::where('category', $categoryName);
-        
-        if ($selectedSubcategory !== 'All') {
-            $query->where('subcategory', $selectedSubcategory);
-        }
-        
-        $products = $query->get();
 
-        return view('category.show', [
-            'categoryName' => $categoryName,
-            'subcategories' => $matchedCategory,
+        // Storefront standard: Only Approved and In-Stock products
+        $products = Product::where('category', $categoryName)
+            ->where('stock_quantity', '>', 0)
+            ->whereHas('approval', function ($query) {
+                $query->where('status', 'Approved');
+            })
+            ->latest()
+            ->get();
+
+        // Calculate dynamic price ranges
+        $minPrice = $products->min(function ($p) {
+            return $p->discount > 0 ? ($p->price - ($p->price * ($p->discount / 100))) : $p->price;
+        }) ?? 0;
+
+        $maxPrice = $products->max(function ($p) {
+            return $p->price;
+        }) ?? 5000;
+
+        $minPrice = floor($minPrice);
+        $maxPrice = ceil($maxPrice > 0 ? $maxPrice : 5000);
+
+        // Minimalist catalog metadata for reactive Alpine filtering
+        $productMetadata = $products->map(function ($p) {
+            $effectivePrice = $p->discount > 0 
+                ? ($p->price - ($p->price * ($p->discount / 100))) 
+                : $p->price;
+
+            return [
+                'id'          => $p->id,
+                'subcategory' => $p->subcategory ?? 'General',
+                'price'       => (float) number_format((float)$effectivePrice, 2, '.', ''),
+            ];
+        })->values();
+
+        return view('buyer.category.show', [
+            'categoryName'        => $categoryName,
+            'slug'                => $slug,
+            'subcategories'       => $matchedCategory,
             'selectedSubcategory' => $selectedSubcategory,
-            'products' => $products,
+            'products'            => $products,
+            'productMetadata'     => $productMetadata,
+            'minPrice'            => $minPrice,
+            'maxPrice'            => $maxPrice,
         ]);
     }
 }

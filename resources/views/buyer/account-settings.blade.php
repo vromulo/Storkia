@@ -4,7 +4,7 @@
 <div class="bg-surface min-h-[calc(100vh-250px)] py-4 sm:py-6 md:py-8">
     <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         
-        <!-- Breadcrumb Navigation & Header: Hidden on mobile (< 768px), visible on md+ -->
+        <!-- Breadcrumb Navigation: Hidden on mobile (< 768px), visible on md+ -->
         <div class="hidden md:block mb-6">
             @php
                 $currentLabel = match(true) {
@@ -23,16 +23,7 @@
                 };
             @endphp
 
-            <nav class="flex items-center space-x-2 text-xs text-text-muted mb-3 select-none" aria-label="Breadcrumb">
-                <a href="/" class="hover:text-primary transition-colors">Home</a>
-
-                @if($currentLabel)
-                    <span class="text-border-subtle">/</span>
-                    <span class="text-text-main font-semibold">
-                        {{ $currentLabel }}
-                    </span>
-                @endif
-            </nav>
+            <x-ui.breadcrumbs :items="array_filter([$currentLabel])" class="mb-3" />
         </div>
 
         <!-- Flush Two-column Layout on Desktop (md:flex-row) -->

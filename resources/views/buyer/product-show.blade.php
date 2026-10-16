@@ -71,13 +71,29 @@
         
         this.$refs.addToCartForm.submit();
     }
-}" class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 bg-gray-50 min-h-screen relative overflow-hidden">
+}" class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 bg-surface min-h-screen relative overflow-hidden">
     
-    <!-- Breadcrumbs -->
-    <div class="text-sm text-gray-500 mb-6">
-        <a href="{{ route('home') }}" class="hover:text-primary cursor-pointer transition-colors">Home</a> &gt; 
-        <span class="text-gray-700 font-medium">{{ $product->name }}</span>
-    </div>
+    <!-- Breadcrumb Navigation Component -->
+    @php
+        $fromCategory = request()->query('from_category');
+        $breadcrumbItems = [];
+
+        if (!empty($fromCategory)) {
+            // Clicked from a category page: Home / {Category} / {Product Name}
+            $breadcrumbItems[] = [
+                'label' => $fromCategory,
+                'url'   => url('/category/' . \Illuminate\Support\Str::slug($fromCategory)),
+            ];
+        }
+
+        // Current item (active)
+        $breadcrumbItems[] = [
+            'label' => $product->name,
+            'url'   => null,
+        ];
+    @endphp
+
+    <x-ui.breadcrumbs :items="$breadcrumbItems" class="mb-6" />
 
     <!-- Product Overview -->
     <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden flex flex-col md:flex-row p-6 md:p-8 gap-8 relative">
