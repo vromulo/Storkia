@@ -3,7 +3,7 @@
 namespace App\Livewire\Admin;
 
 use App\Models\ProductApproval;
-use App\Notifications\ProductComplianceNotification;
+use App\Notifications\Seller\ProductComplianceNotification;
 use Illuminate\Support\Facades\Auth;
 use Livewire\Attributes\Layout;
 use Livewire\Component;
