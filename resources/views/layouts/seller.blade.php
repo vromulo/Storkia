@@ -3,6 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="csrf-token" content="{{ csrf_token() }}">
     <title>{{ $title ?? 'Storkia - Seller Portal' }}</title>
     @vite(['resources/css/app.css', 'resources/js/app.js'])
     @livewireStyles
@@ -45,11 +46,17 @@
         <!-- Portal View Wrapper with Top Navigation Bar -->
         <div class="flex-1 flex flex-col h-screen overflow-hidden">
             <!-- Global Top Header Bar -->
-            <header class="h-20 bg-surface/90 backdrop-blur-md border-b border-border-subtle px-8 flex items-center justify-between shrink-0 z-30">
+            <header x-data="{
+                        headerStoreName: @js(auth()->user()->sellerProfile?->business_name ?? 'Seller Portal'),
+                        headerOwnerName: @js(trim((auth()->user()->first_name ?? '') . ' ' . (auth()->user()->last_name ?? ''))),
+                        headerPhotoUrl: @js(auth()->user()->sellerProfile?->logo_path ? asset('storage/' . auth()->user()->sellerProfile->logo_path) : '')
+                    }"
+                    @seller-store-name-updated.window="headerStoreName = $event.detail.business_name"
+                    @seller-owner-name-updated.window="headerOwnerName = $event.detail.full_name"
+                    @seller-photo-updated.window="headerPhotoUrl = $event.detail.photo_url"
+                    class="h-20 bg-surface/90 backdrop-blur-md border-b border-border-subtle px-8 flex items-center justify-between shrink-0 z-30">
                 <div>
-                    <h2 class="text-sm font-bold text-text-muted">
-                        {{ auth()->user()->sellerProfile?->business_name ?? 'Seller Portal' }}
-                    </h2>
+                    <h2 class="text-sm font-bold text-text-muted" x-text="headerStoreName"></h2>
                 </div>
 
                 <div class="flex items-center gap-4">
@@ -132,15 +139,21 @@
                     </div>
 
                     <!-- Store Profile Badge -->
-                    <div class="flex items-center gap-3 pl-2 border-l border-border-subtle">
-                        <div class="w-9 h-9 rounded-full bg-primary/10 text-primary font-bold text-xs flex items-center justify-center border border-primary/20">
-                            {{ strtoupper(substr(auth()->user()->first_name ?? 'S', 0, 1)) }}
+                    <a href="{{ auth()->user()->sellerProfile ? route('seller.store-settings') : route('seller.seller-dashboard') }}"
+                       class="flex items-center gap-3 pl-2 border-l border-border-subtle group cursor-pointer">
+                        <div class="w-9 h-9 rounded-full bg-primary/10 text-primary font-bold text-xs flex items-center justify-center border border-primary/20 overflow-hidden shrink-0">
+                            <template x-if="headerPhotoUrl">
+                                <img :src="headerPhotoUrl" alt="Store Logo" class="w-full h-full object-cover">
+                            </template>
+                            <template x-if="!headerPhotoUrl">
+                                <span x-text="(headerStoreName || 'S').charAt(0).toUpperCase()"></span>
+                            </template>
                         </div>
                         <div class="text-left hidden sm:block">
-                            <span class="text-xs font-bold text-text-main block leading-tight">{{ auth()->user()->first_name }} {{ auth()->user()->last_name }}</span>
+                            <span class="text-xs font-bold text-text-main group-hover:text-primary transition-colors block leading-tight" x-text="headerOwnerName"></span>
                             <span class="text-[10px] text-text-muted block">{{ auth()->user()->sellerProfile?->line_of_business ?? 'Seller' }}</span>
                         </div>
-                    </div>
+                    </a>
                 </div>
             </header>
 
@@ -159,6 +172,8 @@
             </main>
         </div>
     </div>
+
+    <x-ui.toast-notification />
 
     @livewireScripts
 </body>

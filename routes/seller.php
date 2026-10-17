@@ -4,6 +4,7 @@ use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Seller\AuthController;
 use App\Http\Controllers\Seller\DashboardController;
 use App\Http\Controllers\Seller\ProductController;
+use App\Http\Controllers\Seller\StoreSettingsController;
 
 Route::middleware('guest')->group(function () {
     Route::get('/seller/login', [AuthController::class, 'showLogin'])->name('seller.login');
@@ -29,6 +30,21 @@ Route::middleware(['auth', 'role:Seller'])->group(function () {
         Route::patch('/products/{id}/unarchive', [ProductController::class, 'unarchive'])->name('products.unarchive');
         Route::delete('/products/{id}/force-delete', [ProductController::class, 'forceDelete'])->name('products.forceDelete');
 
+        // Store Settings & Account Management (Approved Sellers Only)
+        Route::get('/store-settings', [StoreSettingsController::class, 'index'])->name('store-settings');
+        Route::post('/store-settings/photo', [StoreSettingsController::class, 'updatePhoto'])->name('store-settings.update-photo');
+        Route::delete('/store-settings/photo', [StoreSettingsController::class, 'removePhoto'])->name('store-settings.remove-photo');
+        Route::patch('/store-settings/store-name', [StoreSettingsController::class, 'updateStoreName'])->name('store-settings.update-store-name');
+        Route::get('/store-settings/documents/{type}', [StoreSettingsController::class, 'viewDocument'])->name('store-settings.document');
+
+        Route::patch('/store-settings/name', [StoreSettingsController::class, 'updateName'])->name('store-settings.update-name');
+        Route::patch('/store-settings/phone', [StoreSettingsController::class, 'updatePhone'])->name('store-settings.update-phone');
+        Route::post('/store-settings/email/request-otp', [StoreSettingsController::class, 'requestEmailOtp'])->name('store-settings.request-email-otp');
+        Route::post('/store-settings/email/verify-otp', [StoreSettingsController::class, 'verifyEmailOtp'])->name('store-settings.verify-email-otp');
+        Route::post('/store-settings/password/request-otp', [StoreSettingsController::class, 'requestPasswordOtp'])->name('store-settings.request-password-otp');
+        Route::post('/store-settings/password/verify-otp', [StoreSettingsController::class, 'verifyPasswordOtp'])->name('store-settings.verify-password-otp');
+        Route::patch('/store-settings/password', [StoreSettingsController::class, 'updatePassword'])->name('store-settings.update-password');
+        
         // Advanced Real-Time Messaging Routes
         Route::get('/messages', [\App\Http\Controllers\Seller\SellerMessageController::class, 'index'])->name('messages.seller-messages');
         Route::get('/messages/contacts', [\App\Http\Controllers\Seller\SellerMessageController::class, 'fetchContacts'])->name('messages.contacts');

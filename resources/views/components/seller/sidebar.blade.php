@@ -12,8 +12,8 @@
         <a href="{{ route('seller.seller-dashboard') }}"
             @click="if (window.location.href.split('?')[0] === '{{ route('seller.seller-dashboard') }}') { $event.preventDefault(); window.scrollTo({top: 0, behavior: 'smooth'}); }"
             class="flex items-center justify-center h-10 w-full overflow-hidden text-primary-dark transition-colors cursor-pointer">
-            <img x-show="sidebarOpen" x-transition.opacity.duration.300ms src="{{ asset('assets/storkia-maximized.webp') }}" alt="Storkia" class="h-8 w-auto object-contain">
-            <img x-show="!sidebarOpen" x-cloak src="{{ asset('assets/storkia-minimized.webp') }}" alt="S" class="h-8 w-auto object-contain">
+            <img x-show="sidebarOpen" x-transition.opacity.duration.300ms src="{{ asset('assets/pink-storkia-maximized.webp') }}" alt="Storkia" class="h-8 w-auto object-contain">
+            <img x-show="!sidebarOpen" x-cloak src="{{ asset('assets/pink-storkia-minimized.webp') }}" alt="S" class="h-8 w-auto object-contain">
         </a>
     </div>
 
@@ -141,6 +141,8 @@
         </div>
         @endif
 
+        @if(auth()->user()->sellerProfile)
+        @php $isSalesActive = request()->is('seller/sales*'); @endphp
         <!-- Reviews & Feedback -->
         <a href="#"
             @click="activeDropdown = null"
@@ -151,7 +153,10 @@
             </svg>
             <span x-show="sidebarOpen" x-transition.opacity.duration.300ms class="ml-3">Reviews & Feedback</span>
         </a>
+        @endif 
 
+        @if(auth()->user()->sellerProfile)
+        @php $isSalesActive = request()->is('seller/sales*'); @endphp
         <!-- Messages -->
         <a href="{{ route('seller.messages.seller-messages') }}"
             @click="activeDropdown = null"
@@ -162,30 +167,22 @@
             </svg>
             <span x-show="sidebarOpen" x-transition.opacity.duration.300ms class="ml-3">Messages</span>
         </a>
+        @endif
 
-        <!-- Account -->
-        @php $isAccountActive = request()->is('seller/account*'); @endphp
-        <div>
-            <button @click="if(!sidebarOpen) { sidebarOpen = true; activeDropdown = 'account'; } else { activeDropdown = activeDropdown === 'account' ? null : 'account'; }"
-                    class="flex items-center justify-between w-full px-3 py-3 rounded-xl transition-all duration-200 font-medium group whitespace-nowrap text-sm cursor-pointer {{ $isAccountActive ? 'text-primary font-bold bg-brand-light/20' : 'text-text-muted hover:bg-brand-light/30 hover:text-primary' }}"
-                    :title="!sidebarOpen ? 'Account' : ''">
-                <div class="flex items-center">
-                    <svg class="w-6 h-6 flex-shrink-0 transition-colors {{ $isAccountActive ? 'text-primary' : 'text-text-muted group-hover:text-primary' }}" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-                    </svg>
-                    <span x-show="sidebarOpen" x-transition.opacity.duration.300ms class="ml-3">Account</span>
-                </div>
-                <svg x-show="sidebarOpen" class="w-4 h-4 transition-transform duration-200 text-text-muted group-hover:text-primary" :class="{'rotate-180': activeDropdown === 'account'}" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
-                </svg>
-            </button>
-            <div x-show="activeDropdown === 'account' && sidebarOpen" x-collapse x-cloak class="ml-6 pl-4 my-1 border-l-2 border-border-subtle/70 space-y-1">
-                <a href="#" class="block px-3 py-2 text-xs rounded-lg text-text-muted hover:text-text-main hover:bg-brand-light/25 transition-all whitespace-nowrap cursor-pointer">Store Profile</a>
-                <a href="#" class="block px-3 py-2 text-xs rounded-lg text-text-muted hover:text-text-main hover:bg-brand-light/25 transition-all whitespace-nowrap cursor-pointer">Personal Information</a>
-                <a href="#" class="block px-3 py-2 text-xs rounded-lg text-text-muted hover:text-text-main hover:bg-brand-light/25 transition-all whitespace-nowrap cursor-pointer">Payment / Payout</a>
-                <a href="#" class="block px-3 py-2 text-xs rounded-lg text-text-muted hover:text-text-main hover:bg-brand-light/25 transition-all whitespace-nowrap cursor-pointer">Security</a>
-            </div>
-        </div>
+        <!-- Store Settings (Approved Sellers Only) -->
+        @if(auth()->user()->sellerProfile)
+        @php $isSalesActive = request()->is('seller/sales*'); @endphp
+        <a href="{{ route('seller.store-settings') }}"
+            @click="activeDropdown = null"
+            class="flex items-center px-3 py-3 rounded-xl transition-all duration-200 font-medium group whitespace-nowrap text-sm cursor-pointer {{ request()->routeIs('seller.store-settings*') ? 'text-primary font-bold bg-brand-light/60 shadow-xs' : 'text-text-muted hover:bg-brand-light/30 hover:text-primary' }}"
+            :title="!sidebarOpen ? 'Store Settings' : ''">
+            <svg class="w-6 h-6 flex-shrink-0 transition-colors {{ request()->routeIs('seller.store-settings*') ? 'text-primary' : 'text-text-muted group-hover:text-primary' }}" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+            </svg>
+            <span x-show="sidebarOpen" x-transition.opacity.duration.300ms class="ml-3">Store Settings</span>
+        </a>
+        @endif
     </nav>
 
     <!-- Logout Footer -->

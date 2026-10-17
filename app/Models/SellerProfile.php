@@ -7,9 +7,18 @@ use Illuminate\Database\Eloquent\Model;
 class SellerProfile extends Model
 {
     protected $fillable = [
-        'user_id', 'contact_no', 'province', 'municipality', 'barangay', 
-        'street', 'house_details', 'business_name', 'line_of_business', 
-        'id_path', 'permit_path'
+        'user_id',
+        'contact_no',
+        'province',
+        'municipality',
+        'barangay',
+        'street',
+        'house_details',
+        'business_name',
+        'line_of_business',
+        'logo_path',
+        'id_path',
+        'permit_path',
     ];
 
     public function user()
