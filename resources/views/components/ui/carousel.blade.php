@@ -25,7 +25,7 @@
      class="relative w-full h-full bg-primary-dark overflow-hidden shrink-0 group">
     
     <!-- Home Icon Button -->
-    <a href="/" wire:navigate class="absolute top-8 left-8 z-50 transition-transform duration-300 hover:scale-105 cursor-pointer">
+    <a href="/shop" wire:navigate class="absolute top-8 left-8 z-50 transition-transform duration-300 hover:scale-105 cursor-pointer">
         <img src="/assets/storkia-minimized.webp" alt="Home" class="w-12 h-12 object-contain drop-shadow-[0_4px_10px_rgba(0,0,0,0.6)]">
     </a>
 

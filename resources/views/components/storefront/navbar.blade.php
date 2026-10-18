@@ -20,9 +20,9 @@
     <!-- Main Nav Container -->
     <div class="relative z-30 max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8">
         <div class="flex justify-between h-14 sm:h-16 items-center">
-            <!-- Logo -->
+            <!-- Logo (Redirects to Storefront Home) -->
             <div class="flex-shrink-0 flex items-center">
-                <a href="/" class="flex items-center text-primary">
+                <a href="{{ route('home') }}" class="flex items-center text-primary">
                     <img src="{{ asset('assets/pink-storkia-minimized.webp') }}" alt="Storkia" class="block md:hidden h-8 w-auto object-contain">
                     <img src="{{ asset('assets/pink-storkia-maximized.webp') }}" alt="Storkia" class="hidden md:block h-9 w-auto object-contain">
                 </a>
@@ -31,7 +31,6 @@
             <!-- Search Bar: Expandable wide search with Alpine.js -->
             <div class="flex flex-1 max-w-4xl mx-3 sm:mx-6 md:mx-10" x-data="searchComponent()">
                 <div class="relative w-full group" @click.away="showSuggestions = false">
-                    <!-- Search Form -->
                     <form @submit.prevent="submitSearch" class="relative">
                         <input 
                             x-model="query"
@@ -43,8 +42,6 @@
                             placeholder="Search products..." 
                             class="w-full bg-surface-subtle focus:bg-surface border border-transparent hover:border-text-main focus:border-text-main rounded-full py-2 sm:py-2.5 px-4 pl-11 outline-none text-text-main placeholder:text-text-muted text-sm font-normal transition-all duration-200"
                         >
-
-                        <!-- Search Icon -->
                         <button type="submit" class="absolute left-4 top-1/2 -translate-y-1/2 text-text-muted group-hover:text-text-main group-focus-within:text-text-main transition-colors duration-150 flex items-center justify-center">
                             <svg xmlns="http://www.w3.org/2000/svg" class="h-4.5 w-4.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.75">
                                 <circle cx="11" cy="11" r="7" stroke-linecap="round" stroke-linejoin="round" />
@@ -61,7 +58,6 @@
                         <ul class="py-1">
                             <template x-for="item in suggestions" :key="item.category || 'all'">
                                 <li>
-                                    <!-- Dynamic URL mapped to category selection -->
                                     <a :href="'/search?q=' + encodeURIComponent(item.name) + (item.category ? '&category=' + encodeURIComponent(item.category) : '')" 
                                        class="flex items-center px-4 py-2 hover:bg-surface-subtle transition-colors">
                                         <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 text-text-muted mr-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -69,7 +65,6 @@
                                         </svg>
                                         <div>
                                             <span class="text-sm text-text-main font-medium" x-text="item.name"></span>
-                                            <!-- Dynamically display category or 'All Categories' fallback -->
                                             <span class="text-xs text-text-muted ml-2" x-text="item.category ? 'in ' + item.category : 'in All Categories'"></span>
                                         </div>
                                     </a>
@@ -82,7 +77,6 @@
 
             <!-- Action Icons -->
             <div class="flex items-center space-x-5 md:space-x-8">
-                <!-- Profile Menu -->
                 <div x-data="{ open: false, timer: null }" 
                     @mouseenter="if (window.innerWidth >= 768) { clearTimeout(timer); open = true; }" 
                     @mouseleave="if (window.innerWidth >= 768) { timer = setTimeout(() => { open = false; }, 300); }" 
@@ -99,7 +93,6 @@
                     @endguest
 
                     @auth
-                        <!-- Role-Aware Profile Direct Link -->
                         @if(auth()->user()->role === 'Buyer')
                             <a href="{{ route('user.account') }}" class="flex items-center text-text-main hover:text-primary transition-colors cursor-pointer focus:outline-none" aria-label="Personal Center">
                                 <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -187,11 +180,9 @@
                             @endauth
                         </a>
 
-                        <!-- Render Popover -->
                         <x-storefront.cart-dropdown />
                     </div>
                 @endif
-                
             </div>
         </div>
     </div>

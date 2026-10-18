@@ -146,7 +146,7 @@
                 </div>
                 <h2 class="text-2xl font-serif font-bold text-primary-dark mb-2">Your Shopping Cart is Empty</h2>
                 <p class="text-text-muted text-sm mb-6">Looks like you haven't added anything to your cart yet.</p>
-                <a href="/" class="inline-flex px-8 py-3.5 bg-primary hover:bg-primary-dark text-surface font-semibold text-sm rounded-full transition-colors shadow-xs">
+                <a href="/shop" class="inline-flex px-8 py-3.5 bg-primary hover:bg-primary-dark text-surface font-semibold text-sm rounded-full transition-colors shadow-xs">
                     Start Shopping
                 </a>
             </div>

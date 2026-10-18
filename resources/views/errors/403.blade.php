@@ -35,7 +35,7 @@
                     Return to Your Portal
                 </a>
             @else
-                <a href="/" class="w-full sm:w-auto px-6 py-3 bg-primary text-white text-xs font-bold rounded-xl shadow-md hover:bg-primary-dark transition-colors cursor-pointer">
+                <a href="/shop" class="w-full sm:w-auto px-6 py-3 bg-primary text-white text-xs font-bold rounded-xl shadow-md hover:bg-primary-dark transition-colors cursor-pointer">
                     Return to Homepage
                 </a>
             @endauth

@@ -11,8 +11,11 @@ use App\Http\Controllers\Buyer\AddressController;
 use App\Http\Controllers\Buyer\CartController;
 use App\Livewire\Buyer\IdentityVerificationFlow;
 
+// Landing Page (The first thing users see at the root domain)
+Route::view('/', 'buyer.landing-page')->name('landing');
+
 // Public Storefront Routes
-Route::get('/', [HomeController::class, 'index'])->name('home');
+Route::get('/shop', [HomeController::class, 'index'])->name('home');
 Route::get('/product/{product}', [ProductController::class, 'show'])->name('product.show');
 Route::get('/category/{slug}', [CategoryController::class, 'show'])->name('category.show');
 Route::get('/search', [SearchController::class, 'index'])->name('search.search');

@@ -29,7 +29,7 @@
                         {{ $mobilePrompt ?? 'Please log in from a computer to access this interface.' }}
                     </p>
                 </div>
-                <a href="/" class="w-full flex items-center justify-center px-6 py-4 bg-primary text-white text-lg font-bold rounded-2xl shadow-md hover:bg-primary-dark transition-all duration-200 cursor-pointer active:scale-95">
+                <a href="/shop" class="w-full flex items-center justify-center px-6 py-4 bg-primary text-white text-lg font-bold rounded-2xl shadow-md hover:bg-primary-dark transition-all duration-200 cursor-pointer active:scale-95">
                     Return Home
                 </a>
             </div>

@@ -10,7 +10,7 @@
             <p class="text-text-muted text-sm max-w-md mx-auto mb-8 leading-relaxed font-normal">
                 Thank you for applying to be a logistics sorting center. Your documents and hub location are under review. Updates will be sent to <span class="font-semibold text-text-main">{{ $email }}</span>.
             </p>
-            <a href="/" wire:navigate class="inline-flex py-3 px-8 bg-primary-dark hover:bg-text-main text-surface text-sm font-semibold rounded-full shadow-xs transition-all cursor-pointer">
+            <a href="/shop" wire:navigate class="inline-flex py-3 px-8 bg-primary-dark hover:bg-text-main text-surface text-sm font-semibold rounded-full shadow-xs transition-all cursor-pointer">
                 Return to Homepage
             </a>
         </div>
