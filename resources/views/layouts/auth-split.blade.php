@@ -8,6 +8,7 @@
     @livewireStyles
 </head>
 <body class="m-0 p-0 h-screen w-screen font-sans antialiased text-text-main overflow-hidden bg-surface relative">
+    <x-ui.preloader />
     
     @php
         $restrictMobile = $restrictMobile ?? true;

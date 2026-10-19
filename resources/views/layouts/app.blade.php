@@ -14,6 +14,8 @@
 </head>
 
 <body class="">
+    <x-ui.preloader />
+
     <header 
         x-data="{ showHeader: true, lastScroll: 0 }" 
         @scroll.window="

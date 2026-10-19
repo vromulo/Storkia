@@ -15,6 +15,7 @@
 
     </head>
     <body class="m-0 p-0 h-screen w-screen font-sans antialiased text-text-main overflow-hidden bg-gradient-to-b from-surface via-surface to-brand-light/30 relative">
+        <x-ui.preloader />
         
         <!-- Mobile Restricted View -->
         <div class="mobile-view absolute inset-0 bg-surface/80 backdrop-blur-md z-40"></div>
