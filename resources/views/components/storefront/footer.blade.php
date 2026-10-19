@@ -1,11 +1,14 @@
-<footer class="bg-primary-dark border-t-16 border-primary font-sans pt-16 pb-8">
+<footer class="relative z-20 bg-primary-dark border-t-16 border-primary font-sans pt-16 pb-8">
     <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <!-- Main Footer Grid -->
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-12 mb-12">
             
             <!-- Brand Section -->
             <div class="flex flex-col">
-                <a href="/" class="text-5xl leading-none font-serif text-white tracking-tight hover:text-gray-200 transition-colors mb-4 inline-block">Storkia</a>
+                <a href="/" class="inline-block mb-6 hover:opacity-90 transition-opacity">
+                    <img src="{{ asset('assets/pink-storkia-minimized.webp') }}" alt="Storkia" class="block md:hidden h-8 w-auto object-contain brightness-0 invert">
+                    <img src="{{ asset('assets/pink-storkia-maximized.webp') }}" alt="Storkia" class="hidden md:block h-10 w-auto object-contain brightness-0 invert">
+                </a>
                 <p class="text-sm text-gray-100 leading-relaxed mb-6">
                     Fast delivery. Exclusive deals. Right to your doorstep. Experience the fastest routing and secure handling in the city.
                 </p>
@@ -58,7 +61,6 @@
                     <div class="flex items-center w-full border border-white/30 rounded-xl bg-white/10 focus-within:border-white focus-within:ring-1 focus-within:ring-white transition-all overflow-hidden shadow-sm">
                         <input type="email" placeholder="Enter your email" required class="w-full py-2.5 px-4 bg-transparent outline-none text-white text-sm placeholder:text-gray-300">
                     </div>
-                    <!-- I used white for the button background to contrast with the dark maroon -->
                     <button type="submit" class="w-full py-2.5 px-4 bg-white hover:bg-gray-100 text-[#5a2e3f] text-sm font-bold rounded-xl shadow-md transition-colors">
                         Subscribe
                     </button>
