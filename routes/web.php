@@ -9,30 +9,28 @@ use App\Http\Controllers\Buyer\SearchController;
 use App\Http\Controllers\Buyer\AccountManagementController;
 use App\Http\Controllers\Buyer\AddressController;
 use App\Http\Controllers\Buyer\CartController;
+use App\Http\Controllers\Buyer\SellerController;
 use App\Livewire\Buyer\IdentityVerificationFlow;
 
-// Landing Page (The first thing users see at the root domain)
 Route::view('/', 'buyer.landing-page')->name('landing');
 
-// Public Storefront Routes
 Route::get('/shop', [HomeController::class, 'index'])->name('home');
+Route::get('/sellers', [SellerController::class, 'index'])->name('sellers.index');
+Route::get('/sellers/{seller}', [SellerController::class, 'show'])->name('sellers.show');
 Route::get('/product/{product}', [ProductController::class, 'show'])->name('product.show');
 Route::get('/category/{slug}', [CategoryController::class, 'show'])->name('category.show');
 Route::get('/search', [SearchController::class, 'index'])->name('search.search');
 Route::get('/search/suggestions', [SearchController::class, 'suggestions'])->name('search.suggestions');
 
-// Buyer Guest Authentication
 Route::middleware('guest')->group(function () {
     Route::get('/login', [AuthController::class, 'showLogin'])->name('login');
     Route::post('/login', [AuthController::class, 'login'])->name('login.post');
     Route::get('/register', [AuthController::class, 'showRegister'])->name('register');
 });
 
-// Global Authenticated Actions
 Route::middleware('auth')->group(function () {
     Route::post('/logout', [AuthController::class, 'logout'])->name('logout');
 
-    // Strict Buyer-Only Routes (Enforces 403 Forbidden for Sellers and Logistics)
     Route::middleware('role:Buyer')->group(function () {
         Route::get('/cart', [CartController::class, 'index'])->name('cart.index');
         Route::post('/cart', [CartController::class, 'store'])->name('cart.store');
@@ -57,7 +55,6 @@ Route::middleware('auth')->group(function () {
             Route::delete('/addresses/{id}', [AddressController::class, 'destroy'])->name('addresses.destroy');
             Route::get('/addresses/psgc/municipalities/{provinceCode}', [AddressController::class, 'getMunicipalities'])->name('addresses.psgc.municipalities');
 
-            // Advanced Real-Time Messaging Routes
             Route::get('/messages', [\App\Http\Controllers\Buyer\BuyerMessageController::class, 'index'])->name('messages.buyer-messages');
             Route::get('/messages/contacts', [\App\Http\Controllers\Buyer\BuyerMessageController::class, 'fetchContacts'])->name('messages.contacts');
             Route::get('/messages/fetch/{userId}', [\App\Http\Controllers\Buyer\BuyerMessageController::class, 'fetchMessages'])->name('messages.fetch');

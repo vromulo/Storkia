@@ -150,9 +150,9 @@
             <div class="flex justify-between items-end mb-8 sm:mb-12">
                 <div>
                     <span class="text-primary font-bold uppercase tracking-widest text-xs sm:text-sm mb-1 sm:mb-2 block">Curated Marketplace</span>
-                    <h2 class="text-3xl sm:text-4xl lg:text-5xl font-extrabold tracking-tight text-text-main">Featured Shops</h2>
+                    <h2 class="text-3xl sm:text-4xl lg:text-5xl font-extrabold tracking-tight text-text-main">Featured Stores</h2>
                 </div>
-                <a href="{{ route('home') }}" class="hidden sm:flex items-center gap-2 text-text-main font-bold hover:text-primary transition-colors">
+                <a href="{{ route('sellers.index') }}" class="hidden sm:flex items-center gap-2 text-text-main font-bold hover:text-primary transition-colors">
                     View All 
                     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 8l4 4m0 0l-4 4m4-4H3"></path></svg>
                 </a>
