@@ -15,6 +15,7 @@ class LogisticsProfile extends Model
         'street',
         'house_details',
         'business_name',
+        'logo_path',
         'id_path',
         'permit_path',
     ];

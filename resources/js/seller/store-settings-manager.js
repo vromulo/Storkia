@@ -1,9 +1,11 @@
 export default function sellerStoreSettingsManager(initialTab = 'store', initialEdit = null, data = {}) {
+    const baseUrl = data.base_url || '/seller/store-settings';
+
     return {
         activeTab: initialTab,
         activeEdit: initialEdit,
 
-        // --- Store Profile State ---
+        // --- Store / Hub Profile State ---
         businessName: data.business_name || '',
         businessNameInput: data.business_name || '',
         isSavingStoreName: false,
@@ -121,7 +123,7 @@ export default function sellerStoreSettingsManager(initialTab = 'store', initial
             return this.isEditing() && this.activeEdit !== field;
         },
 
-        // --- Store Photo Upload & Removal ---
+        // --- Store / Hub Photo Upload & Removal ---
         handlePhotoDrop(event) {
             this.isDraggingPhoto = false;
             const file = event.dataTransfer?.files?.[0];
@@ -159,7 +161,7 @@ export default function sellerStoreSettingsManager(initialTab = 'store', initial
                 document.querySelector('input[name="_token"]')?.value;
 
             try {
-                const response = await fetch('/seller/store-settings/photo', {
+                const response = await fetch(`${baseUrl}/photo`, {
                     method: 'POST',
                     headers: {
                         'Accept': 'application/json',
@@ -202,7 +204,7 @@ export default function sellerStoreSettingsManager(initialTab = 'store', initial
                 document.querySelector('input[name="_token"]')?.value;
 
             try {
-                const response = await fetch('/seller/store-settings/photo', {
+                const response = await fetch(`${baseUrl}/photo`, {
                     method: 'DELETE',
                     headers: {
                         'Accept': 'application/json',
@@ -228,7 +230,7 @@ export default function sellerStoreSettingsManager(initialTab = 'store', initial
             }
         },
 
-        // --- Store Name Submission ---
+        // --- Store / Hub Name Submission ---
         async submitStoreName(event) {
             const form = event.target;
             const formData = new FormData(form);
@@ -262,7 +264,7 @@ export default function sellerStoreSettingsManager(initialTab = 'store', initial
                     this.storeNameError = resData.errors?.business_name?.[0] || resData.message;
                 } else {
                     window.dispatchEvent(new CustomEvent('toast', {
-                        detail: { title: 'Error', message: resData.message || 'Unable to update store name.', type: 'danger' }
+                        detail: { title: 'Error', message: resData.message || 'Unable to update name.', type: 'danger' }
                     }));
                 }
             } catch (err) {
@@ -477,8 +479,9 @@ export default function sellerStoreSettingsManager(initialTab = 'store', initial
             this.otpError = null;
 
             try {
-                const token = document.querySelector('input[name="_token"]')?.value;
-                const response = await fetch('/seller/store-settings/email/verify-otp', {
+                const token = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') ||
+                    document.querySelector('input[name="_token"]')?.value;
+                const response = await fetch(`${baseUrl}/email/verify-otp`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -518,8 +521,9 @@ export default function sellerStoreSettingsManager(initialTab = 'store', initial
             this.otpError = null;
 
             try {
-                const token = document.querySelector('input[name="_token"]')?.value;
-                const response = await fetch('/seller/store-settings/email/request-otp', {
+                const token = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') ||
+                    document.querySelector('input[name="_token"]')?.value;
+                const response = await fetch(`${baseUrl}/email/request-otp`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -567,8 +571,9 @@ export default function sellerStoreSettingsManager(initialTab = 'store', initial
 
             this.isSavingPassword = true;
             try {
-                const token = document.querySelector('input[name="_token"]')?.value;
-                const response = await fetch('/seller/store-settings/password/request-otp', {
+                const token = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') ||
+                    document.querySelector('input[name="_token"]')?.value;
+                const response = await fetch(`${baseUrl}/password/request-otp`, {
                     method: 'POST',
                     headers: {
                         'Accept': 'application/json',
@@ -621,8 +626,9 @@ export default function sellerStoreSettingsManager(initialTab = 'store', initial
             this.passwordOtpError = null;
 
             try {
-                const token = document.querySelector('input[name="_token"]')?.value;
-                const response = await fetch('/seller/store-settings/password/verify-otp', {
+                const token = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') ||
+                    document.querySelector('input[name="_token"]')?.value;
+                const response = await fetch(`${baseUrl}/password/verify-otp`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -657,8 +663,9 @@ export default function sellerStoreSettingsManager(initialTab = 'store', initial
             this.passwordOtpError = null;
 
             try {
-                const token = document.querySelector('input[name="_token"]')?.value;
-                const response = await fetch('/seller/store-settings/password/request-otp', {
+                const token = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') ||
+                    document.querySelector('input[name="_token"]')?.value;
+                const response = await fetch(`${baseUrl}/password/request-otp`, {
                     method: 'POST',
                     headers: {
                         'Accept': 'application/json',

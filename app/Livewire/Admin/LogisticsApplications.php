@@ -6,6 +6,8 @@ use App\Mail\LogisticsApplicationDecisionMail;
 use App\Models\LogisticsApplication;
 use App\Models\LogisticsProfile;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
 use Livewire\Attributes\Layout;
 use Livewire\Component;
@@ -49,37 +51,53 @@ class LogisticsApplications extends Component
         $app = LogisticsApplication::with('user')->findOrFail($appId);
         $admin = Auth::guard('admin')->user();
 
-        $app->update([
-            'status' => 'approved',
-            'rejection_reason' => null,
-            'reviewed_by' => $admin->id,
-            'reviewed_at' => now(),
-        ]);
-
-        // Populates or updates active logistics profile strictly on approval
-        LogisticsProfile::updateOrCreate(
-            ['user_id' => $app->user_id],
-            [
-                'contact_no'    => $app->contact_no,
-                'province'      => $app->province,
-                'municipality'  => $app->municipality,
-                'barangay'      => $app->barangay,
-                'street'        => $app->street,
-                'house_details' => $app->house_details,
-                'business_name' => $app->business_name,
-                'id_path'       => $app->id_path,
-                'permit_path'   => $app->permit_path,
-            ]
-        );
-
-        $app->user->update(['role' => 'Logistics']);
+        DB::beginTransaction();
 
         try {
-            Mail::to($app->user->email)->send(new LogisticsApplicationDecisionMail($app, 'approved'));
-        } catch (\Throwable $e) {}
+            $app->update([
+                'status' => 'approved',
+                'rejection_reason' => null,
+                'reviewed_by' => $admin->id,
+                'reviewed_at' => now(),
+            ]);
 
-        $this->detailModalOpen = false;
-        session()->flash('success', "Logistics sorting center for {$app->business_name} approved successfully.");
+            // Populates or updates active logistics profile strictly on approval
+            LogisticsProfile::updateOrCreate(
+                ['user_id' => $app->user_id],
+                [
+                    'contact_no'       => $app->contact_no,
+                    'province'         => $app->province,
+                    'municipality'     => $app->municipality,
+                    'barangay'         => $app->barangay,
+                    'street'           => $app->street,
+                    'house_details'    => $app->house_details,
+                    'business_name'    => $app->business_name,
+                    'line_of_business' => $app->line_of_business ?? 'Logistics & Sorting Center',
+                    'id_path'          => $app->id_path,
+                    'permit_path'      => $app->permit_path,
+                ]
+            );
+
+            $app->user->update(['role' => 'Logistics']);
+
+            DB::commit();
+
+            try {
+                Mail::to($app->user->email)->send(new LogisticsApplicationDecisionMail($app, 'approved'));
+            } catch (\Throwable $e) {
+                Log::warning("Failed sending approval email to {$app->user->email}: " . $e->getMessage());
+            }
+
+            $this->detailModalOpen = false;
+            session()->flash('success', "Logistics sorting center for {$app->business_name} approved successfully.");
+
+        } catch (\Throwable $e) {
+            DB::rollBack();
+            Log::error("Logistics approval failed for application ID {$appId}: " . $e->getMessage(), [
+                'trace' => $e->getTraceAsString(),
+            ]);
+            session()->flash('error', 'Failed to approve logistics application: ' . $e->getMessage());
+        }
     }
 
     public function promptReject(int $appId)
