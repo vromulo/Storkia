@@ -214,47 +214,55 @@
             </div>
         </section>
 
-        <section id="logistics" class="relative z-10 max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-12 py-16 sm:py-24 scroll-mt-20 scroll-reveal">
-            <div class="bg-[#111] rounded-[2rem] sm:rounded-[3rem] p-6 sm:p-12 lg:p-24 text-white relative overflow-hidden shadow-2xl">
-                <div class="absolute top-0 right-0 w-[400px] md:w-[800px] h-[400px] md:h-[800px] bg-primary-dark/30 rounded-full filter blur-[80px] md:blur-[120px] translate-x-1/3 -translate-y-1/3 pointer-events-none"></div>
-                <div class="absolute bottom-0 left-0 w-[300px] md:w-[600px] h-[300px] md:h-[600px] bg-secondary/20 rounded-full filter blur-[60px] md:blur-[100px] -translate-x-1/3 translate-y-1/3 pointer-events-none"></div>
+        <!-- SECTION 4: Powered by Top Logistics (Seamless Full-Width Dark Card Background) -->
+        <section id="logistics" class="relative z-10 w-full bg-[#111] text-white py-16 sm:py-24 lg:py-28 overflow-hidden shadow-2xl scroll-mt-20 scroll-reveal">
+            <!-- Ambient Radial Glow Effects -->
+            <div class="absolute top-0 right-0 w-[400px] md:w-[800px] h-[400px] md:h-[800px] bg-primary/25 rounded-full filter blur-[80px] md:blur-[120px] translate-x-1/3 -translate-y-1/3 pointer-events-none"></div>
+            <div class="absolute bottom-0 left-0 w-[300px] md:w-[600px] h-[300px] md:h-[600px] bg-secondary/15 rounded-full filter blur-[60px] md:blur-[100px] -translate-x-1/3 translate-y-1/3 pointer-events-none"></div>
+            
+            <!-- Centered Content Grid -->
+            <div class="relative z-10 max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-12 flex flex-col lg:flex-row justify-between items-center gap-10 sm:gap-16">
                 
-                <div class="relative z-10 flex flex-col lg:flex-row justify-between items-center gap-10 sm:gap-16">
-                    <div class="lg:w-1/2 w-full text-center lg:text-left">
-                        <span class="text-primary font-bold uppercase tracking-widest text-xs sm:text-sm mb-3 sm:mb-4 block">Premium Fleet</span>
-                        <h2 class="text-4xl sm:text-5xl lg:text-7xl font-serif font-bold tracking-tight mb-5 sm:mb-8 leading-[1.1] sm:leading-[1.05]">
-                            Powered by<br class="hidden sm:block">Top Logistics
-                        </h2>
-                        <p class="text-base sm:text-xl text-white/70 mb-8 sm:mb-10 leading-relaxed font-medium">
-                            Storkia partners with the most reliable logistics providers to ensure your package is handled with care and delivered with unprecedented speed.
-                        </p>
-                        <a href="{{ route('home') }}" class="inline-flex items-center gap-3 bg-white text-text-main px-8 sm:px-10 py-3 sm:py-4 rounded-full font-bold text-sm sm:text-lg hover:bg-brand-light hover:scale-105 transition-all duration-300 shadow-xl">
-                            Become a Partner
-                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"></path></svg>
-                        </a>
+                <!-- Left: Copy & Call-to-Action -->
+                <div class="lg:w-1/2 w-full text-center lg:text-left">
+                    <span class="text-brand-light font-bold uppercase tracking-widest text-xs sm:text-sm mb-3 sm:mb-4 block">Premium Fleet</span>
+                    <h2 class="text-4xl sm:text-5xl lg:text-7xl font-serif font-bold tracking-tight mb-5 sm:mb-8 leading-[1.1] sm:leading-[1.05]">
+                        Powered by<br class="hidden sm:block">Top Logistics
+                    </h2>
+                    <p class="text-base sm:text-xl text-white/75 mb-8 sm:mb-10 leading-relaxed font-medium">
+                        Storkia partners with the most reliable logistics providers to ensure your package is handled with care and delivered with unprecedented speed.
+                    </p>
+                    <a href="{{ route('home') }}" class="inline-flex items-center gap-3 bg-surface text-primary-dark px-8 sm:px-10 py-3 sm:py-4 rounded-full font-bold text-sm sm:text-lg hover:bg-brand-light hover:scale-105 transition-all duration-300 shadow-xl">
+                        Become a Partner
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"></path></svg>
+                    </a>
+                </div>
+                
+                <!-- Right: Frosted Courier Cards -->
+                <div class="lg:w-1/2 w-full flex flex-col gap-4 sm:gap-6">
+                    <!-- Card 1: SwiftExpress -->
+                    <div class="bg-white/5 backdrop-blur-xl rounded-[1.5rem] sm:rounded-[2rem] p-6 sm:p-10 border border-white/10 hover:bg-white/10 transition-colors duration-300 cursor-default group shadow-lg">
+                        <div class="flex items-center gap-4 sm:gap-5 mb-3 sm:mb-4">
+                            <div class="w-12 h-12 sm:w-14 sm:h-14 flex-shrink-0 bg-gradient-to-br from-primary to-primary-dark rounded-full flex items-center justify-center shadow-lg group-hover:scale-110 transition-transform duration-300">
+                                <svg class="w-6 h-6 sm:w-7 sm:h-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+                            </div>
+                            <h3 class="text-xl sm:text-2xl md:text-3xl font-extrabold tracking-tight break-words">SwiftExpress</h3>
+                        </div>
+                        <p class="text-white/60 text-sm sm:text-lg font-medium leading-relaxed">Same-day delivery specialists for urban zones. Real-time tracking included directly in your Storkia app.</p>
                     </div>
-                    
-                    <div class="lg:w-1/2 w-full flex flex-col gap-4 sm:gap-6">
-                        <div class="bg-white/5 backdrop-blur-xl rounded-[1.5rem] sm:rounded-[2rem] p-6 sm:p-10 border border-white/10 hover:bg-white/10 transition-colors duration-300 cursor-default group shadow-lg">
-                            <div class="flex items-center gap-4 sm:gap-5 mb-3 sm:mb-4">
-                                <div class="w-12 h-12 sm:w-14 sm:h-14 flex-shrink-0 bg-gradient-to-br from-primary to-primary-dark rounded-full flex items-center justify-center shadow-lg group-hover:scale-110 transition-transform duration-300">
-                                    <svg class="w-6 h-6 sm:w-7 sm:h-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
-                                </div>
-                                <h3 class="text-xl sm:text-2xl md:text-3xl font-extrabold tracking-tight break-words">SwiftExpress</h3>
+
+                    <!-- Card 2: SecureFreight -->
+                    <div class="bg-white/5 backdrop-blur-xl rounded-[1.5rem] sm:rounded-[2rem] p-6 sm:p-10 border border-white/10 hover:bg-white/10 transition-colors duration-300 cursor-default group shadow-lg">
+                        <div class="flex items-center gap-4 sm:gap-5 mb-3 sm:mb-4">
+                            <div class="w-12 h-12 sm:w-14 sm:h-14 flex-shrink-0 bg-gradient-to-br from-secondary to-[#F9A8D4] rounded-full flex items-center justify-center shadow-lg group-hover:scale-110 transition-transform duration-300">
+                                <svg class="w-6 h-6 sm:w-7 sm:h-7 text-[#111]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"></path></svg>
                             </div>
-                            <p class="text-white/60 text-sm sm:text-lg font-medium leading-relaxed">Same-day delivery specialists for urban zones. Real-time tracking included directly in your Storkia app.</p>
+                            <h3 class="text-xl sm:text-2xl md:text-3xl font-extrabold tracking-tight break-words">SecureFreight</h3>
                         </div>
-                        <div class="bg-white/5 backdrop-blur-xl rounded-[1.5rem] sm:rounded-[2rem] p-6 sm:p-10 border border-white/10 hover:bg-white/10 transition-colors duration-300 cursor-default group shadow-lg">
-                            <div class="flex items-center gap-4 sm:gap-5 mb-3 sm:mb-4">
-                                <div class="w-12 h-12 sm:w-14 sm:h-14 flex-shrink-0 bg-gradient-to-br from-secondary to-[#F9A8D4] rounded-full flex items-center justify-center shadow-lg group-hover:scale-110 transition-transform duration-300">
-                                    <svg class="w-6 h-6 sm:w-7 sm:h-7 text-[#111]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"></path></svg>
-                                </div>
-                                <h3 class="text-xl sm:text-2xl md:text-3xl font-extrabold tracking-tight break-words">SecureFreight</h3>
-                            </div>
-                            <p class="text-white/60 text-sm sm:text-lg font-medium leading-relaxed">Heavy and fragile item secure transport with dedicated handling protocols. Your delicate items are safe.</p>
-                        </div>
+                        <p class="text-white/60 text-sm sm:text-lg font-medium leading-relaxed">Heavy and fragile item secure transport with dedicated handling protocols. Your delicate items are safe.</p>
                     </div>
                 </div>
+
             </div>
         </section>
 
