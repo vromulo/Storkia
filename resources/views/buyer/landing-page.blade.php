@@ -19,9 +19,18 @@
 <div class="bg-surface font-sans antialiased text-text-main overflow-x-clip selection:bg-primary selection:text-white relative">
 
     <!-- Sticky Hero Background Layer (Stays fixed on desktop & mobile while content scrolls over it) -->
-    <div class="sticky top-0 left-0 w-full h-screen -mb-[100vh] z-0 pointer-events-none overflow-hidden">
-        <div class="absolute inset-0 bg-cover bg-center opacity-80" style="background-image: url('{{ asset('assets/landing-page-section-2.avif') }}');"></div>
-        <div class="absolute inset-0 bg-gradient-to-b from-surface/60 via-transparent to-surface"></div>
+    <div class="sticky top-0 left-0 w-full h-svh -mb-[100svh] z-0 pointer-events-none overflow-hidden">
+        <!-- Responsive Background Picture -->
+        <picture class="absolute inset-0 w-full h-full block">
+            <!-- Mobile Photo (< 768px / md) -->
+            <source media="(max-width: 767px)" srcset="{{ asset('assets/shopping-banner-mobile.avif') }}">
+            <!-- Desktop / Default Photo (>= 768px / md) -->
+            <img src="{{ asset('assets/shopping-banner.avif') }}" 
+                 alt="Storkia Shopping Banner" 
+                 fetchpriority="high"
+                 loading="eager"
+                 class="w-full h-full object-cover object-center">
+        </picture>
 
         <div class="absolute top-10 left-4 sm:left-10 w-48 sm:w-80 h-48 sm:h-80 bg-brand-light/40 rounded-full mix-blend-multiply filter blur-[60px] sm:blur-[80px] opacity-70 animate-blob"></div>
         <div class="absolute top-40 right-4 sm:right-10 w-48 sm:w-80 h-48 sm:h-80 bg-secondary/30 rounded-full mix-blend-multiply filter blur-[60px] sm:blur-[80px] opacity-70 animate-blob animation-delay-2000"></div>
@@ -29,13 +38,13 @@
     </div>
 
     <!-- Hero Content (Scrolls up naturally with the page) -->
-    <section class="relative z-10 w-full min-h-[calc(100vh-80px)] flex flex-col items-center justify-center text-center scroll-reveal py-16 sm:py-20 px-4 sm:px-6">
+    <section class="relative z-10 w-full min-h-svh flex flex-col items-center justify-center text-center pt-24 pb-16 sm:pb-20 px-4 sm:px-6">
         <div class="relative z-20 max-w-5xl mx-auto w-full">
-            <h1 class="text-5xl sm:text-7xl lg:text-[6rem] font-extrabold tracking-tighter text-text-main mb-6 sm:mb-8 leading-[1.1] sm:leading-[1.05] drop-shadow-sm">
+            <h1 class="text-[clamp(2.75rem,9vw,6rem)] font-extrabold tracking-[-0.03em] text-text-main mb-6 sm:mb-8 leading-[1.08] text-balance drop-shadow-[0_2px_20px_rgba(255,255,255,0.55)]">
                 Fast delivery. <br>
-                <span class="text-transparent bg-clip-text bg-gradient-to-r from-primary via-secondary to-primary bg-[length:200%_auto] animate-gradient">Exclusive deals.</span>
+                <span class="text-transparent bg-clip-text bg-gradient-to-r from-primary via-primary-dark to-primary bg-[length:200%_auto] animate-gradient">Exclusive deals.</span>
             </h1>
-            <p class="text-lg sm:text-xl lg:text-2xl text-text-muted mb-8 sm:mb-12 max-w-3xl mx-auto leading-relaxed font-medium px-2">
+            <p class="text-lg sm:text-xl lg:text-[1.375rem] text-dark-grey mb-8 sm:mb-12 max-w-2xl mx-auto leading-[1.65] font-medium px-2 text-pretty [text-shadow:0_1px_14px_rgba(255,255,255,0.85)]">
                 Experience the fastest routing and secure handling in the city. Bridging buyers, curated shops, and premium logistics in one seamless platform.
             </p>
             <div class="flex flex-col sm:flex-row justify-center gap-4 sm:gap-5 px-4 sm:px-0">
@@ -59,7 +68,8 @@
             <div class="flex flex-col md:flex-row w-full h-auto md:h-[500px] gap-4 md:gap-6 lg:gap-8">
                 
                 <!-- Card 1 -->
-                <div @click="activeCard = 1"
+                <div @mouseenter="activeCard = 1"
+                     @click="activeCard = 1"
                      :class="activeCard === 1 ? 'md:flex-[3] h-64 md:h-full' : 'md:flex-[1] h-24 md:h-full cursor-pointer opacity-90 md:opacity-80 hover:opacity-100'"
                      class="relative flex-1 w-full overflow-hidden rounded-[2rem] md:rounded-[2.5rem] transition-all duration-700 ease-[cubic-bezier(0.4,0,0.2,1)] group shadow-lg border border-white/20">
                     <div class="absolute inset-0 bg-cover bg-center transition-transform duration-700"
@@ -87,7 +97,8 @@
                 </div>
                 
                 <!-- Card 2 -->
-                <div @click="activeCard = 2"
+                <div @mouseenter="activeCard = 2"
+                     @click="activeCard = 2"
                      :class="activeCard === 2 ? 'md:flex-[3] h-64 md:h-full' : 'md:flex-[1] h-24 md:h-full cursor-pointer opacity-90 md:opacity-80 hover:opacity-100'"
                      class="relative flex-1 w-full overflow-hidden rounded-[2rem] md:rounded-[2.5rem] transition-all duration-700 ease-[cubic-bezier(0.4,0,0.2,1)] group shadow-lg border border-white/20">
                     <div class="absolute inset-0 bg-cover bg-center transition-transform duration-700"
@@ -115,7 +126,8 @@
                 </div>
 
                 <!-- Card 3 -->
-                <div @click="activeCard = 3"
+                <div @mouseenter="activeCard = 3"
+                     @click="activeCard = 3"
                      :class="activeCard === 3 ? 'md:flex-[3] h-64 md:h-full' : 'md:flex-[1] h-24 md:h-full cursor-pointer opacity-90 md:opacity-80 hover:opacity-100'"
                      class="relative flex-1 w-full overflow-hidden rounded-[2rem] md:rounded-[2.5rem] transition-all duration-700 ease-[cubic-bezier(0.4,0,0.2,1)] group shadow-lg border border-white/20">
                     <div class="absolute inset-0 bg-cover bg-center transition-transform duration-700"
@@ -146,38 +158,46 @@
             </div>
         </section>
 
-        <section id="shops" class="relative z-10 max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-12 py-16 sm:py-24 scroll-mt-20 scroll-reveal">
-            <div class="flex justify-between items-end mb-8 sm:mb-12">
-                <div>
-                    <span class="text-primary font-bold uppercase tracking-widest text-xs sm:text-sm mb-1 sm:mb-2 block">Curated Marketplace</span>
-                    <h2 class="text-3xl sm:text-4xl lg:text-5xl font-extrabold tracking-tight text-text-main">Featured Stores</h2>
-                </div>
-                <a href="{{ route('sellers.index') }}" class="hidden sm:flex items-center gap-2 text-text-main font-bold hover:text-primary transition-colors">
-                    View All 
-                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 8l4 4m0 0l-4 4m4-4H3"></path></svg>
-                </a>
-            </div>
-            
-            <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-6 lg:gap-8">
-                @forelse($featuredSellers as $index => $seller)
-                    <x-storefront.seller-card 
-                        :seller="$seller" 
-                        :delay="$delays[$index % 4]" 
-                        :color="$colors[$index % 4]" 
-                    />
-                @empty
-                    <div class="col-span-full w-full text-center py-12">
-                        <p class="text-text-muted font-medium text-lg">No featured shops available at the moment.</p>
+        <!-- SECTION 2: Featured Stores (Seamless Full-Width Dark Background with Frosted Glass Cards) -->
+        <section id="shops" class="relative z-10 w-full bg-[#111] text-white py-16 sm:py-24 overflow-hidden shadow-2xl scroll-mt-20 scroll-reveal">
+            <!-- Ambient Radial Glow Effects -->
+            <div class="absolute top-0 right-0 w-[400px] md:w-[800px] h-[400px] md:h-[800px] [--gw:400px] md:[--gw:800px] bg-primary/25 rounded-full filter blur-[80px] md:blur-[120px] translate-x-1/3 -translate-y-1/3 pointer-events-none animate-glow-slide-a"></div>
+            <div class="absolute bottom-0 left-0 w-[300px] md:w-[600px] h-[300px] md:h-[600px] [--gw:300px] md:[--gw:600px] bg-secondary/15 rounded-full filter blur-[60px] md:blur-[100px] -translate-x-1/3 translate-y-1/3 pointer-events-none animate-glow-slide-b"></div>
+
+            <div class="relative z-10 max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-12">
+                <div class="flex justify-between items-end mb-8 sm:mb-12">
+                    <div>
+                        <span class="text-brand-light font-bold uppercase tracking-widest text-xs sm:text-sm mb-1 sm:mb-2 block">Curated Marketplace</span>
+                        <h2 class="text-3xl sm:text-4xl lg:text-5xl font-extrabold tracking-tight text-white">Featured Stores</h2>
                     </div>
-                @endforelse
-            </div>
-            
-            <!-- Mobile View All Button -->
-            <div class="mt-6 sm:hidden text-center">
-                <a href="{{ route('home') }}" class="inline-flex items-center gap-2 text-primary font-bold text-sm bg-primary/10 px-6 py-2.5 rounded-full">
-                    View All Shops
-                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 8l4 4m0 0l-4 4m4-4H3"></path></svg>
-                </a>
+                    <a href="{{ route('sellers.index') }}" class="hidden sm:flex items-center gap-2 text-white font-bold hover:text-brand-light transition-colors">
+                        View All 
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 8l4 4m0 0l-4 4m4-4H3"></path></svg>
+                    </a>
+                </div>
+                
+                <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-6 lg:gap-8">
+                    @forelse($featuredSellers as $index => $seller)
+                        <x-storefront.seller-card 
+                            :seller="$seller" 
+                            :delay="$delays[$index % 4]" 
+                            :color="$colors[$index % 4]" 
+                            :glass="true"
+                        />
+                    @empty
+                        <div class="col-span-full w-full text-center py-12">
+                            <p class="text-white/70 font-medium text-lg">No featured shops available at the moment.</p>
+                        </div>
+                    @endforelse
+                </div>
+                
+                <!-- Mobile View All Button -->
+                <div class="mt-6 sm:hidden text-center">
+                    <a href="{{ route('sellers.index') }}" class="inline-flex items-center gap-2 text-white font-bold text-sm bg-white/10 hover:bg-white/20 px-6 py-2.5 rounded-full border border-white/10 transition-colors">
+                        View All Shops
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 8l4 4m0 0l-4 4m4-4H3"></path></svg>
+                    </a>
+                </div>
             </div>
         </section>
 
@@ -217,9 +237,9 @@
         <!-- SECTION 4: Powered by Top Logistics (Seamless Full-Width Dark Card Background) -->
         <section id="logistics" class="relative z-10 w-full bg-[#111] text-white py-16 sm:py-24 lg:py-28 overflow-hidden shadow-2xl scroll-mt-20 scroll-reveal">
             <!-- Ambient Radial Glow Effects -->
-            <div class="absolute top-0 right-0 w-[400px] md:w-[800px] h-[400px] md:h-[800px] bg-primary/25 rounded-full filter blur-[80px] md:blur-[120px] translate-x-1/3 -translate-y-1/3 pointer-events-none"></div>
-            <div class="absolute bottom-0 left-0 w-[300px] md:w-[600px] h-[300px] md:h-[600px] bg-secondary/15 rounded-full filter blur-[60px] md:blur-[100px] -translate-x-1/3 translate-y-1/3 pointer-events-none"></div>
-            
+            <div class="absolute top-0 right-0 w-[400px] md:w-[800px] h-[400px] md:h-[800px] [--gw:400px] md:[--gw:800px] bg-primary/25 rounded-full filter blur-[80px] md:blur-[120px] translate-x-1/3 -translate-y-1/3 pointer-events-none animate-glow-slide-a"></div>
+            <div class="absolute bottom-0 left-0 w-[300px] md:w-[600px] h-[300px] md:h-[600px] [--gw:300px] md:[--gw:600px] bg-secondary/15 rounded-full filter blur-[60px] md:blur-[100px] -translate-x-1/3 translate-y-1/3 pointer-events-none animate-glow-slide-b"></div>
+
             <!-- Centered Content Grid -->
             <div class="relative z-10 max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-12 flex flex-col lg:flex-row justify-between items-center gap-10 sm:gap-16">
                 
@@ -239,29 +259,78 @@
                 </div>
                 
                 <!-- Right: Frosted Courier Cards -->
+                @php
+                    $couriers = [
+                        [
+                            'name'     => 'SwiftExpress',
+                            'desc'     => 'Same-day delivery specialists for urban zones. Real-time tracking included directly in your Storkia app.',
+                            'gradient' => 'from-primary to-primary-dark',
+                            'iconColor'=> 'text-white',
+                            'spot'     => 'rgba(207,65,115,0.24)',
+                            'hover'    => 'hover:border-primary/40 hover:shadow-[0_12px_40px_-12px_rgba(207,65,115,0.5)]',
+                            'icon'     => ['M13 10V3L4 14h7v7l9-11h-7z'],
+                        ],
+                        [
+                            'name'     => 'SecureFreight',
+                            'desc'     => 'Heavy and fragile item secure transport with dedicated handling protocols. Your delicate items are safe.',
+                            'gradient' => 'from-secondary to-[#F9A8D4]',
+                            'iconColor'=> 'text-[#111]',
+                            'spot'     => 'rgba(243,147,153,0.2)',
+                            'hover'    => 'hover:border-secondary/40 hover:shadow-[0_12px_40px_-12px_rgba(243,147,153,0.4)]',
+                            'icon'     => ['M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z'],
+                        ],
+                    ];
+                @endphp
+                
+                <!-- Right: Frosted Courier Cards -->
                 <div class="lg:w-1/2 w-full flex flex-col gap-4 sm:gap-6">
-                    <!-- Card 1: SwiftExpress -->
-                    <div class="bg-white/5 backdrop-blur-xl rounded-[1.5rem] sm:rounded-[2rem] p-6 sm:p-10 border border-white/10 hover:bg-white/10 transition-colors duration-300 cursor-default group shadow-lg">
-                        <div class="flex items-center gap-4 sm:gap-5 mb-3 sm:mb-4">
-                            <div class="w-12 h-12 sm:w-14 sm:h-14 flex-shrink-0 bg-gradient-to-br from-primary to-primary-dark rounded-full flex items-center justify-center shadow-lg group-hover:scale-110 transition-transform duration-300">
-                                <svg class="w-6 h-6 sm:w-7 sm:h-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+                    @foreach ($couriers as $courier)
+                        <article data-spotlight
+                                style="--spot: {{ $courier['spot'] }}"
+                                class="group relative overflow-hidden rounded-[1.5rem] sm:rounded-[2rem] border border-white/10 bg-white/5 p-6 sm:p-10 shadow-lg backdrop-blur-xl cursor-default transition-all duration-500 ease-out hover:-translate-y-1 hover:bg-white/[0.08] motion-reduce:transition-none motion-reduce:hover:translate-y-0 {{ $courier['hover'] }}">
+                
+                            <!-- Cursor-following spotlight (appears on hover) -->
+                            <span aria-hidden="true"
+                                class="pointer-events-none absolute inset-0 opacity-0 transition-opacity duration-500 group-hover:opacity-100"
+                                style="background: radial-gradient(420px circle at var(--x, 50%) var(--y, 0%), var(--spot), transparent 65%);"></span>
+                
+                            <!-- Glass edge highlight -->
+                            <span aria-hidden="true" class="pointer-events-none absolute inset-x-8 top-0 h-px bg-gradient-to-r from-transparent via-white/40 to-transparent"></span>
+                
+                            <div class="relative mb-3 sm:mb-4 flex items-center gap-4 sm:gap-5">
+                                <!-- Icon with soft colored glow -->
+                                <div class="relative flex-shrink-0">
+                                    <div aria-hidden="true" class="absolute inset-0 rounded-full bg-gradient-to-br {{ $courier['gradient'] }} opacity-40 blur-lg transition-opacity duration-500 group-hover:opacity-90"></div>
+                                    <div class="relative flex h-12 w-12 sm:h-14 sm:w-14 items-center justify-center rounded-full bg-gradient-to-br {{ $courier['gradient'] }} shadow-lg ring-1 ring-white/20 transition-transform duration-500 group-hover:-rotate-6 group-hover:scale-110">
+                                        <svg class="h-6 w-6 sm:h-7 sm:w-7 {{ $courier['iconColor'] }}" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                                            @foreach ($courier['icon'] as $d)
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="{{ $d }}"></path>
+                                            @endforeach
+                                        </svg>
+                                    </div>
+                                </div>
+                
+                                <h3 class="break-words text-xl sm:text-2xl md:text-3xl font-extrabold tracking-tight">{{ $courier['name'] }}</h3>
                             </div>
-                            <h3 class="text-xl sm:text-2xl md:text-3xl font-extrabold tracking-tight break-words">SwiftExpress</h3>
-                        </div>
-                        <p class="text-white/60 text-sm sm:text-lg font-medium leading-relaxed">Same-day delivery specialists for urban zones. Real-time tracking included directly in your Storkia app.</p>
-                    </div>
-
-                    <!-- Card 2: SecureFreight -->
-                    <div class="bg-white/5 backdrop-blur-xl rounded-[1.5rem] sm:rounded-[2rem] p-6 sm:p-10 border border-white/10 hover:bg-white/10 transition-colors duration-300 cursor-default group shadow-lg">
-                        <div class="flex items-center gap-4 sm:gap-5 mb-3 sm:mb-4">
-                            <div class="w-12 h-12 sm:w-14 sm:h-14 flex-shrink-0 bg-gradient-to-br from-secondary to-[#F9A8D4] rounded-full flex items-center justify-center shadow-lg group-hover:scale-110 transition-transform duration-300">
-                                <svg class="w-6 h-6 sm:w-7 sm:h-7 text-[#111]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"></path></svg>
-                            </div>
-                            <h3 class="text-xl sm:text-2xl md:text-3xl font-extrabold tracking-tight break-words">SecureFreight</h3>
-                        </div>
-                        <p class="text-white/60 text-sm sm:text-lg font-medium leading-relaxed">Heavy and fragile item secure transport with dedicated handling protocols. Your delicate items are safe.</p>
-                    </div>
+                
+                            <p class="relative text-sm sm:text-lg font-medium leading-relaxed text-white/70 text-pretty">{{ $courier['desc'] }}</p>
+                        </article>
+                    @endforeach
                 </div>
+                
+                <script>
+                    // Moves the spotlight with the mouse (desktop only; touch devices skip it)
+                    document.addEventListener('DOMContentLoaded', () => {
+                        document.querySelectorAll('[data-spotlight]').forEach((card) => {
+                            card.addEventListener('pointermove', (e) => {
+                                if (e.pointerType !== 'mouse') return;
+                                const r = card.getBoundingClientRect();
+                                card.style.setProperty('--x', (e.clientX - r.left) + 'px');
+                                card.style.setProperty('--y', (e.clientY - r.top) + 'px');
+                            });
+                        });
+                    });
+                </script>
 
             </div>
         </section>
@@ -328,43 +397,143 @@
                 <div class="h-px bg-border-subtle flex-1 max-w-[50px] sm:max-w-[100px]"></div>
             </div>
 
+            @php
+                $developers = [
+                    [
+                        'name' => 'Van Justin S. Romulo',
+                        'role' => 'Full-stack Website Developer',
+                        'bio'  => 'Architecting the core systems and database relations to ensure seamless multi-portal integration.',
+                        'icon' => 'M17.25 6.75L22.5 12l-5.25 5.25m-10.5 0L1.5 12l5.25-5.25m7.5-3l-4.5 16.5',
+                    ],
+                    [
+                        'name' => 'Mark M. Trilles',
+                        'role' => 'Full-stack Web & Mobile',
+                        'bio'  => 'Bridging web and mobile experiences by developing scalable APIs and responsive interfaces across all platforms.',
+                        'icon' => 'M10.5 1.5H8.25A2.25 2.25 0 0 0 6 3.75v16.5a2.25 2.25 0 0 0 2.25 2.25h7.5A2.25 2.25 0 0 0 18 20.25V3.75a2.25 2.25 0 0 0-2.25-2.25H13.5m-3 0V3h3V1.5m-3 0h3m-3 18.75h3',
+                    ],
+                    [
+                        'name' => 'Princess Genea R. Umali',
+                        'role' => 'UI/UX Designer/QA Tester',
+                        'bio'  => 'Crafting intuitive, user-centric designs and conducting rigorous quality assurance to guarantee a flawless shopping experience.',
+                        'icon' => 'M4.098 19.902a3.75 3.75 0 0 0 5.304 0l6.401-6.402M6.75 21A3.75 3.75 0 0 1 3 17.25V4.125C3 3.504 3.504 3 4.125 3h5.25c.621 0 1.125.504 1.125 1.125v4.072M6.75 21a3.75 3.75 0 0 0 3.75-3.75V8.197M6.75 21h13.125c.621 0 1.125-.504 1.125-1.125v-5.25c0-.621-.504-1.125-1.125-1.125h-4.072M10.5 8.197l2.88-2.88c.438-.439 1.15-.439 1.59 0l3.712 3.713c.44.44.44 1.152 0 1.59l-2.879 2.88M6.75 17.25h.008v.008H6.75v-.008Z',
+                    ],
+                ];
+            @endphp
+            
             <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6 sm:gap-8 lg:gap-10">
-                <!-- Developer 1 -->
-                <div class="bg-white rounded-[2rem] sm:rounded-[2.5rem] p-6 sm:p-10 text-center border border-border-subtle/50 shadow-lg hover:border-primary/20 hover:shadow-2xl transition-all duration-500 group relative overflow-hidden flex flex-col items-center">
-                    <div class="w-20 h-20 sm:w-24 sm:h-24 bg-surface-subtle rounded-2xl mx-auto mb-6 sm:mb-8 flex items-center justify-center group-hover:bg-primary group-hover:text-white text-primary transition-all duration-500 shadow-sm flex-shrink-0">
-                        <svg class="w-8 h-8 sm:w-10 sm:h-10" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M17.25 6.75L22.5 12l-5.25 5.25m-10.5 0L1.5 12l5.25-5.25m7.5-3l-4.5 16.5" />
-                        </svg>
-                    </div>
-                    <h4 class="text-xl sm:text-2xl font-extrabold text-text-main mb-1 tracking-tight">Van Justin S. Romulo</h4>
-                    <div class="inline-block px-3 sm:px-4 py-1.5 rounded-full bg-surface-subtle text-text-main text-[10px] sm:text-xs font-bold uppercase tracking-wider mb-4 sm:mb-5 border border-border-subtle/50">Full-stack Website Developer</div>
-                    <p class="text-text-muted font-medium leading-relaxed text-xs sm:text-sm">Architecting the core systems and database relations to ensure seamless multi-portal integration.</p>
-                </div>
-                
-                <!-- Developer 2 -->
-                <div class="bg-white rounded-[2rem] sm:rounded-[2.5rem] p-6 sm:p-10 text-center border border-border-subtle/50 shadow-lg hover:border-primary/20 hover:shadow-2xl transition-all duration-500 group relative overflow-hidden flex flex-col items-center">
-                    <div class="w-20 h-20 sm:w-24 sm:h-24 bg-surface-subtle rounded-2xl mx-auto mb-6 sm:mb-8 flex items-center justify-center group-hover:bg-primary group-hover:text-white text-primary transition-all duration-500 shadow-sm flex-shrink-0">
-                        <svg class="w-8 h-8 sm:w-10 sm:h-10" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M10.5 1.5H8.25A2.25 2.25 0 0 0 6 3.75v16.5a2.25 2.25 0 0 0 2.25 2.25h7.5A2.25 2.25 0 0 0 18 20.25V3.75a2.25 2.25 0 0 0-2.25-2.25H13.5m-3 0V3h3V1.5m-3 0h3m-3 18.75h3" />
-                        </svg>
-                    </div>
-                    <h4 class="text-xl sm:text-2xl font-extrabold text-text-main mb-1 tracking-tight">Mark M. Trilles</h4>
-                    <div class="inline-block px-3 sm:px-4 py-1.5 rounded-full bg-surface-subtle text-text-main text-[10px] sm:text-xs font-bold uppercase tracking-wider mb-4 sm:mb-5 border border-border-subtle/50">Full-stack Web & Mobile</div>
-                    <p class="text-text-muted font-medium leading-relaxed text-xs sm:text-sm">Bridging web and mobile experiences by developing scalable APIs and responsive interfaces across all platforms.</p>
-                </div>
-                
-                <!-- Developer 3 -->
-                <div class="bg-white rounded-[2rem] sm:rounded-[2.5rem] p-6 sm:p-10 text-center border border-border-subtle/50 shadow-lg hover:border-primary/20 hover:shadow-2xl transition-all duration-500 group relative overflow-hidden flex flex-col items-center sm:col-span-2 md:col-span-1 sm:mx-auto md:mx-0 sm:w-1/2 md:w-full">
-                    <div class="w-20 h-20 sm:w-24 sm:h-24 bg-surface-subtle rounded-2xl mx-auto mb-6 sm:mb-8 flex items-center justify-center group-hover:bg-primary group-hover:text-white text-primary transition-all duration-500 shadow-sm flex-shrink-0">
-                        <svg class="w-8 h-8 sm:w-10 sm:h-10" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4.098 19.902a3.75 3.75 0 0 0 5.304 0l6.401-6.402M6.75 21A3.75 3.75 0 0 1 3 17.25V4.125C3 3.504 3.504 3 4.125 3h5.25c.621 0 1.125.504 1.125 1.125v4.072M6.75 21a3.75 3.75 0 0 0 3.75-3.75V8.197M6.75 21h13.125c.621 0 1.125-.504 1.125-1.125v-5.25c0-.621-.504-1.125-1.125-1.125h-4.072M10.5 8.197l2.88-2.88c.438-.439 1.15-.439 1.59 0l3.712 3.713c.44.44.44 1.152 0 1.59l-2.879 2.88M6.75 17.25h.008v.008H6.75v-.008Z" />
-                        </svg>
-                    </div>
-                    <h4 class="text-xl sm:text-2xl font-extrabold text-text-main mb-1 tracking-tight">Princess Genea R. Umali</h4>
-                    <div class="inline-block px-3 sm:px-4 py-1.5 rounded-full bg-surface-subtle text-text-main text-[10px] sm:text-xs font-bold uppercase tracking-wider mb-4 sm:mb-5 border border-border-subtle/50">UI/UX Designer/QA Tester</div>
-                    <p class="text-text-muted font-medium leading-relaxed text-xs sm:text-sm">Crafting intuitive, user-centric designs and conducting rigorous quality assurance to guarantee a flawless shopping experience.</p>
-                </div>
+                @foreach ($developers as $dev)
+                    <article data-dev-card class="group relative flex h-full flex-col items-center overflow-hidden rounded-[2rem] sm:rounded-[2.5rem] border border-border-subtle/60 bg-white p-6 sm:p-10 text-center shadow-lg transition-all duration-500 ease-out hover:-translate-y-1.5 hover:border-primary/30 hover:shadow-2xl hover:shadow-primary/10 motion-reduce:transition-none motion-reduce:hover:translate-y-0 {{ $loop->last ? 'sm:col-span-2 md:col-span-1 sm:mx-auto md:mx-0 sm:w-1/2 md:w-full' : '' }}">
+            
+                        <!-- Accent line that draws across the top on hover -->
+                        <span aria-hidden="true" class="absolute inset-x-0 top-0 h-1 origin-left scale-x-0 bg-gradient-to-r from-primary via-secondary to-primary transition-transform duration-500 ease-out group-hover:scale-x-100"></span>
+            
+                        <!-- Soft glow behind the icon -->
+                        <span aria-hidden="true" class="pointer-events-none absolute -top-14 left-1/2 h-44 w-44 -translate-x-1/2 rounded-full bg-primary/10 opacity-0 blur-3xl transition-opacity duration-500 group-hover:opacity-100"></span>
+            
+                        <!-- Icon tile -->
+                        <div class="relative mb-6 sm:mb-8 flex-shrink-0">
+                            <div aria-hidden="true" class="absolute inset-0 rounded-2xl bg-primary/30 opacity-0 blur-xl transition-opacity duration-500 group-hover:opacity-100"></div>
+                            <div class="relative flex h-20 w-20 sm:h-24 sm:w-24 items-center justify-center rounded-2xl bg-surface-subtle text-primary shadow-sm ring-1 ring-border-subtle/70 transition-all duration-500 group-hover:-rotate-3 group-hover:scale-105 group-hover:bg-gradient-to-br group-hover:from-primary group-hover:to-primary-dark group-hover:text-white group-hover:ring-transparent">
+                                <svg class="h-8 w-8 sm:h-10 sm:w-10" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="{{ $dev['icon'] }}" />
+                                </svg>
+                            </div>
+                        </div>
+            
+                        <h4 data-typer="45" class="relative mb-3 text-xl sm:text-2xl font-extrabold tracking-tight text-text-main text-balance">{{ $dev['name'] }}</h4>
+            
+                        <div data-typer="35" class="relative mb-5 inline-block rounded-full border border-border-subtle/50 bg-surface-subtle px-3 sm:px-4 py-1.5 text-[10px] sm:text-xs font-bold uppercase tracking-wider text-text-main transition-colors duration-500 group-hover:border-primary/20 group-hover:bg-primary/10 group-hover:text-primary">{{ $dev['role'] }}</div>
+            
+                        <!-- Divider that lengthens on hover -->
+                        <span aria-hidden="true" class="mb-5 block h-px w-10 bg-border-subtle transition-all duration-500 group-hover:w-20 group-hover:bg-primary/40"></span>
+            
+                        <p data-typer="14" class="relative max-w-[34ch] text-xs sm:text-sm font-medium leading-relaxed text-text-muted text-pretty">{{ $dev['bio'] }}</p>
+                    </article>
+                @endforeach
             </div>
+
+            <style>
+                /* Blinking caret on the line currently being typed. Zero layout width, so text never shifts. */
+                [data-typer].is-typing [data-done]::after {
+                    content: '';
+                    display: inline-block;
+                    width: 0;
+                    height: 1.05em;
+                    position: relative;
+                    left: 2px;
+                    vertical-align: text-bottom;
+                    box-shadow: 0 0 0 1px currentColor;
+                    animation: type-caret 0.8s steps(1) infinite;
+                }
+                @keyframes type-caret {
+                    50% { opacity: 0; }
+                }
+            </style>
+            
+            <script>
+                document.addEventListener('DOMContentLoaded', () => {
+                    const cards = document.querySelectorAll('[data-dev-card]');
+                    if (!cards.length || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+            
+                    // Split each text into "typed" + "not yet typed (transparent)" so the full text
+                    // always occupies its final space and nothing reflows while typing.
+                    cards.forEach((card) => {
+                        card.querySelectorAll('[data-typer]').forEach((el) => {
+                            const text = el.textContent.replace(/\s+/g, ' ').trim();
+                            el.dataset.full = text;
+                            el.textContent = '';
+                            const done = document.createElement('span');
+                            done.setAttribute('data-done', '');
+                            const rest = document.createElement('span');
+                            rest.setAttribute('data-rest', '');
+                            rest.style.opacity = '0';
+                            rest.textContent = text;
+                            el.append(done, rest);
+                        });
+                    });
+            
+                    const typeOne = (el) => new Promise((resolve) => {
+                        const text = el.dataset.full;
+                        const speed = Number(el.dataset.typer) || 30;
+                        const done = el.querySelector('[data-done]');
+                        const rest = el.querySelector('[data-rest]');
+                        if (!text) return resolve();
+                        let i = 0;
+                        el.classList.add('is-typing');
+                        const tick = () => {
+                            i++;
+                            done.textContent = text.slice(0, i);
+                            rest.textContent = text.slice(i);
+                            if (i < text.length) {
+                                setTimeout(tick, speed);
+                            } else {
+                                el.classList.remove('is-typing');
+                                setTimeout(resolve, 180); // short pause before the next line
+                            }
+                        };
+                        tick();
+                    });
+            
+                    // Name -> role -> description, one after another
+                    const runCard = async (card) => {
+                        for (const el of card.querySelectorAll('[data-typer]')) {
+                            await typeOne(el);
+                        }
+                    };
+            
+                    // Start each card the first time it is mostly in view; stagger cards that appear together
+                    const io = new IntersectionObserver((entries) => {
+                        let n = 0;
+                        entries.forEach((entry) => {
+                            if (!entry.isIntersecting) return;
+                            io.unobserve(entry.target);
+                            setTimeout(() => runCard(entry.target), n++ * 350);
+                        });
+                    }, { threshold: 0.35 });
+            
+                    cards.forEach((card) => io.observe(card));
+                });
+            </script>
         </section>
     </div>
 
@@ -383,6 +552,19 @@
     .animate-gradient {
         animation: gradient 8s linear infinite;
     }
+
+    .animate-glow-slide-a {
+        animation:
+            glow-slide-a 20s cubic-bezier(0.45, 0, 0.55, 1) infinite alternate,
+            glow-pulse-a 9s ease-in-out infinite alternate;
+        will-change: transform, scale;
+    }
+    .animate-glow-slide-b {
+        animation:
+            glow-slide-b 20s cubic-bezier(0.45, 0, 0.55, 1) infinite alternate,
+            glow-pulse-b 9s ease-in-out infinite alternate;
+        will-change: transform, scale;
+    }
     
     @keyframes blob {
         0% { transform: translate(0px, 0px) scale(1); }
@@ -394,6 +576,29 @@
         0% { background-position: 0% 50%; }
         50% { background-position: 100% 50%; }
         100% { background-position: 0% 50%; }
+    }
+
+    /* Opposite phases: when A grows, B shrinks */
+    @keyframes glow-pulse-a {
+        from { scale: 0.8; }
+        to   { scale: 1.3; }
+    }
+    @keyframes glow-pulse-b {
+        from { scale: 1.3; }
+        to   { scale: 0.8; }
+    }
+    /* A: top-right -> top-left. B: bottom-left -> bottom-right */
+    @keyframes glow-slide-a {
+        from { transform: translateX(0); }
+        to   { transform: translateX(calc(-100vw + var(--gw) / 3)); }
+    }
+    @keyframes glow-slide-b {
+        from { transform: translateX(0); }
+        to   { transform: translateX(calc(100vw - var(--gw) / 3)); }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+        .animate-glow-slide-a, .animate-glow-slide-b { animation: none; }
     }
 
     /* Kia Bounce Animation */
@@ -422,6 +627,8 @@
 </style>
 
 <script>
+    if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
+    
     document.addEventListener('alpine:init', () => {
         Alpine.data('kiaDialogue', () => ({
             isActive: false,

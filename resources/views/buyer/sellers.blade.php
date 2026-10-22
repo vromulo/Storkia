@@ -176,7 +176,8 @@
                         <x-storefront.seller-card 
                             :seller="$seller" 
                             :color="$colors[$index % 4]" 
-                            :animated="false" 
+                            :delay="$delays[$index % 4]" 
+                            :animated="true"
                         />
                     </div>
                 @endforeach
