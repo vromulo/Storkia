@@ -55,7 +55,7 @@
             <!-- Logo -->
             <div class="flex-shrink-0 flex items-center">
                 <a href="{{ route('landing') }}" aria-label="Storkia home" class="flex items-center text-primary hover:opacity-80 transition-opacity rounded-lg focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-primary">
-                    <img src="{{ asset('assets/pink-storkia-minimized.webp') }}" alt="Storkia" class="block md:hidden h-8 w-auto object-contain">
+                    <img src="{{ asset('assets/pink-storkia-maximized.webp') }}" alt="Storkia" class="block md:hidden h-8 w-auto object-contain">
                     <img src="{{ asset('assets/pink-storkia-maximized.webp') }}" alt="Storkia" class="hidden md:block h-9 w-auto object-contain">
                 </a>
             </div>

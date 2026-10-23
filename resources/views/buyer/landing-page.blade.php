@@ -71,16 +71,17 @@
                 <div @mouseenter="activeCard = 1"
                      @click="activeCard = 1"
                      :class="activeCard === 1 ? 'md:flex-[3] h-64 md:h-full' : 'md:flex-[1] h-24 md:h-full cursor-pointer opacity-90 md:opacity-80 hover:opacity-100'"
-                     class="relative flex-1 w-full overflow-hidden rounded-[2rem] md:rounded-[2.5rem] transition-all duration-700 ease-[cubic-bezier(0.4,0,0.2,1)] group shadow-lg border border-white/20">
+                     class="relative flex-none md:flex-1 w-full overflow-hidden rounded-[2rem] md:rounded-[2.5rem] transition-all duration-700 ease-[cubic-bezier(0.4,0,0.2,1)] group shadow-lg border border-white/20">
                     <div class="absolute inset-0 bg-cover bg-center transition-transform duration-700"
                          style="background-image: url('{{ asset('assets/carousel-slide-3.webp') }}');"
                          :class="activeCard === 1 ? 'scale-105' : 'scale-100 grayscale-[15%] md:grayscale-[30%]' "></div>
                     <div class="absolute inset-0 bg-gradient-to-t from-black/90 via-black/40 to-transparent transition-opacity duration-700" 
                          :class="activeCard === 1 ? 'opacity-90' : 'opacity-100'"></div>
-
-                    <div class="absolute bottom-0 left-0 w-full p-5 md:p-8 lg:p-10 flex flex-col justify-end h-full z-10">
-                        <div class="w-10 h-10 md:w-14 md:h-14 bg-white/10 backdrop-blur-md rounded-xl md:rounded-2xl flex items-center justify-center mb-3 md:mb-6 text-white shadow-sm border border-white/20 transition-all duration-500 group-hover:scale-110"
-                             :class="activeCard === 1 ? 'bg-primary border-primary shadow-[0_4px_14px_0_rgba(207,65,115,0.39)]' : ''">
+ 
+                    <div class="absolute bottom-0 left-0 w-full p-5 md:p-8 lg:p-10 flex md:flex-col md:justify-end h-full z-10 transition-all duration-500"
+                         :class="activeCard === 1 ? 'flex-col justify-end' : 'flex-row items-center gap-4 md:items-stretch md:gap-0'">
+                        <div class="w-10 h-10 md:w-14 md:h-14 bg-white/10 backdrop-blur-md rounded-xl md:rounded-2xl flex items-center justify-center shrink-0 md:mb-6 text-white shadow-sm border border-white/20 transition-all duration-500 group-hover:scale-110"
+                             :class="activeCard === 1 ? 'mb-3 bg-primary border-primary shadow-[0_4px_14px_0_rgba(207,65,115,0.39)]' : 'mb-0'">
                             <svg class="w-5 h-5 md:w-7 md:h-7" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
                             </svg>
@@ -100,16 +101,17 @@
                 <div @mouseenter="activeCard = 2"
                      @click="activeCard = 2"
                      :class="activeCard === 2 ? 'md:flex-[3] h-64 md:h-full' : 'md:flex-[1] h-24 md:h-full cursor-pointer opacity-90 md:opacity-80 hover:opacity-100'"
-                     class="relative flex-1 w-full overflow-hidden rounded-[2rem] md:rounded-[2.5rem] transition-all duration-700 ease-[cubic-bezier(0.4,0,0.2,1)] group shadow-lg border border-white/20">
+                     class="relative flex-none md:flex-1 w-full overflow-hidden rounded-[2rem] md:rounded-[2.5rem] transition-all duration-700 ease-[cubic-bezier(0.4,0,0.2,1)] group shadow-lg border border-white/20">
                     <div class="absolute inset-0 bg-cover bg-center transition-transform duration-700"
                          style="background-image: url('{{ asset('assets/carousel-slide-1.webp') }}');"
                          :class="activeCard === 2 ? 'scale-105' : 'scale-100 grayscale-[15%] md:grayscale-[30%]' "></div>
                     <div class="absolute inset-0 bg-gradient-to-t from-black/90 via-black/40 to-transparent transition-opacity duration-700" 
                          :class="activeCard === 2 ? 'opacity-90' : 'opacity-100'"></div>
-
-                    <div class="absolute bottom-0 left-0 w-full p-5 md:p-8 lg:p-10 flex flex-col justify-end h-full z-10">
-                        <div class="w-10 h-10 md:w-14 md:h-14 bg-white/10 backdrop-blur-md rounded-xl md:rounded-2xl flex items-center justify-center mb-3 md:mb-6 text-white shadow-sm border border-white/20 transition-all duration-500 group-hover:scale-110"
-                             :class="activeCard === 2 ? 'bg-secondary border-secondary text-[#111] shadow-[0_4px_14px_0_rgba(244,185,184,0.5)]' : ''">
+ 
+                    <div class="absolute bottom-0 left-0 w-full p-5 md:p-8 lg:p-10 flex md:flex-col md:justify-end h-full z-10 transition-all duration-500"
+                         :class="activeCard === 2 ? 'flex-col justify-end' : 'flex-row items-center gap-4 md:items-stretch md:gap-0'">
+                        <div class="w-10 h-10 md:w-14 md:h-14 bg-white/10 backdrop-blur-md rounded-xl md:rounded-2xl flex items-center justify-center shrink-0 md:mb-6 text-white shadow-sm border border-white/20 transition-all duration-500 group-hover:scale-110"
+                             :class="activeCard === 2 ? 'mb-3 bg-secondary border-secondary text-[#111] shadow-[0_4px_14px_0_rgba(244,185,184,0.5)]' : 'mb-0'">
                             <svg class="w-5 h-5 md:w-7 md:h-7" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"></path>
                             </svg>
@@ -124,21 +126,22 @@
                         </div>
                     </div>
                 </div>
-
+ 
                 <!-- Card 3 -->
                 <div @mouseenter="activeCard = 3"
                      @click="activeCard = 3"
                      :class="activeCard === 3 ? 'md:flex-[3] h-64 md:h-full' : 'md:flex-[1] h-24 md:h-full cursor-pointer opacity-90 md:opacity-80 hover:opacity-100'"
-                     class="relative flex-1 w-full overflow-hidden rounded-[2rem] md:rounded-[2.5rem] transition-all duration-700 ease-[cubic-bezier(0.4,0,0.2,1)] group shadow-lg border border-white/20">
+                     class="relative flex-none md:flex-1 w-full overflow-hidden rounded-[2rem] md:rounded-[2.5rem] transition-all duration-700 ease-[cubic-bezier(0.4,0,0.2,1)] group shadow-lg border border-white/20">
                     <div class="absolute inset-0 bg-cover bg-center transition-transform duration-700"
                          style="background-image: url('{{ asset('assets/carousel-slide-2.webp') }}');"
                          :class="activeCard === 3 ? 'scale-105' : 'scale-100 grayscale-[15%] md:grayscale-[30%]' "></div>
                     <div class="absolute inset-0 bg-gradient-to-t from-black/90 via-black/40 to-transparent transition-opacity duration-700" 
                          :class="activeCard === 3 ? 'opacity-90' : 'opacity-100'"></div>
-
-                    <div class="absolute bottom-0 left-0 w-full p-5 md:p-8 lg:p-10 flex flex-col justify-end h-full z-10">
-                        <div class="w-10 h-10 md:w-14 md:h-14 bg-white/10 backdrop-blur-md rounded-xl md:rounded-2xl flex items-center justify-center mb-3 md:mb-6 text-white shadow-sm border border-white/20 transition-all duration-500 group-hover:scale-110"
-                             :class="activeCard === 3 ? 'bg-primary border-primary shadow-[0_4px_14px_0_rgba(207,65,115,0.39)]' : ''">
+ 
+                    <div class="absolute bottom-0 left-0 w-full p-5 md:p-8 lg:p-10 flex md:flex-col md:justify-end h-full z-10 transition-all duration-500"
+                         :class="activeCard === 3 ? 'flex-col justify-end' : 'flex-row items-center gap-4 md:items-stretch md:gap-0'">
+                        <div class="w-10 h-10 md:w-14 md:h-14 bg-white/10 backdrop-blur-md rounded-xl md:rounded-2xl flex items-center justify-center shrink-0 md:mb-6 text-white shadow-sm border border-white/20 transition-all duration-500 group-hover:scale-110"
+                             :class="activeCard === 3 ? 'mb-3 bg-primary border-primary shadow-[0_4px_14px_0_rgba(207,65,115,0.39)]' : 'mb-0'">
                             <svg class="w-5 h-5 md:w-7 md:h-7" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.243-4.243a8 8 0 1111.314 0z"></path>
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"></path>
@@ -154,7 +157,7 @@
                         </div>
                     </div>
                 </div>
-
+ 
             </div>
         </section>
 
@@ -337,54 +340,95 @@
 
         <!-- Kia Mascot Visual Novel Dialogue Section -->
         <section id="about" class="relative z-10 max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-12 py-16 sm:py-24 pb-24 sm:pb-32 scroll-mt-20 scroll-reveal">
-            <div class="text-center max-w-5xl mx-auto mb-10" x-data="kiaDialogue()">
+            <div class="text-center max-w-5xl mx-auto mb-10"
+                x-data="kiaDialogue()"
+                @keydown.escape="close()">
+            
                 <span class="text-primary font-bold uppercase tracking-widest text-xs sm:text-sm mb-2 sm:mb-4 block">Our Story</span>
-                <h2 class="text-3xl sm:text-4xl lg:text-5xl font-extrabold tracking-tight text-text-main mb-12 sm:mb-16">About Storkia</h2>
-                
-                <div class="relative w-full max-w-4xl mx-auto flex flex-col md:flex-row items-center transition-all duration-700 justify-center min-h-[300px] sm:min-h-[350px]">
-                    
-                    <!-- Kia Character -->
-                    <div class="relative z-20 cursor-pointer transition-all duration-700 ease-in-out flex-shrink-0"
-                         :class="isActive ? 'md:w-[40%] md:pr-8' : 'w-full flex justify-center'"
-                         @click="interact()">
-                        
-                        <div class="relative inline-block transition-transform duration-700"
-                             :class="isActive ? 'scale-90 sm:scale-100' : 'scale-100 sm:scale-110'">
-                            <img :src="isActive ? images[step] : '{{ asset('kia-assets/kia-expressions-happy.svg') }}'" 
-                                 alt="Kia Mascot" 
-                                 class="h-48 sm:h-56 md:h-72 object-contain drop-shadow-xl hover:scale-105 transition-transform select-none origin-bottom"
-                                 :class="isBouncing ? 'animate-kia-jump' : ''">
-                            
-                            <!-- Helper Tooltip -->
-                            <div x-show="!isActive" 
-                                 x-transition
-                                 class="absolute top-0 -right-4 sm:-right-8 bg-white/90 text-primary text-[10px] sm:text-xs font-bold px-3 py-1.5 sm:px-4 sm:py-2 rounded-full shadow-md animate-pulse whitespace-nowrap pointer-events-none border border-primary/20">
+                <h2 class="text-3xl sm:text-4xl lg:text-5xl font-extrabold tracking-tight text-text-main mb-8 sm:mb-10">About Storkia</h2>
+            
+                <!-- Screen readers get the line once per step, instead of every typed letter -->
+                <p class="sr-only" aria-live="polite" x-text="isActive ? dialogues[step] : ''"></p>
+            
+                <!-- Stage -->
+                <div class="relative w-full max-w-4xl mx-auto flex flex-col md:flex-row items-center justify-center transition-all duration-700"
+                    :class="isActive ? 'md:items-start' : ''">
+            
+                    <!-- Soft spotlight that follows Kia when the dialogue opens -->
+                    <div aria-hidden="true" class="pointer-events-none absolute top-1/2 h-72 w-72 sm:h-96 sm:w-96 -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary/10 blur-3xl transition-all duration-700"
+                        :class="isActive ? 'left-1/2 md:left-[20%]' : 'left-1/2'"></div>
+            
+                    <!-- Kia (a real button, so keyboard and screen-reader users can talk to her too) -->
+                    <button type="button"
+                            @click="interact()"
+                            :aria-label="isActive ? 'Continue the conversation with Kia' : 'Talk to Kia'"
+                            class="group relative z-20 flex-shrink-0 cursor-pointer rounded-[2rem] outline-none transition-all duration-700 ease-in-out focus-visible:ring-4 focus-visible:ring-primary/40"
+                            :class="isActive ? 'md:w-[40%] md:pr-8 md:pt-6' : 'w-full flex justify-center'">
+            
+                        <span class="relative inline-block transition-transform duration-700"
+                            :class="isActive ? 'scale-90 sm:scale-100' : 'scale-100 sm:scale-110 translate-y-4 sm:translate-y-6'">
+            
+                            <!-- Gentle idle float until the conversation starts -->
+                            <span class="block" :class="isActive ? '' : 'animate-kia-float'">
+                                <!-- Expressions are stacked and cross-fade instead of swapping abruptly -->
+                                <span class="grid origin-bottom transition-transform duration-300 group-hover:scale-105"
+                                    :class="isBouncing ? 'animate-kia-jump' : ''">
+                                    <template x-for="(src, i) in images" :key="i">
+                                        <img :src="src" alt=""
+                                            class="col-start-1 row-start-1 h-48 sm:h-56 md:h-72 w-auto object-contain drop-shadow-xl select-none transition-opacity duration-300"
+                                            :class="(isActive ? step : 0) === i ? 'opacity-100' : 'opacity-0'">
+                                    </template>
+                                </span>
+                            </span>
+            
+                            <!-- Ground shadow keeps her anchored while she floats -->
+                            <span aria-hidden="true" class="mx-auto mt-1 block h-3 w-24 sm:w-32 rounded-full bg-black/10 blur-md"></span>
+            
+                            <!-- Helper tooltip -->
+                            <span x-show="!isActive"
+                                x-transition
+                                aria-hidden="true"
+                                class="pointer-events-none absolute top-0 -right-4 sm:-right-8 whitespace-nowrap rounded-full border border-primary/20 bg-white/90 px-3 py-1.5 sm:px-4 sm:py-2 text-[10px] sm:text-xs font-bold text-primary shadow-md animate-pulse">
                                 Tap me!
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- Dialogue Box -->
-                    <div class="w-full transition-all duration-700 ease-in-out transform md:origin-left origin-top flex-shrink-0"
-                         :class="isActive ? 'opacity-100 md:w-[60%] scale-100 max-h-[500px]' : 'opacity-0 md:w-0 scale-95 max-h-0 md:max-h-[500px] overflow-hidden'">
-                        
-                        <div class="relative z-10 w-full bg-white/95 backdrop-blur-xl border-2 sm:border-4 border-primary/20 rounded-[2rem] sm:rounded-[2.5rem] p-6 sm:p-8 md:p-10 shadow-2xl cursor-pointer hover:border-primary/40 transition-colors text-left mt-6 md:mt-0" 
-                             @click="interact()">
-                             
-                            <!-- Name Badge -->
-                            <div class="absolute -top-5 sm:-top-6 left-6 sm:left-8 md:left-10 bg-primary text-white font-extrabold text-sm sm:text-lg px-6 sm:px-8 py-1.5 sm:py-2 rounded-full shadow-[0_4px_14px_0_rgba(207,65,115,0.39)] border-2 border-white tracking-wide">
+                            </span>
+                        </span>
+                    </button>
+            
+                    <!-- Dialogue box -->
+                    <div class="w-full flex-shrink-0 transform transition-all duration-700 ease-in-out origin-top md:origin-left"
+                        :class="isActive ? 'opacity-100 md:w-[60%] scale-100 max-h-[700px]' : 'opacity-0 md:w-0 scale-95 max-h-0 overflow-hidden'">
+            
+                        <div @click="interact()"
+                            class="relative z-10 mt-8 md:mt-0 w-full cursor-pointer rounded-[2rem] sm:rounded-[2.5rem] border border-primary/20 bg-white p-6 sm:p-8 md:p-10 text-left shadow-2xl ring-4 ring-white/60 transition-colors hover:border-primary/40">
+            
+                            <!-- Speech-bubble tail pointing at Kia (up on mobile, left on desktop) -->
+                            <span aria-hidden="true" class="absolute -top-2 left-1/2 h-4 w-4 -translate-x-1/2 rotate-45 border-l border-t border-primary/20 bg-white md:top-20 md:left-0 md:-translate-y-1/2 md:border-t-0 md:border-b"></span>
+            
+                            <!-- Name badge -->
+                            <div class="absolute -top-5 sm:-top-6 left-6 sm:left-8 md:left-10 rounded-full border-2 border-white bg-primary px-6 sm:px-8 py-1.5 sm:py-2 text-sm sm:text-lg font-extrabold tracking-wide text-white shadow-[0_4px_14px_0_rgba(207,65,115,0.39)]">
                                 Kia
                             </div>
-                            
-                            <!-- Text Area -->
-                            <div class="min-h-[6rem] md:min-h-[8rem] flex items-start pr-4 sm:pr-6">
-                                <p class="text-base sm:text-xl md:text-2xl text-text-main font-medium leading-relaxed" x-text="displayedText"></p>
+            
+                            <!-- Text area: only the typed text is rendered, so the box grows line by line as she types -->
+                            <div class="min-h-[3rem] pb-8 pr-4 sm:pr-6" aria-hidden="true">
+                                <p class="text-base sm:text-lg md:text-xl lg:text-[1.375rem] font-medium leading-relaxed text-text-main text-pretty">
+                                    <span class="kia-typed" :class="isTyping ? 'is-typing' : ''" x-text="typed"></span>
+                                </p>
                             </div>
-                            
-                            <!-- Next Indicator -->
-                            <div class="absolute bottom-4 sm:bottom-6 right-6 sm:right-8 text-primary/60 transition-opacity duration-300"
-                                 :class="isTyping ? 'opacity-0' : 'animate-bounce opacity-100'">
-                                <svg class="w-5 h-5 sm:w-6 sm:h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M19 9l-7 7-7-7"></path></svg>
+            
+                            <!-- Progress dots -->
+                            <div class="absolute bottom-5 sm:bottom-7 left-6 sm:left-8 md:left-10 flex items-center gap-1.5" aria-hidden="true">
+                                <template x-for="(d, i) in dialogues" :key="'dot' + i">
+                                    <span class="h-1.5 rounded-full transition-all duration-500"
+                                        :class="i === step ? 'w-6 bg-primary' : (i < step ? 'w-1.5 bg-primary/50' : 'w-1.5 bg-border-subtle')"></span>
+                                </template>
+                            </div>
+            
+                            <!-- Next / done indicator -->
+                            <div class="absolute bottom-4 sm:bottom-6 right-6 sm:right-8 text-primary/70 transition-opacity duration-300"
+                                :class="isTyping ? 'opacity-0' : 'opacity-100'" aria-hidden="true">
+                                <svg x-show="step < dialogues.length - 1" class="h-5 w-5 sm:h-6 sm:w-6 animate-bounce" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M19 9l-7 7-7-7"></path></svg>
+                                <svg x-show="step === dialogues.length - 1" class="h-5 w-5 sm:h-6 sm:w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"></path></svg>
                             </div>
                         </div>
                     </div>
@@ -400,19 +444,19 @@
             @php
                 $developers = [
                     [
-                        'name' => 'Van Justin S. Romulo',
+                        'name' => 'Van Romulo',
                         'role' => 'Full-stack Website Developer',
                         'bio'  => 'Architecting the core systems and database relations to ensure seamless multi-portal integration.',
                         'icon' => 'M17.25 6.75L22.5 12l-5.25 5.25m-10.5 0L1.5 12l5.25-5.25m7.5-3l-4.5 16.5',
                     ],
                     [
-                        'name' => 'Mark M. Trilles',
+                        'name' => 'Mark Trilles',
                         'role' => 'Full-stack Web & Mobile',
                         'bio'  => 'Bridging web and mobile experiences by developing scalable APIs and responsive interfaces across all platforms.',
                         'icon' => 'M10.5 1.5H8.25A2.25 2.25 0 0 0 6 3.75v16.5a2.25 2.25 0 0 0 2.25 2.25h7.5A2.25 2.25 0 0 0 18 20.25V3.75a2.25 2.25 0 0 0-2.25-2.25H13.5m-3 0V3h3V1.5m-3 0h3m-3 18.75h3',
                     ],
                     [
-                        'name' => 'Princess Genea R. Umali',
+                        'name' => 'Genea Umali',
                         'role' => 'UI/UX Designer/QA Tester',
                         'bio'  => 'Crafting intuitive, user-centric designs and conducting rigorous quality assurance to guarantee a flawless shopping experience.',
                         'icon' => 'M4.098 19.902a3.75 3.75 0 0 0 5.304 0l6.401-6.402M6.75 21A3.75 3.75 0 0 1 3 17.25V4.125C3 3.504 3.504 3 4.125 3h5.25c.621 0 1.125.504 1.125 1.125v4.072M6.75 21a3.75 3.75 0 0 0 3.75-3.75V8.197M6.75 21h13.125c.621 0 1.125-.504 1.125-1.125v-5.25c0-.621-.504-1.125-1.125-1.125h-4.072M10.5 8.197l2.88-2.88c.438-.439 1.15-.439 1.59 0l3.712 3.713c.44.44.44 1.152 0 1.59l-2.879 2.88M6.75 17.25h.008v.008H6.75v-.008Z',
@@ -451,7 +495,7 @@
                     </article>
                 @endforeach
             </div>
-
+            
             <style>
                 /* Blinking caret on the line currently being typed. Zero layout width, so text never shifts. */
                 [data-typer].is-typing [data-done]::after {
@@ -478,6 +522,10 @@
                     // Split each text into "typed" + "not yet typed (transparent)" so the full text
                     // always occupies its final space and nothing reflows while typing.
                     cards.forEach((card) => {
+                        card._token = 0;        // changes whenever the card is reset, which cancels any typing in progress
+                        card._playing = false;
+                        card._startTimer = null;
+            
                         card.querySelectorAll('[data-typer]').forEach((el) => {
                             const text = el.textContent.replace(/\s+/g, ' ').trim();
                             el.dataset.full = text;
@@ -492,15 +540,26 @@
                         });
                     });
             
-                    const typeOne = (el) => new Promise((resolve) => {
+                    // Back to the blank "not typed yet" state
+                    const resetText = (card) => {
+                        card.querySelectorAll('[data-typer]').forEach((el) => {
+                            el.classList.remove('is-typing');
+                            el.querySelector('[data-done]').textContent = '';
+                            el.querySelector('[data-rest]').textContent = el.dataset.full;
+                        });
+                    };
+            
+                    // Resolves true when the line finished, false if the card was reset while typing
+                    const typeOne = (el, card, token) => new Promise((resolve) => {
                         const text = el.dataset.full;
                         const speed = Number(el.dataset.typer) || 30;
                         const done = el.querySelector('[data-done]');
                         const rest = el.querySelector('[data-rest]');
-                        if (!text) return resolve();
+                        if (!text) return resolve(true);
                         let i = 0;
                         el.classList.add('is-typing');
                         const tick = () => {
+                            if (card._token !== token) return resolve(false);
                             i++;
                             done.textContent = text.slice(0, i);
                             rest.textContent = text.slice(i);
@@ -508,28 +567,45 @@
                                 setTimeout(tick, speed);
                             } else {
                                 el.classList.remove('is-typing');
-                                setTimeout(resolve, 180); // short pause before the next line
+                                setTimeout(() => resolve(card._token === token), 180); // short pause before the next line
                             }
                         };
                         tick();
                     });
             
                     // Name -> role -> description, one after another
-                    const runCard = async (card) => {
-                        for (const el of card.querySelectorAll('[data-typer]')) {
-                            await typeOne(el);
-                        }
+                    const startCard = (card, delay) => {
+                        if (card._playing) return;
+                        card._playing = true;
+                        const token = ++card._token;
+                        card._startTimer = setTimeout(async () => {
+                            for (const el of card.querySelectorAll('[data-typer]')) {
+                                if (!(await typeOne(el, card, token))) return;
+                            }
+                        }, delay);
                     };
             
-                    // Start each card the first time it is mostly in view; stagger cards that appear together
+                    // Cancel anything in progress and blank the card so it can type again next time
+                    const resetCard = (card) => {
+                        clearTimeout(card._startTimer);
+                        card._token++;
+                        card._playing = false;
+                        resetText(card);
+                    };
+            
+                    // Start when a card is mostly in view; reset once it has fully left the screen.
+                    // Cards that appear together are staggered.
                     const io = new IntersectionObserver((entries) => {
                         let n = 0;
                         entries.forEach((entry) => {
-                            if (!entry.isIntersecting) return;
-                            io.unobserve(entry.target);
-                            setTimeout(() => runCard(entry.target), n++ * 350);
+                            const card = entry.target;
+                            if (entry.intersectionRatio === 0) {
+                                resetCard(card);
+                            } else if (entry.intersectionRatio >= 0.3 && !card._playing) {
+                                startCard(card, n++ * 350);
+                            }
                         });
-                    }, { threshold: 0.35 });
+                    }, { threshold: [0, 0.35] });
             
                     cards.forEach((card) => io.observe(card));
                 });
@@ -626,6 +702,33 @@
     }
 </style>
 
+<style>
+    /* Idle float for Kia */
+    @keyframes kia-float {
+        0%, 100% { transform: translateY(0); }
+        50%      { transform: translateY(-8px); }
+    }
+    .animate-kia-float { animation: kia-float 3.4s ease-in-out infinite; }
+ 
+    /* Blinking caret at the end of the typed text. Zero layout width, so words never re-wrap. */
+    .kia-typed.is-typing::after {
+        content: '';
+        display: inline-block;
+        width: 0;
+        height: 1.05em;
+        position: relative;
+        left: 2px;
+        vertical-align: text-bottom;
+        box-shadow: 0 0 0 1px currentColor;
+        animation: kia-caret 0.8s steps(1) infinite;
+    }
+    @keyframes kia-caret { 50% { opacity: 0; } }
+ 
+    @media (prefers-reduced-motion: reduce) {
+        .animate-kia-float { animation: none; }
+    }
+</style>
+
 <script>
     if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
     
@@ -635,8 +738,9 @@
             step: 0,
             isTyping: false,
             isBouncing: false,
-            displayedText: '',
-            typingInterval: null,
+            typed: '',
+            timer: null,
+            reduceMotion: false,
             dialogues: [
                 "Hi there! I'm Kia, the official stork mascot of Storkia! It is absolutely wonderful to finally meet you. Let me tell you a little bit about what we do around here!",
                 "Storkia was born out of a vision to revolutionize localized e-commerce. We are more than just a marketplace; we are a community-driven ecosystem that bridges the gap between passionate local sellers, eager buyers, and top-tier logistics providers. Our mission is to make fast, reliable, and exclusive shopping accessible to everyone in the city.",
@@ -647,62 +751,83 @@
                 "{{ asset('kia-assets/kia-expressions-chirpy.svg') }}",
                 "{{ asset('kia-assets/kia-expressions-happy.svg') }}"
             ],
+ 
             init() {
-                this.isActive = false;
+                this.reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
             },
+ 
             interact() {
                 this.triggerBounce();
-
+ 
                 if (!this.isActive) {
-                    // Start dialogue layout
                     this.isActive = true;
                     this.step = 0;
-                    
-                    // Delay typing slightly to let the transition finish expanding
-                    setTimeout(() => {
-                        this.typeText();
-                    }, 400); 
+                    this.typed = '';
+                    // let the box finish opening before typing starts
+                    setTimeout(() => { if (this.isActive) this.typeText(); }, 400);
+                    return;
+                }
+ 
+                if (this.isTyping) {
+                    // fast-forward the current line
+                    clearTimeout(this.timer);
+                    this.typed = this.dialogues[this.step];
+                    this.isTyping = false;
+                    return;
+                }
+ 
+                if (this.step < this.dialogues.length - 1) {
+                    this.step++;
+                    this.typeText();
                 } else {
-                    if (this.isTyping) {
-                        // Fast forward typing
-                        clearInterval(this.typingInterval);
-                        this.displayedText = this.dialogues[this.step];
-                        this.isTyping = false;
-                    } else {
-                        // Go to the next dialogue step
-                        if (this.step < this.dialogues.length - 1) {
-                            this.step++;
-                            this.typeText();
-                        } else {
-                            // Close the dialogue box and center the mascot
-                            this.isActive = false;
-                            this.displayedText = '';
-                        }
-                    }
+                    this.close();
                 }
             },
+ 
+            close() {
+                if (!this.isActive) return;
+                clearTimeout(this.timer);
+                this.isTyping = false;
+                this.isActive = false;
+                // reset after the box has faded out, so the text doesn't vanish mid-fade
+                setTimeout(() => {
+                    if (!this.isActive) { this.typed = ''; this.step = 0; }
+                }, 700);
+            },
+ 
             triggerBounce() {
                 this.isBouncing = false;
-                // Timeout needed to force DOM reflow to replay animation quickly
+                // timeout forces a reflow so the animation can replay quickly
                 setTimeout(() => { this.isBouncing = true; }, 10);
                 setTimeout(() => { this.isBouncing = false; }, 410);
             },
+ 
             typeText() {
-                clearInterval(this.typingInterval);
-                this.displayedText = '';
+                clearTimeout(this.timer);
+                const text = this.dialogues[this.step];
+                this.typed = '';
+ 
+                if (this.reduceMotion) {
+                    this.typed = text;
+                    this.isTyping = false;
+                    return;
+                }
+ 
                 this.isTyping = true;
                 let i = 0;
-                let text = this.dialogues[this.step];
-                
-                this.typingInterval = setInterval(() => {
-                    if (i < text.length) {
-                        this.displayedText += text.charAt(i);
-                        i++;
-                    } else {
+                const tick = () => {
+                    i++;
+                    this.typed = text.slice(0, i);
+                    if (i >= text.length) {
                         this.isTyping = false;
-                        clearInterval(this.typingInterval);
+                        return;
                     }
-                }, 15); // Fast typewriter speed
+                    // natural rhythm: short pause on commas, longer on sentence ends
+                    const ch = text[i - 1];
+                    const delay = '.!?'.includes(ch) ? 260 : (ch === ',' || ch === ';') ? 120 : 15;
+                    this.timer = setTimeout(tick, delay);
+                };
+                this.timer = setTimeout(tick, 15);
             }
         }));
     });
