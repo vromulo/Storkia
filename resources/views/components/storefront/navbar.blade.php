@@ -161,7 +161,12 @@
                         $recentNotifications = auth()->user()->notifications()->take(6)->get();
                     @endphp
 
-                    <div x-data="{ notifOpen: false }" @click.away="notifOpen = false" @keydown.escape.window="notifOpen = false" class="relative flex items-center h-full">
+                    <div x-data="{ notifOpen: false, notifTimer: null }" 
+                        @mouseenter="clearTimeout(notifTimer); notifOpen = true" 
+                        @mouseleave="notifTimer = setTimeout(() => { notifOpen = false }, 250)" 
+                        @click.away="notifOpen = false" 
+                        @keydown.escape.window="notifOpen = false" 
+                        class="relative flex items-center h-full">
                         <button type="button"
                                 @click="notifOpen = !notifOpen"
                                 class="relative flex items-center text-text-main hover:text-primary transition-colors cursor-pointer focus:outline-none"
@@ -256,8 +261,8 @@
                                 @endphp
                                 
                                 @if($cartCount > 0)
-                                    <span class="absolute -top-1.5 -right-2 text-[10px] font-bold rounded-full h-4 w-4 flex items-center justify-center border border-surface bg-primary text-surface">
-                                        {{ $cartCount > 99 ? '99+' :$cartCount }}
+                                    <span class="absolute -top-1.5 -right-2 text-[10px] font-bold rounded-full h-4 w-4 flex items-center justify-center border border-surface bg-red-500 text-white">
+                                        {{ $cartCount > 99 ? '99+' : $cartCount }}
                                     </span>
                                 @endif
                             @endauth
