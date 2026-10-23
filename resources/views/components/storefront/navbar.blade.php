@@ -154,6 +154,89 @@
                     </div>
                 </div>
 
+                <!-- Notification Bell (Buyer only) -->
+                @if(auth()->check() && auth()->user()->role === 'Buyer')
+                    @php
+                        $unreadCount = auth()->user()->unreadNotifications()->count();
+                        $recentNotifications = auth()->user()->notifications()->take(6)->get();
+                    @endphp
+
+                    <div x-data="{ notifOpen: false }" @click.away="notifOpen = false" @keydown.escape.window="notifOpen = false" class="relative flex items-center h-full">
+                        <button type="button"
+                                @click="notifOpen = !notifOpen"
+                                class="relative flex items-center text-text-main hover:text-primary transition-colors cursor-pointer focus:outline-none"
+                                aria-label="Notifications">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+                            </svg>
+                            @if($unreadCount > 0)
+                                <span class="absolute -top-1.5 -right-2 text-[10px] font-bold rounded-full h-4 w-4 flex items-center justify-center border border-surface bg-red-500 text-white">
+                                    {{ $unreadCount > 9 ? '9+' : $unreadCount }}
+                                </span>
+                            @endif
+                        </button>
+
+                        <div x-show="notifOpen" x-cloak
+                            x-transition:enter="transition ease-out duration-150"
+                            x-transition:enter-start="opacity-0 scale-95 -translate-y-1"
+                            x-transition:enter-end="opacity-100 scale-100 translate-y-0"
+                            x-transition:leave="transition ease-in duration-100"
+                            x-transition:leave-start="opacity-100 scale-100 translate-y-0"
+                            x-transition:leave-end="opacity-0 scale-95 -translate-y-1"
+                            class="absolute right-0 top-full mt-2 w-72 sm:w-96 bg-surface border border-border-subtle rounded-2xl shadow-2xl z-50 overflow-hidden">
+
+                            <div class="p-4 border-b border-border-subtle flex items-center justify-between bg-surface-subtle">
+                                <span class="font-bold text-sm text-text-main">Notifications</span>
+                                @if($unreadCount > 0)
+                                    <form method="POST" action="{{ route('user.notifications.markAllRead') }}">
+                                        @csrf @method('PATCH')
+                                        <button type="submit" class="text-xs font-bold text-primary hover:underline cursor-pointer">Mark all as read</button>
+                                    </form>
+                                @endif
+                            </div>
+
+                            <div class="max-h-80 overflow-y-auto divide-y divide-border-subtle/60">
+                                @forelse($recentNotifications as $notif)
+                                    @php
+                                        $data = $notif->data;
+                                        $isUnread = is_null($notif->read_at);
+                                        $nType = $data['type'] ?? '';
+                                    @endphp
+                                    <div class="p-4 {{ $isUnread ? 'bg-brand-light/10' : 'bg-surface' }}">
+                                        <div class="flex items-start justify-between gap-2">
+                                            <h4 class="text-xs font-bold {{ $nType === 'danger' ? 'text-danger' : ($nType === 'success' ? 'text-success' : 'text-primary') }}">
+                                                {{ $data['title'] ?? 'Notice' }}
+                                            </h4>
+                                            <span class="text-[10px] text-text-muted shrink-0">{{ $notif->created_at->diffForHumans() }}</span>
+                                        </div>
+                                        <p class="text-xs text-text-main mt-1 leading-relaxed">{{ $data['message'] ?? '' }}</p>
+
+                                        <div class="mt-2 flex items-center justify-between gap-3">
+                                            @if(isset($data['verification_id']))
+                                                <a href="{{ ($data['status'] ?? '') === 'failed' ? route('user.identity-verification') : route('user.account-management') }}"
+                                                class="text-[11px] font-bold text-primary hover:underline">
+                                                    {{ ($data['status'] ?? '') === 'failed' ? 'Try again' : 'View account' }}
+                                                </a>
+                                            @else
+                                                <span></span>
+                                            @endif
+
+                                            @if($isUnread)
+                                                <form method="POST" action="{{ route('user.notifications.markRead', $notif->id) }}">
+                                                    @csrf @method('PATCH')
+                                                    <button type="submit" class="text-[10px] font-bold text-text-muted hover:text-primary cursor-pointer">Dismiss</button>
+                                                </form>
+                                            @endif
+                                        </div>
+                                    </div>
+                                @empty
+                                    <div class="p-8 text-center text-text-muted text-xs">No notifications at this time.</div>
+                                @endforelse
+                            </div>
+                        </div>
+                    </div>
+                @endif
+
                 <!-- Cart Icon -->
                 @if(!auth()->check() || auth()->user()->role === 'Buyer')
                     <div 

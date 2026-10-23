@@ -3,6 +3,7 @@
 namespace App\Livewire\Admin;
 
 use App\Models\IdentityVerification;
+use App\Notifications\Buyer\IdentityVerificationNotification;
 use Livewire\Attributes\Layout;
 use Livewire\Component;
 use Livewire\WithPagination;
@@ -50,12 +51,17 @@ class IdentityVerifications extends Component
 
     public function approve(int $id): void
     {
-        $item = IdentityVerification::findOrFail($id);
+        $item = IdentityVerification::with('user')->findOrFail($id);
         $item->update([
             'status'           => 'verified',
             'rejection_reason' => null,
             'verified_at'      => now(),
         ]);
+
+        // Send buyer notification
+        if ($item->user) {
+            $item->user->notify(new IdentityVerificationNotification($item, 'verified'));
+        }
 
         $this->detailModalOpen = false;
         session()->flash('success', "Identity verification approved.");
@@ -74,12 +80,17 @@ class IdentityVerifications extends Component
             'rejectionReason' => ['required', 'string', 'min:5', 'max:500'],
         ]);
 
-        $item = IdentityVerification::findOrFail($this->selectedId);
+        $item = IdentityVerification::with('user')->findOrFail($this->selectedId);
         $item->update([
             'status'           => 'failed',
             'rejection_reason' => $this->rejectionReason,
             'verified_at'      => null,
         ]);
+
+        // Send buyer notification with rejection feedback
+        if ($item->user) {
+            $item->user->notify(new IdentityVerificationNotification($item, 'failed', $this->rejectionReason));
+        }
 
         $this->rejectModalOpen = false;
         $this->detailModalOpen = false;
@@ -97,7 +108,10 @@ class IdentityVerifications extends Component
                       ->orWhere('email', 'like', "%{$this->search}%");
                 });
             })
-            ->latest();
+            ->latest('id');
+
+        $current = $this->selectedId ? IdentityVerification::with('user')->find($this->selectedId) : null;
+        $history = $current ? IdentityVerification::where('user_id', $current->user_id)->orderByDesc('id')->get() : collect();
 
         return view('livewire.admin.identity-verifications', [
             'verifications' => $query->paginate(10),
@@ -106,7 +120,8 @@ class IdentityVerifications extends Component
                 'verified' => IdentityVerification::where('status', 'verified')->count(),
                 'failed'   => IdentityVerification::where('status', 'failed')->count(),
             ],
-            'currentItem' => $this->selectedId ? IdentityVerification::find($this->selectedId) : null,
+            'currentItem'  => $current,
+            'history'      => $history,
         ]);
     }
 }

@@ -25,7 +25,7 @@
 
         {{-- 1. INTRO SCREEN --}}
         @if ($currentScreen === 'intro')
-            <div class="flex flex-col md:flex-row md:items-start justify-between gap-12 lg:gap-16 pt-4 w-full">
+            <div wire:key="screen-intro" class="flex flex-col md:flex-row md:items-start justify-between gap-12 lg:gap-16 pt-4 w-full">
                 
                 <!-- Left Column: Primary Copy & Action (Expands to 100% width when privacy box is hidden) -->
                 <div class="w-full flex-1 md:max-w-xl space-y-6">
@@ -74,7 +74,7 @@
 
         {{-- 2. METHOD SELECTION --}}
         @elseif ($currentScreen === 'method')
-            <div class="max-w-2xl mx-auto space-y-6">
+            <div wire:key="screen-method"class="max-w-2xl mx-auto space-y-6">
                 <div class="space-y-1">
                     <h2 class="text-2xl sm:text-3xl font-bold text-text-main tracking-tight font-sans">
                         How would you like to add your government ID?
@@ -121,7 +121,7 @@
 
         {{-- 3. ID TYPE SELECTION --}}
         @elseif ($currentScreen === 'id_type')
-            <div class="max-w-2xl mx-auto space-y-6">
+            <div wire:key="screen-id-type" class="max-w-2xl mx-auto space-y-6">
                 <div class="space-y-1">
                     <h2 class="text-2xl sm:text-3xl font-bold text-text-main tracking-tight font-sans">
                         Choose an ID type to add
@@ -192,7 +192,7 @@
                 };
                 $canContinue = $id_type === 'passport' ? (bool)$front_image : ((bool)$front_image && (bool)$back_image);
             @endphp
-            <div class="max-w-2xl mx-auto space-y-8">
+            <div wire:key="screen-upload" class="max-w-2xl mx-auto space-y-8">
                 <!-- Heading & Dynamic Subdescription -->
                 <div class="space-y-2">
                     <h2 class="text-2xl sm:text-3xl font-bold text-text-main tracking-tight font-sans">
@@ -366,58 +366,8 @@
         {{-- 5. CAMERA CAPTURE --}}
         @elseif ($currentScreen === 'camera')
             <div 
-                x-data="{
-                    step: 'front',
-                    requiresBack: {{ $id_type === 'passport' ? 'false' : 'true' }},
-                    stream: null,
-                    cameraError: null,
-                    frontCaptured: null,
-                    backCaptured: null,
-                    initCamera() {
-                        navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment', width: { ideal: 1280 } }, audio: false })
-                            .then(s => {
-                                this.stream = s;
-                                this.$refs.videoEl.srcObject = s;
-                            })
-                            .catch(err => {
-                                this.cameraError = 'Unable to access camera: ' + err.message;
-                            });
-                    },
-                    stopCamera() {
-                        if (this.stream) {
-                            this.stream.getTracks().forEach(track => track.stop());
-                        }
-                    },
-                    capture() {
-                        const canvas = document.createElement('canvas');
-                        canvas.width = this.$refs.videoEl.videoWidth;
-                        canvas.height = this.$refs.videoEl.videoHeight;
-                        const ctx = canvas.getContext('2d');
-                        ctx.drawImage(this.$refs.videoEl, 0, 0);
-
-                        canvas.toBlob((blob) => {
-                            const file = new File([blob], `${this.step}_capture.jpg`, { type: 'image/jpeg' });
-                            if (this.step === 'front') {
-                                this.frontCaptured = URL.createObjectURL(blob);
-                                @this.upload('front_image', file);
-                                if (this.requiresBack) {
-                                    this.step = 'back';
-                                } else {
-                                    this.stopCamera();
-                                    @this.proceedToReview();
-                                }
-                            } else {
-                                this.backCaptured = URL.createObjectURL(blob);
-                                @this.upload('back_image', file, () => {
-                                    this.stopCamera();
-                                    @this.proceedToReview();
-                                });
-                            }
-                        }, 'image/jpeg', 0.95);
-                    }
-                }"
-                x-init="initCamera()"
-                x-destroy="stopCamera()"
+                wire:key="screen-camera"
+                x-data="idCameraCapture({{ $id_type === 'passport' ? 'false' : 'true' }}, $wire)"
                 class="max-w-2xl mx-auto space-y-5"
             >
                 <div class="space-y-1">
@@ -426,22 +376,36 @@
                 </div>
 
                 <div class="relative bg-black rounded-2xl overflow-hidden aspect-[4/3] flex items-center justify-center">
-                    <video x-ref="videoEl" autoplay playsinline class="w-full h-full object-cover"></video>
+                    <video x-ref="videoEl" autoplay playsinline muted class="w-full h-full object-cover"></video>
                     <div class="absolute inset-8 border-2 border-dashed border-white/50 rounded-xl pointer-events-none"></div>
 
+                    <!-- Uploading Overlay -->
+                    <div x-show="isUploading" x-cloak class="absolute inset-0 bg-black/60 backdrop-blur-xs flex flex-col items-center justify-center gap-2 z-20">
+                        <div class="w-6 h-6 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                        <span class="text-xs font-semibold text-white" x-text="step === 'front' ? 'Processing front...' : 'Processing back...'"></span>
+                    </div>
+
                     <template x-if="cameraError">
-                        <div class="absolute inset-0 bg-surface p-6 flex flex-col items-center justify-center text-center">
-                            <p class="text-danger text-sm font-bold" x-text="cameraError"></p>
-                            <button type="button" wire:click="$set('currentScreen', 'method')" class="mt-4 px-4 py-2 bg-text-main text-surface text-xs font-bold rounded-xl">Try Uploading Instead</button>
+                        <div class="absolute inset-0 bg-surface p-6 flex flex-col items-center justify-center text-center z-30">
+                            <p class="text-danger text-sm font-bold max-w-md" x-text="cameraError"></p>
+                            <button type="button" @click="stopCamera(); $wire.selectMethod('upload')" class="mt-4 px-4 py-2 bg-text-main text-surface text-xs font-bold rounded-xl cursor-pointer">
+                                Try Uploading Instead
+                            </button>
                         </div>
                     </template>
                 </div>
 
                 <div class="flex items-center justify-between pt-2">
-                    <button type="button" @click="stopCamera(); $wire.set('currentScreen', 'id_type')" class="text-xs font-bold text-text-muted hover:text-text-main cursor-pointer">
+                    <button type="button" 
+                            @click="cancel()" 
+                            :disabled="isUploading"
+                            class="text-xs font-bold text-text-muted hover:text-text-main cursor-pointer disabled:opacity-50">
                         Cancel
                     </button>
-                    <button type="button" @click="capture()" class="px-6 py-3 bg-text-main text-surface font-semibold text-sm rounded-xl shadow-xs hover:bg-black transition-all flex items-center gap-2 cursor-pointer">
+                    <button type="button" 
+                            @click="capture()" 
+                            :disabled="isUploading || cameraError !== null"
+                            class="px-6 py-3 bg-text-main text-surface font-semibold text-sm rounded-xl shadow-xs hover:bg-black transition-all flex items-center gap-2 cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed">
                         <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><circle cx="10" cy="10" r="7"/></svg>
                         <span x-text="step === 'front' && requiresBack ? 'Capture Front' : 'Capture & Proceed'"></span>
                     </button>
@@ -450,7 +414,7 @@
 
         {{-- 6. REVIEW SCREEN --}}
         @elseif ($currentScreen === 'review')
-            <div class="max-w-2xl mx-auto space-y-6">
+            <div wire:key="screen-review" class="max-w-2xl mx-auto space-y-6">
                 <div class="space-y-1">
                     <h2 class="text-2xl sm:text-3xl font-bold text-text-main tracking-tight font-sans">
                         Review your verification
@@ -471,7 +435,7 @@
                         </div>
                     @endif
 
-                    @if ($back_image &&$id_type !== 'passport')
+                    @if ($back_image && $id_type !== 'passport')
                         <div class="border border-border-subtle rounded-2xl p-3 bg-surface space-y-2">
                             <span class="text-[11px] font-bold text-text-muted uppercase">Back</span>
                             <img src="{{ $back_image->temporaryUrl() }}" class="w-full h-36 object-cover rounded-xl border border-border-subtle">
@@ -480,7 +444,7 @@
                 </div>
 
                 <div class="pt-4 flex items-center justify-between">
-                    <button type="button" wire:click="$set('currentScreen', '{{$method }}')" class="py-2.5 px-5 text-sm font-semibold text-text-muted hover:text-text-main">
+                    <button type="button" wire:click="retake" class="py-2.5 px-5 text-sm font-semibold text-text-muted hover:text-text-main cursor-pointer">
                         Retake / Change
                     </button>
                     <button type="button" wire:click="submit" wire:loading.attr="disabled" class="py-3 px-8 bg-text-main hover:bg-black text-surface font-semibold text-sm rounded-xl transition-all cursor-pointer">
@@ -492,7 +456,7 @@
 
         {{-- 7. SUBMITTED SCREEN --}}
         @elseif ($currentScreen === 'submitted')
-            <div class="max-w-md mx-auto text-center py-10 space-y-4">
+            <div wire:key="screen-submitted" class="max-w-md mx-auto text-center py-10 space-y-4">
                 <div class="w-16 h-16 bg-success/10 text-success rounded-full flex items-center justify-center mx-auto mb-2">
                     <svg class="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />

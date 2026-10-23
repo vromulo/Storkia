@@ -26,8 +26,8 @@ class IdentityVerificationFlow extends Component
     protected function rules(): array
     {
         $rules = [
-            'id_type' => ['required', 'in:drivers_license,passport,identity_card'],
-            'method'  => ['required', 'in:upload,camera'],
+            'id_type'     => ['required', 'in:drivers_license,passport,identity_card'],
+            'method'      => ['required', 'in:upload,camera'],
             'front_image' => ['required', 'image', 'mimes:jpeg,jpg,png', 'max:10240'],
         ];
 
@@ -40,9 +40,11 @@ class IdentityVerificationFlow extends Component
 
     public function mount(): void
     {
-        $existing = Auth::user()->identityVerification;
-        if ($existing && $existing->status === 'verified') {
-            redirect()->route('user.account-management');
+        $latest = Auth::user()->identityVerification;
+        
+        // Prevent accessing the flow if already verified or currently under review
+        if ($latest && in_array($latest->status, ['verified', 'pending'], true)) {
+            $this->redirect(route('user.account-management'), navigate: false);
         }
     }
 
@@ -54,13 +56,32 @@ class IdentityVerificationFlow extends Component
     public function selectMethod(string $method): void
     {
         $this->method = $method;
+        $this->reset(['front_image', 'back_image']);
+        $this->resetValidation();
         $this->currentScreen = 'id_type';
     }
 
     public function selectIdType(string $type): void
     {
         $this->id_type = $type;
+        $this->reset(['front_image', 'back_image']);
+        $this->resetValidation();
         $this->currentScreen = $this->method === 'camera' ? 'camera' : 'upload';
+    }
+
+    public function cancelCamera(): void
+    {
+        // Reset any previously captured front/back image if the buyer cancels mid-way
+        $this->reset(['front_image', 'back_image']);
+        $this->resetValidation();
+        $this->currentScreen = 'id_type';
+    }
+
+    public function retake(): void
+    {
+        $this->reset(['front_image', 'back_image']);
+        $this->resetValidation();
+        $this->currentScreen = $this->method ?: 'method';
     }
 
     public function proceedToReview(): void
@@ -81,23 +102,24 @@ class IdentityVerificationFlow extends Component
         $this->validate();
 
         $user = Auth::user();
-        $frontPath = $this->front_image->store('identity_documents/fronts', 'public');
+
+        // 1. Store securely on private 'local' disk
+        $frontPath = $this->front_image->store('identity_documents/fronts', 'local');
         $backPath = ($this->id_type !== 'passport' && $this->back_image)
-            ? $this->back_image->store('identity_documents/backs', 'public')
+            ? $this->back_image->store('identity_documents/backs', 'local')
             : null;
 
-        IdentityVerification::updateOrCreate(
-            ['user_id' => $user->id],
-            [
-                'id_type'          => $this->id_type,
-                'method'           => $this->method,
-                'front_image_path' => $frontPath,
-                'back_image_path'  => $backPath,
-                'status'           => 'pending',
-                'rejection_reason' => null,
-                'verified_at'      => null,
-            ]
-        );
+        // 2. Create append-only historical attempt record
+        IdentityVerification::create([
+            'user_id'          => $user->id,
+            'id_type'          => $this->id_type,
+            'method'           => $this->method,
+            'front_image_path' => $frontPath,
+            'back_image_path'  => $backPath,
+            'status'           => 'pending',
+            'rejection_reason' => null,
+            'verified_at'      => null,
+        ]);
 
         $this->currentScreen = 'submitted';
     }
@@ -105,6 +127,6 @@ class IdentityVerificationFlow extends Component
     public function render()
     {
         return view('livewire.buyer.identity-verification-flow')
-                ->layout('layouts.app', ['hideFooter' => true]);
+            ->layout('layouts.app', ['hideFooter' => true]);
     }
 }

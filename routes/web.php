@@ -72,5 +72,15 @@ Route::middleware('auth')->group(function () {
         });
 
         Route::get('/identity-verification', IdentityVerificationFlow::class)->name('user.identity-verification');
+
+        Route::patch('/user/notifications/mark-all-read', function () {
+            auth()->user()->unreadNotifications->markAsRead();
+            return back();
+        })->name('user.notifications.markAllRead');
+
+        Route::patch('/user/notifications/{id}/read', function ($id) {
+            auth()->user()->notifications()->findOrFail($id)->markAsRead();
+            return back();
+        })->name('user.notifications.markRead');
     });
 });

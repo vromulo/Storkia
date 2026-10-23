@@ -78,6 +78,11 @@ class User extends Authenticatable
         return $this->hasOne(IdentityVerification::class)->latestOfMany();
     }
 
+    public function identityVerifications()
+    {
+        return $this->hasMany(IdentityVerification::class)->latest('id');
+    }
+
     public function addresses()
     {
         return $this->hasMany(UserAddress::class)->latest('id');
