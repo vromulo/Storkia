@@ -49,25 +49,28 @@
 
     $idExt = strtolower(pathinfo($profile->id_path ?? '', PATHINFO_EXTENSION));
     $permitExt = strtolower(pathinfo($profile->permit_path ?? '', PATHINFO_EXTENSION));
+
+    
+    $sellerData = [
+        'business_name' => $profile->business_name ?? '',
+        'photo_url' => $photoUrl,
+        'first_name' => $user->first_name ?? '',
+        'last_name' => $user->last_name ?? '',
+        'full_name' => $initialFullName,
+        'email' => $rawEmail,
+        'masked_email' => $maskedEmail,
+        'password_last_updated' => $passwordLastUpdated,
+        'phone_raw' => $cleanContact,
+        'formatted_phone' => $formattedPhone,
+        'masked_phone' => $maskedContact,
+        'has_phone' => $hasPhone
+    ];
 @endphp
 
 <div x-data="sellerStoreSettingsManager(
     'store',
     null,
-    {
-        business_name: @js($profile->business_name ?? ''),
-        photo_url: @js($photoUrl),
-        first_name: @js($user->first_name ?? ''),
-        last_name: @js($user->last_name ?? ''),
-        full_name: @js($initialFullName),
-        email: @js($rawEmail),
-        masked_email: @js($maskedEmail),
-        password_last_updated: @js($passwordLastUpdated),
-        phone_raw: @js($cleanContact),
-        formatted_phone: @js($formattedPhone),
-        masked_phone: @js($maskedContact),
-        has_phone: @js($hasPhone)
-    }
+    {{ json_encode($sellerData) }}
 )" class="max-w-5xl mx-auto select-none">
 
     <!-- Page Header & Segmented Tabs Navigation -->
