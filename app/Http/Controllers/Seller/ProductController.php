@@ -14,33 +14,23 @@ use Intervention\Image\Encoders\WebpEncoder;
 
 class ProductController extends Controller
 {
-    /**
-     * Helper method to convert, resize, and store images in WebP format
-     * Updated to use Intervention Image v4 syntax.
-     */
     private function optimizeAndStoreImage($file, $folder)
     {
         $extension = $file->getClientOriginalExtension();
-        
-        // Skip conversion for vector graphics or animated gifs to preserve their nature
         if (in_array(strtolower($extension), ['svg', 'gif'])) {
             return $file->store($folder, 'public');
         }
 
         $filename = uniqid('img_') . '_' . time() . '.webp';
         $path = $folder . '/' . $filename;
-        
-        // Initialize Intervention Image Manager with the GD driver (v4 syntax)
+
         $manager = ImageManager::usingDriver(Driver::class);
-        
-        // Read (decode), resize (maintaining aspect ratio, only scaling down), and encode to WebP
         $image = $manager->decode($file->getRealPath());
         $image->scaleDown(width: 1200, height: 1200);
         $encoded = $image->encode(new WebpEncoder(quality: 80));
-            
-        // Store the encoded string
+
         Storage::disk('public')->put($path, $encoded->toString());
-        
+
         return $path;
     }
 
@@ -83,7 +73,7 @@ class ProductController extends Controller
             'title'            => $validated['variant_title'],
             'sub_title'        => $validated['sub_variant_title'] ?? null,
             'price_dependency' => $priceDependency,
-            'items'            => []
+            'items'            => [],
         ];
 
         $minPrice = null;
@@ -92,17 +82,27 @@ class ProductController extends Controller
         $uploadedVariantFiles = $request->file('variant_pictures') ?? [];
 
         if (!empty($validated['variant_names'])) {
+            $seenVariants = [];
+
             foreach ($validated['variant_names'] as $vId => $vName) {
+                $normalizedVName = strtolower(trim($vName));
+                if (in_array($normalizedVName, $seenVariants, true)) {
+                    return back()->withErrors(['variant_names' => "Duplicate variant name \"{$vName}\" is not allowed."])->withInput();
+                }
+                $seenVariants[] = $normalizedVName;
+
                 $item = [
-                    'name'  => $vName,
-                    'image' => null,
-                    'price' => null,
-                    'weight'=> null,
-                    'stock' => null,
-                    'subs'  => []
+                    'id'          => uniqid(),
+                    'name'        => trim($vName),
+                    'status'      => 'Pending',
+                    'is_archived' => false,
+                    'image'       => null,
+                    'price'       => null,
+                    'weight'      => null,
+                    'stock'       => null,
+                    'subs'        => [],
                 ];
 
-                // Direct array key lookup handles large JS timestamps robustly
                 if (isset($uploadedVariantFiles[$vId])) {
                     $item['image'] = $this->optimizeAndStoreImage($uploadedVariantFiles[$vId], 'variants');
                 } elseif ($request->hasFile("variant_pictures.{$vId}")) {
@@ -115,17 +115,31 @@ class ProductController extends Controller
                     $item['stock']  = (int) ($validated['variant_stocks'][$vId] ?? 0);
 
                     $totalStock += $item['stock'];
-                    if (is_null($minPrice) || $item['price'] < $minPrice) $minPrice = $item['price'];
-                    if (is_null($baseWeight)) $baseWeight = $item['weight'];
+                    if (is_null($minPrice) || $item['price'] < $minPrice) {
+                        $minPrice = $item['price'];
+                    }
+                    if (is_null($baseWeight)) {
+                        $baseWeight = $item['weight'];
+                    }
                 }
 
                 if (!empty($validated['sub_variant_names'][$vId])) {
+                    $seenSubs = [];
                     foreach ($validated['sub_variant_names'][$vId] as $sId => $sName) {
+                        $normalizedSName = strtolower(trim($sName));
+                        if (in_array($normalizedSName, $seenSubs, true)) {
+                            return back()->withErrors(['sub_variant_names' => "Duplicate subvariant name \"{$sName}\" under \"{$vName}\" is not allowed."])->withInput();
+                        }
+                        $seenSubs[] = $normalizedSName;
+
                         $sub = [
-                            'name'  => $sName,
-                            'price' => null,
-                            'weight'=> null,
-                            'stock' => null
+                            'id'          => uniqid(),
+                            'name'        => trim($sName),
+                            'status'      => 'Pending',
+                            'is_archived' => false,
+                            'price'       => null,
+                            'weight'      => null,
+                            'stock'       => null,
                         ];
 
                         if ($priceDependency === 'sub') {
@@ -134,8 +148,12 @@ class ProductController extends Controller
                             $sub['stock']  = (int) ($validated['sub_variant_stocks'][$vId][$sId] ?? 0);
 
                             $totalStock += $sub['stock'];
-                            if (is_null($minPrice) || $sub['price'] < $minPrice) $minPrice = $sub['price'];
-                            if (is_null($baseWeight)) $baseWeight = $sub['weight'];
+                            if (is_null($minPrice) || $sub['price'] < $minPrice) {
+                                $minPrice = $sub['price'];
+                            }
+                            if (is_null($baseWeight)) {
+                                $baseWeight = $sub['weight'];
+                            }
                         }
 
                         $item['subs'][] = $sub;
@@ -159,6 +177,7 @@ class ProductController extends Controller
             'additional_descriptions' => $validated['additional_descriptions'] ?? null,
             'pictures'                => $picturePaths,
             'variants'                => count($variantsData['items']) > 0 ? $variantsData : null,
+            'has_pending_variants'    => false,
         ]);
 
         ProductApproval::create([
@@ -172,43 +191,61 @@ class ProductController extends Controller
 
     public function update(UpdateProductRequest $request, Product $product)
     {
-        if ($product->user_id !== auth()->id()) abort(403, 'Unauthorized action.');
+        if ($product->user_id !== auth()->id()) {
+            abort(403, 'Unauthorized action.');
+        }
+
         $validated = $request->validated();
+        $isApprovedProduct = $product->approval && $product->approval->status === 'Approved';
 
         $dataToUpdate = [
-            'name'                    => $validated['name'],
-            'subcategory'             => $validated['subcategory'],
             'discount'                => $validated['discount'] ?? 0,
             'description'             => $validated['description'] ?? null,
             'additional_descriptions' => $validated['additional_descriptions'] ?? null,
         ];
 
-        // Process main picture replacements
-        if ($request->hasFile('pictures')) {
-            if ($product->pictures && is_array($product->pictures)) {
-                foreach ($product->pictures as $pic) {
-                    Storage::disk('public')->delete($pic);
+        if (!$isApprovedProduct) {
+            $dataToUpdate['name'] = $validated['name'];
+            $dataToUpdate['subcategory'] = $validated['subcategory'];
+
+            if ($request->hasFile('pictures')) {
+                if ($product->pictures && is_array($product->pictures)) {
+                    foreach ($product->pictures as $pic) {
+                        Storage::disk('public')->delete($pic);
+                    }
                 }
+                $picturePaths = [];
+                foreach ($request->file('pictures') as $file) {
+                    $picturePaths[] = $this->optimizeAndStoreImage($file, 'products');
+                }
+                $dataToUpdate['pictures'] = $picturePaths;
             }
-            $picturePaths = [];
-            foreach ($request->file('pictures') as $file) {
-                $picturePaths[] = $this->optimizeAndStoreImage($file, 'products');
-            }
-            $dataToUpdate['pictures'] = $picturePaths;
         }
 
-        // Process Variant Updates
-        if ($request->has('variant_names') && $product->variants) {
-            $variantsData = $product->variants;
-            $totalStock = 0;
-            $minPrice = null;
-            $baseWeight = null;
+        $rawVariants = $product->raw_variants ?? $product->variants;
+        if ($rawVariants && isset($rawVariants['items']) && is_array($rawVariants['items'])) {
+            $variantsData = $rawVariants;
+            $priceDependency = $variantsData['price_dependency'] ?? 'main';
 
-            foreach ($request->variant_names as $vIndex => $vName) {
-                if (isset($variantsData['items'][$vIndex])) {
-                    $variantsData['items'][$vIndex]['name'] = $vName;
+            if ($request->has('variant_names')) {
+                foreach ($request->variant_names as $vIndex => $vName) {
+                    if (!isset($variantsData['items'][$vIndex])) {
+                        continue;
+                    }
 
-                    // Replace variant image if uploaded
+                    $isArchivedVariant = isset($request->archive_variants[$vIndex]) && (int) $request->archive_variants[$vIndex] === 1;
+                    if ($isArchivedVariant) {
+                        $variantsData['items'][$vIndex]['is_archived'] = true;
+                        continue;
+                    }
+
+                    $existingVStatus = $variantsData['items'][$vIndex]['status'] ?? 'Approved';
+                    $variantsData['items'][$vIndex]['name'] = trim((string) $vName);
+
+                    if (!$isApprovedProduct || $existingVStatus === 'Disapproved') {
+                        $variantsData['items'][$vIndex]['status'] = 'Pending';
+                    }
+
                     if ($request->hasFile("variant_pictures.{$vIndex}")) {
                         if (!empty($variantsData['items'][$vIndex]['image'])) {
                             Storage::disk('public')->delete($variantsData['items'][$vIndex]['image']);
@@ -216,30 +253,194 @@ class ProductController extends Controller
                         $variantsData['items'][$vIndex]['image'] = $this->optimizeAndStoreImage($request->file("variant_pictures.{$vIndex}"), 'variants');
                     }
 
-                    if ($variantsData['price_dependency'] === 'main') {
-                        $variantsData['items'][$vIndex]['price'] = (float) ($request->variant_prices[$vIndex] ?? $variantsData['items'][$vIndex]['price']);
+                    if ($priceDependency === 'main') {
+                        $variantsData['items'][$vIndex]['price']  = (float) ($request->variant_prices[$vIndex] ?? $variantsData['items'][$vIndex]['price']);
                         $variantsData['items'][$vIndex]['weight'] = (float) ($request->variant_weights[$vIndex] ?? $variantsData['items'][$vIndex]['weight']);
-                        $variantsData['items'][$vIndex]['stock'] = (int) ($request->variant_stocks[$vIndex] ?? $variantsData['items'][$vIndex]['stock']);
-
-                        $totalStock += $variantsData['items'][$vIndex]['stock'];
-                        if (is_null($minPrice) || $variantsData['items'][$vIndex]['price'] < $minPrice) $minPrice = $variantsData['items'][$vIndex]['price'];
-                        if (is_null($baseWeight)) $baseWeight = $variantsData['items'][$vIndex]['weight'];
+                        $variantsData['items'][$vIndex]['stock']  = (int) ($request->variant_stocks[$vIndex] ?? $variantsData['items'][$vIndex]['stock']);
                     }
 
-                    if (isset($variantsData['items'][$vIndex]['subs'])) {
+                    if (isset($variantsData['items'][$vIndex]['subs']) && is_array($variantsData['items'][$vIndex]['subs'])) {
                         foreach ($variantsData['items'][$vIndex]['subs'] as $sIndex => $sub) {
+                            $isArchivedSub = isset($request->archive_sub_variants[$vIndex][$sIndex]) && (int) $request->archive_sub_variants[$vIndex][$sIndex] === 1;
+                            if ($isArchivedSub) {
+                                $variantsData['items'][$vIndex]['subs'][$sIndex]['is_archived'] = true;
+                                continue;
+                            }
+
                             if (isset($request->sub_variant_names[$vIndex][$sIndex])) {
-                                $variantsData['items'][$vIndex]['subs'][$sIndex]['name'] = $request->sub_variant_names[$vIndex][$sIndex];
+                                $existingSubStatus = $variantsData['items'][$vIndex]['subs'][$sIndex]['status'] ?? 'Approved';
+                                $variantsData['items'][$vIndex]['subs'][$sIndex]['name'] = trim((string) $request->sub_variant_names[$vIndex][$sIndex]);
 
-                                if ($variantsData['price_dependency'] === 'sub') {
-                                    $variantsData['items'][$vIndex]['subs'][$sIndex]['price'] = (float) ($request->sub_variant_prices[$vIndex][$sIndex] ?? $sub['price']);
-                                    $variantsData['items'][$vIndex]['subs'][$sIndex]['weight'] = (float) ($request->sub_variant_weights[$vIndex][$sIndex] ?? $sub['weight']);
-                                    $variantsData['items'][$vIndex]['subs'][$sIndex]['stock'] = (int) ($request->sub_variant_stocks[$vIndex][$sIndex] ?? $sub['stock']);
-
-                                    $totalStock += $variantsData['items'][$vIndex]['subs'][$sIndex]['stock'];
-                                    if (is_null($minPrice) || $variantsData['items'][$vIndex]['subs'][$sIndex]['price'] < $minPrice) $minPrice = $variantsData['items'][$vIndex]['subs'][$sIndex]['price'];
-                                    if (is_null($baseWeight)) $baseWeight = $variantsData['items'][$vIndex]['subs'][$sIndex]['weight'];
+                                if (!$isApprovedProduct || $existingSubStatus === 'Disapproved') {
+                                    $variantsData['items'][$vIndex]['subs'][$sIndex]['status'] = 'Pending';
                                 }
+
+                                if ($priceDependency === 'sub') {
+                                    $variantsData['items'][$vIndex]['subs'][$sIndex]['price']  = (float) ($request->sub_variant_prices[$vIndex][$sIndex] ?? $sub['price']);
+                                    $variantsData['items'][$vIndex]['subs'][$sIndex]['weight'] = (float) ($request->sub_variant_weights[$vIndex][$sIndex] ?? $sub['weight']);
+                                    $variantsData['items'][$vIndex]['subs'][$sIndex]['stock']  = (int) ($request->sub_variant_stocks[$vIndex][$sIndex] ?? $sub['stock']);
+                                }
+                            }
+                        }
+                    }
+
+                    if (isset($request->new_existing_sub_variant_names[$vIndex]) && is_array($request->new_existing_sub_variant_names[$vIndex])) {
+                        if (!isset($variantsData['items'][$vIndex]['subs']) || !is_array($variantsData['items'][$vIndex]['subs'])) {
+                            $variantsData['items'][$vIndex]['subs'] = [];
+                        }
+
+                        foreach ($request->new_existing_sub_variant_names[$vIndex] as $nsIndex => $nsName) {
+                            $trimmedNsName = trim((string) $nsName);
+                            if ($trimmedNsName === '') {
+                                continue;
+                            }
+
+                            $variantsData['items'][$vIndex]['subs'][] = [
+                                'id'          => uniqid(),
+                                'name'        => $trimmedNsName,
+                                'status'      => 'Pending',
+                                'is_archived' => false,
+                                'price'       => (float) ($request->new_existing_sub_variant_prices[$vIndex][$nsIndex] ?? 0),
+                                'weight'      => (float) ($request->new_existing_sub_variant_weights[$vIndex][$nsIndex] ?? 0),
+                                'stock'       => (int) ($request->new_existing_sub_variant_stocks[$vIndex][$nsIndex] ?? 0),
+                            ];
+                        }
+                    }
+                }
+            }
+
+            if ($request->has('new_variant_names') && is_array($request->new_variant_names)) {
+                foreach ($request->new_variant_names as $nIndex => $nName) {
+                    $trimmedNName = trim((string) $nName);
+                    if ($trimmedNName === '') {
+                        continue;
+                    }
+
+                    $item = [
+                        'id'          => uniqid(),
+                        'name'        => $trimmedNName,
+                        'status'      => 'Pending',
+                        'is_archived' => false,
+                        'price'       => $priceDependency === 'main' ? (float) ($request->new_variant_prices[$nIndex] ?? 0) : null,
+                        'weight'      => $priceDependency === 'main' ? (float) ($request->new_variant_weights[$nIndex] ?? 0) : null,
+                        'stock'       => $priceDependency === 'main' ? (int) ($request->new_variant_stocks[$nIndex] ?? 0) : null,
+                        'image'       => null,
+                        'subs'        => [],
+                    ];
+
+                    if ($request->hasFile("new_variant_pictures.{$nIndex}")) {
+                        $item['image'] = $this->optimizeAndStoreImage($request->file("new_variant_pictures.{$nIndex}"), 'variants');
+                    }
+
+                    if (isset($request->new_sub_variant_names[$nIndex]) && is_array($request->new_sub_variant_names[$nIndex])) {
+                        foreach ($request->new_sub_variant_names[$nIndex] as $nsIndex => $nsName) {
+                            $trimmedSubName = trim((string) $nsName);
+                            if ($trimmedSubName === '') {
+                                continue;
+                            }
+
+                            $item['subs'][] = [
+                                'id'          => uniqid(),
+                                'name'        => $trimmedSubName,
+                                'status'      => 'Pending',
+                                'is_archived' => false,
+                                'price'       => (float) ($request->new_sub_variant_prices[$nIndex][$nsIndex] ?? 0),
+                                'weight'      => (float) ($request->new_sub_variant_weights[$nIndex][$nsIndex] ?? 0),
+                                'stock'       => (int) ($request->new_sub_variant_stocks[$nIndex][$nsIndex] ?? 0),
+                            ];
+                        }
+                    }
+
+                    $variantsData['items'][] = $item;
+                }
+            }
+
+            $seenVariantNames = [];
+            foreach ($variantsData['items'] as $vItem) {
+                if (!empty($vItem['is_archived']) || ($vItem['status'] ?? '') === 'Disapproved') {
+                    continue;
+                }
+
+                $normVName = strtolower(trim($vItem['name'] ?? ''));
+                if ($normVName !== '') {
+                    if (in_array($normVName, $seenVariantNames, true)) {
+                        return back()->withErrors(['variant_names' => "Variant name \"{$vItem['name']}\" must be unique."])->withInput();
+                    }
+                    $seenVariantNames[] = $normVName;
+                }
+
+                if (!empty($vItem['subs']) && is_array($vItem['subs'])) {
+                    $seenSubNames = [];
+                    foreach ($vItem['subs'] as $sItem) {
+                        if (!empty($sItem['is_archived']) || ($sItem['status'] ?? '') === 'Disapproved') {
+                            continue;
+                        }
+                        $normSName = strtolower(trim($sItem['name'] ?? ''));
+                        if ($normSName !== '') {
+                            if (in_array($normSName, $seenSubNames, true)) {
+                                return back()->withErrors(['sub_variant_names' => "Sub-variant name \"{$sItem['name']}\" under \"{$vItem['name']}\" must be unique."])->withInput();
+                            }
+                            $seenSubNames[] = $normSName;
+                        }
+                    }
+                }
+            }
+
+            $totalStock = 0;
+            $minPrice = null;
+            $baseWeight = null;
+            $hasAnyPendingAdditions = false;
+
+            foreach ($variantsData['items'] as $item) {
+                if (!empty($item['is_archived'])) {
+                    continue;
+                }
+
+                $itemStatus = $item['status'] ?? 'Approved';
+                if ($itemStatus === 'Pending') {
+                    $hasAnyPendingAdditions = true;
+                }
+
+                if ($itemStatus === 'Disapproved') {
+                    continue;
+                }
+
+                $countItemInTotals = !$isApprovedProduct || $itemStatus === 'Approved';
+
+                if ($priceDependency === 'main' && $countItemInTotals) {
+                    $totalStock += (int) ($item['stock'] ?? 0);
+                    if (is_null($minPrice) || (float) $item['price'] < $minPrice) {
+                        $minPrice = (float) $item['price'];
+                    }
+                    if (is_null($baseWeight)) {
+                        $baseWeight = $item['weight'];
+                    }
+                }
+
+                if (isset($item['subs']) && count($item['subs']) > 0) {
+                    foreach ($item['subs'] as $sub) {
+                        if (!empty($sub['is_archived'])) {
+                            continue;
+                        }
+
+                        $subStatus = $sub['status'] ?? 'Approved';
+                        if ($subStatus === 'Pending') {
+                            $hasAnyPendingAdditions = true;
+                        }
+
+                        if ($subStatus === 'Disapproved') {
+                            continue;
+                        }
+
+                        $countSubInTotals = !$isApprovedProduct || ($itemStatus === 'Approved' && $subStatus === 'Approved');
+
+                        if ($priceDependency === 'sub' && $countSubInTotals) {
+                            $totalStock += (int) ($sub['stock'] ?? 0);
+                            if (is_null($minPrice) || (float) $sub['price'] < $minPrice) {
+                                $minPrice = (float) $sub['price'];
+                            }
+                            if (is_null($baseWeight)) {
+                                $baseWeight = $sub['weight'];
                             }
                         }
                     }
@@ -250,25 +451,32 @@ class ProductController extends Controller
             $dataToUpdate['price'] = $minPrice ?? $product->price;
             $dataToUpdate['weight'] = $baseWeight ?? $product->weight;
             $dataToUpdate['stock_quantity'] = $totalStock;
+            $dataToUpdate['has_pending_variants'] = $isApprovedProduct ? $hasAnyPendingAdditions : false;
         }
 
         $product->update($dataToUpdate);
 
-        // Reset the product to pending approval if updated
-        if($product->approval) {
+        if ($isApprovedProduct && !empty($dataToUpdate['has_pending_variants'])) {
+            $product->approval?->touch();
+            return back()->with('success', 'Changes saved. New variants/subvariants have been submitted for admin review.');
+        }
+
+        if (!$isApprovedProduct && $product->approval) {
             $product->approval->update([
-                'status'           => 'Pending', 
+                'status'           => 'Pending',
                 'disapproval_type' => null,
-                'remarks'          => null
+                'remarks'          => null,
             ]);
         }
 
-        return back()->with('success', 'Product updated and re-submitted for review.');
+        return back()->with('success', 'Product updated successfully.');
     }
 
     public function archive(Product $product)
     {
-        if ($product->user_id !== auth()->id()) abort(403, 'Unauthorized action.');
+        if ($product->user_id !== auth()->id()) {
+            abort(403, 'Unauthorized action.');
+        }
         $product->delete();
         return back()->with('success', 'Product archived.');
     }
@@ -284,10 +492,13 @@ class ProductController extends Controller
     {
         $product = Product::withTrashed()->where('user_id', auth()->id())->findOrFail($id);
         if ($product->pictures && is_array($product->pictures)) {
-            foreach ($product->pictures as $pic) Storage::disk('public')->delete($pic);
+            foreach ($product->pictures as $pic) {
+                Storage::disk('public')->delete($pic);
+            }
         }
-        if ($product->variants && isset($product->variants['items']) && is_array($product->variants['items'])) {
-            foreach ($product->variants['items'] as $variant) {
+        $rawVariants = $product->raw_variants ?? $product->variants;
+        if ($rawVariants && isset($rawVariants['items']) && is_array($rawVariants['items'])) {
+            foreach ($rawVariants['items'] as $variant) {
                 if (isset($variant['image']) && $variant['image']) {
                     Storage::disk('public')->delete($variant['image']);
                 }
