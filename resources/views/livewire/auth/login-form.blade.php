@@ -1,5 +1,4 @@
 <div class="w-full">
-    <!-- Header Copy -->
     <div class="mb-10 text-center">
         <h1 class="text-2xl sm:text-3xl font-serif font-normal tracking-tight text-primary-dark">
             {{ $title }}
@@ -15,9 +14,7 @@
         @endif
     </div>
 
-    <!-- Form Elements -->
     <form wire:submit="submit" class="space-y-6">
-        <!-- Email Field -->
         <div>
             <label for="email" class="block text-xs uppercase tracking-wider font-bold text-text-muted mb-1.5 text-left">
                 Email Address
@@ -37,7 +34,6 @@
             @enderror
         </div>
 
-        <!-- Password Field with Alpine Visibility Toggle -->
         <div x-data="{ showPassword: false }">
             <div class="flex items-center justify-between mb-1.5">
                 <label for="password" class="block text-xs uppercase tracking-wider font-bold text-text-muted">
@@ -71,7 +67,6 @@
             @enderror
         </div>
 
-        <!-- Submit Button -->
         <div class="pt-2">
             <button 
                 type="submit" 
@@ -84,15 +79,23 @@
         </div>
     </form>
 
-    <!-- Sign-up Redirection -->
     @if ($showRegister)
-        <div class="mt-8 pt-8 border-t border-border-subtle/50 text-center">
+        <div class="mt-8 pt-8 border-t border-border-subtle/50 text-center space-y-2.5">
             <p class="text-xs text-text-muted">
                 Don't have an account? 
                 <a href="{{ $registerRoute }}" wire:navigate class="ml-1 font-bold text-primary hover:text-primary-dark underline underline-offset-4 transition-colors cursor-pointer">
                     {{ $registerText }}
                 </a>
             </p>
+
+            @if ($showSecondaryRegister && $secondaryRegisterRoute)
+                <p class="text-xs text-text-muted">
+                    {{ $secondaryRegisterPrompt }}
+                    <a href="{{ $secondaryRegisterRoute }}" wire:navigate class="ml-1 font-bold text-primary hover:text-primary-dark underline underline-offset-4 transition-colors cursor-pointer">
+                        {{ $secondaryRegisterText }}
+                    </a>
+                </p>
+            @endif
         </div>
     @endif
 </div>

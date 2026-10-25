@@ -11,5 +11,10 @@
         :registerRoute="route('logistics.register')"
         registerText="Apply for Logistics Hub"
         :showRegister="true"
+        :secondaryRegisterRoute="route('rider.register')"
+        secondaryRegisterPrompt="Want to be a rider?"
+        secondaryRegisterText="Apply as a Delivery Rider"
+        :showSecondaryRegister="true"
+        :showRiderAppButton="true"
     />
 @endsection

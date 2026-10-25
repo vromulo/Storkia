@@ -84,3 +84,5 @@ Route::middleware('auth')->group(function () {
         })->name('user.notifications.markRead');
     });
 });
+
+require __DIR__ . '/rider.php';

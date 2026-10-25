@@ -12,7 +12,6 @@ class LoginForm extends Component
     public string $password = '';
     public bool $remember = false;
 
-    // Portal UI configuration passed from the parent view
     public string $title = 'Sign In';
     public string $subtitle = 'Enter your credentials to access your account';
     public string $expectedRole = 'Buyer';
@@ -20,13 +19,22 @@ class LoginForm extends Component
     public string $registerText = 'Create an account';
     public bool $showRegister = true;
 
+    public ?string $secondaryRegisterRoute = null;
+    public string $secondaryRegisterPrompt = 'Want to be a rider?';
+    public string $secondaryRegisterText = 'Apply here';
+    public bool $showSecondaryRegister = false;
+
     public function mount(
         string $title = 'Sign In',
         string $subtitle = 'Enter your credentials to access your account',
         string $expectedRole = 'Buyer',
         ?string $registerRoute = null,
         string $registerText = 'Create an account',
-        bool $showRegister = true
+        bool $showRegister = true,
+        ?string $secondaryRegisterRoute = null,
+        string $secondaryRegisterPrompt = 'Want to be a rider?',
+        string $secondaryRegisterText = 'Apply here',
+        bool $showSecondaryRegister = false
     ): void {
         $this->title = $title;
         $this->subtitle = $subtitle;
@@ -34,12 +42,12 @@ class LoginForm extends Component
         $this->registerRoute = $registerRoute ?? route('register');
         $this->registerText = $registerText;
         $this->showRegister = $showRegister;
+        $this->secondaryRegisterRoute = $secondaryRegisterRoute;
+        $this->secondaryRegisterPrompt = $secondaryRegisterPrompt;
+        $this->secondaryRegisterText = $secondaryRegisterText;
+        $this->showSecondaryRegister = $showSecondaryRegister;
     }
 
-    /**
-     * Real-time format validation as the user inputs data.
-     * Evaluates format only (syntax & length) to protect against email enumeration.
-     */
     public function updated($propertyName): void
     {
         if ($propertyName === 'email') {
@@ -59,9 +67,6 @@ class LoginForm extends Component
         }
     }
 
-    /**
-     * Authenticate and enforce portal role matching on form submission.
-     */
     public function submit(AuthService $authService, Request $request)
     {
         $this->validate([
@@ -69,7 +74,6 @@ class LoginForm extends Component
             'password' => ['required'],
         ]);
 
-        // Synthesize an authentication request for the common AuthService
         $syntheticRequest = Request::create(
             request()->getUri(),
             'POST',

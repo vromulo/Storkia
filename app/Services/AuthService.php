@@ -2,25 +2,42 @@
 
 namespace App\Services;
 
+use App\Models\Rider;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\MessageBag;
 use Illuminate\Support\ViewErrorBag;
 use Illuminate\Validation\ValidationException;
 
 class AuthService
 {
-    /**
-     * Authenticate credentials and enforce portal matching.
-     *
-     * @throws ValidationException
-     */
     public function authenticate(Request $request, string $expectedRole)
     {
         $credentials = $request->validate([
             'email'    => ['required', 'email'],
             'password' => ['required'],
         ]);
+
+        $normalizedEmail = strtolower(trim($credentials['email']));
+
+        $rider = Rider::whereRaw('LOWER(TRIM(email)) = ?', [$normalizedEmail])->first();
+
+        if ($rider && Hash::check($credentials['password'], $rider->password)) {
+            if ($rider->status === 'pending') {
+                throw ValidationException::withMessages([
+                    'email' => 'Your rider application is still pending approval by your selected logistics company.',
+                ]);
+            }
+
+            if ($rider->status === 'rejected') {
+                throw ValidationException::withMessages([
+                    'email' => 'Your rider application was declined by the logistics company.',
+                ]);
+            }
+
+            return redirect()->route('rider.download-app');
+        }
 
         if (! Auth::attempt($credentials)) {
             throw ValidationException::withMessages([
@@ -30,14 +47,11 @@ class AuthService
 
         $user = Auth::user();
 
-        // Check if user is logging into the matching portal
         if ($user->role !== $expectedRole) {
-            // Immediately log out to prevent unauthorized portal access
             Auth::logout();
             $request->session()->invalidate();  
             $request->session()->regenerateToken();
 
-            // Option B: Redirect to designated login page with warning notice
             $target = match ($user->role) {
                 'Seller'    => ['route' => 'seller.login', 'portal' => 'Seller Portal'],
                 'Logistics' => ['route' => 'logistics.login', 'portal' => 'Logistics Portal'],

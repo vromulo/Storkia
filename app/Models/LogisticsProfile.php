@@ -29,4 +29,9 @@ class LogisticsProfile extends Model
     {
         return $this->hasMany(LogisticsApplication::class, 'user_id', 'user_id')->latest('version');
     }
+
+    public function riders()
+    {
+        return $this->hasMany(Rider::class, 'logistics_profile_id');
+    }
 }
