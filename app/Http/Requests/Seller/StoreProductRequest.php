@@ -17,7 +17,7 @@ class StoreProductRequest extends FormRequest
 
         $rules = [
             'name'                    => ['required', 'string', 'max:100'],
-            'category'                => ['nullable', 'string'],
+            'category'                => ['required', 'string'],
             'subcategory'             => ['required', 'string'],
             'discount'                => ['nullable', 'numeric', 'min:0', 'max:100'],
             'description'             => ['nullable', 'string'],
@@ -25,7 +25,6 @@ class StoreProductRequest extends FormRequest
             'pictures'                => ['required', 'array', 'min:1'],
             'pictures.*'              => ['image', 'mimes:jpeg,png,jpg,webp', 'max:5120'],
 
-            // Variant Rules
             'variant_title'           => ['required', 'string', 'max:50'],
             'sub_variant_title'       => ['nullable', 'string', 'max:50'],
             'variant_names'           => ['required', 'array', 'min:1'],

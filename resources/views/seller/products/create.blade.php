@@ -2,22 +2,13 @@
 
 @section('content')
     @php
-        $categoriesList = [
-            'Pet' => [ ['name' => 'Dog Food & Treats'], ['name' => 'Cat Litter & Accessories'], ['name' => 'Aquariums & Fish Supplies'], ['name' => 'Bird Feeders & Food'], ['name' => 'Pet Grooming Products'], ['name' => 'Pet Health & Wellness'] ],
-            'Kids' => [ ['name' => 'Baby Clothes & Accessories'], ['name' => 'Toys & Games'], ['name' => 'Educational Materials'], ['name' => 'Strollers & Gear'], ['name' => 'Nursery Furniture'], ['name' => 'Safety and Health'] ],
-            'Electronics' => [ ['name' => 'Mobile Phones & Accessories'], ['name' => 'Laptops, Desktops & Monitors'], ['name' => 'Audio & Video Equipment'], ['name' => 'Smart Home Devices'], ['name' => 'Cameras & Photography'], ['name' => 'Wearable Technology'] ],
-            'Home & Garden' => [ ['name' => 'Kitchen Appliances'], ['name' => 'Furniture & Decor'], ['name' => 'Gardening Tools'], ['name' => 'Outdoor Living'], ['name' => 'Home Improvement Tools'], ['name' => 'Bedding & Bath'] ],
-            'Women\'s' => [ ['name' => 'Dresses & Skirts'], ['name' => 'Tops & Blouses'], ['name' => 'Activewear & Yoga Pants'], ['name' => 'Lingerie & Sleepwear'], ['name' => 'Jackets & Coats'], ['name' => 'Shoes & Accessories'] ],
-            'Men\'s' => [ ['name' => 'Suits & Blazers'], ['name' => 'Casual Shirts & Pants'], ['name' => 'Outerwear & Jackets'], ['name' => 'Activewear & Fitness Gear'], ['name' => 'Shoes & Accessories'], ['name' => 'Grooming Products'] ],
-            'Health & Beauty' => [ ['name' => 'Skincare Products'], ['name' => 'Haircare Solutions'], ['name' => 'Makeup & Cosmetics'], ['name' => 'Personal Care Appliances'], ['name' => 'Men\'s Grooming'], ['name' => 'Health Supplements'] ],
-            'Books & Media' => [ ['name' => 'Fiction & Non-Fiction Books'], ['name' => 'Magazines & Periodicals'], ['name' => 'Music CDs & Vinyl Records'], ['name' => 'Movie DVDs & Blu-ray'], ['name' => 'Video Games & Consoles'], ['name' => 'Educational DVDs'] ],
-            'Sports & Outdoors' => [ ['name' => 'Fitness Equipment'], ['name' => 'Camping & Hiking Gear'], ['name' => 'Sports Apparel'], ['name' => 'Cycling & Bikes'], ['name' => 'Water Sports'], ['name' => 'Team Sports Equipment'] ],
-            'Food & Gourmet' => [ ['name' => 'Baking Supplies & Ingredients'], ['name' => 'Coffee, Tea & Beverages'], ['name' => 'Snacks & Candy'], ['name' => 'Specialty Foods'], ['name' => 'Organic and Health Foods'], ['name' => 'Meal Kits & Prepped Foods'] ],
-            'Furniture & Office' => [ ['name' => 'Office Desks & Chairs'], ['name' => 'Storage Cabinets & Shelving'], ['name' => 'Conference & Meeting Furniture'], ['name' => 'Computer Tables & Workstations'], ['name' => 'Ergonomic Accessories'], ['name' => 'Office Lighting & Fixtures'] ],
-            'Jewelry & Watches' => [ ['name' => 'Necklaces & Pendants'], ['name' => 'Rings & Earrings'], ['name' => 'Bracelets & Bangles'], ['name' => 'Watches for Men & Women'], ['name' => 'Fashion Jewelry'], ['name' => 'Jewelry Storage & Care'] ]
-        ];
-        $sellerCategory = auth()->user()->sellerProfile->line_of_business ?? 'Pet';
-        $subcategories = $categoriesList[$sellerCategory] ?? $categoriesList['Pet'];
+        $categoriesList = $categoriesList ?? \App\Http\Controllers\Seller\ProductController::getCategoriesList();
+        $primaryCategory = auth()->user()->sellerProfile->line_of_business ?? 'Pet';
+        $sellerCategory = old('category', $selectedCategory ?? request()->query('category', $primaryCategory));
+        if (!array_key_exists($sellerCategory, $categoriesList)) {
+            $sellerCategory = $primaryCategory;
+        }
+        $subcategories = $categoriesList[$sellerCategory] ?? ($categoriesList[$primaryCategory] ?? []);
     @endphp
 
     @if($errors->any())
@@ -53,24 +44,69 @@
         </div>
     @endif
 
-    <div x-data="{ imageModalOpen: false, imageModalSrc: '' }">
+    <div x-data="{ 
+        imageModalOpen: false, 
+        imageModalSrc: '',
+        touched: {},
+        fieldErrors: {},
+        isFormValid: false,
+        initForm() {
+            this.$refs.productForm.addEventListener('blur', (e) => {
+                if (e.target.name) {
+                    this.touched[e.target.name] = true;
+                    this.validateForm();
+                }
+            }, true);
+            this.validateForm();
+        },
+        validateForm() {
+            this.$nextTick(() => {
+                const form = this.$refs.productForm;
+                if (!form) return;
+                this.isFormValid = form.checkValidity();
+                let errs = {};
+                form.querySelectorAll('input, select, textarea').forEach(el => {
+                    if (el.name && !el.validity.valid) {
+                        errs[el.name] = true;
+                    }
+                });
+                this.fieldErrors = errs;
+            });
+        },
+        hasError(name) {
+            return this.touched[name] && this.fieldErrors[name];
+        }
+    }" x-init="initForm()">
         <div class="max-w-5xl mx-auto">
             <div class="flex items-center mb-8">
-                <a href="{{ route('seller.products.index') }}" class="mr-4 p-2 bg-white rounded-full shadow-sm border border-border-subtle hover:bg-brand-light/20 transition-colors text-text-muted hover:text-primary cursor-pointer">
+                <a href="{{ route('seller.products.index', ['category' => $sellerCategory]) }}" class="mr-4 p-2 bg-white rounded-full shadow-sm border border-border-subtle hover:bg-brand-light/20 transition-colors text-text-muted hover:text-primary cursor-pointer">
                     <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18" />
                     </svg>
                 </a>
-                <h1 class="text-3xl font-bold text-primary-dark">Add New Product</h1>
+                <div>
+                    <h1 class="text-3xl font-bold text-primary-dark">Add New Product</h1>
+                    <p class="text-xs text-text-muted mt-0.5">Creating product under <strong>{{ $sellerCategory }}</strong> ({{ $sellerCategory === $primaryCategory ? 'Primary Category' : 'Other Category' }})</p>
+                </div>
             </div>
 
-            <form x-data="variantManager()" action="{{ route('seller.products.store') }}" method="POST" enctype="multipart/form-data" class="bg-white rounded-3xl p-8 shadow-sm border border-border-subtle space-y-6">
+            <form x-ref="productForm"
+                  @input="validateForm"
+                  @change="validateForm"
+                  x-data="variantManager()" 
+                  action="{{ route('seller.products.store') }}" 
+                  method="POST" 
+                  enctype="multipart/form-data" 
+                  class="bg-white rounded-3xl p-8 shadow-sm border border-border-subtle space-y-6">
                 @csrf
                 <input type="hidden" name="stock_quantity" :value="totalStock">
 
                 <div>
                     <label class="block text-sm font-bold text-text-muted mb-1">Product Name (Max 100 chars) <span class="text-red-500">*</span></label>
-                    <input type="text" name="name" maxlength="100" required value="{{ old('name') }}" class="w-full p-3 rounded-xl border border-border-subtle focus:border-primary focus:ring-1 focus:ring-primary outline-none">
+                    <input type="text" name="name" maxlength="100" required value="{{ old('name') }}" 
+                           :class="hasError('name') ? 'border-red-500 focus:border-red-500 focus:ring-red-500' : 'border-border-subtle focus:border-primary focus:ring-primary'"
+                           class="w-full p-3 rounded-xl border focus:ring-1 outline-none">
+                    <span x-show="hasError('name')" x-cloak class="text-red-500 text-[10px] font-bold mt-1 block">Product Name is required.</span>
                 </div>
 
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -79,9 +115,8 @@
                         <input type="text" name="category" value="{{ $sellerCategory }}" readonly class="w-full p-3.5 rounded-2xl border border-gray-200 bg-gray-100 text-gray-500 font-bold outline-none cursor-not-allowed select-none">
                     </div>
 
-                    <!-- Searchable Subcategory Dropdown -->
                     <div x-data="searchableSelect({
-                            selected: '{{ old('subcategory') }}',
+                            selected: '{{ addslashes(old('subcategory', '')) }}',
                             options: {{ json_encode(array_column($subcategories, 'name')) }}
                          })" 
                          @click.away="open = false" 
@@ -90,13 +125,14 @@
                         <label class="block text-sm font-bold text-text-muted mb-1">Subcategory <span class="text-red-500">*</span></label>
                         <input type="text" name="subcategory" x-model="selected" required tabindex="-1" class="absolute w-0 h-0 opacity-0 pointer-events-none -z-10">
                         
-                        <div @click="open = true; $refs.searchInput.focus()"
-                             class="w-full p-3 bg-white rounded-2xl border-2 border-gray-300 hover:border-gray-400 focus-within:border-primary transition-all flex items-center justify-between cursor-text shadow-sm relative">
+                        <div @click="open = true; $refs.searchInput.focus(); touched['subcategory'] = true;"
+                             :class="hasError('subcategory') ? 'border-red-500' : 'border-gray-300 hover:border-gray-400 focus-within:border-primary'"
+                             class="w-full p-3 bg-white rounded-2xl border-2 transition-all flex items-center justify-between cursor-text shadow-sm relative">
                             <input x-ref="searchInput"
                                    type="text" 
                                    x-model="search" 
                                    @focus="open = true"
-                                   @keydown.enter.prevent="if(filteredOptions.length > 0) selectOption(filteredOptions[0])"
+                                   @keydown.enter.prevent="if(filteredOptions.length > 0) { selectOption(filteredOptions[0]); setTimeout(() => validateForm(), 50); }"
                                    :placeholder="selected ? '' : 'Select or type to search...'" 
                                    class="w-full bg-transparent outline-none text-text-main font-medium z-10 relative">
                             
@@ -109,6 +145,7 @@
                                 </svg>
                             </button>
                         </div>
+                        <span x-show="hasError('subcategory')" x-cloak class="text-red-500 text-[10px] font-bold mt-1 block">Subcategory is required.</span>
 
                         <div x-show="open" 
                              x-cloak 
@@ -120,7 +157,7 @@
                              x-transition:leave-end="opacity-0 scale-95 -translate-y-1"
                              class="absolute z-50 left-0 right-0 mt-2 bg-white border border-gray-200 rounded-2xl shadow-xl max-h-60 overflow-y-auto custom-scrollbar p-1.5 divide-y divide-gray-100">
                             <template x-for="opt in filteredOptions" :key="opt">
-                                <div @click="selectOption(opt)" 
+                                <div @click="selectOption(opt); setTimeout(() => validateForm(), 50)" 
                                      class="px-4 py-3 rounded-xl hover:bg-gray-50 cursor-pointer flex items-center justify-between transition-colors text-sm font-medium text-gray-800">
                                     <span x-text="opt"></span>
                                     <svg x-show="selected === opt" class="w-5 h-5 text-pink-600 font-bold" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
@@ -138,22 +175,25 @@
                 <div class="grid grid-cols-1 gap-6">
                     <div>
                         <label class="block text-sm font-bold text-text-muted mb-1">Discount <span class="text-xs font-normal italic">(Optional)</span></label>
-                        <div class="relative flex items-center w-full md:w-1/2">
-                            <input type="number" step="0.01" min="0" name="discount" value="{{ old('discount', 0) }}"
-                                   onkeypress="return (event.charCode >= 48 && event.charCode <= 57) || event.charCode === 46"
-                                   class="w-full pr-9 p-3 rounded-xl border border-border-subtle focus:border-primary outline-none no-spinners cursor-text">
-                            <span class="absolute right-4 text-text-muted font-bold">%</span>
+                        <div class="relative flex flex-col w-full md:w-1/2">
+                            <div class="relative w-full">
+                                <input type="number" step="0.01" min="0" name="discount" value="{{ old('discount', 0) }}"
+                                       onkeypress="return (event.charCode >= 48 && event.charCode <= 57) || event.charCode === 46"
+                                       :class="hasError('discount') ? 'border-red-500 focus:border-red-500' : 'border-border-subtle focus:border-primary'"
+                                       class="w-full pr-9 p-3 rounded-xl border outline-none no-spinners cursor-text">
+                                <span class="absolute right-4 top-3 text-text-muted font-bold">%</span>
+                            </div>
+                            <span x-show="hasError('discount')" x-cloak class="text-red-500 text-[10px] font-bold mt-1 block">Invalid discount value.</span>
                         </div>
                     </div>
                 </div>
 
-                <!-- Main Image Drag & Drop -->
                 <div x-data="imageUploader()">
                     <label class="block text-sm font-bold text-text-muted mb-1">Main Product Pictures <span class="text-red-500">*</span></label>
                     <div @dragover.prevent="isDragging = true"
                          @dragleave.prevent="isDragging = false"
-                         @drop.prevent="handleDrop($event)"
-                         :class="isDragging ? 'border-primary bg-primary/10 scale-[1.005]' : 'border-border-subtle bg-surface hover:bg-brand-light/10'"
+                         @drop.prevent="handleDrop($event); touched['pictures[]'] = true; setTimeout(() => validateForm(), 100)"
+                         :class="hasError('pictures[]') ? 'border-red-500 bg-red-50 scale-[1.005]' : (isDragging ? 'border-primary bg-primary/10 scale-[1.005]' : 'border-border-subtle bg-surface hover:bg-brand-light/10')"
                          class="border-2 border-dashed rounded-2xl p-10 text-center transition-all cursor-pointer relative flex flex-col items-center justify-center min-h-[220px]">
                         
                         <input x-ref="mainFileInput"
@@ -162,7 +202,7 @@
                                multiple
                                accept="image/*"
                                required
-                               @change="handleSelect($event)"
+                               @change="handleSelect($event); touched['pictures[]'] = true; setTimeout(() => validateForm(), 100)"
                                class="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10">
                         
                         <div class="flex flex-col items-center justify-center space-y-3 pointer-events-none">
@@ -177,6 +217,7 @@
                             <p class="text-xs text-text-muted">Supports PNG, JPG, WEBP, GIF, SVG (PDFs & Documents are rejected)</p>
                         </div>
                     </div>
+                    <span x-show="hasError('pictures[]')" x-cloak class="text-red-500 text-[10px] font-bold mt-1 block">At least one product picture is required.</span>
                     
                     <template x-if="errorMessage">
                         <p class="text-red-500 text-xs font-bold mt-2 flex items-center">
@@ -195,18 +236,23 @@
                     </div>
                 </div>
 
-                <!-- Variant System -->
                 <div class="border border-border-subtle rounded-2xl p-6 bg-brand-light/10 space-y-6">
                     <div class="border-b border-border-subtle pb-4">
                         <h3 class="text-lg font-bold text-primary-dark mb-4">Product Variants</h3>
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div>
-                                <label class="block text-xs font-bold text-text-muted mb-1">Title of the Variants <span class="text-red-500">*</span></label>
-                                <input type="text" name="variant_title" x-model="variantTitle" placeholder="e.g. Color, Units" required class="w-full p-2.5 rounded-lg border border-border-subtle focus:border-primary outline-none">
+                                <label class="block text-xs font-bold text-text-muted mb-1">Title of the Variants <span x-show="variants.length > 0" class="text-red-500">*</span></label>
+                                <input type="text" name="variant_title" x-model="variantTitle" placeholder="e.g. Color, Units" :required="variants.length > 0" 
+                                       :class="hasError('variant_title') ? 'border-red-500 focus:border-red-500' : 'border-border-subtle focus:border-primary'"
+                                       class="w-full p-2.5 rounded-lg border outline-none">
+                                <span x-show="hasError('variant_title')" x-cloak class="text-red-500 text-[10px] font-bold mt-1 block">Title is required.</span>
                             </div>
                             <div>
-                                <label class="block text-xs font-bold text-text-muted mb-1">Sub-title (Optional)</label>
-                                <input type="text" name="sub_variant_title" x-model="subVariantTitle" placeholder="e.g. Size, RAM" class="w-full p-2.5 rounded-lg border border-border-subtle focus:border-primary outline-none">
+                                <label class="block text-xs font-bold text-text-muted mb-1">Title of the Sub Variants (If necessary)</label>
+                                <input type="text" name="sub_variant_title" x-model="subVariantTitle" placeholder="e.g. Size, RAM"
+                                       :disabled="!variantTitle || variantTitle.trim() === ''"
+                                       :class="(!variantTitle || variantTitle.trim() === '') ? 'bg-gray-100 cursor-not-allowed opacity-70 border-border-subtle text-gray-500' : 'bg-white border-border-subtle focus:border-primary'"
+                                       class="w-full p-2.5 rounded-lg border outline-none transition-colors">
                             </div>
                         </div>
                     </div>
@@ -214,50 +260,90 @@
                     <div class="space-y-4">
                         <template x-for="(v, vIndex) in variants" :key="v.id">
                             <div class="bg-white rounded-xl border border-border-subtle shadow-sm overflow-hidden">
-                                <div class="p-4 flex flex-col lg:flex-row lg:items-center gap-4 bg-surface/50 border-b border-border-subtle">
-                                    <div class="w-full lg:w-48 shrink-0">
+                                
+                                <div x-show="vIndex > 0 && !v.isCopied && variants[0] && (variants[0].price || variants[0].weight || variants[0].stock) && priceDependsOn === 'main'"
+                                     x-data="{ promptState: 'active' }"
+                                     class="px-4 pt-4">
+                                     <div x-show="promptState === 'active'" x-transition class="p-2.5 bg-blue-50 border border-blue-200 rounded-lg flex flex-wrap items-center justify-between gap-2 text-xs text-blue-900 shadow-sm">
+                                         <div class="flex items-center gap-2">
+                                             <svg class="w-4 h-4 text-blue-600 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M12 8h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                                             <span>Do you want to copy the previous variant's descriptions (Price, Weight, and Stock)?</span>
+                                         </div>
+                                         <div class="flex gap-2 mt-2 sm:mt-0">
+                                             <button type="button" @click="v.price = variants[0].price; v.weight = variants[0].weight; v.stock = variants[0].stock; v.isCopied = true; promptState = 'copied'; setTimeout(() => validateForm(), 50);" class="px-3 py-1 bg-blue-600 text-white font-bold rounded-md hover:bg-blue-700 transition-colors cursor-pointer shadow-sm">Copy</button>
+                                             <button type="button" @click="promptState = 'remind_later'" class="px-3 py-1 bg-white border border-blue-300 text-blue-600 font-bold rounded-md hover:bg-blue-50 transition-colors cursor-pointer shadow-sm">Not Now</button>
+                                             <button type="button" @click="v.isCopied = true; promptState = 'dismissed'" class="px-3 py-1 bg-gray-100 text-gray-600 font-bold rounded-md hover:bg-gray-200 transition-colors cursor-pointer shadow-sm">Dismiss</button>
+                                         </div>
+                                     </div>
+                                     <div x-show="promptState === 'remind_later'" class="flex justify-end mt-1">
+                                         <button type="button" @click="promptState = 'active'" class="text-[10px] text-blue-500 hover:text-blue-700 underline font-bold">Show automation prompt</button>
+                                     </div>
+                                </div>
+
+                                <div class="p-4 flex flex-col lg:flex-row lg:items-start gap-4 bg-surface/50 border-b border-border-subtle">
+                                    <div class="w-full lg:w-48 shrink-0 flex flex-col">
                                         <input type="text" :name="`variant_names[${v.id}]`" x-model="v.name" :placeholder="`${variantTitle || 'Variant'} Name (e.g. Red)`" required
-                                               :class="duplicateVariants.includes(v.name.trim().toLowerCase()) && v.name.trim() !== '' ? 'border-red-500 focus:border-red-500 focus:ring-red-500' : 'border-border-subtle focus:border-primary'"
+                                               :disabled="!variantTitle || variantTitle.trim() === ''"
+                                               :class="(!variantTitle || variantTitle.trim() === '') ? 'bg-gray-100 text-gray-500 cursor-not-allowed border-border-subtle' : ((duplicateVariants.includes(v.name.trim().toLowerCase()) && v.name.trim() !== '') || hasError(`variant_names[${v.id}]`) ? 'border-red-500 focus:border-red-500 focus:ring-red-500 bg-white' : 'border-border-subtle focus:border-primary bg-white')"
                                                class="w-full p-2.5 text-sm rounded-lg border outline-none transition-colors">
+                                        <span x-show="hasError(`variant_names[${v.id}]`)" x-cloak class="text-red-500 text-[10px] font-bold mt-1 block">Name is required.</span>
                                         <span x-show="duplicateVariants.includes(v.name.trim().toLowerCase()) && v.name.trim() !== ''" class="text-red-500 text-[10px] font-bold mt-1 block">Variant name must be unique.</span>
                                     </div>
 
-                                    <div class="flex-1 flex items-center gap-3 min-w-[260px]">
-                                        <template x-if="v.imagePreview">
-                                            <img :src="v.imagePreview" @click="imageModalSrc = v.imagePreview; imageModalOpen = true" class="w-20 h-20 object-cover rounded-xl border-2 border-border-subtle shadow-sm flex-shrink-0 cursor-pointer hover:opacity-80 transition-opacity">
-                                        </template>
-                                        
-                                        <div @dragover.prevent="v.isDragging = true"
-                                             @dragleave.prevent="isDragging = false"
-                                             @drop.prevent="handleVariantDrop($event, v.id)"
-                                             :class="v.isDragging ? 'border-primary bg-primary/10' : 'border-border-subtle bg-white hover:bg-brand-light/10'"
-                                             class="relative flex-1 border-2 border-dashed rounded-xl p-3 transition-all text-center flex items-center justify-center min-h-[64px]">
-                                            <input :id="`variant_picture_input_${v.id}`"
-                                                   type="file" 
-                                                   :name="`variant_pictures[${v.id}]`" 
-                                                   accept="image/*" 
-                                                   required 
-                                                   @change="handleVariantImage($event, v.id)" 
-                                                   class="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10">
-                                            <span class="text-xs font-semibold text-text-muted pointer-events-none flex items-center justify-center gap-1.5">
-                                                <svg class="w-5 h-5 text-primary shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
-                                                <span>Drag & drop or <span class="text-primary underline font-bold">browse</span> image</span>
-                                            </span>
+                                    <div class="flex-1 flex flex-col min-w-[260px]">
+                                        <div class="flex items-center gap-3">
+                                            <template x-if="v.imagePreview">
+                                                <img :src="v.imagePreview" @click="imageModalSrc = v.imagePreview; imageModalOpen = true" class="w-20 h-20 object-cover rounded-xl border-2 border-border-subtle shadow-sm flex-shrink-0 cursor-pointer hover:opacity-80 transition-opacity">
+                                            </template>
+                                            
+                                            <div @dragover.prevent="v.isDragging = true"
+                                                 @dragleave.prevent="isDragging = false"
+                                                 @drop.prevent="handleVariantDrop($event, v.id); touched[`variant_pictures[${v.id}]`] = true; setTimeout(() => validateForm(), 100)"
+                                                 :class="hasError(`variant_pictures[${v.id}]`) ? 'border-red-500 bg-red-50' : (v.isDragging ? 'border-primary bg-primary/10' : 'border-border-subtle bg-white hover:bg-brand-light/10')"
+                                                 class="relative flex-1 border-2 border-dashed rounded-xl p-3 transition-all text-center flex items-center justify-center min-h-[64px]">
+                                                <input :id="`variant_picture_input_${v.id}`"
+                                                       type="file" 
+                                                       :name="`variant_pictures[${v.id}]`" 
+                                                       accept="image/*" 
+                                                       required 
+                                                       @change="handleVariantImage($event, v.id); touched[`variant_pictures[${v.id}]`] = true; setTimeout(() => validateForm(), 100)" 
+                                                       class="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10">
+                                                <span class="text-xs font-semibold text-text-muted pointer-events-none flex items-center justify-center gap-1.5">
+                                                    <svg class="w-5 h-5 text-primary shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
+                                                    <span>Drag & drop or <span class="text-primary underline font-bold">browse</span></span>
+                                                </span>
+                                            </div>
                                         </div>
+                                        <span x-show="hasError(`variant_pictures[${v.id}]`)" x-cloak class="text-red-500 text-[10px] font-bold mt-1 block">Image is required.</span>
                                     </div>
 
                                     <template x-if="priceDependsOn === 'main'">
-                                        <div class="flex gap-2 w-full lg:w-auto shrink-0">
-                                            <div class="relative w-full lg:w-32">
-                                                <span class="absolute left-2.5 top-2.5 text-text-muted text-xs font-bold">₱</span>
-                                                <input type="number" step="0.01" min="20" :name="`variant_prices[${v.id}]`" placeholder="Price" required onkeypress="return (event.charCode >= 48 && event.charCode <= 57) || event.charCode === 46" class="w-full pl-6 p-2 text-sm rounded-lg border border-border-subtle focus:border-primary outline-none no-spinners cursor-text">
+                                        <div class="flex gap-2 w-full lg:w-auto shrink-0 pt-0.5">
+                                            <div class="flex flex-col w-full lg:w-32">
+                                                <div class="relative w-full">
+                                                    <span class="absolute left-2.5 top-2.5 text-text-muted text-xs font-bold pointer-events-none">₱</span>
+                                                    <input type="number" step="0.01" min="20" :name="`variant_prices[${v.id}]`" x-model="v.price" placeholder="Price" required onkeypress="return (event.charCode >= 48 && event.charCode <= 57) || event.charCode === 46"
+                                                           :class="hasError(`variant_prices[${v.id}]`) ? 'border-red-500 focus:border-red-500' : 'border-border-subtle focus:border-primary'" 
+                                                           class="w-full pl-6 p-2 text-sm rounded-lg border outline-none no-spinners cursor-text">
+                                                </div>
+                                                <span x-show="hasError(`variant_prices[${v.id}]`)" x-cloak class="text-red-500 text-[9px] font-bold mt-1 block">Required (Min 20)</span>
                                             </div>
-                                            <div class="relative w-full lg:w-28">
-                                                <input type="number" step="0.01" min="0" :name="`variant_weights[${v.id}]`" placeholder="Weight" required onkeypress="return (event.charCode >= 48 && event.charCode <= 57) || event.charCode === 46" class="w-full pr-8 p-2 text-sm rounded-lg border border-border-subtle focus:border-primary outline-none no-spinners cursor-text">
-                                                <span class="absolute right-2.5 top-2.5 text-text-muted text-xs font-bold">KG</span>
+                                            <div class="flex flex-col w-full lg:w-28">
+                                                <div class="relative w-full">
+                                                    <input type="number" step="0.01" min="0" :name="`variant_weights[${v.id}]`" x-model="v.weight" placeholder="Weight" required onkeypress="return (event.charCode >= 48 && event.charCode <= 57) || event.charCode === 46" 
+                                                           :class="hasError(`variant_weights[${v.id}]`) ? 'border-red-500 focus:border-red-500' : 'border-border-subtle focus:border-primary'"
+                                                           class="w-full pr-8 p-2 text-sm rounded-lg border outline-none no-spinners cursor-text">
+                                                    <span class="absolute right-2.5 top-2.5 text-text-muted text-xs font-bold pointer-events-none">KG</span>
+                                                </div>
+                                                <span x-show="hasError(`variant_weights[${v.id}]`)" x-cloak class="text-red-500 text-[9px] font-bold mt-1 block">Required</span>
                                             </div>
-                                            <div class="relative w-full lg:w-24">
-                                                <input type="number" min="0" :name="`variant_stocks[${v.id}]`" x-model="v.stock" placeholder="Stock" required onkeypress="return (event.charCode >= 48 && event.charCode <= 57)" class="w-full p-2 text-sm rounded-lg border border-border-subtle focus:border-primary outline-none no-spinners cursor-text">
+                                            <div class="flex flex-col w-full lg:w-24">
+                                                <div class="relative w-full">
+                                                    <input type="number" min="0" :name="`variant_stocks[${v.id}]`" x-model="v.stock" placeholder="Stock" required onkeypress="return (event.charCode >= 48 && event.charCode <= 57)" 
+                                                           :class="hasError(`variant_stocks[${v.id}]`) ? 'border-red-500 focus:border-red-500' : 'border-border-subtle focus:border-primary'"
+                                                           class="w-full p-2 text-sm rounded-lg border outline-none no-spinners cursor-text">
+                                                </div>
+                                                <span x-show="hasError(`variant_stocks[${v.id}]`)" x-cloak class="text-red-500 text-[9px] font-bold mt-1 block">Required</span>
                                             </div>
                                         </div>
                                     </template>
@@ -267,7 +353,6 @@
                                     </button>
                                 </div>
 
-                                <!-- Sub Variants Loop -->
                                 <div x-show="priceDependsOn === 'sub'" class="p-4 bg-white space-y-3">
                                     <div class="flex justify-between items-center mb-2">
                                         <div class="flex items-center gap-2">
@@ -285,53 +370,70 @@
                                     
                                     <template x-for="(sub, sIndex) in v.subs" :key="sub.id">
                                         <div class="space-y-2 bg-brand-light/10 p-3 rounded-xl border border-brand-light/30">
+                                            
                                             <div x-show="sIndex > 0 && !sub.isCopied && v.subs[0] && (v.subs[0].price || v.subs[0].weight || v.subs[0].stock)"
-                                                 x-transition
-                                                 class="p-2.5 bg-blue-50 border border-blue-200 rounded-lg flex flex-wrap items-center justify-between gap-2 text-xs text-blue-900 shadow-sm">
-                                                <div class="flex items-center gap-2">
-                                                    <svg class="w-4 h-4 text-blue-600 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M12 8h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                                                    <span>Would you like to copy Price, Weight, and Stock from the 1st subvariant (<strong x-text="v.subs[0].name || '1st Subvariant'"></strong>)?</span>
-                                                </div>
-                                                <button type="button" @click="copyFirstSubValues(v.id, sIndex)" class="px-3 py-1 bg-blue-600 text-white font-bold rounded-md hover:bg-blue-700 transition-colors cursor-pointer text-[11px] shadow-sm">
-                                                    Copy
-                                                </button>
+                                                 x-data="{ promptState: 'active' }"
+                                                 class="mb-2">
+                                                 <div x-show="promptState === 'active'" x-transition class="p-2.5 bg-blue-50 border border-blue-200 rounded-lg flex flex-wrap items-center justify-between gap-2 text-xs text-blue-900 shadow-sm">
+                                                     <div class="flex items-center gap-2">
+                                                         <svg class="w-4 h-4 text-blue-600 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M12 8h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                                                         <span>Do you want to copy the previous subvariant descriptions (Price, Weight, Stock) from <strong x-text="v.subs[0].name || '1st Subvariant'"></strong>?</span>
+                                                     </div>
+                                                     <div class="flex gap-2 mt-2 sm:mt-0">
+                                                         <button type="button" @click="copyFirstSubValues(v.id, sIndex); promptState = 'copied'; setTimeout(() => validateForm(), 50);" class="px-3 py-1 bg-blue-600 text-white font-bold rounded-md hover:bg-blue-700 transition-colors cursor-pointer shadow-sm">Copy</button>
+                                                         <button type="button" @click="promptState = 'remind_later'" class="px-3 py-1 bg-white border border-blue-300 text-blue-600 font-bold rounded-md hover:bg-blue-50 transition-colors cursor-pointer shadow-sm">Not Now</button>
+                                                         <button type="button" @click="sub.isCopied = true; promptState = 'dismissed'" class="px-3 py-1 bg-gray-100 text-gray-600 font-bold rounded-md hover:bg-gray-200 transition-colors cursor-pointer shadow-sm">Dismiss</button>
+                                                     </div>
+                                                 </div>
+                                                 <div x-show="promptState === 'remind_later'" class="flex justify-end mt-1">
+                                                     <button type="button" @click="promptState = 'active'" class="text-[10px] text-blue-500 hover:text-blue-700 underline font-bold">Show automation prompt</button>
+                                                 </div>
                                             </div>
 
-                                            <div class="flex items-start gap-3">
-                                                <div class="flex-1">
+                                            <div class="flex flex-col md:flex-row items-start gap-3">
+                                                <div class="flex-1 w-full">
                                                     <input type="text" :name="`sub_variant_names[${v.id}][${sub.id}]`" x-model="sub.name" :placeholder="`${subVariantTitle} Name (e.g. 128GB)`" required
                                                            :disabled="v.name.trim() === ''"
-                                                           :class="(isSubVariantDuplicate(v, sub.name) ? 'border-red-500 focus:border-red-500 ' : 'border-border-subtle focus:border-primary ') + (v.name.trim() === '' ? 'bg-gray-100 text-gray-500 cursor-not-allowed' : 'bg-white')"
+                                                           :class="(isSubVariantDuplicate(v, sub.name) || hasError(`sub_variant_names[${v.id}][${sub.id}]`) ? 'border-red-500 focus:border-red-500 ' : 'border-border-subtle focus:border-primary ') + (v.name.trim() === '' ? 'bg-gray-100 text-gray-500 cursor-not-allowed' : 'bg-white')"
                                                            class="w-full p-2 text-xs rounded-md border outline-none transition-colors">
-                                                    <span x-show="isSubVariantDuplicate(v, sub.name)" class="text-red-500 text-[10px] font-bold mt-1 block">Sub-variant must be unique.</span>
+                                                    <span x-show="hasError(`sub_variant_names[${v.id}][${sub.id}]`)" x-cloak class="text-red-500 text-[9px] font-bold mt-1 block">Required</span>
+                                                    <span x-show="isSubVariantDuplicate(v, sub.name)" class="text-red-500 text-[9px] font-bold mt-1 block">Sub-variant must be unique.</span>
                                                 </div>
 
-                                                <div class="flex gap-2">
-                                                    <div class="relative w-28">
-                                                        <span class="absolute left-2.5 top-1.5 text-text-muted text-xs font-bold" :class="v.name.trim() === '' ? 'opacity-50' : ''">₱</span>
-                                                        <input type="number" step="0.01" min="20" :name="`sub_variant_prices[${v.id}][${sub.id}]`" x-model="sub.price" placeholder="Price" required onkeypress="return (event.charCode >= 48 && event.charCode <= 57) || event.charCode === 46"
-                                                               :disabled="v.name.trim() === ''"
-                                                               :class="v.name.trim() === '' ? 'bg-gray-100 text-gray-500 cursor-not-allowed' : 'bg-white cursor-text'"
-                                                               class="w-full pl-6 p-2 text-xs rounded-md border border-border-subtle focus:border-primary outline-none no-spinners">
+                                                <div class="flex flex-wrap gap-2 w-full md:w-auto">
+                                                    <div class="flex flex-col flex-1 min-w-[100px]">
+                                                        <div class="relative w-full">
+                                                            <span class="absolute left-2.5 top-1.5 text-text-muted text-xs font-bold pointer-events-none" :class="v.name.trim() === '' ? 'opacity-50' : ''">₱</span>
+                                                            <input type="number" step="0.01" min="20" :name="`sub_variant_prices[${v.id}][${sub.id}]`" x-model="sub.price" placeholder="Price" required onkeypress="return (event.charCode >= 48 && event.charCode <= 57) || event.charCode === 46"
+                                                                   :disabled="v.name.trim() === ''"
+                                                                   :class="(hasError(`sub_variant_prices[${v.id}][${sub.id}]`) ? 'border-red-500 ' : 'border-border-subtle focus:border-primary ') + (v.name.trim() === '' ? 'bg-gray-100 text-gray-500 cursor-not-allowed' : 'bg-white cursor-text')"
+                                                                   class="w-full pl-6 p-2 text-xs rounded-md border outline-none no-spinners">
+                                                        </div>
+                                                        <span x-show="hasError(`sub_variant_prices[${v.id}][${sub.id}]`)" x-cloak class="text-red-500 text-[9px] font-bold mt-1 block">Required</span>
                                                     </div>
-                                                    <div class="relative w-24">
-                                                        <input type="number" step="0.01" min="0" :name="`sub_variant_weights[${v.id}][${sub.id}]`" x-model="sub.weight" placeholder="Weight" required onkeypress="return (event.charCode >= 48 && event.charCode <= 57) || event.charCode === 46"
-                                                               :disabled="v.name.trim() === ''"
-                                                               :class="v.name.trim() === '' ? 'bg-gray-100 text-gray-500 cursor-not-allowed' : 'bg-white cursor-text'"
-                                                               class="w-full pr-7 p-2 text-xs rounded-md border border-border-subtle focus:border-primary outline-none no-spinners">
-                                                        <span class="absolute right-2 top-1.5 text-text-muted text-xs font-bold" :class="v.name.trim() === '' ? 'opacity-50' : ''">KG</span>
+                                                    <div class="flex flex-col flex-1 min-w-[90px]">
+                                                        <div class="relative w-full">
+                                                            <input type="number" step="0.01" min="0" :name="`sub_variant_weights[${v.id}][${sub.id}]`" x-model="sub.weight" placeholder="Weight" required onkeypress="return (event.charCode >= 48 && event.charCode <= 57) || event.charCode === 46"
+                                                                   :disabled="v.name.trim() === ''"
+                                                                   :class="(hasError(`sub_variant_weights[${v.id}][${sub.id}]`) ? 'border-red-500 ' : 'border-border-subtle focus:border-primary ') + (v.name.trim() === '' ? 'bg-gray-100 text-gray-500 cursor-not-allowed' : 'bg-white cursor-text')"
+                                                                   class="w-full pr-7 p-2 text-xs rounded-md border outline-none no-spinners">
+                                                            <span class="absolute right-2 top-1.5 text-text-muted text-xs font-bold pointer-events-none" :class="v.name.trim() === '' ? 'opacity-50' : ''">KG</span>
+                                                        </div>
+                                                        <span x-show="hasError(`sub_variant_weights[${v.id}][${sub.id}]`)" x-cloak class="text-red-500 text-[9px] font-bold mt-1 block">Required</span>
                                                     </div>
-                                                    <div class="relative w-20">
-                                                        <input type="number" min="0" :name="`sub_variant_stocks[${v.id}][${sub.id}]`" x-model="sub.stock" placeholder="Stock" required onkeypress="return (event.charCode >= 48 && event.charCode <= 57)"
-                                                               :disabled="v.name.trim() === ''"
-                                                               :class="v.name.trim() === '' ? 'bg-gray-100 text-gray-500 cursor-not-allowed' : 'bg-white cursor-text'"
-                                                               class="w-full p-2 text-xs rounded-md border border-border-subtle focus:border-primary outline-none no-spinners">
+                                                    <div class="flex flex-col flex-1 min-w-[80px]">
+                                                        <div class="relative w-full">
+                                                            <input type="number" min="0" :name="`sub_variant_stocks[${v.id}][${sub.id}]`" x-model="sub.stock" placeholder="Stock" required onkeypress="return (event.charCode >= 48 && event.charCode <= 57)"
+                                                                   :disabled="v.name.trim() === ''"
+                                                                   :class="(hasError(`sub_variant_stocks[${v.id}][${sub.id}]`) ? 'border-red-500 ' : 'border-border-subtle focus:border-primary ') + (v.name.trim() === '' ? 'bg-gray-100 text-gray-500 cursor-not-allowed' : 'bg-white cursor-text')"
+                                                                   class="w-full p-2 text-xs rounded-md border outline-none no-spinners">
+                                                        </div>
+                                                        <span x-show="hasError(`sub_variant_stocks[${v.id}][${sub.id}]`)" x-cloak class="text-red-500 text-[9px] font-bold mt-1 block">Required</span>
                                                     </div>
+                                                    <button type="button" @click="removeSubVariant(v.id, sub.id)" class="text-text-muted hover:text-red-500 mt-1.5 md:mt-1 cursor-pointer shrink-0">
+                                                        <svg class="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
+                                                    </button>
                                                 </div>
-
-                                                <button type="button" @click="removeSubVariant(v.id, sub.id)" class="text-text-muted hover:text-red-500 mt-1 cursor-pointer">
-                                                    <svg class="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
-                                                </button>
                                             </div>
                                         </div>
                                     </template>
@@ -342,7 +444,7 @@
                                                 <svg class="w-5 h-5 mr-2 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M12 8h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
                                                 <span>Save time! Do all variants share the same sub-variants?</span>
                                             </div>
-                                            <button type="button" @click="copySubVariants" class="w-full sm:w-auto px-4 py-2 bg-blue-600 text-white text-xs font-bold rounded-lg shadow-sm hover:bg-blue-700 transition-colors cursor-pointer">
+                                            <button type="button" @click="copySubVariants(); setTimeout(() => validateForm(), 50);" class="w-full sm:w-auto px-4 py-2 bg-blue-600 text-white text-xs font-bold rounded-lg shadow-sm hover:bg-blue-700 transition-colors cursor-pointer">
                                                 Copy from 1st Variant
                                             </button>
                                         </div>
@@ -357,21 +459,61 @@
                     </div>
                 </div>
 
+                <div x-data="{
+                    enableSpecs: false,
+                    specs: [{ id: Date.now(), title: '', desc: '' }],
+                    addSpec() { this.specs.push({ id: Date.now(), title: '', desc: '' }); },
+                    removeSpec(index) { this.specs.splice(index, 1); }
+                }" class="border border-border-subtle rounded-2xl p-6 bg-brand-light/5 space-y-4">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <h3 class="text-sm font-bold text-text-muted">Specifications <span class="text-xs font-normal italic">(Optional)</span></h3>
+                            <p class="text-xs text-text-muted mt-1">Add dynamic product specifications depending on the item.</p>
+                        </div>
+                        <button type="button" @click="enableSpecs = !enableSpecs; if(enableSpecs && specs.length === 0) addSpec();"
+                                class="px-4 py-2 text-xs font-bold rounded-lg border transition-colors cursor-pointer"
+                                :class="enableSpecs ? 'bg-red-50 text-red-600 border-red-200 hover:bg-red-100' : 'bg-primary/10 text-primary border-primary/20 hover:bg-primary/20'">
+                            <span x-text="enableSpecs ? 'Disable Specifications' : 'Enable Specifications'"></span>
+                        </button>
+                    </div>
+                    
+                    <div x-show="enableSpecs" x-collapse class="space-y-3 mt-4">
+                        <template x-for="(spec, index) in specs" :key="spec.id">
+                            <div class="flex items-start gap-3">
+                                <div class="flex-1">
+                                    <input type="text" :name="`specifications[${index}][title]`" x-model="spec.title" placeholder="Specification Title (e.g. RAM, Warranty)" class="w-full p-2.5 text-sm rounded-xl border border-border-subtle focus:border-primary outline-none">
+                                </div>
+                                <div class="flex-1">
+                                    <input type="text" :name="`specifications[${index}][description]`" x-model="spec.desc" placeholder="Specification Description (e.g. 8GB, 1 Year)" class="w-full p-2.5 text-sm rounded-xl border border-border-subtle focus:border-primary outline-none">
+                                </div>
+                                <button type="button" @click="removeSpec(index)" class="p-2.5 text-gray-400 hover:text-red-500 rounded-lg hover:bg-red-50 transition-colors mt-0.5 cursor-pointer">
+                                    <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
+                                </button>
+                            </div>
+                        </template>
+                        <button type="button" @click="addSpec" class="text-xs font-bold text-primary hover:text-primary-dark cursor-pointer">+ Add another specification</button>
+                    </div>
+                </div>
+
                 <div>
                     <label class="block text-sm font-bold text-text-muted mb-1">Standard Description</label>
                     <textarea name="description" rows="3" class="w-full p-3 rounded-xl border border-border-subtle focus:border-primary outline-none custom-scrollbar cursor-text">{{ old('description') }}</textarea>
                 </div>
-                <div>
-                    <label class="block text-sm font-bold text-text-muted mb-1">Additional Descriptions <span class="text-xs font-normal italic">(Optional)</span></label>
-                    <textarea name="additional_descriptions" rows="3" class="w-full p-3 rounded-xl border border-border-subtle focus:border-primary outline-none custom-scrollbar cursor-text">{{ old('additional_descriptions') }}</textarea>
+                
+                <div x-data="{ enableAddDesc: false }">
+                    <div class="flex items-center justify-between mb-2">
+                        <label class="block text-sm font-bold text-text-muted">Additional Descriptions <span class="text-xs font-normal italic">(Optional)</span></label>
+                        <button type="button" @click="enableAddDesc = !enableAddDesc" class="text-xs text-primary font-bold hover:underline cursor-pointer" x-text="enableAddDesc ? 'Disable Field' : 'Enable Field'"></button>
+                    </div>
+                    <textarea name="additional_descriptions" rows="3" :disabled="!enableAddDesc" :class="!enableAddDesc ? 'bg-gray-100 cursor-not-allowed opacity-70' : 'bg-white cursor-text'" class="w-full p-3 rounded-xl border border-border-subtle focus:border-primary outline-none custom-scrollbar">{{ old('additional_descriptions') }}</textarea>
                 </div>
 
-                <div class="flex justify-end mt-8 border-t border-border-subtle pt-6">
+                <div class="flex flex-col items-end mt-8 border-t border-border-subtle pt-6">
                     <button type="submit" 
-                            :disabled="hasValidationErrors" 
-                            :class="hasValidationErrors ? 'opacity-50 cursor-not-allowed bg-gray-400' : 'bg-primary hover:bg-primary-dark cursor-pointer'"
+                            :disabled="hasValidationErrors || !isFormValid" 
+                            :class="(hasValidationErrors || !isFormValid) ? 'opacity-50 cursor-not-allowed bg-gray-400' : 'bg-primary hover:bg-primary-dark cursor-pointer'"
                             class="px-8 py-3 text-white rounded-xl shadow-md transition-all font-bold text-lg">
-                        Save Product
+                        Create Product
                     </button>
                 </div>
             </form>

@@ -30,4 +30,9 @@ class SellerProfile extends Model
     {
         return $this->hasMany(SellerApplication::class, 'user_id', 'user_id')->latest('version');
     }
+
+    public function otherCategories()
+    {
+        return $this->hasMany(SellerCategory::class, 'seller_profile_id');
+    }
 }

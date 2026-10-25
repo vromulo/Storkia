@@ -7,13 +7,127 @@ use App\Http\Requests\Seller\StoreProductRequest;
 use App\Http\Requests\Seller\UpdateProductRequest;
 use App\Models\Product;
 use App\Models\ProductApproval;
+use App\Models\SellerCategory;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Validation\Rule;
 use Intervention\Image\ImageManager;
 use Intervention\Image\Drivers\Gd\Driver;
 use Intervention\Image\Encoders\WebpEncoder;
 
 class ProductController extends Controller
 {
+    public static function getCategoriesList(): array
+    {
+        return [
+            'Pet' => [
+                ['name' => 'Dog Food & Treats'],
+                ['name' => 'Cat Litter & Accessories'],
+                ['name' => 'Aquariums & Fish Supplies'],
+                ['name' => 'Bird Feeders & Food'],
+                ['name' => 'Pet Grooming Products'],
+                ['name' => 'Pet Health & Wellness'],
+            ],
+            'Kids' => [
+                ['name' => 'Baby Clothes & Accessories'],
+                ['name' => 'Toys & Games'],
+                ['name' => 'Educational Materials'],
+                ['name' => 'Strollers & Gear'],
+                ['name' => 'Nursery Furniture'],
+                ['name' => 'Safety and Health'],
+            ],
+            'Electronics' => [
+                ['name' => 'Mobile Phones & Accessories'],
+                ['name' => 'Laptops, Desktops & Monitors'],
+                ['name' => 'Audio & Video Equipment'],
+                ['name' => 'Smart Home Devices'],
+                ['name' => 'Cameras & Photography'],
+                ['name' => 'Wearable Technology'],
+            ],
+            'Home & Garden' => [
+                ['name' => 'Kitchen Appliances'],
+                ['name' => 'Furniture & Decor'],
+                ['name' => 'Gardening Tools'],
+                ['name' => 'Outdoor Living'],
+                ['name' => 'Home Improvement Tools'],
+                ['name' => 'Bedding & Bath'],
+            ],
+            'Women\'s' => [
+                ['name' => 'Dresses & Skirts'],
+                ['name' => 'Tops & Blouses'],
+                ['name' => 'Activewear & Yoga Pants'],
+                ['name' => 'Lingerie & Sleepwear'],
+                ['name' => 'Jackets & Coats'],
+                ['name' => 'Shoes & Accessories'],
+            ],
+            'Men\'s' => [
+                ['name' => 'Suits & Blazers'],
+                ['name' => 'Casual Shirts & Pants'],
+                ['name' => 'Outerwear & Jackets'],
+                ['name' => 'Activewear & Fitness Gear'],
+                ['name' => 'Shoes & Accessories'],
+                ['name' => 'Grooming Products'],
+            ],
+            'Health & Beauty' => [
+                ['name' => 'Skincare Products'],
+                ['name' => 'Haircare Solutions'],
+                ['name' => 'Makeup & Cosmetics'],
+                ['name' => 'Personal Care Appliances'],
+                ['name' => 'Men\'s Grooming'],
+                ['name' => 'Health Supplements'],
+            ],
+            'Books & Media' => [
+                ['name' => 'Fiction & Non-Fiction Books'],
+                ['name' => 'Magazines & Periodicals'],
+                ['name' => 'Music CDs & Vinyl Records'],
+                ['name' => 'Movie DVDs & Blu-ray'],
+                ['name' => 'Video Games & Consoles'],
+                ['name' => 'Educational DVDs'],
+            ],
+            'Sports & Outdoors' => [
+                ['name' => 'Fitness Equipment'],
+                ['name' => 'Camping & Hiking Gear'],
+                ['name' => 'Sports Apparel'],
+                ['name' => 'Cycling & Bikes'],
+                ['name' => 'Water Sports'],
+                ['name' => 'Team Sports Equipment'],
+            ],
+            'Food & Gourmet' => [
+                ['name' => 'Baking Supplies & Ingredients'],
+                ['name' => 'Coffee, Tea & Beverages'],
+                ['name' => 'Snacks & Candy'],
+                ['name' => 'Specialty Foods'],
+                ['name' => 'Organic and Health Foods'],
+                ['name' => 'Meal Kits & Prepped Foods'],
+            ],
+            'Furniture & Office' => [
+                ['name' => 'Office Desks & Chairs'],
+                ['name' => 'Storage Cabinets & Shelving'],
+                ['name' => 'Conference & Meeting Furniture'],
+                ['name' => 'Computer Tables & Workstations'],
+                ['name' => 'Ergonomic Accessories'],
+                ['name' => 'Office Lighting & Fixtures'],
+            ],
+            'Jewelry & Watches' => [
+                ['name' => 'Necklaces & Pendants'],
+                ['name' => 'Rings & Earrings'],
+                ['name' => 'Bracelets & Bangles'],
+                ['name' => 'Watches for Men & Women'],
+                ['name' => 'Fashion Jewelry'],
+                ['name' => 'Jewelry Storage & Care'],
+            ],
+        ];
+    }
+
+    private function getSellerAllowedCategories(): array
+    {
+        $profile = auth()->user()->sellerProfile;
+        $primary = $profile->line_of_business ?? 'Pet';
+        $others = $profile ? $profile->otherCategories()->orderBy('created_at', 'asc')->pluck('category')->toArray() : [];
+
+        return array_values(array_unique(array_merge([$primary], $others)));
+    }
+
     private function optimizeAndStoreImage($file, $folder)
     {
         $extension = $file->getClientOriginalExtension();
@@ -34,15 +148,123 @@ class ProductController extends Controller
         return $path;
     }
 
-    public function index()
+    public function index(Request $request)
     {
-        $products = Product::with('approval')->where('user_id', auth()->id())->latest()->paginate(10);
-        return view('seller.products.index', compact('products'));
+        $categoriesList = self::getCategoriesList();
+        $sellerProfile = auth()->user()->sellerProfile;
+        $primaryCategory = $sellerProfile->line_of_business ?? 'Pet';
+        $otherCategories = $sellerProfile ? $sellerProfile->otherCategories()->orderBy('created_at', 'asc')->get() : collect();
+        $allowedCategories = $this->getSellerAllowedCategories();
+
+        $selectedCategory = $request->query('category');
+        if ($selectedCategory !== null && !in_array($selectedCategory, $allowedCategories, true)) {
+            return redirect()->route('seller.products.index');
+        }
+
+        $categoryCounts = [];
+        foreach ($allowedCategories as $catName) {
+            if ($catName === $primaryCategory) {
+                $categoryCounts[$catName] = Product::where('user_id', auth()->id())
+                    ->where(function ($q) use ($primaryCategory) {
+                        $q->where('category', $primaryCategory)->orWhereNull('category');
+                    })
+                    ->count();
+            } else {
+                $categoryCounts[$catName] = Product::where('user_id', auth()->id())
+                    ->where('category', $catName)
+                    ->count();
+            }
+        }
+
+        $availableCategoriesToAdd = array_values(array_diff(array_keys($categoriesList), $allowedCategories));
+
+        $productsQuery = Product::with(['approval', 'specifications'])->where('user_id', auth()->id());
+
+        if ($selectedCategory !== null) {
+            if ($selectedCategory === $primaryCategory) {
+                $productsQuery->where(function ($q) use ($primaryCategory) {
+                    $q->where('category', $primaryCategory)->orWhereNull('category');
+                });
+            } else {
+                $productsQuery->where('category', $selectedCategory);
+            }
+        }
+
+        $products = $productsQuery->latest()->paginate(10)->withQueryString();
+
+        return view('seller.products.index', compact(
+            'products',
+            'categoriesList',
+            'primaryCategory',
+            'otherCategories',
+            'categoryCounts',
+            'availableCategoriesToAdd',
+            'selectedCategory'
+        ));
     }
 
-    public function create()
+    public function storeCategory(Request $request)
     {
-        return view('seller.products.create');
+        $categoriesList = self::getCategoriesList();
+        $allowedCategories = $this->getSellerAllowedCategories();
+
+        $validated = $request->validate([
+            'category' => [
+                'required',
+                'string',
+                Rule::in(array_keys($categoriesList)),
+                Rule::notIn($allowedCategories),
+            ],
+        ], [
+            'category.not_in' => 'You have already added this category.',
+        ]);
+
+        $sellerProfile = auth()->user()->sellerProfile;
+
+        SellerCategory::create([
+            'seller_profile_id' => $sellerProfile->id,
+            'category'          => $validated['category'],
+        ]);
+
+        return redirect()->route('seller.products.index')->with('success', "Category \"{$validated['category']}\" added successfully.");
+    }
+
+    public function destroyCategory(SellerCategory $sellerCategory)
+    {
+        $sellerProfile = auth()->user()->sellerProfile;
+
+        if (!$sellerProfile || $sellerCategory->seller_profile_id !== $sellerProfile->id) {
+            abort(403, 'Unauthorized action.');
+        }
+
+        $productCount = Product::where('user_id', auth()->id())
+            ->where('category', $sellerCategory->category)
+            ->count();
+
+        if ($productCount > 0) {
+            return redirect()->route('seller.products.index')->withErrors([
+                'category' => "Cannot remove \"{$sellerCategory->category}\" because it still has {$productCount} product(s) in All Products.",
+            ]);
+        }
+
+        $categoryName = $sellerCategory->category;
+        $sellerCategory->delete();
+
+        return redirect()->route('seller.products.index')->with('success', "Category \"{$categoryName}\" removed successfully.");
+    }
+
+    public function create(Request $request)
+    {
+        $categoriesList = self::getCategoriesList();
+        $primaryCategory = auth()->user()->sellerProfile->line_of_business ?? 'Pet';
+        $allowedCategories = $this->getSellerAllowedCategories();
+
+        $selectedCategory = $request->query('category', $primaryCategory);
+        if (!in_array($selectedCategory, $allowedCategories, true)) {
+            $selectedCategory = $primaryCategory;
+        }
+
+        return view('seller.products.create', compact('categoriesList', 'selectedCategory'));
     }
 
     public function inventory()
@@ -60,6 +282,19 @@ class ProductController extends Controller
     public function store(StoreProductRequest $request)
     {
         $validated = $request->validated();
+        $categoriesList = self::getCategoriesList();
+        $allowedCategories = $this->getSellerAllowedCategories();
+        $primaryCategory = auth()->user()->sellerProfile->line_of_business ?? 'Pet';
+
+        $targetCategory = $validated['category'] ?? $primaryCategory;
+        if (!in_array($targetCategory, $allowedCategories, true)) {
+            return back()->withErrors(['category' => 'You are not authorized to add products to this category.'])->withInput();
+        }
+
+        $validSubcategories = array_column($categoriesList[$targetCategory] ?? [], 'name');
+        if (!in_array($validated['subcategory'], $validSubcategories, true)) {
+            return back()->withErrors(['subcategory' => 'The selected subcategory does not belong to ' . $targetCategory . '.'])->withInput();
+        }
 
         $picturePaths = [];
         if ($request->hasFile('pictures')) {
@@ -70,7 +305,7 @@ class ProductController extends Controller
 
         $priceDependency = !empty($validated['sub_variant_title']) ? 'sub' : 'main';
         $variantsData = [
-            'title'            => $validated['variant_title'],
+            'title'            => $validated['variant_title'] ?? null,
             'sub_title'        => $validated['sub_variant_title'] ?? null,
             'price_dependency' => $priceDependency,
             'items'            => [],
@@ -167,7 +402,7 @@ class ProductController extends Controller
         $product = Product::create([
             'user_id'                 => auth()->id(),
             'name'                    => $validated['name'],
-            'category'                => $validated['category'] ?? null,
+            'category'                => $targetCategory,
             'subcategory'             => $validated['subcategory'],
             'price'                   => $minPrice ?? 0,
             'weight'                  => $baseWeight ?? '0',
@@ -180,13 +415,23 @@ class ProductController extends Controller
             'has_pending_variants'    => false,
         ]);
 
+        $specifications = $request->input('specifications');
+        if (is_array($specifications)) {
+            $validSpecs = array_filter($specifications, function($spec) {
+                return !empty($spec['title']) && !empty($spec['description']);
+            });
+            if (count($validSpecs) > 0) {
+                $product->specifications()->createMany($validSpecs);
+            }
+        }
+
         ProductApproval::create([
             'product_id' => $product->id,
             'user_id'    => auth()->id(),
             'status'     => 'Pending',
         ]);
 
-        return redirect()->route('seller.products.index')->with('success', 'Product submitted and pending review.');
+        return redirect()->route('seller.products.index', ['category' => $targetCategory])->with('success', 'Product submitted and pending review.');
     }
 
     public function update(UpdateProductRequest $request, Product $product)
@@ -195,8 +440,13 @@ class ProductController extends Controller
             abort(403, 'Unauthorized action.');
         }
 
+        $currentApprovalStatus = $product->approval->status ?? 'Pending';
+        if ($currentApprovalStatus === 'Pending') {
+            return back()->withErrors(['error' => 'You cannot update a product while it is pending administrative review.'])->withInput();
+        }
+
         $validated = $request->validated();
-        $isApprovedProduct = $product->approval && $product->approval->status === 'Approved';
+        $isApprovedProduct = $currentApprovalStatus === 'Approved';
 
         $dataToUpdate = [
             'discount'                => $validated['discount'] ?? 0,
@@ -205,6 +455,15 @@ class ProductController extends Controller
         ];
 
         if (!$isApprovedProduct) {
+            $categoriesList = self::getCategoriesList();
+            $primaryCategory = auth()->user()->sellerProfile->line_of_business ?? 'Pet';
+            $productCategory = $product->category ?? $primaryCategory;
+            $validSubcategories = array_column($categoriesList[$productCategory] ?? [], 'name');
+
+            if (!empty($validSubcategories) && !in_array($validated['subcategory'], $validSubcategories, true)) {
+                return back()->withErrors(['subcategory' => 'The selected subcategory does not belong to ' . $productCategory . '.'])->withInput();
+            }
+
             $dataToUpdate['name'] = $validated['name'];
             $dataToUpdate['subcategory'] = $validated['subcategory'];
 
@@ -455,6 +714,17 @@ class ProductController extends Controller
         }
 
         $product->update($dataToUpdate);
+
+        $product->specifications()->delete();
+        $specifications = $request->input('specifications');
+        if (is_array($specifications)) {
+            $validSpecs = array_filter($specifications, function($spec) {
+                return !empty($spec['title']) && !empty($spec['description']);
+            });
+            if (count($validSpecs) > 0) {
+                $product->specifications()->createMany($validSpecs);
+            }
+        }
 
         if ($isApprovedProduct && !empty($dataToUpdate['has_pending_variants'])) {
             $product->approval?->touch();

@@ -63,6 +63,8 @@
                             }
                         }
                         $isVariantUpdate = $approval->status === 'Approved' && ($approval->product?->has_pending_variants || $pendingVariantCount > 0 || $pendingSubCount > 0);
+                        $mainCategory = $approval->product?->category ?: ($approval->seller?->sellerProfile?->line_of_business ?? 'Uncategorized');
+                        $subCategory = $approval->product?->subcategory ?: 'Uncategorized';
                     @endphp
                     <tr class="hover:bg-brand-light/10 transition-colors">
                         <td class="py-3.5 px-4">
@@ -89,7 +91,7 @@
                                             </span>
                                         @endif
                                     </div>
-                                    <p class="text-xs text-text-muted mt-0.5">{{ $approval->product?->category ?? 'No Category' }} &bull; {{ $approval->product?->subcategory ?? 'General' }}</p>
+                                    <p class="text-xs text-text-muted mt-0.5">{{ $mainCategory }} &bull; {{ $subCategory }}</p>
                                 </div>
                             </div>
                         </td>
@@ -147,6 +149,8 @@
             $items = $variants['items'] ?? [];
             $hasSubTitle = !empty($variants['sub_title']);
             $isVariantUpdateOnly = $currentApproval->status === 'Approved' && ($prod->has_pending_variants || $prod->hasPendingVariantItems());
+            $modalMainCategory = $prod->category ?: ($currentApproval->seller?->sellerProfile?->line_of_business ?? 'Uncategorized');
+            $modalSubCategory = $prod->subcategory ?: 'Uncategorized';
         @endphp
         <div class="fixed inset-0 z-[150] flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs overflow-y-auto" wire:keydown.escape="$set('detailModalOpen', false)">
             <div class="bg-surface rounded-3xl max-w-5xl w-full p-6 sm:p-8 shadow-2xl border border-border-subtle max-h-[92vh] overflow-y-auto space-y-6 my-auto text-left relative">
@@ -173,7 +177,7 @@
                 <div class="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs bg-surface-subtle p-4 rounded-2xl border border-border-subtle">
                     <div><span class="text-text-muted">Store Name:</span> <strong class="text-text-main">{{ $currentApproval->seller?->sellerProfile?->business_name ?? 'N/A' }}</strong></div>
                     <div><span class="text-text-muted">Registered Category:</span> <strong class="text-text-main">{{ $currentApproval->seller?->sellerProfile?->line_of_business ?? 'N/A' }}</strong></div>
-                    <div><span class="text-text-muted">Product Category:</span> <strong class="text-text-main">{{ $prod->category }} / {{ $prod->subcategory }}</strong></div>
+                    <div><span class="text-text-muted">Product Category:</span> <strong class="text-text-main">{{ $modalMainCategory }} / {{ $modalSubCategory }}</strong></div>
                 </div>
 
                 <div class="grid grid-cols-1 md:grid-cols-12 gap-6 items-start">
@@ -211,11 +215,32 @@
                                 <span class="text-lg font-bold text-text-main">{{ $prod->stock_quantity }} units</span>
                             </div>
                         </div>
+                        
+                        @if($prod->specifications && $prod->specifications->count() > 0)
+                            <div>
+                                <h4 class="font-bold text-text-main uppercase tracking-wider text-[11px] mb-1">Specifications</h4>
+                                <div class="p-3 bg-surface border border-border-subtle rounded-xl text-text-muted text-xs divide-y divide-border-subtle/50">
+                                    @foreach($prod->specifications as $spec)
+                                        <div class="flex items-center py-1.5">
+                                            <span class="font-medium w-1/3">{{ $spec->title }}</span>
+                                            <span class="text-text-main font-bold flex-1">{{ $spec->description }}</span>
+                                        </div>
+                                    @endforeach
+                                </div>
+                            </div>
+                        @endif
 
                         <div>
                             <h4 class="font-bold text-text-main uppercase tracking-wider text-[11px] mb-1">Standard Description</h4>
                             <p class="p-3 bg-surface border border-border-subtle rounded-xl text-text-muted leading-relaxed whitespace-pre-line">{{ $prod->description ?: 'No description provided.' }}</p>
                         </div>
+                        
+                        @if(!empty($prod->additional_descriptions))
+                            <div>
+                                <h4 class="font-bold text-text-main uppercase tracking-wider text-[11px] mb-1">Additional Descriptions</h4>
+                                <p class="p-3 bg-surface border border-border-subtle rounded-xl text-text-muted leading-relaxed whitespace-pre-line">{{ $prod->additional_descriptions }}</p>
+                            </div>
+                        @endif
                     </div>
                 </div>
 

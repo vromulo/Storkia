@@ -512,6 +512,14 @@
                     Product Specifications
                 </h2>
                 <div class="divide-y divide-border-subtle/60 text-sm px-2">
+                    @if($product->specifications && $product->specifications->count() > 0)
+                        @foreach($product->specifications as $spec)
+                            <div class="flex items-center py-3.5">
+                                <span class="w-44 text-text-muted font-medium">{{ $spec->title }}</span>
+                                <span class="font-bold text-text-main">{{ $spec->description }}</span>
+                            </div>
+                        @endforeach
+                    @endif
                     <div class="flex items-center py-3.5">
                         <span class="w-44 text-text-muted font-medium">Weight</span>
                         <span class="font-bold text-text-main">{{ $product->weight ?? 'Not specified' }}</span>
