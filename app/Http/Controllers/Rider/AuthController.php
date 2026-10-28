@@ -4,12 +4,13 @@ namespace App\Http\Controllers\Rider;
 
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
 
 class AuthController extends Controller
 {
     public function showRegister()
     {
-        return view('rider.auth.register');
+        return redirect()->route('logistics.login');
     }
 
     public function downloadApp()
@@ -19,7 +20,7 @@ class AuthController extends Controller
 
     public function logout(Request $request)
     {
-        $request->session()->forget('rider_id');
+        Auth::guard('rider')->logout();
         $request->session()->invalidate();
         $request->session()->regenerateToken();
 

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="{{ str_replace('_', '-', app()->getLocale()) }}" class="scroll-smooth">
+<html lang="{{ str_replace('_', '-', app()->getLocale()) }}" class="scroll-smooth overflow-x-hidden">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -14,7 +14,7 @@
     @livewireStyles
 </head>
 
-<body class="">
+<body class="overflow-x-hidden max-w-full flex flex-col min-h-screen">
     <x-ui.preloader />
 
     <header 
@@ -49,7 +49,7 @@
         </div>
     @endauth
 
-    <main class="flex-grow">
+    <main class="flex-grow w-full min-w-0 overflow-x-clip">
         @yield('content')
         {{ $slot ?? '' }}
     </main>

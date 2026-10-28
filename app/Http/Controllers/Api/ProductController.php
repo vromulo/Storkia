@@ -10,11 +10,7 @@ class ProductController extends Controller
 {
     public function index(Request $request)
     {
-        // Eager load the sellerProfile so it is included in the JSON response
         $query = Product::with('sellerProfile')->where('stock_quantity', '>', 0);
-        
-        // Ensure you only get approved products if you have an approval system setup
-        // $query->whereHas('approval', function ($q) { $q->where('status', 'Approved'); });
 
         if ($request->has('category') && !empty($request->category)) {
             $query->where('category', $request->category);
@@ -22,6 +18,12 @@ class ProductController extends Controller
 
         if ($request->has('subcategory') && !empty($request->subcategory) && $request->subcategory !== 'All') {
             $query->where('subcategory', $request->subcategory);
+        }
+
+        if ($request->has('seller_id') && !empty($request->seller_id)) {
+            $query->whereHas('sellerProfile', function ($q) use ($request) {
+                $q->where('id', $request->seller_id);
+            });
         }
 
         $perPage = $request->get('per_page', 6);

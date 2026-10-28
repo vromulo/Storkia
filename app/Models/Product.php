@@ -47,6 +47,7 @@ class Product extends Model
     public function getVariantsAttribute($value): ?array
     {
         $variants = is_string($value) ? json_decode($value, true) : $value;
+
         if (!is_array($variants) || !isset($variants['items']) || !is_array($variants['items'])) {
             return $variants;
         }
@@ -172,5 +173,10 @@ class Product extends Model
             'user_id',
             'id'
         );
+    }
+
+    public function orderItems(): HasMany
+    {
+        return $this->hasMany(OrderItem::class);
     }
 }

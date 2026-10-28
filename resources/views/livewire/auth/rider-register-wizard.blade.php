@@ -6,32 +6,58 @@
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
                 </svg>
             </div>
-            <h2 class="text-3xl font-serif text-primary-dark mb-2">Application Submitted</h2>
-            <p class="text-text-muted text-sm max-w-md mx-auto mb-8 leading-relaxed font-normal">
-                Thank you for applying to become a delivery rider for <span class="font-semibold text-text-main">{{ $selectedLogisticsName ?: 'your selected logistics hub' }}</span>. Your application and documents are currently pending approval by the logistics company before you can sign in. Status updates will be sent to <span class="font-semibold text-text-main">{{ $email }}</span>.
+            <h2 class="text-3xl font-serif text-primary-dark mb-2">Rider Account Created</h2>
+            <p class="text-text-muted text-sm max-w-md mx-auto mb-6 leading-relaxed font-normal">
+                Delivery Rider <span class="font-semibold text-text-main">{{ $first_name }} {{ $last_name }}</span> has been created and assigned to <span class="font-semibold text-text-main">{{ $selectedLogisticsName }} ({{ $selectedHubMunicipality }})</span>.
             </p>
-            <a href="{{ route('logistics.login') }}" wire:navigate class="inline-flex py-3 px-8 bg-primary-dark hover:bg-text-main text-surface text-sm font-semibold rounded-full shadow-xs transition-all cursor-pointer">
-                Return to Login
-            </a>
+            <div class="max-w-md mx-auto mb-8 p-4 rounded-2xl bg-surface-subtle border border-border-subtle text-xs space-y-1.5 text-left">
+                <div class="flex justify-between">
+                    <span class="text-text-muted">Internal Login Email:</span>
+                    <span class="font-mono font-bold text-primary-dark">{{ $email }}</span>
+                </div>
+                <div class="flex justify-between">
+                    <span class="text-text-muted">Assigned Hub:</span>
+                    <span class="font-semibold text-text-main">{{ $selectedLogisticsName }} ({{ $selectedHubMunicipality }})</span>
+                </div>
+                <div>
+                    <span class="text-text-muted block mb-1">Barangay Coverage:</span>
+                    <div class="flex flex-wrap gap-1">
+                        @foreach ($selectedBarangays as $bName)
+                            <span class="px-2 py-0.5 rounded-md bg-blue-50 text-blue-800 border border-blue-200 text-[11px] font-semibold">{{ $bName }}</span>
+                        @endforeach
+                    </div>
+                </div>
+                <div class="flex justify-between pt-1">
+                    <span class="text-text-muted">Account Status:</span>
+                    <span class="font-bold text-success uppercase">Approved & Active</span>
+                </div>
+            </div>
+            <div class="flex flex-wrap items-center justify-center gap-3">
+                <a href="{{ route('logistics.employees.index') }}" class="inline-flex py-3 px-8 bg-primary-dark hover:bg-text-main text-surface text-sm font-semibold rounded-full shadow-xs transition-all cursor-pointer">
+                    Open Employee Management
+                </a>
+                <a href="{{ route('logistics.riders.active') }}" class="inline-flex py-3 px-6 bg-surface border border-border-subtle hover:border-primary text-text-main text-sm font-semibold rounded-full transition-all cursor-pointer">
+                    View Active Riders
+                </a>
+            </div>
         </div>
     @else
         <div class="mb-8 text-center">
             <h1 class="text-2xl sm:text-3xl font-serif font-normal tracking-tight text-primary-dark">
-                Become a Delivery Rider
+                Create Delivery Rider Account
             </h1>
             <p class="mt-2 text-sm text-text-muted font-normal leading-relaxed">
-                @if ($currentStep === 1) Verify your email to start your rider application
-                @elseif ($currentStep === 2) Select your logistics hub & personal information
-                @elseif ($currentStep === 3) Driver's license & delivery vehicle information
-                @elseif ($currentStep === 4) Upload your license and vehicle OR/CR documents
-                @elseif ($currentStep === 5) Set up your rider login password
-                @elseif ($currentStep === 6) Review and submit your rider application
+                @if ($currentStep === 1) Internal @storkia.shop email, hub municipality, barangay coverage & personal details
+                @elseif ($currentStep === 2) Driver's license & delivery vehicle information
+                @elseif ($currentStep === 3) Upload driver's license and vehicle OR/CR documents
+                @elseif ($currentStep === 4) Set up rider login password
+                @elseif ($currentStep === 5) Review and confirm rider account creation
                 @endif
             </p>
         </div>
 
         <div class="flex items-center justify-center gap-1.5 mb-10 overflow-x-auto pb-2 [&::-webkit-scrollbar]:hidden">
-            @foreach (['Email', 'Personal', 'Vehicle', 'Docs', 'Password', 'Review'] as $index => $label)
+            @foreach (['Personal & Hub', 'Vehicle', 'Docs', 'Password', 'Review'] as $index => $label)
                 @php $num = $index + 1; @endphp
                 <div class="flex items-center gap-1.5 shrink-0">
                     <div class="w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold transition-all duration-300
@@ -42,109 +68,70 @@
                             {{ $num }}
                         @endif
                     </div>
-                    @if ($num < 6)
-                        <div class="w-3 sm:w-5 h-[1px] {{ $currentStep > $num ? 'bg-primary-dark/40' : 'bg-border-subtle' }}"></div>
+                    @if ($num < 5)
+                        <div class="w-4 sm:w-6 h-[1px] {{ $currentStep > $num ? 'bg-primary-dark/40' : 'bg-border-subtle' }}"></div>
                     @endif
                 </div>
             @endforeach
         </div>
 
         @if ($currentStep === 1)
-            <div class="space-y-6">
-                <div>
-                    <label class="block text-xs uppercase tracking-wider font-bold text-text-muted mb-1.5">
-                        Email Address*
-                    </label>
-                    <div class="relative flex items-center border-b {{ $errors->has('email') ? 'border-danger' : 'border-border-subtle focus-within:border-text-main' }} transition-colors">
-                        <input 
-                            type="email" 
-                            wire:model.live.debounce.500ms="email" 
-                            @if ($codeSent) disabled @endif
-                            class="w-full py-3 bg-transparent text-text-main text-base outline-none placeholder:text-text-muted/40 disabled:text-text-muted/50"
-                            placeholder="rider@example.com"
-                        >
-                    </div>
-                    @error('email') <p class="text-danger text-xs mt-1.5 font-medium">{{ $message }}</p> @enderror
-                </div>
-
-                @if (! $codeSent)
-                    <div class="pt-2">
-                        <button 
-                            type="button" 
-                            wire:click="sendCode" 
-                            wire:loading.attr="disabled" 
-                            wire:target="sendCode"
-                            class="w-full py-3.5 px-6 bg-primary-dark hover:bg-text-main text-surface text-sm font-semibold rounded-full shadow-xs hover:shadow-md transition-all duration-200 cursor-pointer active:scale-[0.99] disabled:opacity-60"
-                        >
-                            <span wire:loading.remove wire:target="sendCode">Send Verification Code</span>
-                            <span wire:loading wire:target="sendCode">Sending Code...</span>
-                        </button>
-                    </div>
-                @else
-                    <div>
-                        <label class="block text-xs uppercase tracking-wider font-bold text-text-muted mb-1.5">
-                            Verification Code*
-                        </label>
-                        <div class="relative flex items-center border-b {{ $errors->has('code') ? 'border-danger' : 'border-border-subtle focus-within:border-text-main' }} transition-colors">
-                            <input 
-                                type="text" 
-                                wire:model="code" 
-                                inputmode="numeric" 
-                                maxlength="6" 
-                                autocomplete="one-time-code"
-                                class="w-full py-3 bg-transparent text-text-main text-lg tracking-[0.4em] font-semibold text-center outline-none placeholder:text-text-muted/40 placeholder:tracking-normal"
-                                placeholder="000000"
-                            >
-                        </div>
-                        @error('code') <p class="text-danger text-xs mt-1.5 font-medium">{{ $message }}</p> @enderror
-                        <p class="text-text-muted text-xs mt-2 text-center">
-                            Code sent to <span class="font-semibold text-text-main">{{ $email }}</span>
-                        </p>
-                    </div>
-
-                    <div class="space-y-3 pt-2">
-                        <button 
-                            type="button" 
-                            wire:click="verifyCode" 
-                            wire:loading.attr="disabled" 
-                            wire:target="verifyCode"
-                            class="w-full py-3.5 px-6 bg-primary-dark hover:bg-text-main text-surface text-sm font-semibold rounded-full shadow-xs hover:shadow-md transition-all duration-200 cursor-pointer active:scale-[0.99] disabled:opacity-60"
-                        >
-                            <span wire:loading.remove wire:target="verifyCode">Verify & Continue</span>
-                            <span wire:loading wire:target="verifyCode">Verifying...</span>
-                        </button>
-                        <div class="text-center" x-data="{ seconds: {{ $resendCooldown }} }"
-                             x-init="let t = setInterval(() => { if (seconds > 0) seconds--; else clearInterval(t); }, 1000)">
-                            <button 
-                                type="button" 
-                                wire:click="resendCode" 
-                                wire:loading.attr="disabled" 
-                                wire:target="resendCode"
-                                x-bind:disabled="seconds > 0"
-                                class="text-xs text-text-muted hover:text-primary transition-colors cursor-pointer disabled:text-text-muted/40 font-medium"
-                            >
-                                <span x-show="seconds === 0">Resend Code</span>
-                                <span x-show="seconds > 0">Resend available in <span x-text="seconds"></span>s</span>
-                            </button>
-                        </div>
-                    </div>
-                @endif
-            </div>
-        @endif
-
-        @if ($currentStep === 2)
             <div class="space-y-5">
                 <div>
-                    <label class="block text-xs uppercase tracking-wider font-bold text-text-muted mb-1.5">Logistics Company / Hub*</label>
-                    <x-ui.searchable-select 
-                        wire:model.live="logistics_profile_id" 
-                        :options="$logisticsCompanies" 
-                        placeholder="Search & Select Logistics Company" 
-                        value-key="id" 
-                        label-key="business_name" 
-                        :hasError="$errors->has('logistics_profile_id')" 
-                    />
-                    @error('logistics_profile_id') <p class="text-danger text-xs mt-1 font-medium">{{ $message }}</p> @enderror
+                    <label class="block text-xs uppercase tracking-wider font-bold text-text-muted mb-1.5">Email Username*</label>
+                    <div class="relative flex items-center border-b {{ $errors->has('email_prefix') ? 'border-danger' : 'border-border-subtle focus-within:border-text-main' }} transition-colors">
+                        <input 
+                            type="text" 
+                            wire:model.live.debounce.300ms="email_prefix" 
+                            maxlength="40"
+                            x-on:input="$event.target.value = $event.target.value.toLowerCase().replace(/@.*$/, '').replace(/[^a-z0-9._-]/g, '')"
+                            class="w-full py-2.5 bg-transparent text-text-main text-base font-mono lowercase outline-none placeholder:text-text-muted/40"
+                            placeholder="rider001"
+                        >
+                        <span class="px-3 py-1.5 rounded-lg bg-surface-subtle border border-border-subtle text-xs font-mono font-bold text-primary-dark select-none shrink-0">
+                            @storkia.shop
+                        </span>
+                    </div>
+                    <p class="text-[11px] text-text-muted mt-1">
+                        Generated Account Email: <span class="font-mono font-semibold text-text-main">{{ ($email_prefix ?: 'username') . '@storkia.shop' }}</span>
+                    </p>
+                    @error('email_prefix') <p class="text-danger text-xs mt-1 font-medium">{{ $message }}</p> @enderror
+                </div>
+
+                <div>
+                    <label class="block text-xs uppercase tracking-wider font-bold text-text-muted mb-1.5">Company Hub (Municipality)*</label>
+                    <div class="relative border-b {{ $errors->has('logistics_hub_id') ? 'border-danger' : 'border-border-subtle focus-within:border-text-main' }} transition-colors">
+                        <select wire:model.live="logistics_hub_id" class="w-full py-2.5 bg-transparent text-text-main text-sm font-semibold outline-none cursor-pointer">
+                            @foreach ($eligibleHubs as $h)
+                                <option value="{{ $h['id'] }}">{{ $h['label'] }}</option>
+                            @endforeach
+                        </select>
+                    </div>
+                    @error('logistics_hub_id') <p class="text-danger text-xs mt-1 font-medium">{{ $message }}</p> @enderror
+                </div>
+
+                <div>
+                    <div class="flex items-center justify-between mb-1.5">
+                        <label class="block text-xs uppercase tracking-wider font-bold text-text-muted">
+                            Assigned Barangay Coverage ({{ $selectedHubMunicipality ?: 'Hub Municipality' }})*
+                        </label>
+                        <span class="text-[11px] font-bold text-primary">{{ count($selectedBarangays) }} selected</span>
+                    </div>
+                    <div class="max-h-48 overflow-y-auto rounded-2xl border {{ $errors->has('selectedBarangays') ? 'border-danger' : 'border-border-subtle' }} p-3 bg-surface-subtle/50 grid grid-cols-1 sm:grid-cols-2 gap-2 custom-scrollbar">
+                        @foreach ($availableBarangays as $brgy)
+                            <label class="flex items-center gap-2 p-2.5 rounded-xl bg-surface border border-border-subtle hover:border-primary transition-colors cursor-pointer">
+                                <input 
+                                    type="checkbox" 
+                                    wire:model.live="selectedBarangays" 
+                                    value="{{ $brgy['name'] }}" 
+                                    class="rounded text-primary focus:ring-primary"
+                                >
+                                <span class="text-xs font-medium text-text-main truncate">{{ $brgy['name'] }}</span>
+                            </label>
+                        @endforeach
+                    </div>
+                    <p class="text-[11px] text-text-muted mt-1">Select one or more Barangays within {{ $selectedHubMunicipality }} covered by this Rider.</p>
+                    @error('selectedBarangays') <p class="text-danger text-xs mt-1 font-medium">{{ $message }}</p> @enderror
                 </div>
 
                 <div>
@@ -152,8 +139,8 @@
                     <div class="relative border-b {{ $errors->has('first_name') ? 'border-danger' : 'border-border-subtle focus-within:border-text-main' }} transition-colors">
                         <input 
                             type="text" 
-                            wire:model.live.debounce.500ms="first_name"
-                            maxlength="51"
+                            wire:model.live.debounce.400ms="first_name"
+                            maxlength="50"
                             x-on:input="$event.target.value = $event.target.value.replace(/^\s+/, '').replace(/ {2,}/g, ' ').replace(/\b\w/g, c => c.toUpperCase())"
                             class="capitalize w-full py-2.5 bg-transparent text-text-main text-base outline-none placeholder:text-text-muted/40"
                             placeholder="Pedro Jose"
@@ -167,8 +154,8 @@
                     <div class="relative border-b {{ $errors->has('last_name') ? 'border-danger' : 'border-border-subtle focus-within:border-text-main' }} transition-colors">
                         <input 
                             type="text" 
-                            wire:model.live.debounce.500ms="last_name"
-                            maxlength="51"
+                            wire:model.live.debounce.400ms="last_name"
+                            maxlength="50"
                             x-on:input="$event.target.value = $event.target.value.replace(/^\s+/, '').replace(/ {2,}/g, ' ').replace(/\b\w/g, c => c.toUpperCase())"
                             class="capitalize w-full py-2.5 bg-transparent text-text-main text-base outline-none placeholder:text-text-muted/40"
                             placeholder="Garcia"
@@ -197,7 +184,7 @@
                         <span class="text-sm font-semibold text-text-muted pr-2">+63</span>
                         <input 
                             type="text" 
-                            wire:model.live.debounce.500ms="contact_no" 
+                            wire:model.live.debounce.400ms="contact_no" 
                             inputmode="numeric"
                             maxlength="10" 
                             placeholder="9XXXXXXXXX" 
@@ -207,24 +194,25 @@
                     @error('contact_no') <p class="text-danger text-xs mt-1 font-medium">{{ $message }}</p> @enderror
                 </div>
 
-                <div class="flex items-center gap-3 pt-4">
-                    <button type="button" wire:click="backToStep(1)" class="py-3 px-5 text-text-muted hover:text-text-main text-sm font-medium transition-colors cursor-pointer">Back</button>
-                    <button type="button" wire:click="nextStep(2)" class="flex-1 py-3.5 px-6 bg-primary-dark hover:bg-text-main text-surface text-sm font-semibold rounded-full shadow-xs hover:shadow-md transition-all duration-200 cursor-pointer active:scale-[0.99]">Continue</button>
+                <div class="pt-4">
+                    <button type="button" wire:click="nextStep(1)" class="w-full py-3.5 px-6 bg-primary-dark hover:bg-text-main text-surface text-sm font-semibold rounded-full shadow-xs hover:shadow-md transition-all duration-200 cursor-pointer active:scale-[0.99]">
+                        Continue
+                    </button>
                 </div>
             </div>
         @endif
 
-        @if ($currentStep === 3)
+        @if ($currentStep === 2)
             <div class="space-y-5">
                 <div>
                     <label class="block text-xs uppercase tracking-wider font-bold text-text-muted mb-1.5">Driver's License No.*</label>
                     <div class="relative border-b {{ $errors->has('license_no') ? 'border-danger' : 'border-border-subtle focus-within:border-text-main' }} transition-colors">
                         <input 
                             type="text" 
-                            wire:model.live.debounce.500ms="license_no"
+                            wire:model.live.debounce.400ms="license_no"
                             maxlength="13"
                             x-on:input="$event.target.value = $event.target.value.toUpperCase()"
-                            class="uppercase w-full py-2.5 bg-transparent text-text-main text-base outline-none placeholder:text-text-muted/40"
+                            class="uppercase font-mono w-full py-2.5 bg-transparent text-text-main text-base outline-none placeholder:text-text-muted/40"
                             placeholder="N01-23-456789"
                         >
                     </div>
@@ -261,10 +249,10 @@
                     <div class="relative border-b {{ $errors->has('plate_number') ? 'border-danger' : 'border-border-subtle focus-within:border-text-main' }} transition-colors">
                         <input 
                             type="text" 
-                            wire:model.live.debounce.500ms="plate_number"
+                            wire:model.live.debounce.400ms="plate_number"
                             maxlength="15"
                             x-on:input="$event.target.value = $event.target.value.toUpperCase()"
-                            class="uppercase w-full py-2.5 bg-transparent text-text-main text-base outline-none placeholder:text-text-muted/40"
+                            class="uppercase font-mono w-full py-2.5 bg-transparent text-text-main text-base outline-none placeholder:text-text-muted/40"
                             placeholder="123ABC"
                         >
                     </div>
@@ -272,13 +260,13 @@
                 </div>
 
                 <div class="flex items-center gap-3 pt-4">
-                    <button type="button" wire:click="backToStep(2)" class="py-3 px-5 text-text-muted hover:text-text-main text-sm font-medium transition-colors cursor-pointer">Back</button>
-                    <button type="button" wire:click="nextStep(3)" class="flex-1 py-3.5 px-6 bg-primary-dark hover:bg-text-main text-surface text-sm font-semibold rounded-full shadow-xs hover:shadow-md transition-all duration-200 cursor-pointer active:scale-[0.99]">Continue</button>
+                    <button type="button" wire:click="backToStep(1)" class="py-3 px-5 text-text-muted hover:text-text-main text-sm font-medium transition-colors cursor-pointer">Back</button>
+                    <button type="button" wire:click="nextStep(2)" class="flex-1 py-3.5 px-6 bg-primary-dark hover:bg-text-main text-surface text-sm font-semibold rounded-full shadow-xs hover:shadow-md transition-all duration-200 cursor-pointer active:scale-[0.99]">Continue</button>
                 </div>
             </div>
         @endif
 
-        @if ($currentStep === 4)
+        @if ($currentStep === 3)
             <div class="space-y-6">
                 <div>
                     <div class="flex items-center justify-between mb-1.5">
@@ -473,12 +461,12 @@
                 </div>
 
                 <div class="flex items-center gap-3 pt-4">
-                    <button type="button" wire:click="backToStep(3)" class="py-3 px-5 text-text-muted hover:text-text-main text-sm font-medium transition-colors cursor-pointer">
+                    <button type="button" wire:click="backToStep(2)" class="py-3 px-5 text-text-muted hover:text-text-main text-sm font-medium transition-colors cursor-pointer">
                         Back
                     </button>
                     <button 
                         type="button" 
-                        wire:click="nextStep(4)" 
+                        wire:click="nextStep(3)" 
                         wire:loading.attr="disabled" 
                         class="flex-1 py-3.5 px-6 bg-primary-dark hover:bg-text-main text-surface text-sm font-semibold rounded-full shadow-xs hover:shadow-md transition-all duration-200 cursor-pointer active:scale-[0.99] disabled:opacity-60"
                     >
@@ -489,14 +477,14 @@
             </div>
         @endif
 
-        @if ($currentStep === 5)
+        @if ($currentStep === 4)
             <div class="space-y-5" x-data="{ showPass: false, showConfirm: false }">
                 <div>
                     <label class="block text-xs uppercase tracking-wider font-bold text-text-muted mb-1.5">Password*</label>
                     <div class="relative flex items-center border-b {{ $errors->has('password') ? 'border-danger' : 'border-border-subtle focus-within:border-text-main' }} transition-colors">
                         <input 
                             :type="showPass ? 'text' : 'password'" 
-                            wire:model.live.debounce.500ms="password" 
+                            wire:model.live.debounce.400ms="password" 
                             class="w-full py-2.5 pr-8 bg-transparent text-text-main text-base outline-none placeholder:text-text-muted/40 tracking-wider" 
                             placeholder="••••••••"
                         >
@@ -513,7 +501,7 @@
                     <div class="relative flex items-center border-b {{ $errors->has('password_confirmation') ? 'border-danger' : 'border-border-subtle focus-within:border-text-main' }} transition-colors">
                         <input 
                             :type="showConfirm ? 'text' : 'password'" 
-                            wire:model.live.debounce.500ms="password_confirmation" 
+                            wire:model.live.debounce.400ms="password_confirmation" 
                             class="w-full py-2.5 pr-8 bg-transparent text-text-main text-base outline-none placeholder:text-text-muted/40 tracking-wider" 
                             placeholder="••••••••"
                         >
@@ -544,25 +532,26 @@
                 </div>
 
                 <div class="flex items-center gap-3 pt-4">
-                    <button type="button" wire:click="backToStep(4)" class="py-3 px-5 text-text-muted hover:text-text-main text-sm font-medium transition-colors cursor-pointer">Back</button>
-                    <button type="button" wire:click="nextStep(5)" class="flex-1 py-3.5 px-6 bg-primary-dark hover:bg-text-main text-surface text-sm font-semibold rounded-full shadow-xs hover:shadow-md transition-all duration-200 cursor-pointer active:scale-[0.99]">Continue</button>
+                    <button type="button" wire:click="backToStep(3)" class="py-3 px-5 text-text-muted hover:text-text-main text-sm font-medium transition-colors cursor-pointer">Back</button>
+                    <button type="button" wire:click="nextStep(4)" class="flex-1 py-3.5 px-6 bg-primary-dark hover:bg-text-main text-surface text-sm font-semibold rounded-full shadow-xs hover:shadow-md transition-all duration-200 cursor-pointer active:scale-[0.99]">Continue</button>
                 </div>
             </div>
         @endif
 
-        @if ($currentStep === 6)
+        @if ($currentStep === 5)
             <div class="space-y-6 text-xs">
                 <div class="space-y-5">
                     <div class="border-b border-border-subtle/70 pb-3">
                         <div class="flex justify-between items-center mb-2">
-                            <span class="uppercase tracking-wider font-bold text-primary-dark">Logistics Hub & Personal Info</span>
-                            <button type="button" wire:click="backToStep(2)" class="text-[11px] font-bold text-primary hover:underline cursor-pointer">Edit</button>
+                            <span class="uppercase tracking-wider font-bold text-primary-dark">Hub, Barangay Coverage & Personal Info</span>
+                            <button type="button" wire:click="backToStep(1)" class="text-[11px] font-bold text-primary hover:underline cursor-pointer">Edit</button>
                         </div>
                         <div class="space-y-1 text-text-muted">
-                            <p><span class="text-text-main font-semibold">Logistics Hub:</span> {{ $selectedLogisticsName }}</p>
+                            <p><span class="text-text-main font-semibold">Assigned Hub:</span> {{ $selectedLogisticsName }} ({{ $selectedHubMunicipality }})</p>
+                            <p><span class="text-text-main font-semibold">Barangay Coverage:</span> {{ implode(', ', $selectedBarangays) }}</p>
                             <p><span class="text-text-main font-semibold">Full Name:</span> {{ $first_name }} {{ $last_name }}</p>
                             <p><span class="text-text-main font-semibold">Date of Birth:</span> {{ $birthday ? \Carbon\Carbon::parse($birthday)->format('M d, Y') : '' }}</p>
-                            <p><span class="text-text-main font-semibold">Email:</span> {{ $email }}</p>
+                            <p><span class="text-text-main font-semibold">Internal Email:</span> <span class="font-mono font-bold text-primary-dark">{{ $email }}</span></p>
                             <p><span class="text-text-main font-semibold">Mobile Number:</span> +63{{ $contact_no }}</p>
                         </div>
                     </div>
@@ -570,7 +559,7 @@
                     <div class="border-b border-border-subtle/70 pb-3">
                         <div class="flex justify-between items-center mb-2">
                             <span class="uppercase tracking-wider font-bold text-primary-dark">License & Vehicle Details</span>
-                            <button type="button" wire:click="backToStep(3)" class="text-[11px] font-bold text-primary hover:underline cursor-pointer">Edit</button>
+                            <button type="button" wire:click="backToStep(2)" class="text-[11px] font-bold text-primary hover:underline cursor-pointer">Edit</button>
                         </div>
                         <div class="space-y-1 text-text-muted">
                             <p><span class="text-text-main font-semibold">License No.:</span> {{ $license_no }}</p>
@@ -583,7 +572,7 @@
                     <div class="border-b border-border-subtle/70 pb-3">
                         <div class="flex justify-between items-center mb-2">
                             <span class="uppercase tracking-wider font-bold text-primary-dark">Verification Documents</span>
-                            <button type="button" wire:click="backToStep(4)" class="text-[11px] font-bold text-primary hover:underline cursor-pointer">Edit</button>
+                            <button type="button" wire:click="backToStep(3)" class="text-[11px] font-bold text-primary hover:underline cursor-pointer">Edit</button>
                         </div>
                         <div class="space-y-1 text-text-muted">
                             <p><span class="text-text-main font-semibold">Driver's License:</span> {{ $drivers_license ? $drivers_license->getClientOriginalName() : 'Attached' }}</p>
@@ -593,27 +582,18 @@
                 </div>
 
                 <div class="flex items-center gap-3 pt-2">
-                    <button type="button" wire:click="backToStep(5)" class="py-3 px-5 text-text-muted hover:text-text-main text-sm font-medium transition-colors cursor-pointer">Back</button>
+                    <button type="button" wire:click="backToStep(4)" class="py-3 px-5 text-text-muted hover:text-text-main text-sm font-medium transition-colors cursor-pointer">Back</button>
                     <button 
                         type="button" 
                         wire:click="register" 
                         wire:loading.attr="disabled" 
                         class="flex-1 py-3.5 px-6 bg-primary-dark hover:bg-text-main text-surface text-sm font-semibold rounded-full shadow-xs hover:shadow-md transition-all duration-200 cursor-pointer active:scale-[0.99] disabled:opacity-60"
                     >
-                        <span wire:loading.remove wire:target="register">Submit Application</span>
-                        <span wire:loading wire:target="register">Submitting Application...</span>
+                        <span wire:loading.remove wire:target="register">Create Rider Account</span>
+                        <span wire:loading wire:target="register">Creating Rider Account...</span>
                     </button>
                 </div>
             </div>
         @endif
-
-        <div class="mt-8 pt-8 border-t border-border-subtle/50 text-center">
-            <p class="text-xs text-text-muted">
-                Already have an approved rider or logistics account? 
-                <a href="{{ route('logistics.login') }}" wire:navigate class="ml-1 font-bold text-primary hover:text-primary-dark underline underline-offset-4 transition-colors cursor-pointer">
-                    Sign in here
-                </a>
-            </p>
-        </div>
     @endif
 </div>

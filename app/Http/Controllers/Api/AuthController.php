@@ -1,4 +1,5 @@
 <?php
+
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
@@ -22,7 +23,6 @@ class AuthController extends Controller
         $expiresInMinutes = 10;
         
         Cache::put('register_otp_' . $request->email, $code, now()->addMinutes($expiresInMinutes));
-
         Mail::to($request->email)->send(new RegistrationOtpMail($code, $expiresInMinutes));
 
         return response()->json([
@@ -73,7 +73,7 @@ class AuthController extends Controller
             'middle_initial' => $validated['middle_initial'] ?? null,
             'sex' => $validated['sex'],
             'birthday' => $validated['birthday'],
-            'email' => $validated['email'],
+            'email' => strtolower(trim($validated['email'])),
             'password' => Hash::make($validated['password']),
             'contact_no' => 'N/A',
             'role' => 'Buyer',
@@ -119,7 +119,6 @@ class AuthController extends Controller
 
     public function logout(Request $request)
     {
-        // Added check to prevent 500 error if token is already missing/invalid
         if ($request->user()) {
             $request->user()->currentAccessToken()->delete();
         }

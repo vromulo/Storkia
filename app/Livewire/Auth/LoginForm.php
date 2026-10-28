@@ -18,7 +18,6 @@ class LoginForm extends Component
     public ?string $registerRoute = null;
     public string $registerText = 'Create an account';
     public bool $showRegister = true;
-
     public ?string $secondaryRegisterRoute = null;
     public string $secondaryRegisterPrompt = 'Want to be a rider?';
     public string $secondaryRegisterText = 'Apply here';
@@ -45,24 +44,24 @@ class LoginForm extends Component
         $this->secondaryRegisterRoute = $secondaryRegisterRoute;
         $this->secondaryRegisterPrompt = $secondaryRegisterPrompt;
         $this->secondaryRegisterText = $secondaryRegisterText;
-        $this->showSecondaryRegister = $showSecondaryRegister;
+        $this->showSecondaryRegister = $expectedRole === 'Logistics' ? false : $showSecondaryRegister;
     }
 
     public function updated($propertyName): void
     {
         if ($propertyName === 'email') {
             $this->validateOnly('email', [
-                'email' => ['required', 'email:rfc,dns'],
+                'email' => ['required', 'email:rfc'],
             ], [
                 'email.required' => 'Please enter your email address.',
-                'email.email' => 'Please enter a valid email address.',
+                'email.email'    => 'Please enter a valid email address.',
             ]);
         } elseif ($propertyName === 'password') {
             $this->validateOnly('password', [
                 'password' => ['required', 'min:8'],
             ], [
                 'password.required' => 'Please enter your password.',
-                'password.min' => 'Password must be at least 8 characters.',
+                'password.min'      => 'Password must be at least 8 characters.',
             ]);
         }
     }
@@ -70,7 +69,7 @@ class LoginForm extends Component
     public function submit(AuthService $authService, Request $request)
     {
         $this->validate([
-            'email' => ['required', 'email'],
+            'email'    => ['required', 'email:rfc'],
             'password' => ['required'],
         ]);
 
@@ -78,11 +77,12 @@ class LoginForm extends Component
             request()->getUri(),
             'POST',
             [
-                'email' => $this->email,
+                'email'    => $this->email,
                 'password' => $this->password,
                 'remember' => $this->remember,
             ]
         );
+
         $syntheticRequest->setLaravelSession(request()->session());
 
         try {

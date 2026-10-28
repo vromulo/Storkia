@@ -36,26 +36,67 @@
             </div>
         @endif
 
-        <!-- Header -->
         <div class="flex justify-between items-center mb-8">
             <h1 class="text-3xl font-bold text-primary-dark">Seller Portal</h1>
             <p class="text-text-muted">Welcome back, {{ auth()->user()->first_name ?? 'Seller' }}</p>
         </div>
 
-        <!-- Stats Grid -->
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
             <div class="p-6 bg-white rounded-2xl shadow-sm border border-border-subtle hover:border-primary/50 hover:shadow-md transition-all duration-300">
-                <h3 class="text-text-muted font-bold mb-2">Total Sales</h3>
-                <p class="text-2xl text-primary font-serif">₱0.00</p>
+                <h3 class="text-text-muted text-xs uppercase font-bold mb-2">Gross Delivered Sales</h3>
+                <p class="text-2xl text-primary font-serif">₱{{ number_format($totalSales ?? 0, 2) }}</p>
             </div>
             <div class="p-6 bg-white rounded-2xl shadow-sm border border-border-subtle hover:border-primary/50 hover:shadow-md transition-all duration-300">
-                <h3 class="text-text-muted font-bold mb-2">Active Products</h3>
-                <p class="text-2xl text-primary font-serif">0</p>
+                <h3 class="text-text-muted text-xs uppercase font-bold mb-2">Net Earnings (90%)</h3>
+                <p class="text-2xl text-green-700 font-serif">₱{{ number_format($netEarnings ?? 0, 2) }}</p>
             </div>
             <div class="p-6 bg-white rounded-2xl shadow-sm border border-border-subtle hover:border-primary/50 hover:shadow-md transition-all duration-300">
-                <h3 class="text-text-muted font-bold mb-2">Pending Orders</h3>
-                <p class="text-2xl text-primary font-serif">0</p>
+                <h3 class="text-text-muted text-xs uppercase font-bold mb-2">Active Products</h3>
+                <p class="text-2xl text-primary font-serif">{{ $activeProductsCount ?? 0 }}</p>
+            </div>
+            <div class="p-6 bg-white rounded-2xl shadow-sm border border-border-subtle hover:border-primary/50 hover:shadow-md transition-all duration-300">
+                <h3 class="text-text-muted text-xs uppercase font-bold mb-2">Pending Orders</h3>
+                <p class="text-2xl text-primary font-serif">{{ $pendingOrdersCount ?? 0 }}</p>
             </div>
         </div>
+
+        @if($profile && isset($recentOrders) && $recentOrders->isNotEmpty())
+            <div class="bg-white rounded-3xl shadow-sm border border-border-subtle overflow-hidden">
+                <div class="p-5 border-b border-border-subtle flex items-center justify-between">
+                    <h2 class="text-base font-bold text-primary-dark">Recent Incoming Orders</h2>
+                    <a href="{{ route('seller.orders.index') }}" class="text-xs font-bold text-primary hover:underline">View All Orders</a>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left border-collapse text-xs">
+                        <thead>
+                            <tr class="border-b border-border-subtle bg-surface-subtle/50 text-text-muted uppercase text-[11px] font-bold">
+                                <th class="py-3 px-5">Order #</th>
+                                <th class="py-3 px-4">Buyer</th>
+                                <th class="py-3 px-4">Total COD</th>
+                                <th class="py-3 px-4">Status</th>
+                                <th class="py-3 px-5 text-right">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-border-subtle">
+                            @foreach($recentOrders as $ro)
+                                <tr class="hover:bg-surface-subtle/30">
+                                    <td class="py-3.5 px-5 font-mono font-bold text-primary-dark">{{ $ro->seller_order_number }}</td>
+                                    <td class="py-3.5 px-4 font-medium text-text-main">{{ $ro->buyer?->full_name }}</td>
+                                    <td class="py-3.5 px-4 font-bold text-primary">₱{{ number_format((float) $ro->total_amount, 2) }}</td>
+                                    <td class="py-3.5 px-4">
+                                        <span class="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-brand-light/40 text-primary-dark">
+                                            {{ $ro->status_label }}
+                                        </span>
+                                    </td>
+                                    <td class="py-3.5 px-5 text-right">
+                                        <a href="{{ route('seller.orders.show', $ro->id) }}" class="text-primary font-bold hover:underline">Manage</a>
+                                    </td>
+                                </tr>
+                            @endforeach
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        @endif
     </div>
 @endsection

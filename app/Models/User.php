@@ -11,16 +11,16 @@ use Illuminate\Notifications\Notifiable;
 use Laravel\Sanctum\HasApiTokens;
 
 #[Fillable([
-    'first_name', 
-    'last_name', 
-    'middle_initial', 
-    'sex', 
-    'contact_no', 
-    'birthday', 
-    'email', 
+    'first_name',
+    'last_name',
+    'middle_initial',
+    'sex',
+    'contact_no',
+    'birthday',
+    'email',
     'password',
     'password_changed_at',
-    'role'
+    'role',
 ])]
 #[Hidden(['password', 'remember_token'])]
 class User extends Authenticatable
@@ -28,11 +28,6 @@ class User extends Authenticatable
     /** @use HasFactory<UserFactory> */
     use HasApiTokens, HasFactory, Notifiable;
 
-    /**
-     * Get the attributes that should be cast.
-     *
-     * @return array<string, string>
-     */
     protected function casts(): array
     {
         return [
@@ -71,8 +66,12 @@ class User extends Authenticatable
 
         return 'Last updated ' . $this->password_changed_at->format('m/d/Y');
     }
-    
-    // Buyer
+
+    public function getFullNameAttribute(): string
+    {
+        return trim("{$this->first_name} {$this->last_name}");
+    }
+
     public function identityVerification()
     {
         return $this->hasOne(IdentityVerification::class)->latestOfMany();
@@ -93,28 +92,36 @@ class User extends Authenticatable
         return $this->hasOne(UserAddress::class)->where('is_default', true);
     }
 
-    /**
-     * The seller's current approved profile. Only exists once an
-     * application has been approved by an admin.
-     */
+    public function carts()
+    {
+        return $this->hasMany(Cart::class);
+    }
+
+    public function orders()
+    {
+        return $this->hasMany(Order::class, 'buyer_id')->latest('id');
+    }
+
+    public function buyerSellerOrders()
+    {
+        return $this->hasMany(SellerOrder::class, 'buyer_id')->latest('id');
+    }
+
+    public function sellerOrders()
+    {
+        return $this->hasMany(SellerOrder::class, 'seller_id')->latest('id');
+    }
+
     public function sellerProfile()
     {
         return $this->hasOne(SellerProfile::class);
     }
 
-    /**
-     * Full application history (pending/approved/rejected), newest first.
-     */
     public function sellerApplications()
     {
         return $this->hasMany(SellerApplication::class)->latest('version');
     }
 
-    /**
-     * The most recent application submitted, regardless of status.
-     * This is the source of truth for "what state is this seller's
-     * application in right now" — never seller_profiles.
-     */
     public function latestSellerApplication()
     {
         return $this->hasOne(SellerApplication::class)->latestOfMany('version');
@@ -122,7 +129,75 @@ class User extends Authenticatable
 
     public function logisticsProfile()
     {
-        return $this->hasOne(LogisticsProfile::class);
+        return $this->hasOne(LogisticsProfile::class, 'user_id');
+    }
+
+    public function ownedLogisticsProfile()
+    {
+        return $this->hasOne(LogisticsProfile::class, 'user_id');
+    }
+
+    public function branchLogisticsHub()
+    {
+        return $this->hasOne(LogisticsHub::class, 'branch_user_id');
+    }
+
+    public function getLogisticsProfileAttribute(): ?LogisticsProfile
+    {
+        if (! $this->relationLoaded('ownedLogisticsProfile')) {
+            $this->setRelation('ownedLogisticsProfile', $this->ownedLogisticsProfile()->first());
+        }
+
+        $owned = $this->getRelation('ownedLogisticsProfile');
+        if ($owned) {
+            return $owned;
+        }
+
+        if (! $this->relationLoaded('branchLogisticsHub')) {
+            $this->setRelation(
+                'branchLogisticsHub',
+                $this->branchLogisticsHub()->with('parentLogisticsProfile')->first()
+            );
+        }
+
+        $branchHub = $this->getRelation('branchLogisticsHub');
+        if ($branchHub && $branchHub->status === 'active') {
+            return $branchHub->parentLogisticsProfile;
+        }
+
+        return null;
+    }
+
+    public function isMainLogisticsAccount(): bool
+    {
+        if (! $this->relationLoaded('ownedLogisticsProfile')) {
+            $this->setRelation('ownedLogisticsProfile', $this->ownedLogisticsProfile()->first());
+        }
+
+        return $this->getRelation('ownedLogisticsProfile') !== null;
+    }
+
+    public function isBranchLogisticsAccount(): bool
+    {
+        if (! $this->relationLoaded('branchLogisticsHub')) {
+            $this->setRelation('branchLogisticsHub', $this->branchLogisticsHub()->first());
+        }
+
+        return $this->getRelation('branchLogisticsHub') !== null;
+    }
+
+    public function activeLogisticsHub(): ?LogisticsHub
+    {
+        if ($this->isBranchLogisticsAccount()) {
+            return $this->getRelation('branchLogisticsHub');
+        }
+
+        $profile = $this->logisticsProfile;
+        if (! $profile) {
+            return null;
+        }
+
+        return $profile->ensureMainHubExists();
     }
 
     public function logisticsApplications()
@@ -135,7 +210,6 @@ class User extends Authenticatable
         return $this->hasOne(LogisticsApplication::class)->latestOfMany('version');
     }
 
-    // NEW: Messages relationship required by MessageController
     public function messages()
     {
         return $this->hasMany(Message::class, 'user_id');

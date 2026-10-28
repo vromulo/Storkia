@@ -114,7 +114,7 @@
     setMainImage(img) {
         this.mainImage = img;
     },
-    validateAndSubmit(isAuth) {
+    validateAndSubmit(isAuth, isBuyNow = false) {
         if (this.hasVariants && !this.selectedMainName) {
             this.toastMessage = 'Please pick a {{ addslashes($product->variants['title'] ?? 'variant') }} first.';
             this.showToast = true;
@@ -131,7 +131,11 @@
             window.location.href = '{{ route('login') }}';
             return;
         }
-        this.$refs.addToCartForm.submit();
+        if (isBuyNow) {
+            this.$refs.buyNowForm.submit();
+        } else {
+            this.$refs.addToCartForm.submit();
+        }
     }
 }" class="bg-surface-subtle font-sans antialiased text-text-main min-h-screen pb-16 relative overflow-x-hidden">
 
@@ -332,7 +336,7 @@
                                 <input type="hidden" name="sub_variant" x-bind:value="selectedSubName">
 
                                 <button type="button"
-                                        @click="validateAndSubmit(true)"
+                                        @click="validateAndSubmit(true, false)"
                                         class="w-full bg-primary/10 text-primary border border-primary/30 hover:bg-primary hover:text-white font-bold py-3.5 px-6 rounded-2xl transition-all duration-300 flex items-center justify-center gap-2.5 cursor-pointer shadow-2xs">
                                     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z"></path>
@@ -340,14 +344,23 @@
                                     <span>Add To Cart</span>
                                 </button>
                             </form>
-                            <button type="button"
-                                    @click="validateAndSubmit(true)"
-                                    class="w-full sm:w-1/2 bg-primary text-white hover:bg-primary-dark font-bold py-3.5 px-6 rounded-2xl transition-all duration-300 shadow-md shadow-primary/20 hover:shadow-lg cursor-pointer">
-                                Buy Now
-                            </button>
+
+                            <form x-ref="buyNowForm" action="{{ route('checkout.buy-now') }}" method="POST" class="w-full sm:w-1/2 flex">
+                                @csrf
+                                <input type="hidden" name="product_id" value="{{ $product->id }}">
+                                <input type="hidden" name="quantity" x-bind:value="quantity">
+                                <input type="hidden" name="variant" x-bind:value="selectedMainName">
+                                <input type="hidden" name="sub_variant" x-bind:value="selectedSubName">
+
+                                <button type="button"
+                                        @click="validateAndSubmit(true, true)"
+                                        class="w-full bg-primary text-white hover:bg-primary-dark font-bold py-3.5 px-6 rounded-2xl transition-all duration-300 shadow-md shadow-primary/20 hover:shadow-lg cursor-pointer">
+                                    Buy Now
+                                </button>
+                            </form>
                         @else
                             <button type="button"
-                                    @click="validateAndSubmit(false)"
+                                    @click="validateAndSubmit(false, false)"
                                     class="w-full sm:w-1/2 bg-primary/10 text-primary border border-primary/30 hover:bg-primary hover:text-white font-bold py-3.5 px-6 rounded-2xl transition-all duration-300 flex items-center justify-center gap-2.5 cursor-pointer shadow-2xs">
                                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z"></path>
@@ -355,7 +368,7 @@
                                 <span>Add To Cart</span>
                             </button>
                             <button type="button"
-                                    @click="validateAndSubmit(false)"
+                                    @click="validateAndSubmit(false, true)"
                                     class="w-full sm:w-1/2 bg-primary text-white hover:bg-primary-dark font-bold py-3.5 px-6 rounded-2xl transition-all duration-300 shadow-md shadow-primary/20 hover:shadow-lg cursor-pointer flex items-center justify-center">
                                 Buy Now
                             </button>

@@ -6,15 +6,11 @@
 @section('content')
     <x-auth.login-form 
         title="Logistics Operations" 
-        subtitle="Sign in to your courier dashboard"
+        subtitle="Sign in to your Main Hub, Branch Hub, Courier, or Rider account"
         expectedRole="Logistics"
         :registerRoute="route('logistics.register')"
-        registerText="Apply for Logistics Hub"
+        registerText="Apply for Main Logistics Hub"
         :showRegister="true"
-        :secondaryRegisterRoute="route('rider.register')"
-        secondaryRegisterPrompt="Want to be a rider?"
-        secondaryRegisterText="Apply as a Delivery Rider"
-        :showSecondaryRegister="true"
-        :showRiderAppButton="true"
+        :showSecondaryRegister="false"
     />
 @endsection

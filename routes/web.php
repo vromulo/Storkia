@@ -9,11 +9,13 @@ use App\Http\Controllers\Buyer\SearchController;
 use App\Http\Controllers\Buyer\AccountManagementController;
 use App\Http\Controllers\Buyer\AddressController;
 use App\Http\Controllers\Buyer\CartController;
+use App\Http\Controllers\Buyer\CheckoutController;
+use App\Http\Controllers\Buyer\OrderController;
 use App\Http\Controllers\Buyer\SellerController;
+use App\Http\Controllers\Buyer\VoucherController;
 use App\Livewire\Buyer\IdentityVerificationFlow;
 
 Route::view('/', 'buyer.landing-page')->name('landing');
-
 Route::get('/shop', [HomeController::class, 'index'])->name('home');
 Route::get('/sellers', [SellerController::class, 'index'])->name('sellers.index');
 Route::get('/sellers/{seller}', [SellerController::class, 'show'])->name('sellers.show');
@@ -37,9 +39,14 @@ Route::middleware('auth')->group(function () {
         Route::delete('/cart/{cart}', [CartController::class, 'destroy'])->name('cart.destroy');
         Route::patch('/cart/{cart}', [CartController::class, 'update'])->name('cart.update');
 
+        Route::post('/checkout/buy-now', [CheckoutController::class, 'buyNow'])->name('checkout.buy-now');
+        Route::get('/checkout', [CheckoutController::class, 'index'])->name('checkout.index');
+        Route::post('/checkout', [CheckoutController::class, 'store'])->name('checkout.store');
+        Route::get('/checkout/success/{order}', [CheckoutController::class, 'success'])->name('checkout.success');
+
         Route::prefix('user')->name('user.')->group(function () {
             Route::view('/account', 'buyer.option.account.personal-center')->name('account');
-            
+
             Route::get('/account-management', [AccountManagementController::class, 'index'])->name('account-management');
             Route::patch('/account-management/name', [AccountManagementController::class, 'updateName'])->name('account-management.update-name');
             Route::patch('/account-management/phone', [AccountManagementController::class, 'updatePhone'])->name('account-management.update-phone');
@@ -61,10 +68,21 @@ Route::middleware('auth')->group(function () {
             Route::post('/messages', [\App\Http\Controllers\Buyer\BuyerMessageController::class, 'store'])->name('messages.store');
             Route::patch('/messages/{contactId}/read', [\App\Http\Controllers\Buyer\BuyerMessageController::class, 'markAsRead'])->name('messages.read');
 
+            Route::get('/orders', [OrderController::class, 'index'])->name('orders');
+            Route::get('/orders/{sellerOrder}', [OrderController::class, 'show'])->name('orders.show');
+            Route::post('/orders/{sellerOrder}/cancel', [OrderController::class, 'cancelOrder'])->name('orders.cancel');
+            Route::post('/orders/{sellerOrder}/switch-to-cod', [OrderController::class, 'switchToCod'])->name('orders.switch-to-cod');
+            Route::post('/orders/{sellerOrder}/cancel-flagged-payment', [OrderController::class, 'cancelFlaggedPaymentOrder'])->name('orders.cancel-flagged-payment');
+            Route::post('/orders/{sellerOrder}/confirm-receipt', [OrderController::class, 'confirmReceipt'])->name('orders.confirm-receipt');
+            Route::post('/orders/{sellerOrder}/report-dispute', [OrderController::class, 'reportDispute'])->name('orders.report-dispute');
+            Route::post('/orders/{sellerOrder}/escalate-dispute', [OrderController::class, 'escalateDispute'])->name('orders.escalate-dispute');
+            Route::get('/orders/proof/{proof}', [OrderController::class, 'proofImage'])->name('orders.proof-image');
+
+            Route::get('/coupons', [VoucherController::class, 'index'])->name('coupons');
+            Route::post('/coupons/claim', [VoucherController::class, 'claim'])->name('coupons.claim');
+
             Route::view('/profile', 'buyer.option.coming-soon', ['title' => 'Profile'])->name('profile');
             Route::view('/change-password', 'buyer.option.coming-soon', ['title' => 'Change Password'])->name('change-password');
-            Route::view('/orders', 'buyer.option.coming-soon', ['title' => 'My Orders'])->name('orders');
-            Route::view('/coupons', 'buyer.option.coming-soon', ['title' => 'My Coupons'])->name('coupons');
             Route::view('/points', 'buyer.option.coming-soon', ['title' => 'My Points/Coins'])->name('points');
             Route::view('/wishlist', 'buyer.option.coming-soon', ['title' => 'Wish List'])->name('wishlist');
             Route::view('/recently-viewed', 'buyer.option.coming-soon', ['title' => 'Recently Viewed'])->name('recently-viewed');

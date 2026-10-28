@@ -12,7 +12,6 @@
             ->latest()
             ->get();
 
-        // Group cart items by seller/store name
         $groupedCart = $cartItems->groupBy(function($item) {
             return $item->product->sellerProfile->business_name 
                 ?? $item->product->user->first_name 
@@ -101,34 +100,28 @@
     "
     class="min-h-screen bg-surface-subtle/40 pb-16 lg:pb-20 pt-4"
 >
-    <!-- Wider Container -->
     <div class="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 space-y-6">
 
-        <!-- 1. Header Stepper (Cart > Place Order > Pay > Order Complete) -->
         <nav aria-label="Checkout Stepper" class="w-full bg-surface border border-border-subtle rounded-2xl p-4 sm:p-5 shadow-xs select-none">
             <div class="flex items-center justify-between max-w-3xl mx-auto">
-                <!-- Step 1: Cart (Active) -->
                 <div class="flex items-center gap-2 text-primary font-bold">
                     <span class="w-7 h-7 rounded-full bg-primary text-surface text-xs font-bold flex items-center justify-center shadow-xs">1</span>
                     <span class="text-sm font-sans tracking-tight">Cart</span>
                 </div>
                 <div class="flex-1 h-[2px] bg-primary/20 mx-3 sm:mx-6 rounded-full"></div>
 
-                <!-- Step 2: Place Order -->
                 <div class="flex items-center gap-2 text-text-muted font-medium">
                     <span class="w-7 h-7 rounded-full bg-surface-subtle border border-border-subtle text-text-muted text-xs font-bold flex items-center justify-center">2</span>
                     <span class="text-sm font-sans tracking-tight hidden sm:inline">Place Order</span>
                 </div>
                 <div class="flex-1 h-[2px] bg-border-subtle mx-3 sm:mx-6 rounded-full"></div>
 
-                <!-- Step 3: Pay -->
                 <div class="flex items-center gap-2 text-text-muted font-medium">
                     <span class="w-7 h-7 rounded-full bg-surface-subtle border border-border-subtle text-text-muted text-xs font-bold flex items-center justify-center">3</span>
                     <span class="text-sm font-sans tracking-tight hidden sm:inline">Pay</span>
                 </div>
                 <div class="flex-1 h-[2px] bg-border-subtle mx-3 sm:mx-6 rounded-full"></div>
 
-                <!-- Step 4: Order Complete -->
                 <div class="flex items-center gap-2 text-text-muted font-medium">
                     <span class="w-7 h-7 rounded-full bg-surface-subtle border border-border-subtle text-text-muted text-xs font-bold flex items-center justify-center">4</span>
                     <span class="text-sm font-sans tracking-tight hidden sm:inline">Order Complete</span>
@@ -137,7 +130,6 @@
         </nav>
 
         @if($cartItems->isEmpty())
-            <!-- Empty Cart Slate -->
             <div class="bg-surface border border-border-subtle rounded-3xl p-16 text-center max-w-xl mx-auto shadow-xs my-10">
                 <div class="w-20 h-20 rounded-full bg-surface-subtle text-text-muted flex items-center justify-center mx-auto mb-4 border border-border-subtle">
                     <svg class="w-9 h-9" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -151,13 +143,10 @@
                 </a>
             </div>
         @else
-            <!-- Main Content Grid: Cart Items (Left) vs Summary Panel (Right) -->
             <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
                 
-                <!-- LEFT COLUMN: Global Select All + Store Grouped Cards -->
                 <div class="lg:col-span-8 space-y-4">
                     
-                    <!-- Global Master Checkbox Bar -->
                     <div class="bg-surface rounded-2xl border border-border-subtle p-4 sm:p-5 flex items-center justify-between shadow-xs">
                         <label class="flex items-center gap-3.5 cursor-pointer select-none">
                             <input 
@@ -175,10 +164,8 @@
                         </div>
                     </div>
 
-                    <!-- Store Grouped Items Loop -->
                     @foreach ($groupedCart as $storeName => $itemsInStore)
                         <div class="bg-surface rounded-2xl border border-border-subtle shadow-xs overflow-hidden">
-                            <!-- Store Header -->
                             <div class="p-4 sm:px-6 bg-surface-subtle/50 border-b border-border-subtle flex items-center gap-3.5 select-none">
                                 <input 
                                     type="checkbox" 
@@ -196,7 +183,6 @@
                                 </div>
                             </div>
 
-                            <!-- Products under this Store -->
                             <div class="divide-y divide-border-subtle/60">
                                 @foreach ($itemsInStore as $cartItem)
                                     @php
@@ -204,7 +190,6 @@
                                     @endphp
                                     <div class="p-4 sm:p-6 flex items-start gap-4 hover:bg-surface-subtle/20 transition-colors">
                                         
-                                        <!-- Item Checkbox -->
                                         <div class="pt-2 sm:pt-4">
                                             <input 
                                                 type="checkbox" 
@@ -213,7 +198,6 @@
                                             >
                                         </div>
 
-                                        <!-- Product Image -->
                                         <a href="{{ route('product.show', $cartItem->product->id) }}" class="w-20 h-20 sm:w-28 sm:h-28 rounded-xl bg-surface-subtle border border-border-subtle overflow-hidden shrink-0 flex items-center justify-center p-1.5 group">
                                             @if($initialAlpineData[$alpineIndex]['image'])
                                                 <img 
@@ -228,7 +212,6 @@
                                             @endif
                                         </a>
 
-                                        <!-- Item Details & Stepper -->
                                         <div class="flex-1 min-w-0 flex flex-col justify-between self-stretch">
                                             <div>
                                                 <a href="{{ route('product.show', $cartItem->product->id) }}" class="text-sm sm:text-base font-semibold text-text-main line-clamp-2 hover:text-primary transition-colors leading-snug">
@@ -243,7 +226,6 @@
                                             </div>
 
                                             <div class="mt-4 flex flex-wrap items-end justify-between gap-3">
-                                                <!-- Pricing -->
                                                 <div class="flex items-baseline gap-2 font-sans">
                                                     <span 
                                                         class="text-base sm:text-lg font-semibold tracking-tight"
@@ -264,7 +246,6 @@
                                                     </template>
                                                 </div>
 
-                                                <!-- Stepper Quantity & Delete -->
                                                 <div class="flex items-center gap-4">
                                                     <div class="flex items-center border border-border-subtle rounded-lg bg-surface h-8 overflow-hidden w-24">
                                                         <button 
@@ -291,7 +272,6 @@
                                                         </button>
                                                     </div>
 
-                                                    <!-- Remove Button -->
                                                     <form action="{{ route('cart.destroy', $cartItem->id) }}" method="POST" class="m-0 inline" onsubmit="return confirm('Remove this item from your cart?');">
                                                         @csrf
                                                         @method('DELETE')
@@ -311,22 +291,16 @@
                     @endforeach
                 </div>
 
-                <!-- RIGHT COLUMN: Desktop Sidebar (>= 1024px) vs. Mobile Bottom Dock (< 1024px) -->
                 <div class="lg:col-span-4" 
                      x-data="{ mobileSummaryOpen: false }"
                      @resize.window.debounce.100ms="if (window.innerWidth >= 1024) mobileSummaryOpen = false">
                     
-                    <!-- ============================================================ -->
-                    <!-- 1. DESKTOP ONLY SIDEBAR (>= 1024px)                          -->
-                    <!-- Strictly unaffected by mobile toggles, always visible         -->
-                    <!-- ============================================================ -->
                     <div class="hidden lg:block bg-surface rounded-2xl border border-border-subtle p-6 shadow-xs sticky top-24 select-none space-y-6">
                         <div>
                             <h3 class="text-xl font-serif font-bold text-primary-dark">Order Summary</h3>
                             <p class="text-xs text-text-muted mt-0.5">Proceed to checkout and select your shipping address.</p>
                         </div>
 
-                        <!-- Selected Items Thumbnail Strip -->
                         <div>
                             <div class="text-xs font-bold text-text-muted uppercase tracking-wider mb-2.5">
                                 Selected Items (<span x-text="selectedCount"></span>)
@@ -342,7 +316,6 @@
                                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
                                             </svg>
                                         </template>
-                                        <!-- Small 'x' remove button -->
                                         <button 
                                             type="button"
                                             @click.stop="item.selected = false"
@@ -361,7 +334,6 @@
                             </div>
                         </div>
 
-                        <!-- Price Breakdown -->
                         <div class="space-y-3 pt-3 border-t border-border-subtle/70 text-sm">
                             <div class="flex items-center justify-between text-text-muted">
                                 <span>Retail Price:</span>
@@ -412,9 +384,12 @@
                             </div>
                         </div>
 
-                        <!-- Desktop Checkout CTA -->
                        <div class="pt-0">
-                            <form action="#" method="GET">
+                            <form action="{{ route('checkout.index') }}" method="GET">
+                                <input type="hidden" name="mode" value="cart">
+                                <template x-for="item in selectedItems" :key="'desk_' + item.id">
+                                    <input type="hidden" name="cart_ids[]" :value="item.id">
+                                </template>
                                 <button 
                                     type="submit"
                                     :disabled="selectedCount === 0"
@@ -428,21 +403,15 @@
                                 </button>
                             </form>
                             <p class="text-[11px] text-text-muted text-center mt-2">
-                                Taxes and shipping vouchers computed during checkout.
+                                Shipping fees computed per seller during checkout.
                             </p>
                         </div>
                     </div>
 
-                    <!-- ============================================================ -->
-                    <!-- 2. MOBILE & TABLET BOTTOM DOCK (< 1024px)                    -->
-                    <!-- No backdrop overlay, pushes up smoothly on toggle            -->
-                    <!-- ============================================================ -->
                     <div class="lg:hidden fixed inset-x-0 bottom-0 z-40 bg-surface border-t border-border-subtle px-4 py-2 sm:px-5 sm:py-2.5 shadow-[0_-4px_25px_rgba(0,0,0,0.12)] select-none">                        
-                        <!-- Slide-Up Details Panel (Expands upward without backdrop) -->
                         <div x-show="mobileSummaryOpen" x-collapse x-cloak class="mb-3">
                             <div class="space-y-4 pb-3 border-b border-border-subtle/70">
                                 
-                                <!-- Selected Items Thumbnail Strip -->
                                 <div>
                                     <div class="text-xs font-bold text-text-muted uppercase tracking-wider mb-2">
                                         Selected Items (<span x-text="selectedCount"></span>)
@@ -476,7 +445,6 @@
                                     </div>
                                 </div>
 
-                                <!-- Detailed Price Breakdown (Retail & Savings) -->
                                 <div class="space-y-1.5 text-xs sm:text-sm">
                                     <div class="flex items-center justify-between text-text-muted">
                                         <span>Retail Price:</span>
@@ -496,7 +464,6 @@
                             </div>
                         </div>
 
-                        <!-- Sticky Bottom Bar Row: Total + Toggle Arrow + Checkout CTA -->
                         <div class="flex items-center justify-between gap-3">
                             <div>
                                 <div class="flex items-center gap-1.5 sm:gap-2">
@@ -532,7 +499,6 @@
                                         ></span>
                                     </span>
 
-                                    <!-- Chevron Toggle Arrow: points up initially, rotates down 180° when expanded -->
                                     <button 
                                         type="button" 
                                         @click="mobileSummaryOpen = !mobileSummaryOpen"
@@ -559,9 +525,12 @@
                                 </template>
                             </div>
 
-                            <!-- Mobile/Tablet Checkout Button -->
                             <div>
-                                <form action="#" method="GET" class="m-0">
+                                <form action="{{ route('checkout.index') }}" method="GET" class="m-0">
+                                    <input type="hidden" name="mode" value="cart">
+                                    <template x-for="item in selectedItems" :key="'mob_' + item.id">
+                                        <input type="hidden" name="cart_ids[]" :value="item.id">
+                                    </template>
                                     <button 
                                         type="submit"
                                         :disabled="selectedCount === 0"

@@ -3,15 +3,16 @@
 @section('content')
 @php
     $initialFullName = trim(($user->first_name ?? '') . ' ' . ($user->last_name ?? '')) ?: 'Seller-' . str_pad($user->id, 6, '0', STR_PAD_LEFT);
+
     $rawEmail = $user->email ?? '';
     $maskedEmail = $rawEmail;
     if (str_contains($rawEmail, '@')) {
         [$name, $domain] = explode('@', $rawEmail, 2);
         $maskedEmail = substr($name, 0, 1) . str_repeat('*', max(strlen($name) - 2, 4)) . substr($name, -1) . '@' . $domain;
     }
+
     $passwordLastUpdated = $user->formattedPasswordLastUpdated();
 
-    // Phone formatting & initial state
     $contact = $user->contact_no ?: ($profile->contact_no ?? '');
     $cleanContact = preg_replace('/\D/', '', $contact);
     if (str_starts_with($cleanContact, '63')) {
@@ -39,6 +40,7 @@
     }
 
     $photoUrl = $profile->logo_path ? asset('storage/' . $profile->logo_path) : '';
+
     $fullAddress = collect([
         $profile->house_details,
         $profile->street,
@@ -50,7 +52,9 @@
     $idExt = strtolower(pathinfo($profile->id_path ?? '', PATHINFO_EXTENSION));
     $permitExt = strtolower(pathinfo($profile->permit_path ?? '', PATHINFO_EXTENSION));
 
-    
+    $gcashAccount = $gcashAccount ?? ($profile?->gcashAccount ?? null);
+    $existingGcashQrUrl = $gcashAccount?->qr_image_path ? asset('storage/' . $gcashAccount->qr_image_path) : '';
+
     $sellerData = [
         'business_name' => $profile->business_name ?? '',
         'photo_url' => $photoUrl,
@@ -73,7 +77,20 @@
     {{ json_encode($sellerData) }}
 )" class="max-w-5xl mx-auto select-none">
 
-    <!-- Page Header & Segmented Tabs Navigation -->
+    @if(session('success'))
+        <div class="mb-6 p-4 rounded-2xl bg-green-50 border border-green-200 text-green-700 text-xs sm:text-sm font-bold flex items-center justify-between">
+            <span>{{ session('success') }}</span>
+        </div>
+    @endif
+
+    @if($errors->any())
+        <div class="mb-6 p-4 rounded-2xl bg-red-50 border border-red-200 text-red-700 text-xs sm:text-sm space-y-1">
+            @foreach($errors->all() as $err)
+                <p class="font-semibold">{{ $err }}</p>
+            @endforeach
+        </div>
+    @endif
+
     <div class="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-8">
         <div>
             <div class="flex items-center gap-2.5">
@@ -86,19 +103,15 @@
                 </span>
             </div>
             <p class="text-sm text-text-muted mt-1">
-                Manage your storefront identity, verified business details, and personal login security.
+                Manage your storefront identity, GCash online payment account, verified business details, and personal login security.
             </p>
         </div>
 
-        <!-- Segmented Pill Switcher -->
         <div class="relative grid grid-cols-2 p-1.5 bg-surface-subtle border border-border-subtle rounded-2xl shadow-xs self-start select-none">
-            
-            <!-- Animated Sliding Pill Background -->
             <div class="absolute top-1.5 bottom-1.5 left-1.5 w-[calc(50%-0.375rem)] bg-surface rounded-xl shadow-xs border border-border-subtle transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] pointer-events-none"
                  :class="activeTab === 'security' ? 'translate-x-full' : 'translate-x-0'">
             </div>
 
-            <!-- Tab 1: Store Profile -->
             <button type="button"
                     @click="setTab('store')"
                     :class="activeTab === 'store' ? 'text-primary-dark font-bold' : 'text-text-muted hover:text-text-main font-semibold'"
@@ -111,7 +124,6 @@
                 <span>Store Profile</span>
             </button>
 
-            <!-- Tab 2: Account & Security -->
             <button type="button"
                     @click="setTab('security')"
                     :class="activeTab === 'security' ? 'text-primary-dark font-bold' : 'text-text-muted hover:text-text-main font-semibold'"
@@ -126,27 +138,21 @@
         </div>
     </div>
 
-    <!-- ========================================== -->
-    <!-- TAB 1: STORE PROFILE                       -->
-    <!-- ========================================== -->
     <div x-show="activeTab === 'store'"
          x-transition:enter="transition ease-out duration-200"
          x-transition:enter-start="opacity-0 translate-y-1"
          x-transition:enter-end="opacity-100 translate-y-0"
          class="space-y-6">
 
-        <!-- Card 1: Store Branding (Store Photo & Store Name) -->
         <div class="bg-surface rounded-3xl border border-border-subtle p-6 sm:p-8 shadow-xs space-y-6">
             <div class="border-b border-border-subtle pb-4">
                 <h2 class="text-lg font-bold text-text-main">Storefront Identity</h2>
                 <p class="text-xs text-text-muted mt-0.5">Customize your public shop avatar and store display name.</p>
             </div>
 
-            <!-- 1A. Seller Store Photo / Logo -->
             <div class="transition-all duration-200" :class="isDimmed('photo') ? 'opacity-40' : ''">
                 <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-6">
                     <div class="flex items-center gap-5">
-                        <!-- Avatar Circle Preview -->
                         <div class="relative w-24 h-24 rounded-full border-2 border-border-subtle bg-brand-light/30 flex items-center justify-center overflow-hidden shadow-inner shrink-0 group">
                             <template x-if="photoUrl">
                                 <img :src="photoUrl" alt="Store Photo" class="w-full h-full object-cover">
@@ -155,7 +161,6 @@
                                 <span class="text-3xl font-serif font-bold text-primary-dark" x-text="(businessName || 'S').charAt(0).toUpperCase()"></span>
                             </template>
 
-                            <!-- Uploading Spinner Overlay -->
                             <div x-show="isUploadingPhoto" x-cloak class="absolute inset-0 bg-black/50 backdrop-blur-xs flex items-center justify-center">
                                 <span class="inline-flex items-center gap-1">
                                     <span class="w-1.5 h-1.5 bg-white rounded-full animate-bounce" style="animation-delay: -0.32s;"></span>
@@ -176,7 +181,6 @@
                         </div>
                     </div>
 
-                    <!-- Upload / Remove Buttons -->
                     <div class="flex items-center gap-3 shrink-0">
                         <label for="seller_photo_input"
                                :class="(isEditing() || isUploadingPhoto || isRemovingPhoto) ? 'pointer-events-none opacity-50' : 'cursor-pointer hover:bg-dark-grey active:scale-95'"
@@ -206,7 +210,6 @@
 
             <hr class="border-border-subtle" />
 
-            <!-- 1B. Store / Business Name (Editable) -->
             <div class="transition-all duration-200" :class="isDimmed('store_name') ? 'opacity-40' : ''">
                 <div class="flex items-start justify-between gap-4">
                     <div>
@@ -232,7 +235,6 @@
                     </div>
                 </div>
 
-                <!-- Inline Edit Form for Store Name -->
                 <div x-show="activeEdit === 'store_name'" x-cloak class="mt-4">
                     <form action="{{ route('seller.store-settings.update-store-name') }}"
                           method="POST"
@@ -280,7 +282,253 @@
             </div>
         </div>
 
-        <!-- Card 2: Read-Only Verified Business Compliance Details -->
+        <div x-data="{
+            gcashName: @js(old('account_name', $gcashAccount?->account_name ?? '')),
+            gcashNumber: @js(old('gcash_number', $gcashAccount?->gcash_number ?? '')),
+            gcashActive: {{ ($gcashAccount === null || $gcashAccount->is_active) ? 'true' : 'false' }},
+            existingQrUrl: @js($existingGcashQrUrl),
+            newQrPreview: '',
+            newQrName: '',
+            gcashError: '',
+            confirmGcashModalOpen: false,
+            isSubmittingGcash: false,
+            onQrFileChange(e) {
+                this.gcashError = '';
+                const file = e.target.files[0];
+                if (!file) {
+                    this.newQrPreview = '';
+                    this.newQrName = '';
+                    return;
+                }
+                if (file.size > 5 * 1024 * 1024) {
+                    this.gcashError = 'GCash QR Code image must not exceed 5MB.';
+                    e.target.value = '';
+                    this.newQrPreview = '';
+                    this.newQrName = '';
+                    return;
+                }
+                this.newQrName = file.name;
+                const reader = new FileReader();
+                reader.onload = (ev) => {
+                    this.newQrPreview = ev.target.result;
+                };
+                reader.readAsDataURL(file);
+            },
+            sanitizeGcashNumber() {
+                let digits = (this.gcashNumber || '').replace(/\D/g, '');
+                if (digits.startsWith('63') && digits.length === 12) {
+                    digits = '0' + digits.slice(2);
+                } else if (digits.startsWith('9') && digits.length === 10) {
+                    digits = '0' + digits;
+                }
+                this.gcashNumber = digits.slice(0, 11);
+            },
+            openGcashConfirmation() {
+                this.gcashError = '';
+                this.sanitizeGcashNumber();
+                if (!this.gcashName || this.gcashName.trim().length < 2) {
+                    this.gcashError = 'Please enter a valid GCash Account Name (at least 2 characters).';
+                    return;
+                }
+                if (!/^09\d{9}$/.test(this.gcashNumber)) {
+                    this.gcashError = 'Please enter a valid 11-digit GCash mobile number starting with 09 (e.g., 09171234567).';
+                    return;
+                }
+                this.confirmGcashModalOpen = true;
+            },
+            confirmAndSubmitGcash() {
+                this.isSubmittingGcash = true;
+                this.$refs.gcashConfirmedInput.value = '1';
+                this.$refs.gcashForm.submit();
+            }
+        }" class="bg-surface rounded-3xl border border-border-subtle p-6 sm:p-8 shadow-xs space-y-6">
+
+            <div class="border-b border-border-subtle pb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                    <div class="flex items-center gap-2.5">
+                        <h2 class="text-lg font-bold text-primary-dark">GCash Online Payment Account (Optional)</h2>
+                        @if($gcashAccount && $gcashAccount->isCompliantForCheckout())
+                            <span class="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-blue-100 text-blue-700 border border-blue-200">
+                                Online Payment Enabled at Checkout
+                            </span>
+                        @else
+                            <span class="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-surface-subtle text-text-muted border border-border-subtle">
+                                COD Only (No Active GCash)
+                            </span>
+                        @endif
+                    </div>
+                    <p class="text-xs text-text-muted mt-1">
+                        Add your GCash Account Name, GCash Number, and an optional GCash QR Code image (Max 5MB) to unlock the Online Payment option for buyers checking out your products.
+                    </p>
+                </div>
+            </div>
+
+            <form x-ref="gcashForm"
+                  action="{{ route('seller.store-settings.update-gcash') }}"
+                  method="POST"
+                  enctype="multipart/form-data"
+                  @submit.prevent="openGcashConfirmation()"
+                  class="space-y-5 text-xs">
+                @csrf
+                <input type="hidden" x-ref="gcashConfirmedInput" name="confirmed" value="">
+                <input type="hidden" name="is_active" :value="gcashActive ? 1 : 0">
+
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                        <label class="block font-bold text-text-muted uppercase tracking-wider mb-1.5">
+                            GCash Account Name <span class="text-danger">*</span>
+                        </label>
+                        <input type="text"
+                               name="account_name"
+                               x-model="gcashName"
+                               maxlength="120"
+                               required
+                               placeholder="e.g. Juan Dela Cruz"
+                               class="w-full p-3 rounded-xl border border-border-subtle bg-surface text-sm text-text-main outline-none focus:border-primary">
+                    </div>
+
+                    <div>
+                        <label class="block font-bold text-text-muted uppercase tracking-wider mb-1.5">
+                            GCash Mobile Number (11 Digits) <span class="text-danger">*</span>
+                        </label>
+                        <input type="text"
+                               name="gcash_number"
+                               x-model="gcashNumber"
+                               @input="sanitizeGcashNumber()"
+                               maxlength="11"
+                               required
+                               placeholder="09171234567"
+                               class="w-full p-3 rounded-xl border border-border-subtle bg-surface text-sm font-mono text-text-main outline-none focus:border-primary">
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 items-start">
+                    <div>
+                        <label class="block font-bold text-text-muted uppercase tracking-wider mb-1.5">
+                            Optional Upload Image of GCash QR Code (Max 5MB)
+                        </label>
+                        <input type="file"
+                               name="qr_image"
+                               accept="image/jpeg,image/png,image/jpg,image/webp"
+                               @change="onQrFileChange($event)"
+                               class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface text-xs file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:bg-primary/10 file:text-primary file:font-bold cursor-pointer">
+                        <p class="text-[11px] text-text-muted mt-1">
+                            If you do not upload a QR image, buyers can still pay using your GCash Account Name and Number.
+                        </p>
+                    </div>
+
+                    <div class="p-4 rounded-2xl bg-surface-subtle border border-border-subtle flex items-center justify-between gap-4">
+                        <div class="flex items-center gap-3">
+                            <template x-if="newQrPreview || existingQrUrl">
+                                <img :src="newQrPreview || existingQrUrl"
+                                     alt="GCash QR Preview"
+                                     class="w-16 h-16 rounded-xl object-contain bg-white border border-border-subtle p-1 shrink-0">
+                            </template>
+                            <template x-if="!newQrPreview && !existingQrUrl">
+                                <div class="w-16 h-16 rounded-xl bg-white border border-border-subtle flex items-center justify-center text-[10px] font-bold text-text-muted text-center p-1 shrink-0">
+                                    No QR Uploaded
+                                </div>
+                            </template>
+                            <div>
+                                <div class="font-bold text-text-main" x-text="newQrPreview ? 'New QR Selected' : (existingQrUrl ? 'Current GCash QR on File' : 'No QR Image Uploaded')"></div>
+                                <div class="text-[11px] text-text-muted" x-text="newQrName || (existingQrUrl ? 'Visible to buyers in Checkout Phase 1' : 'Optional — Account Name & Number will be shown')"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="flex flex-wrap items-center justify-between gap-4 pt-2 border-t border-border-subtle">
+                    <label class="inline-flex items-center gap-2.5 cursor-pointer">
+                        <input type="checkbox"
+                               x-model="gcashActive"
+                               class="w-4 h-4 rounded text-primary focus:ring-primary">
+                        <span class="text-xs font-bold text-text-main">Enable Online Payment (GCash) option for buyers checking out my products</span>
+                    </label>
+
+                    <div class="flex items-center gap-2.5">
+                        <button type="submit"
+                                class="px-5 py-2.5 rounded-xl bg-primary-dark hover:bg-text-main text-surface text-xs font-bold shadow-xs transition-colors cursor-pointer">
+                            {{ $gcashAccount ? 'Review & Update GCash Account' : 'Review & Add GCash Account' }}
+                        </button>
+                    </div>
+                </div>
+
+                <template x-if="gcashError">
+                    <p class="text-danger text-xs font-bold" x-text="gcashError"></p>
+                </template>
+            </form>
+
+            @if($gcashAccount && $gcashAccount->qr_image_path)
+                <form action="{{ route('seller.store-settings.remove-gcash-qr') }}" method="POST" class="pt-1">
+                    @csrf
+                    @method('DELETE')
+                    <button type="submit" class="text-xs font-bold text-danger hover:underline cursor-pointer">
+                        Remove Uploaded GCash QR Code Image
+                    </button>
+                </form>
+            @endif
+
+            <template x-teleport="body">
+                <div x-show="confirmGcashModalOpen"
+                     x-cloak
+                     class="fixed inset-0 z-[195] flex items-center justify-center p-4">
+                    <div @click="confirmGcashModalOpen = false" class="absolute inset-0 bg-black/60 backdrop-blur-xs cursor-pointer"></div>
+
+                    <div @click.stop class="relative z-10 bg-surface rounded-3xl max-w-md w-full p-6 shadow-2xl border border-border-subtle space-y-4">
+                        <div class="flex items-center justify-between pb-3 border-b border-border-subtle">
+                            <h3 class="text-base font-bold text-primary-dark">Confirm GCash Account Details</h3>
+                            <button type="button" @click="confirmGcashModalOpen = false" class="p-1 text-text-muted hover:text-text-main cursor-pointer">
+                                <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                            </button>
+                        </div>
+
+                        <p class="text-xs text-text-muted leading-relaxed">
+                            Please verify that your GCash details below are accurate. Buyers selecting Online Payment at checkout will send their payment to this account:
+                        </p>
+
+                        <div class="p-4 rounded-2xl bg-surface-subtle border border-border-subtle space-y-2.5 text-xs">
+                            <div class="flex justify-between">
+                                <span class="text-text-muted">GCash Account Name:</span>
+                                <strong class="text-text-main" x-text="gcashName"></strong>
+                            </div>
+                            <div class="flex justify-between">
+                                <span class="text-text-muted">GCash Mobile Number:</span>
+                                <strong class="font-mono text-primary-dark" x-text="gcashNumber"></strong>
+                            </div>
+                            <div class="flex justify-between">
+                                <span class="text-text-muted">Checkout Status:</span>
+                                <strong :class="gcashActive ? 'text-green-700' : 'text-danger'" x-text="gcashActive ? 'Enabled for Buyers' : 'Disabled (COD Only)'"></strong>
+                            </div>
+                            <div class="pt-2 border-t border-border-subtle flex items-center justify-between">
+                                <span class="text-text-muted">GCash QR Code Image:</span>
+                                <template x-if="newQrPreview || existingQrUrl">
+                                    <img :src="newQrPreview || existingQrUrl" alt="QR Preview" class="w-20 h-20 object-contain rounded-lg border border-border-subtle bg-white p-1">
+                                </template>
+                                <template x-if="!newQrPreview && !existingQrUrl">
+                                    <span class="text-[11px] italic text-text-muted">Not uploaded (Optional)</span>
+                                </template>
+                            </div>
+                        </div>
+
+                        <div class="flex justify-end gap-2.5 pt-2">
+                            <button type="button"
+                                    @click="confirmGcashModalOpen = false"
+                                    class="px-4 py-2.5 rounded-xl bg-surface-subtle text-text-muted text-xs font-bold cursor-pointer">
+                                Edit Details
+                            </button>
+                            <button type="button"
+                                    @click="confirmAndSubmitGcash()"
+                                    :disabled="isSubmittingGcash"
+                                    class="px-5 py-2.5 rounded-xl bg-primary hover:bg-primary-dark text-white text-xs font-bold shadow-sm cursor-pointer disabled:opacity-50">
+                                <span x-show="!isSubmittingGcash">Confirm & Save GCash Account</span>
+                                <span x-show="isSubmittingGcash" x-cloak>Saving...</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </template>
+        </div>
+
         <div class="bg-surface rounded-3xl border border-border-subtle p-6 sm:p-8 shadow-xs space-y-6">
             <div class="border-b border-border-subtle pb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                 <div>
@@ -298,7 +546,6 @@
             </div>
 
             <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <!-- Line of Business / Category -->
                 <div class="p-4 bg-surface-subtle rounded-2xl border border-border-subtle flex items-start justify-between gap-3">
                     <div>
                         <span class="text-[11px] font-bold uppercase tracking-wider text-text-muted block">Line of Business / Primary Category</span>
@@ -310,7 +557,6 @@
                     </span>
                 </div>
 
-                <!-- Business / Pickup Address -->
                 <div class="p-4 bg-surface-subtle rounded-2xl border border-border-subtle flex items-start justify-between gap-3">
                     <div>
                         <span class="text-[11px] font-bold uppercase tracking-wider text-text-muted block">Registered Business Address</span>
@@ -323,11 +569,9 @@
                 </div>
             </div>
 
-            <!-- Legal Documents Previews -->
             <div class="pt-2">
                 <span class="text-xs font-bold uppercase tracking-wider text-text-muted block mb-3">Submitted Legal Documents</span>
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <!-- Valid Government ID -->
                     <div class="p-4 rounded-2xl border border-border-subtle bg-surface flex items-center justify-between gap-3">
                         <div class="flex items-center gap-3 min-w-0">
                             <div class="w-10 h-10 rounded-xl bg-primary/10 text-primary flex items-center justify-center shrink-0">
@@ -351,7 +595,6 @@
                         </button>
                     </div>
 
-                    <!-- Business Permit -->
                     <div class="p-4 rounded-2xl border border-border-subtle bg-surface flex items-center justify-between gap-3">
                         <div class="flex items-center gap-3 min-w-0">
                             <div class="w-10 h-10 rounded-xl bg-primary/10 text-primary flex items-center justify-center shrink-0">
@@ -378,9 +621,6 @@
         </div>
     </div>
 
-    <!-- ========================================== -->
-    <!-- TAB 2: ACCOUNT & SECURITY                  -->
-    <!-- ========================================== -->
     <div x-show="activeTab === 'security'"
          x-cloak
          x-transition:enter="transition ease-out duration-200"
@@ -395,7 +635,6 @@
             </p>
         </div>
 
-        <!-- 1. Full Name Row -->
         <div class="transition-all duration-200" :class="isDimmed('username') ? 'opacity-40' : ''">
             <div class="flex items-start justify-between gap-4">
                 <div>
@@ -490,7 +729,6 @@
 
         <hr class="border-border-subtle" />
 
-        <!-- 2. Email Address Row -->
         <div class="transition-all duration-200" :class="isDimmed('email') ? 'opacity-40' : ''">
             <div class="flex items-start justify-between gap-4">
                 <div>
@@ -498,7 +736,7 @@
                         Email address
                     </h3>
                     <p x-show="activeEdit === 'email'" x-cloak class="text-xs sm:text-sm text-text-muted mt-2">
-                        Use an address you’ll always have access to.
+                        Use an address you'll always have access to.
                     </p>
                     <p x-show="activeEdit !== 'email'" class="text-sm text-text-muted font-normal tracking-wide mt-2">
                         <span x-text="maskedEmail"></span>
@@ -522,7 +760,6 @@
                       @submit.prevent="submitEmail($event)"
                       class="space-y-4">
                     @csrf
-
                     <div class="w-full">
                         <div class="border rounded-xl p-3 bg-surface transition-colors"
                              :class="emailErrors.email ? 'border-danger' : 'border-neutral-400 focus-within:border-text-main'">
@@ -559,7 +796,6 @@
 
         <hr class="border-border-subtle" />
 
-        <!-- 3. Phone Number Row (Syncs both users.contact_no and seller_profiles.contact_no) -->
         <div class="transition-all duration-200" :class="isDimmed('phone') ? 'opacity-40' : ''">
             <div class="flex items-start justify-between gap-4">
                 <div>
@@ -644,7 +880,6 @@
 
         <hr class="border-border-subtle" />
 
-        <!-- 4. Password Row -->
         <div class="transition-all duration-200" :class="isDimmed('password') ? 'opacity-40' : ''">
             <div class="flex items-start justify-between gap-4">
                 <div>
@@ -701,7 +936,6 @@
                             <template x-if="passwordErrors.password">
                                 <p class="text-danger text-xs mt-1.5 font-medium" x-text="passwordErrors.password"></p>
                             </template>
-
                             <div class="mt-2 grid grid-cols-2 gap-1.5 text-[11px] text-text-muted">
                                 <span class="flex items-center gap-1" :class="newPassword.length >= 8 ? 'text-success font-semibold' : ''">
                                     <span x-text="newPassword.length >= 8 ? '✓' : '•'"></span> 8+ characters
@@ -764,11 +998,6 @@
         </div>
     </div>
 
-    <!-- ========================================== -->
-    <!-- MODALS: DOCUMENT PREVIEW & OTP             -->
-    <!-- ========================================== -->
-
-    <!-- Inline Verified Document Preview Modal -->
     <template x-teleport="body">
         <div x-show="docModalOpen"
              x-cloak
@@ -800,11 +1029,10 @@
         </div>
     </template>
 
-    <!-- Reusable Email OTP Modal -->
     <x-ui.otp-modal
         show="showOtpModal"
         close="closeOtpModal()"
-        title="Confirm it’s you"
+        title="Confirm it's you"
         maskedTarget="otpMaskedEmail"
         codeModel="otpCode"
         onInput="onOtpInput($event)"
@@ -817,11 +1045,10 @@
         inputId="seller_otp_hidden_input"
     />
 
-    <!-- Reusable Password OTP Modal -->
     <x-ui.otp-modal
         show="showPasswordOtpModal"
         close="closePasswordOtpModal()"
-        title="Confirm it’s you"
+        title="Confirm it's you"
         maskedTarget="passwordOtpMaskedEmail"
         codeModel="passwordOtpCode"
         onInput="onPasswordOtpInput($event)"

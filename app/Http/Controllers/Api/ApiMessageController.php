@@ -17,9 +17,9 @@ class ApiMessageController extends Controller
         try {
             $userId = $request->user()->id;
 
-            // 1. Get unique conversation partners efficiently
-            $sentIds = Message::where('user_id', $userId)->pluck('receiver_id')->toArray();
-            $receivedIds = Message::where('receiver_id', $userId)->pluck('user_id')->toArray();
+            // 1. Get unique conversation partners efficiently without pulling vast arrays into PHP memory
+            $sentIds = Message::where('user_id', $userId)->distinct()->pluck('receiver_id')->toArray();
+            $receivedIds = Message::where('receiver_id', $userId)->distinct()->pluck('user_id')->toArray();
             
             $contactIds = array_unique(array_merge($sentIds, $receivedIds));
             
@@ -77,6 +77,7 @@ class ApiMessageController extends Controller
 
             // 4. Handle requested contact (if navigating directly from a product)
             $requestedContactId = $request->input('contact');
+
             if ($requestedContactId && $requestedContactId != $userId) {
                 $found = false;
                 foreach ($contacts as $c) {
@@ -116,7 +117,6 @@ class ApiMessageController extends Controller
             ]);
 
         } catch (\Throwable $e) {
-            // This prevents an HTML 500 crash page and sends a clean error to Flutter
             Log::error("Fetch Contacts 500 Error: " . $e->getMessage() . " on line " . $e->getLine());
             return response()->json([
                 'success' => false,
@@ -191,6 +191,7 @@ class ApiMessageController extends Controller
                 'success' => true,
                 'data' => $message->toArray()
             ]);
+
         } catch (\Throwable $e) {
             Log::error("Message Store Error: " . $e->getMessage());
             return response()->json(['success' => false, 'message' => 'Database error'], 500);

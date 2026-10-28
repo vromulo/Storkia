@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Seller;
 use App\Http\Controllers\Controller;
 use App\Mail\RegistrationOtpMail;
 use App\Models\EmailChangeRequest;
+use App\Models\SellerGcashAccount;
 use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -19,13 +20,9 @@ use Symfony\Component\HttpFoundation\BinaryFileResponse;
 
 class StoreSettingsController extends Controller
 {
-    /**
-     * Optimize and store seller store photo as WebP (Intervention Image v4).
-     */
     private function optimizeAndStoreImage($file, string $folder): string
     {
         $extension = strtolower($file->getClientOriginalExtension());
-
         if (in_array($extension, ['svg', 'gif'])) {
             return $file->store($folder, 'public');
         }
@@ -48,13 +45,100 @@ class StoreSettingsController extends Controller
         /** @var \App\Models\User $user */
         $user = auth()->user();
         $profile = $user->sellerProfile;
+        $gcashAccount = $profile ? SellerGcashAccount::where('seller_profile_id', $profile->id)->first() : null;
 
-        return view('seller.settings.store-settings', compact('user', 'profile'));
+        return view('seller.settings.store-settings', compact('user', 'profile', 'gcashAccount'));
     }
 
-    /**
-     * Update Store Photo / Logo (AJAX).
-     */
+    public function updateGcashAccount(Request $request)
+    {
+        /** @var \App\Models\User $user */
+        $user = auth()->user();
+        $profile = $user->sellerProfile;
+
+        if (! $profile) {
+            abort(403);
+        }
+
+        $rawDigits = preg_replace('/\D/', '', (string) $request->input('gcash_number'));
+        if (str_starts_with($rawDigits, '63') && strlen($rawDigits) === 12) {
+            $rawDigits = '0' . substr($rawDigits, 2);
+        } elseif (strlen($rawDigits) === 10 && str_starts_with($rawDigits, '9')) {
+            $rawDigits = '0' . $rawDigits;
+        }
+
+        $request->merge([
+            'gcash_number' => $rawDigits,
+        ]);
+
+        $validated = $request->validate([
+            'account_name' => ['required', 'string', 'min:2', 'max:120'],
+            'gcash_number' => ['required', 'string', 'regex:/^09\d{9}$/'],
+            'qr_image'     => ['nullable', 'image', 'mimes:jpeg,png,jpg,webp', 'max:5120'],
+            'is_active'    => ['nullable', 'boolean'],
+            'confirmed'    => ['required', 'accepted'],
+        ], [
+            'account_name.required' => 'Please enter your GCash registered account name.',
+            'gcash_number.required' => 'Please enter your 11-digit GCash mobile number.',
+            'gcash_number.regex'    => 'GCash number must be a valid 11-digit mobile number starting with 09 (e.g., 09171234567).',
+            'qr_image.image'        => 'The GCash QR code must be a valid image file.',
+            'qr_image.max'          => 'The GCash QR code image must not exceed 5MB.',
+            'confirmed.required'    => 'Please review and confirm your GCash account details before saving.',
+            'confirmed.accepted'    => 'Please confirm that your GCash account details are accurate.',
+        ]);
+
+        $existing = SellerGcashAccount::where('seller_profile_id', $profile->id)->first();
+        $qrPath = $existing?->qr_image_path;
+
+        if ($request->hasFile('qr_image')) {
+            if ($qrPath && Storage::disk('public')->exists($qrPath)) {
+                Storage::disk('public')->delete($qrPath);
+            }
+            $qrPath = $this->optimizeAndStoreImage($request->file('qr_image'), 'seller_gcash_qr');
+        }
+
+        $isActive = $request->has('is_active') ? $request->boolean('is_active') : true;
+
+        SellerGcashAccount::updateOrCreate(
+            ['seller_profile_id' => $profile->id],
+            [
+                'user_id'       => $user->id,
+                'account_name'  => trim(preg_replace('/\s+/', ' ', $validated['account_name'])),
+                'gcash_number'  => $validated['gcash_number'],
+                'qr_image_path' => $qrPath,
+                'is_active'     => $isActive,
+                'confirmed_at'  => now(),
+            ]
+        );
+
+        return redirect()
+            ->route('seller.store-settings')
+            ->with('success', 'GCash online payment account details confirmed and saved successfully.');
+    }
+
+    public function removeGcashQr()
+    {
+        /** @var \App\Models\User $user */
+        $user = auth()->user();
+        $profile = $user->sellerProfile;
+
+        if (! $profile) {
+            abort(403);
+        }
+
+        $existing = SellerGcashAccount::where('seller_profile_id', $profile->id)->first();
+        if ($existing && $existing->qr_image_path) {
+            if (Storage::disk('public')->exists($existing->qr_image_path)) {
+                Storage::disk('public')->delete($existing->qr_image_path);
+            }
+            $existing->update(['qr_image_path' => null]);
+        }
+
+        return redirect()
+            ->route('seller.store-settings')
+            ->with('success', 'GCash QR Code image removed. Buyers can still pay using your GCash Account Name and Number.');
+    }
+
     public function updatePhoto(Request $request)
     {
         $request->validate([
@@ -84,9 +168,6 @@ class StoreSettingsController extends Controller
         ]);
     }
 
-    /**
-     * Remove Store Photo / Logo (AJAX).
-     */
     public function removePhoto()
     {
         /** @var \App\Models\User $user */
@@ -105,9 +186,6 @@ class StoreSettingsController extends Controller
         ]);
     }
 
-    /**
-     * Update Store / Business Name (AJAX).
-     */
     public function updateStoreName(Request $request)
     {
         $validated = $request->validate([
@@ -135,9 +213,6 @@ class StoreSettingsController extends Controller
         ]);
     }
 
-    /**
-     * Securely stream seller's own verified ID or Permit for inline preview.
-     */
     public function viewDocument(string $type): BinaryFileResponse
     {
         /** @var \App\Models\User $user */
@@ -163,9 +238,6 @@ class StoreSettingsController extends Controller
         ]);
     }
 
-    /**
-     * Update Seller Owner's Full Name (AJAX).
-     */
     public function updateName(Request $request)
     {
         $validated = $request->validate([
@@ -196,9 +268,6 @@ class StoreSettingsController extends Controller
         ]);
     }
 
-    /**
-     * Update Phone Number on BOTH users.contact_no and seller_profiles.contact_no (AJAX).
-     */
     public function updatePhone(Request $request)
     {
         /** @var \App\Models\User $user */
@@ -233,7 +302,6 @@ class StoreSettingsController extends Controller
 
         DB::transaction(function () use ($user, $formattedNumber) {
             $user->update(['contact_no' => $formattedNumber]);
-
             if ($user->sellerProfile) {
                 $user->sellerProfile->update(['contact_no' => $formattedNumber]);
             }
@@ -251,9 +319,6 @@ class StoreSettingsController extends Controller
         ]);
     }
 
-    /**
-     * Request 6-digit OTP to change Email Address.
-     */
     public function requestEmailOtp(Request $request)
     {
         /** @var \App\Models\User $user */
@@ -335,9 +400,6 @@ class StoreSettingsController extends Controller
         ]);
     }
 
-    /**
-     * Verify 6-digit OTP to apply new Email Address.
-     */
     public function verifyEmailOtp(Request $request)
     {
         $request->validate([
@@ -373,6 +435,7 @@ class StoreSettingsController extends Controller
         if (! Hash::check($request->code, $changeRequest->code_hash)) {
             $changeRequest->increment('attempts');
             $remaining = max(0, EmailChangeRequest::MAX_ATTEMPTS - $changeRequest->attempts);
+
             return response()->json([
                 'success' => false,
                 'message' => "Invalid code. {$remaining} attempt(s) remaining.",
@@ -380,7 +443,6 @@ class StoreSettingsController extends Controller
         }
 
         $targetEmail = strtolower(trim($changeRequest->new_email));
-
         if (User::whereRaw('LOWER(TRIM(email)) = ?', [$targetEmail])->where('id', '!=', $user->id)->exists()) {
             return response()->json([
                 'success' => false,
@@ -406,9 +468,6 @@ class StoreSettingsController extends Controller
         ]);
     }
 
-    /**
-     * Request 6-digit OTP to current email before allowing Password Change.
-     */
     public function requestPasswordOtp()
     {
         /** @var \App\Models\User $user */
@@ -463,9 +522,6 @@ class StoreSettingsController extends Controller
         ]);
     }
 
-    /**
-     * Verify 6-digit OTP to unlock Password Form.
-     */
     public function verifyPasswordOtp(Request $request)
     {
         $request->validate([
@@ -474,6 +530,7 @@ class StoreSettingsController extends Controller
 
         /** @var \App\Models\User $user */
         $user = auth()->user();
+
         $sessionKey = "pwd_otp_{$user->id}";
         $data = session()->get($sessionKey);
 
@@ -504,6 +561,7 @@ class StoreSettingsController extends Controller
             $data['attempts']++;
             session()->put($sessionKey, $data);
             $remaining = max(0, 5 - $data['attempts']);
+
             return response()->json([
                 'success' => false,
                 'message' => "Invalid code. {$remaining} attempt(s) remaining.",
@@ -511,6 +569,7 @@ class StoreSettingsController extends Controller
         }
 
         session()->forget($sessionKey);
+
         $token = Str::random(40);
         session()->put("pwd_unlock_token_{$user->id}", [
             'token'      => $token,
@@ -524,15 +583,13 @@ class StoreSettingsController extends Controller
         ]);
     }
 
-    /**
-     * Update Password via AJAX after OTP verification.
-     */
     public function updatePassword(Request $request)
     {
         /** @var \App\Models\User $user */
         $user = auth()->user();
 
         $tokenData = session()->get("pwd_unlock_token_{$user->id}");
+
         if (! $tokenData || $tokenData['token'] !== $request->input('unlock_token') || now()->isAfter($tokenData['expires_at'])) {
             return response()->json([
                 'success' => false,
