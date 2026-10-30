@@ -2,6 +2,7 @@
 
 namespace App\Livewire\Auth;
 
+use App\Models\BuyerProfile;
 use App\Models\RegistrationOtp;
 use App\Models\User;
 use App\Services\OtpService;
@@ -188,19 +189,24 @@ class RegisterWizard extends Component
 
         DB::transaction(function () use ($record) {
             $user = User::create([
-                'first_name' => ucwords(strtolower(trim($this->first_name))),
-                'last_name' => ucwords(strtolower(trim($this->last_name))),
+                'first_name'     => ucwords(strtolower(trim($this->first_name))),
+                'last_name'      => ucwords(strtolower(trim($this->last_name))),
                 'middle_initial' => trim($this->middle_initial) ? strtoupper(trim($this->middle_initial)) : null,
-                'sex' => $this->sex,
-                'email' => $this->email,
-                'contact_no' => null,
-                'birthday' => $this->birthday,
-                'password' => Hash::make($this->password),
-                'role' => 'Buyer',
+                'sex'            => $this->sex,
+                'email'          => $this->email,
+                'contact_no'     => null,
+                'birthday'       => $this->birthday,
+                'password'       => Hash::make($this->password),
+                'role'           => 'Buyer',
+            ]);
+
+            // Auto-create BuyerProfile with email prefix + random 4 digits
+            BuyerProfile::create([
+                'user_id'  => $user->id,
+                'username' => BuyerProfile::generateUniqueUsername($user->email),
             ]);
 
             $record->delete();
-
             Auth::login($user);
         });
 

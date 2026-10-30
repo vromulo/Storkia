@@ -45,8 +45,12 @@
             @endif
 
             <!-- Circular User Avatar -->
-            <div class="w-12 h-12 rounded-full bg-brand-light/50 text-text-main border border-border-subtle flex items-center justify-center font-bold text-lg shadow-xs shrink-0 select-none">
-                {{ strtoupper(substr(auth()->user()->first_name ?? 'U', 0, 1)) }}
+            <div class="w-12 h-12 rounded-full bg-brand-light/50 text-text-main border border-border-subtle flex items-center justify-center font-bold text-lg shadow-xs shrink-0 select-none overflow-hidden">
+                @if(auth()->user()->avatar_url)
+                    <img src="{{ auth()->user()->avatar_url }}" alt="Avatar" class="w-full h-full object-cover">
+                @else
+                    {{ strtoupper(substr(auth()->user()->first_name ?? 'U', 0, 1)) }}
+                @endif
             </div>
 
             <!-- Name (Right side of avatar) -->

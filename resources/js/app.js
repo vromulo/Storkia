@@ -8,6 +8,7 @@ import addressManager from './buyer/address-manager';
 import cartPageManager from './buyer/cart-manager';
 import categoryPageManager from './buyer/category-manager';
 import idCameraCapture from './buyer/id-camera-capture';
+import profileManager from './buyer/profile-manager';
 
 document.addEventListener('alpine:init', () => {
     Alpine.data('variantManager', variantManager);
@@ -20,6 +21,7 @@ document.addEventListener('alpine:init', () => {
     Alpine.data('cartPageManager', cartPageManager);
     Alpine.data('categoryPageManager', categoryPageManager);
     Alpine.data('idCameraCapture', idCameraCapture);
+    Alpine.data('profileManager', profileManager);
 });
 
 /**

@@ -16,6 +16,7 @@ use App\Http\Controllers\Buyer\SellerController;
 use App\Http\Controllers\Buyer\VoucherController;
 use App\Http\Controllers\Buyer\WishlistController;
 use App\Livewire\Buyer\IdentityVerificationFlow;
+use App\Http\Controllers\Buyer\ProfileController;
 
 Route::middleware('throttle:120,1')->group(function () {
     Route::view('/', 'buyer.landing-page')->name('landing');
@@ -61,6 +62,11 @@ Route::middleware('throttle:120,1')->group(function () {
             Route::prefix('user')->name('user.')->group(function () {
                 Route::view('/account', 'buyer.option.account.personal-center')->name('account');
 
+                Route::get('/profile', [ProfileController::class, 'index'])->name('profile');
+                Route::patch('/profile/username', [ProfileController::class, 'updateUsername'])->name('profile.update-username');
+                Route::post('/profile/avatar', [ProfileController::class, 'updateAvatar'])->name('profile.update-avatar');
+                Route::delete('/profile/avatar', [ProfileController::class, 'removeAvatar'])->name('profile.remove-avatar');
+                
                 Route::get('/account-management', [AccountManagementController::class, 'index'])->name('account-management');
                 Route::patch('/account-management/name', [AccountManagementController::class, 'updateName'])->name('account-management.update-name');
                 Route::patch('/account-management/phone', [AccountManagementController::class, 'updatePhone'])->name('account-management.update-phone');
@@ -104,7 +110,6 @@ Route::middleware('throttle:120,1')->group(function () {
                 Route::post('/wishlist/toggle/{product}', [WishlistController::class, 'toggle'])->middleware('throttle:60,1')->name('wishlist.toggle');
                 Route::delete('/wishlist/{product}', [WishlistController::class, 'destroy'])->name('wishlist.destroy');
 
-                Route::view('/profile', 'buyer.option.coming-soon', ['title' => 'Profile'])->name('profile');
                 Route::view('/change-password', 'buyer.option.coming-soon', ['title' => 'Change Password'])->name('change-password');
                 Route::view('/points', 'buyer.option.coming-soon', ['title' => 'My Points/Coins'])->name('points');
                 Route::view('/recently-viewed', 'buyer.option.coming-soon', ['title' => 'Recently Viewed'])->name('recently-viewed');
