@@ -18,10 +18,12 @@ use App\Notifications\OrderLifecycleNotification;
 use App\Services\BuyerCancellationGuardService;
 use App\Services\InventoryStockService;
 use App\Services\ShippingCalculatorService;
+use App\Services\SuperDealPricingService;
 use App\Services\VoucherService;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
@@ -35,19 +37,48 @@ class CheckoutController extends Controller
         protected InventoryStockService $inventoryStockService,
         protected ShippingCalculatorService $shippingCalculatorService,
         protected VoucherService $voucherService,
-        protected BuyerCancellationGuardService $cancellationGuardService
+        protected BuyerCancellationGuardService $cancellationGuardService,
+        protected SuperDealPricingService $superDealPricingService
     ) {}
+
+    protected function assertPerBuyerLimitNotExceeded(int $buyerId, Product $product, int $checkoutQuantity): void
+    {
+        if (! Schema::hasColumn('products', 'per_buyer_limit')) {
+            return;
+        }
+
+        $limit = (int) ($product->per_buyer_limit ?? 0);
+        if ($limit <= 0) {
+            return;
+        }
+
+        $previouslyPurchased = (int) OrderItem::where('product_id', $product->id)
+            ->whereHas('sellerOrder', function ($q) use ($buyerId) {
+                $q->where('buyer_id', $buyerId)
+                  ->whereNotIn('status', ['cancelled', 'rejected', 'returned_to_seller']);
+            })
+            ->sum('quantity');
+
+        if (($previouslyPurchased + $checkoutQuantity) > $limit) {
+            throw ValidationException::withMessages([
+                'quantity' => "Purchase limit reached for \"{$product->name}\": Maximum {$limit} unit(s) allowed per buyer across orders.",
+            ]);
+        }
+    }
 
     public function buyNow(Request $request)
     {
         $validated = $request->validate([
             'product_id'  => ['required', 'exists:products,id'],
-            'quantity'    => ['required', 'integer', 'min:1', 'max:1000000'],
+            'quantity'    => ['required', 'integer', 'min:1', 'max:99999'],
             'variant'     => ['nullable', 'string'],
             'sub_variant' => ['nullable', 'string'],
         ]);
 
         $product = Product::with(['approval', 'user.sellerProfile'])->findOrFail($validated['product_id']);
+
+        $this->superDealPricingService->assertStoreNotOnVacation($product->user?->sellerProfile);
+        $this->assertPerBuyerLimitNotExceeded((int) $request->user()->id, $product, (int) $validated['quantity']);
 
         $resolved = $this->inventoryStockService->resolveProductSelection(
             $product,
@@ -203,7 +234,12 @@ class CheckoutController extends Controller
             $expectedPrices = json_decode((string) $validated['price_signature'], true);
             if (is_array($expectedPrices)) {
                 foreach ($rawLineItems as $line) {
-                    $sigKey = $this->buildLineSignatureKey($line['product']->id, $line['variant_name'], $line['sub_variant_name']);
+                    $sigKey = $this->buildLineSignatureKey(
+                        $line['product']->id,
+                        $line['variant_name'],
+                        $line['sub_variant_name'],
+                        $line['pricing_label'] ?? 'Regular'
+                    );
                     if (isset($expectedPrices[$sigKey])) {
                         $expectedUnit = round((float) $expectedPrices[$sigKey], 2);
                         $currentUnit = round((float) $line['discounted_unit_price'], 2);
@@ -286,9 +322,11 @@ class CheckoutController extends Controller
 
                 if ($chosenMethod === 'GCASH') {
                     $gcashAcc = $sellerProfile->gcashAccount;
-                    if (! $gcashAcc || ! $gcashAcc->isCompliantForCheckout()) {
+                    $blockedForArrears = (bool) ($sellerProfile->gcash_blocked_for_arrears ?? false);
+
+                    if ($blockedForArrears || ! $gcashAcc || ! $gcashAcc->isCompliantForCheckout()) {
                         throw ValidationException::withMessages([
-                            'payment_methods' => "Online Payment (GCash) is not enabled for {$sellerProfile->business_name}. Please select Cash on Delivery (COD).",
+                            'payment_methods' => "Online Payment (GCash) is currently unavailable for {$sellerProfile->business_name}. Please select Cash on Delivery (COD).",
                         ]);
                     }
 
@@ -374,6 +412,13 @@ class CheckoutController extends Controller
                     $line['sub_variant_name'],
                     $line['quantity']
                 );
+
+                // Increment sold_quantity on Super Deal slot if applicable (SEL-FLASH-003)
+                if (! empty($line['super_deal_id']) && Schema::hasTable('super_deals')) {
+                    DB::table('super_deals')
+                        ->where('id', (int) $line['super_deal_id'])
+                        ->increment('sold_quantity', (int) $line['quantity']);
+                }
             }
 
             $allMethods = array_map('strtoupper', array_values($validated['payment_methods']));
@@ -436,11 +481,15 @@ class CheckoutController extends Controller
                 ]);
 
                 foreach ($pkg['items'] as $itemData) {
+                    $labelSuffix = ! empty($itemData['pricing_label']) && $itemData['pricing_label'] !== 'Regular' && $itemData['pricing_label'] !== 'Regular Price'
+                        ? ' [' . $itemData['pricing_label'] . ']'
+                        : '';
+
                     OrderItem::create([
                         'order_id'              => $parentOrder->id,
                         'seller_order_id'       => $sellerOrder->id,
                         'product_id'            => $itemData['product']->id,
-                        'product_name'          => $itemData['product']->name,
+                        'product_name'          => $itemData['product']->name . $labelSuffix,
                         'product_image'         => $itemData['image_path'],
                         'variant_id'            => $itemData['variant_id'],
                         'variant_name'          => $itemData['variant_name'],
@@ -475,7 +524,7 @@ class CheckoutController extends Controller
                     'buyer_note'                => $buyerNote !== '' ? substr($buyerNote, 0, 200) : null,
                     'store_voucher_id'          => $pkg['store_voucher']?->id,
                     'store_voucher_code'        => $pkg['store_voucher']?->code,
-                    'store_voucher_discount'    => $pkg['store_discount'],
+                    'store_voucher_discount'    => round($pkg['store_discount'] + ($pkg['bundle_discount'] ?? 0), 2),
                     'platform_voucher_id'       => $pkg['platform_discount'] > 0 ? $preview['applied_platform_voucher']?->id : null,
                     'platform_voucher_code'     => $pkg['platform_discount'] > 0 ? $preview['applied_platform_voucher']?->code : null,
                     'platform_voucher_discount' => $pkg['platform_discount'],
@@ -614,9 +663,9 @@ class CheckoutController extends Controller
         return $path;
     }
 
-    protected function buildLineSignatureKey(int $productId, ?string $variantName, ?string $subVariantName): string
+    protected function buildLineSignatureKey(int $productId, ?string $variantName, ?string $subVariantName, string $pricingLabel = 'Regular'): string
     {
-        return $productId . ':' . strtolower(trim((string) $variantName)) . ':' . strtolower(trim((string) $subVariantName));
+        return $productId . ':' . strtolower(trim((string) $variantName)) . ':' . strtolower(trim((string) $subVariantName)) . ':' . strtolower(trim($pricingLabel));
     }
 
     protected function collectCheckoutLineItems(Request $request, string $mode): array
@@ -635,6 +684,8 @@ class CheckoutController extends Controller
                 return [];
             }
 
+            $this->superDealPricingService->assertStoreNotOnVacation($product->user->sellerProfile);
+
             $resolved = $this->inventoryStockService->resolveProductSelection(
                 $product,
                 $buyNow['variant'] ?? null,
@@ -642,30 +693,48 @@ class CheckoutController extends Controller
             );
 
             $qty = max(1, (int) ($buyNow['quantity'] ?? 1));
+            $this->assertPerBuyerLimitNotExceeded((int) $user->id, $product, $qty);
+
             if ($resolved['available_stock'] < $qty) {
                 throw ValidationException::withMessages([
                     'stock' => "Insufficient stock for \"{$product->name}\". Available: {$resolved['available_stock']}.",
                 ]);
             }
 
-            $lineItems[] = [
-                'cart_id'               => null,
-                'product'               => $product,
-                'seller_profile'        => $product->user->sellerProfile,
-                'quantity'              => $qty,
-                'variant_id'            => $resolved['variant_id'],
-                'variant_name'          => $resolved['variant_name'],
-                'sub_variant_id'        => $resolved['sub_variant_id'],
-                'sub_variant_name'      => $resolved['sub_variant_name'],
-                'unit_price'            => $resolved['unit_price'],
-                'discount_percent'      => $resolved['discount_percent'],
-                'discounted_unit_price' => $resolved['discounted_unit_price'],
-                'unit_weight'           => $resolved['unit_weight'],
-                'available_stock'       => $resolved['available_stock'],
-                'image_path'            => $resolved['image_path'],
-                'line_total'            => round($resolved['discounted_unit_price'] * $qty, 2),
-                'line_weight'           => round($resolved['unit_weight'] * $qty, 3),
-            ];
+            $splitLines = $this->superDealPricingService->buildSplitCheckoutLines(
+                product: $product,
+                requestedQty: $qty,
+                baseUnitPrice: (float) $resolved['unit_price'],
+                unitWeight: (float) $resolved['unit_weight'],
+                variantName: $resolved['variant_name'],
+                subVariantName: $resolved['sub_variant_name'],
+                imagePath: $resolved['image_path']
+            );
+
+            foreach ($splitLines as $sLine) {
+                $lineItems[] = [
+                    'cart_id'               => null,
+                    'product'               => $product,
+                    'seller_profile'        => $product->user->sellerProfile,
+                    'quantity'              => $sLine['quantity'],
+                    'variant_id'            => $resolved['variant_id'],
+                    'variant_name'          => $sLine['variant_name'],
+                    'sub_variant_id'        => $resolved['sub_variant_id'],
+                    'sub_variant_name'      => $sLine['sub_variant_name'],
+                    'unit_price'            => $sLine['original_unit_price'],
+                    'discount_percent'      => $sLine['original_unit_price'] > 0
+                        ? round((1 - ($sLine['discounted_unit_price'] / $sLine['original_unit_price'])) * 100, 2)
+                        : 0,
+                    'discounted_unit_price' => $sLine['discounted_unit_price'],
+                    'unit_weight'           => $sLine['unit_weight'],
+                    'available_stock'       => $resolved['available_stock'],
+                    'image_path'            => $sLine['image_path'],
+                    'line_total'            => $sLine['line_total'],
+                    'line_weight'           => $sLine['line_weight'],
+                    'super_deal_id'         => $sLine['super_deal_id'],
+                    'pricing_label'         => $sLine['pricing_label'],
+                ];
+            }
 
             return $lineItems;
         }
@@ -691,6 +760,8 @@ class CheckoutController extends Controller
                 continue;
             }
 
+            $this->superDealPricingService->assertStoreNotOnVacation($product->user->sellerProfile);
+
             $resolved = $this->inventoryStockService->resolveProductSelection(
                 $product,
                 $cartItem->variant,
@@ -698,30 +769,48 @@ class CheckoutController extends Controller
             );
 
             $qty = max(1, (int) $cartItem->quantity);
+            $this->assertPerBuyerLimitNotExceeded((int) $user->id, $product, $qty);
+
             if ($resolved['available_stock'] < $qty) {
                 throw ValidationException::withMessages([
                     'stock' => "Insufficient stock for \"{$product->name}\". Available: {$resolved['available_stock']}.",
                 ]);
             }
 
-            $lineItems[] = [
-                'cart_id'               => $cartItem->id,
-                'product'               => $product,
-                'seller_profile'        => $product->user->sellerProfile,
-                'quantity'              => $qty,
-                'variant_id'            => $resolved['variant_id'],
-                'variant_name'          => $resolved['variant_name'],
-                'sub_variant_id'        => $resolved['sub_variant_id'],
-                'sub_variant_name'      => $resolved['sub_variant_name'],
-                'unit_price'            => $resolved['unit_price'],
-                'discount_percent'      => $resolved['discount_percent'],
-                'discounted_unit_price' => $resolved['discounted_unit_price'],
-                'unit_weight'           => $resolved['unit_weight'],
-                'available_stock'       => $resolved['available_stock'],
-                'image_path'            => $resolved['image_path'],
-                'line_total'            => round($resolved['discounted_unit_price'] * $qty, 2),
-                'line_weight'           => round($resolved['unit_weight'] * $qty, 3),
-            ];
+            $splitLines = $this->superDealPricingService->buildSplitCheckoutLines(
+                product: $product,
+                requestedQty: $qty,
+                baseUnitPrice: (float) $resolved['unit_price'],
+                unitWeight: (float) $resolved['unit_weight'],
+                variantName: $resolved['variant_name'],
+                subVariantName: $resolved['sub_variant_name'],
+                imagePath: $resolved['image_path']
+            );
+
+            foreach ($splitLines as $sLine) {
+                $lineItems[] = [
+                    'cart_id'               => $cartItem->id,
+                    'product'               => $product,
+                    'seller_profile'        => $product->user->sellerProfile,
+                    'quantity'              => $sLine['quantity'],
+                    'variant_id'            => $resolved['variant_id'],
+                    'variant_name'          => $sLine['variant_name'],
+                    'sub_variant_id'        => $resolved['sub_variant_id'],
+                    'sub_variant_name'      => $sLine['sub_variant_name'],
+                    'unit_price'            => $sLine['original_unit_price'],
+                    'discount_percent'      => $sLine['original_unit_price'] > 0
+                        ? round((1 - ($sLine['discounted_unit_price'] / $sLine['original_unit_price'])) * 100, 2)
+                        : 0,
+                    'discounted_unit_price' => $sLine['discounted_unit_price'],
+                    'unit_weight'           => $sLine['unit_weight'],
+                    'available_stock'       => $resolved['available_stock'],
+                    'image_path'            => $sLine['image_path'],
+                    'line_total'            => $sLine['line_total'],
+                    'line_weight'           => $sLine['line_weight'],
+                    'super_deal_id'         => $sLine['super_deal_id'],
+                    'pricing_label'         => $sLine['pricing_label'],
+                ];
+            }
         }
 
         return $lineItems;
@@ -747,7 +836,12 @@ class CheckoutController extends Controller
             }
             $totalItemsCount += $line['quantity'];
 
-            $sigKey = $this->buildLineSignatureKey($line['product']->id, $line['variant_name'], $line['sub_variant_name']);
+            $sigKey = $this->buildLineSignatureKey(
+                $line['product']->id,
+                $line['variant_name'],
+                $line['sub_variant_name'],
+                $line['pricing_label'] ?? 'Regular'
+            );
             $priceMap[$sigKey] = round((float) $line['discounted_unit_price'], 2);
 
             $sellerProfileId = $line['seller_profile']->id;
@@ -790,6 +884,14 @@ class CheckoutController extends Controller
                 totalWeightKg: $package['total_weight']
             );
 
+            // Apply Bundle Deal Discount automatically if qualifying items are present (SEL-FLASH-007 / 008)
+            $bundleResult = $this->superDealPricingService->calculateStoreBundleDiscount(
+                sellerProfileId: (int) $sellerProfile->id,
+                packageLines: $package['items']
+            );
+            $bundleDiscount = (float) ($bundleResult['bundle_discount'] ?? 0.0);
+            $subtotalAfterBundle = max(0.0, round($package['subtotal'] - $bundleDiscount, 2));
+
             $appliedStoreVoucher = null;
             $storeDiscount = 0.0;
             $rawStoreCode = strtoupper(trim((string) ($storeVoucherCodes[$sellerProfileId] ?? '')));
@@ -810,7 +912,7 @@ class CheckoutController extends Controller
                             buyerId: $buyerId,
                             sellerProfileId: (int) $sellerProfile->id,
                             packageItems: $package['items'],
-                            packageSubtotal: (float) $package['subtotal']
+                            packageSubtotal: $subtotalAfterBundle
                         );
                         $appliedStoreVoucher = $candidate;
                     } catch (ValidationException $e) {
@@ -822,12 +924,15 @@ class CheckoutController extends Controller
                 }
             }
 
+            $combinedSellerFundedDiscount = round($bundleDiscount + $storeDiscount, 2);
+
             $overallSubtotal = round($overallSubtotal + $package['subtotal'], 2);
             $overallShipping = round($overallShipping + $shipping['shipping_fee'], 2);
-            $overallStoreDiscount = round($overallStoreDiscount + $storeDiscount, 2);
+            $overallStoreDiscount = round($overallStoreDiscount + $combinedSellerFundedDiscount, 2);
 
             $gcashAccount = $sellerProfile->gcashAccount;
-            $gcashEnabled = $gcashAccount !== null && $gcashAccount->isCompliantForCheckout();
+            $blockedForArrears = (bool) ($sellerProfile->gcash_blocked_for_arrears ?? false);
+            $gcashEnabled = ! $blockedForArrears && $gcashAccount !== null && $gcashAccount->isCompliantForCheckout();
 
             $sellerPackages[] = [
                 'seller_profile'     => $sellerProfile,
@@ -835,15 +940,17 @@ class CheckoutController extends Controller
                 'gcash_account'      => $gcashEnabled ? $gcashAccount : null,
                 'items'              => $package['items'],
                 'subtotal'           => $package['subtotal'],
+                'bundle_discount'    => $bundleDiscount,
+                'bundle_title'       => $bundleResult['bundle_title'],
                 'store_voucher'      => $appliedStoreVoucher,
                 'store_discount'     => $storeDiscount,
                 'platform_discount'  => 0.0,
                 'shipping_discount'  => 0.0,
-                'net_subtotal'       => max(0.0, round($package['subtotal'] - $storeDiscount, 2)),
+                'net_subtotal'       => max(0.0, round($package['subtotal'] - $combinedSellerFundedDiscount, 2)),
                 'total_weight'       => $package['total_weight'],
                 'shipping'           => $shipping,
                 'net_shipping_fee'   => $shipping['shipping_fee'],
-                'total'              => round(max(0.0, $package['subtotal'] - $storeDiscount) + $shipping['shipping_fee'], 2),
+                'total'              => round(max(0.0, $package['subtotal'] - $combinedSellerFundedDiscount) + $shipping['shipping_fee'], 2),
             ];
         }
 
@@ -941,7 +1048,7 @@ class CheckoutController extends Controller
                 $remainingShipDiscount = max(0.0, round($remainingShipDiscount - $pkg['shipping_discount'], 2));
             }
 
-            $pkg['net_subtotal'] = max(0.0, round($pkg['subtotal'] - $pkg['store_discount'] - $pkg['platform_discount'], 2));
+            $pkg['net_subtotal'] = max(0.0, round($pkg['subtotal'] - $pkg['bundle_discount'] - $pkg['store_discount'] - $pkg['platform_discount'], 2));
             $pkg['net_shipping_fee'] = max(0.0, round($pkg['shipping']['shipping_fee'] - $pkg['shipping_discount'], 2));
             $pkg['total'] = round($pkg['net_subtotal'] + $pkg['net_shipping_fee'], 2);
         }

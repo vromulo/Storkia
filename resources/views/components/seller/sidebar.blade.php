@@ -15,7 +15,14 @@
         </a>
     </div>
 
-    <nav x-data="{ activeDropdown: '{{ request()->is('seller/products*') ? 'products' : (request()->is('seller/orders*') ? 'orders' : (request()->is('seller/promotions*') ? 'promotions' : (request()->is('seller/sales*') ? 'sales' : (request()->is('seller/account*') ? 'account' : null)))) }}' }" class="flex-1 overflow-y-auto overflow-x-hidden p-3 space-y-1.5 custom-scrollbar">
+    @php
+        $isProductsActive = request()->is('seller/products*');
+        $isPromotionsActive = request()->is('seller/promotions*') || request()->is('seller/vouchers*');
+        $isOrdersActive = request()->is('seller/orders*');
+        $isSalesActive = request()->is('seller/sales*');
+    @endphp
+
+    <nav x-data="{ activeDropdown: '{{ $isProductsActive ? 'products' : ($isPromotionsActive ? 'promotions' : ($isOrdersActive ? 'orders' : ($isSalesActive ? 'sales' : (request()->is('seller/account*') ? 'account' : null)))) }}' }" class="flex-1 overflow-y-auto overflow-x-hidden p-3 space-y-1.5 custom-scrollbar">
         <a href="{{ route('seller.seller-dashboard') }}"
             @click="activeDropdown = null"
             class="flex items-center px-3 py-3 rounded-xl transition-all duration-200 font-bold group whitespace-nowrap relative text-sm cursor-pointer {{ request()->routeIs('seller.seller-dashboard') ? 'text-primary bg-brand-light/60 shadow-xs' : 'text-text-muted hover:bg-brand-light/30 hover:text-primary' }}"
@@ -27,7 +34,6 @@
         </a>
 
         @if(auth()->user()->sellerProfile)
-        @php $isProductsActive = request()->is('seller/products*'); @endphp
         <div>
             <button @click="if(!sidebarOpen) { sidebarOpen = true; activeDropdown = 'products'; } else { activeDropdown = activeDropdown === 'products' ? null : 'products'; }"
                     class="flex items-center justify-between w-full px-3 py-3 rounded-xl transition-all duration-200 font-medium group whitespace-nowrap text-sm cursor-pointer {{ $isProductsActive ? 'text-primary font-bold bg-brand-light/20' : 'text-text-muted hover:bg-brand-light/30 hover:text-primary' }}"
@@ -44,7 +50,7 @@
             </button>
             <div x-show="activeDropdown === 'products' && sidebarOpen" x-collapse x-cloak class="ml-6 pl-4 my-1 border-l-2 border-border-subtle/70 space-y-1">
                 <a href="{{ route('seller.products.index') }}" class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ request()->routeIs('seller.products.index') || request()->routeIs('seller.products.create') ? 'bg-primary/10 text-primary font-bold shadow-xs' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">
-                    All Products
+                    All Products &amp; Drafts
                 </a>
                 <a href="{{ route('seller.products.inventory') }}" class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ request()->routeIs('seller.products.inventory') ? 'bg-primary/10 text-primary font-bold shadow-xs' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">
                     Inventory
@@ -54,10 +60,31 @@
                 </a>
             </div>
         </div>
-        @endif
 
-        @if(auth()->user()->sellerProfile)
-        @php $isOrdersActive = request()->is('seller/orders*'); @endphp
+        <div>
+            <button @click="if(!sidebarOpen) { sidebarOpen = true; activeDropdown = 'promotions'; } else { activeDropdown = activeDropdown === 'promotions' ? null : 'promotions'; }"
+                    class="flex items-center justify-between w-full px-3 py-3 rounded-xl transition-all duration-200 font-medium group whitespace-nowrap text-sm cursor-pointer {{ $isPromotionsActive ? 'text-primary font-bold bg-brand-light/20' : 'text-text-muted hover:bg-brand-light/30 hover:text-primary' }}"
+                    :title="!sidebarOpen ? 'Promotions & Vouchers' : ''">
+                <div class="flex items-center">
+                    <svg class="w-6 h-6 flex-shrink-0 transition-colors {{ $isPromotionsActive ? 'text-primary' : 'text-text-muted group-hover:text-primary' }}" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                    </svg>
+                    <span x-show="sidebarOpen" x-transition.opacity.duration.300ms class="ml-3">Promotions &amp; Vouchers</span>
+                </div>
+                <svg x-show="sidebarOpen" class="w-4 h-4 transition-transform duration-200 text-text-muted group-hover:text-primary" :class="{'rotate-180': activeDropdown === 'promotions'}" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                </svg>
+            </button>
+            <div x-show="activeDropdown === 'promotions' && sidebarOpen" x-collapse x-cloak class="ml-6 pl-4 my-1 border-l-2 border-border-subtle/70 space-y-1">
+                <a href="{{ route('seller.promotions.index') }}" class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ request()->routeIs('seller.promotions.*') ? 'bg-primary/10 text-primary font-bold shadow-xs' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">
+                    Super Deals, Sales &amp; Bundles
+                </a>
+                <a href="{{ route('seller.vouchers.index') }}" class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ request()->routeIs('seller.vouchers.*') ? 'bg-primary/10 text-primary font-bold shadow-xs' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">
+                    Store Vouchers
+                </a>
+            </div>
+        </div>
+
         <div>
             <button @click="if(!sidebarOpen) { sidebarOpen = true; activeDropdown = 'orders'; } else { activeDropdown = activeDropdown === 'orders' ? null : 'orders'; }"
                     class="flex items-center justify-between w-full px-3 py-3 rounded-xl transition-all duration-200 font-medium group whitespace-nowrap text-sm cursor-pointer {{ $isOrdersActive ? 'text-primary font-bold bg-brand-light/20' : 'text-text-muted hover:bg-brand-light/30 hover:text-primary' }}"
@@ -75,6 +102,7 @@
             <div x-show="activeDropdown === 'orders' && sidebarOpen" x-collapse x-cloak class="ml-6 pl-4 my-1 border-l-2 border-border-subtle/70 space-y-1">
                 <a href="{{ route('seller.orders.index') }}" class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ request()->routeIs('seller.orders.index') && !request('status') ? 'bg-primary/10 text-primary font-bold shadow-xs' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">All Orders</a>
                 <a href="{{ route('seller.orders.index', ['status' => 'new']) }}" class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ request('status') === 'new' ? 'bg-primary/10 text-primary font-bold shadow-xs' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">New Orders</a>
+                <a href="{{ route('seller.orders.index', ['status' => 'pending']) }}" class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ request('status') === 'pending' ? 'bg-primary/10 text-primary font-bold shadow-xs' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">Pending Buyer Response</a>
                 <a href="{{ route('seller.orders.index', ['status' => 'to_process']) }}" class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ request('status') === 'to_process' ? 'bg-primary/10 text-primary font-bold shadow-xs' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">To Process</a>
                 <a href="{{ route('seller.orders.index', ['status' => 'to_ship']) }}" class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ request('status') === 'to_ship' ? 'bg-primary/10 text-primary font-bold shadow-xs' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">To Ship</a>
                 <a href="{{ route('seller.orders.index', ['status' => 'shipped']) }}" class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ request('status') === 'shipped' ? 'bg-primary/10 text-primary font-bold shadow-xs' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">Shipped</a>
@@ -82,10 +110,7 @@
                 <a href="{{ route('seller.orders.index', ['status' => 'cancelled']) }}" class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ request('status') === 'cancelled' ? 'bg-primary/10 text-primary font-bold shadow-xs' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">Cancelled / Returned</a>
             </div>
         </div>
-        @endif
 
-        @if(auth()->user()->sellerProfile)
-        @php $isSalesActive = request()->is('seller/sales*'); @endphp
         <div>
             <button @click="if(!sidebarOpen) { sidebarOpen = true; activeDropdown = 'sales'; } else { activeDropdown = activeDropdown === 'sales' ? null : 'sales'; }"
                     class="flex items-center justify-between w-full px-3 py-3 rounded-xl transition-all duration-200 font-medium group whitespace-nowrap text-sm cursor-pointer {{ $isSalesActive ? 'text-primary font-bold bg-brand-light/20' : 'text-text-muted hover:bg-brand-light/30 hover:text-primary' }}"
@@ -94,19 +119,18 @@
                     <svg class="w-6 h-6 flex-shrink-0 transition-colors {{ $isSalesActive ? 'text-primary' : 'text-text-muted group-hover:text-primary' }}" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
                     </svg>
-                    <span x-show="sidebarOpen" x-transition.opacity.duration.300ms class="ml-3">Sales & Settlements</span>
+                    <span x-show="sidebarOpen" x-transition.opacity.duration.300ms class="ml-3">Sales &amp; Settlements</span>
                 </div>
                 <svg x-show="sidebarOpen" class="w-4 h-4 transition-transform duration-200 text-text-muted group-hover:text-primary" :class="{'rotate-180': activeDropdown === 'sales'}" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
                 </svg>
             </button>
             <div x-show="activeDropdown === 'sales' && sidebarOpen" x-collapse x-cloak class="ml-6 pl-4 my-1 border-l-2 border-border-subtle/70 space-y-1">
-                <a href="{{ route('seller.settlements.index') }}" class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ request()->routeIs('seller.settlements.index') ? 'bg-primary/10 text-primary font-bold shadow-xs' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">Settlements & Earnings</a>
+                <a href="{{ route('seller.settlements.index') }}" class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ request()->routeIs('seller.settlements.index') ? 'bg-primary/10 text-primary font-bold shadow-xs' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">E-Wallet, Payouts &amp; Ledger</a>
+                <a href="{{ route('seller.reports.formal-pdf') }}" target="_blank" class="block px-3 py-2 text-xs rounded-lg text-primary font-bold hover:bg-brand-light/25 transition-all whitespace-nowrap cursor-pointer">Formal PDF Statement &nearr;</a>
             </div>
         </div>
-        @endif
 
-        @if(auth()->user()->sellerProfile)
         <a href="{{ route('seller.messages.seller-messages') }}"
             @click="activeDropdown = null"
             class="flex items-center px-3 py-3 rounded-xl transition-all duration-200 font-medium group whitespace-nowrap text-sm cursor-pointer {{ request()->is('seller/messages*') ? 'text-primary font-bold bg-brand-light/20' : 'text-text-muted hover:bg-brand-light/30 hover:text-primary' }}"

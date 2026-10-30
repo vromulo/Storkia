@@ -7,6 +7,7 @@ use App\Models\BuyerVoucherClaim;
 use App\Models\StorkVoucher;
 use App\Services\VoucherService;
 use Illuminate\Http\Request;
+use Illuminate\Validation\ValidationException;
 
 class VoucherController extends Controller
 {
@@ -17,6 +18,7 @@ class VoucherController extends Controller
     public function index(Request $request)
     {
         $user = $request->user();
+        $this->voucherService->expireOverdueVouchers();
 
         $claimedRecords = BuyerVoucherClaim::with(['voucher.sellerProfile'])
             ->where('buyer_id', $user->id)
@@ -25,8 +27,11 @@ class VoucherController extends Controller
 
         $claimedVoucherIds = $claimedRecords->pluck('voucher_id')->all();
 
+        // Global Discover tab only lists Platform & Free Shipping vouchers;
+        // Seller Store Vouchers are exclusively claimable on that Seller's storefront/product pages!
         $discoverableVouchers = StorkVoucher::with('sellerProfile')
             ->where('status', 'active')
+            ->whereIn('scope', ['platform', 'shipping'])
             ->where('visibility', 'claimable')
             ->where('ends_at', '>=', now())
             ->whereColumn('used_count', '<', 'total_usage_limit')
@@ -44,8 +49,20 @@ class VoucherController extends Controller
     public function claim(Request $request)
     {
         $validated = $request->validate([
-            'code' => ['required', 'string', 'max:25'],
+            'code'              => ['required', 'string', 'max:25'],
+            'seller_profile_id' => ['nullable', 'integer'],
         ]);
+
+        $normCode = $this->voucherService->normalizeCode($validated['code']);
+        $candidate = StorkVoucher::whereRaw('UPPER(TRIM(code)) = ?', [$normCode])->first();
+
+        if ($candidate && $candidate->scope === 'store' && $candidate->visibility === 'claimable') {
+            if (empty($validated['seller_profile_id']) || (int) $validated['seller_profile_id'] !== (int) $candidate->seller_profile_id) {
+                throw ValidationException::withMessages([
+                    'code' => "Store voucher \"{$candidate->code}\" can only be claimed directly on {$candidate->sellerProfile?->business_name}'s Storefront or Product Page.",
+                ]);
+            }
+        }
 
         $voucher = $this->voucherService->claimVoucherByCode(
             buyerId: (int) $request->user()->id,

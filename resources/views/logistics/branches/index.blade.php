@@ -5,21 +5,37 @@
     createModalOpen: {{ $errors->any() ? 'true' : 'false' }},
     detailHub: null,
     emailPrefix: @js(old('email_prefix', '')),
+    provincesList: @js($provinces),
     selectedProvinceCode: @js(old('province_code', $defaultProvinceCode)),
     selectedProvinceName: @js(old('province', $defaultProvinceName)),
     selectedMunicipalityCode: @js(old('municipality_code', '')),
     selectedMunicipalityName: @js(old('municipality', '')),
     municipalities: @js($initialMunicipalities),
     loadingMunicipalities: false,
+    provinceDropdownOpen: false,
+    municipalityDropdownOpen: false,
+    provinceSearch: '',
+    municipalitySearch: '',
     showPass: false,
     showConfirmPass: false,
     sanitizePrefix() {
         this.emailPrefix = (this.emailPrefix || '').toLowerCase().replace(/@.*$/, '').replace(/[^a-z0-9._-]/g, '').slice(0, 40);
     },
-    async onProvinceChange(event) {
-        const option = event.target.selectedOptions[0];
-        this.selectedProvinceCode = event.target.value;
-        this.selectedProvinceName = option ? option.dataset.name : '';
+    get filteredProvinces() {
+        const q = (this.provinceSearch || '').trim().toLowerCase();
+        if (!q) return this.provincesList || [];
+        return (this.provincesList || []).filter(p => (p.name || '').toLowerCase().includes(q));
+    },
+    get filteredMunicipalities() {
+        const q = (this.municipalitySearch || '').trim().toLowerCase();
+        if (!q) return this.municipalities || [];
+        return (this.municipalities || []).filter(m => (m.name || '').toLowerCase().includes(q));
+    },
+    async selectProvince(prov) {
+        this.selectedProvinceCode = prov.code;
+        this.selectedProvinceName = prov.name;
+        this.provinceDropdownOpen = false;
+        this.provinceSearch = '';
         this.selectedMunicipalityCode = '';
         this.selectedMunicipalityName = '';
         this.municipalities = [];
@@ -35,10 +51,11 @@
             this.loadingMunicipalities = false;
         }
     },
-    onMunicipalityChange(event) {
-        const option = event.target.selectedOptions[0];
-        this.selectedMunicipalityName = event.target.value;
-        this.selectedMunicipalityCode = option ? (option.dataset.code || '') : '';
+    selectMunicipality(mun) {
+        this.selectedMunicipalityName = mun.name;
+        this.selectedMunicipalityCode = mun.code || '';
+        this.municipalityDropdownOpen = false;
+        this.municipalitySearch = '';
     }
 }" class="max-w-7xl mx-auto space-y-6 select-none">
 
@@ -112,7 +129,7 @@
             <table class="w-full text-left border-collapse text-xs">
                 <thead>
                     <tr class="border-b border-border-subtle bg-surface-subtle/40 text-text-muted uppercase text-[11px] font-bold">
-                        <th class="py-3.5 px-5">Hub Code & Name</th>
+                        <th class="py-3.5 px-5">Hub Code &amp; Name</th>
                         <th class="py-3.5 px-4">Hub Type</th>
                         <th class="py-3.5 px-4">Municipality Coverage</th>
                         <th class="py-3.5 px-4">Account Login Email</th>
@@ -215,8 +232,10 @@
 
                 <form action="{{ route('logistics.branches.store') }}" method="POST" class="space-y-4 text-xs">
                     @csrf
+                    <input type="hidden" name="province_code" :value="selectedProvinceCode">
                     <input type="hidden" name="province" :value="selectedProvinceName">
                     <input type="hidden" name="municipality_code" :value="selectedMunicipalityCode">
+                    <input type="hidden" name="municipality" :value="selectedMunicipalityName">
 
                     <div>
                         <label class="block font-bold text-text-muted uppercase tracking-wider mb-1.5">
@@ -241,41 +260,79 @@
                     </div>
 
                     <div class="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-                        <div>
+                        <!-- Custom Downward-Opening Province Dropdown -->
+                        <div class="relative" @click.away="provinceDropdownOpen = false">
                             <label class="block font-bold text-text-muted uppercase tracking-wider mb-1.5">
                                 Province <span class="text-danger">*</span>
                             </label>
-                            <select name="province_code"
-                                    x-model="selectedProvinceCode"
-                                    @change="onProvinceChange($event)"
-                                    required
-                                    class="w-full p-3 rounded-xl border border-border-subtle bg-surface text-xs font-semibold outline-none focus:border-primary">
-                                <option value="">Select Province</option>
-                                @foreach($provinces as $prov)
-                                    <option value="{{ $prov['code'] }}"
-                                            data-name="{{ $prov['name'] }}"
-                                            {{ (string) $prov['code'] === (string) $defaultProvinceCode ? 'selected' : '' }}>
-                                        {{ $prov['name'] }}
-                                    </option>
-                                @endforeach
-                            </select>
+                            <button type="button"
+                                    @click="provinceDropdownOpen = !provinceDropdownOpen; municipalityDropdownOpen = false"
+                                    class="w-full p-3 rounded-xl border border-border-subtle bg-surface text-xs font-semibold text-left flex items-center justify-between gap-2 cursor-pointer hover:border-primary focus:outline-none">
+                                <span class="truncate" :class="selectedProvinceName ? 'text-text-main' : 'text-text-muted'" x-text="selectedProvinceName || 'Select Province'"></span>
+                                <svg class="w-4 h-4 text-text-muted transition-transform shrink-0" :class="provinceDropdownOpen ? 'rotate-180' : ''" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/></svg>
+                            </button>
+
+                            <div x-show="provinceDropdownOpen"
+                                 x-cloak
+                                 x-transition
+                                 class="absolute left-0 right-0 top-full mt-1.5 z-50 bg-surface border border-border-subtle rounded-2xl shadow-xl overflow-hidden">
+                                <div class="p-2 border-b border-border-subtle bg-surface-subtle">
+                                    <input type="text"
+                                           x-model="provinceSearch"
+                                           placeholder="Search province..."
+                                           class="w-full px-3 py-1.5 rounded-xl border border-border-subtle bg-surface text-xs outline-none focus:border-primary">
+                                </div>
+                                <div class="max-h-52 overflow-y-auto divide-y divide-border-subtle/40 custom-scrollbar">
+                                    <template x-for="prov in filteredProvinces" :key="prov.code">
+                                        <button type="button"
+                                                @click="selectProvince(prov)"
+                                                class="w-full px-3.5 py-2.5 text-left text-xs hover:bg-primary/10 transition-colors flex items-center justify-between cursor-pointer"
+                                                :class="String(selectedProvinceCode) === String(prov.code) ? 'bg-primary/10 text-primary font-bold' : 'text-text-main font-medium'">
+                                            <span x-text="prov.name"></span>
+                                            <span x-show="String(selectedProvinceCode) === String(prov.code)" class="text-primary font-bold">✓</span>
+                                        </button>
+                                    </template>
+                                </div>
+                            </div>
                         </div>
 
-                        <div>
+                        <!-- Custom Downward-Opening Branch Municipality Dropdown -->
+                        <div class="relative" @click.away="municipalityDropdownOpen = false">
                             <label class="block font-bold text-text-muted uppercase tracking-wider mb-1.5">
                                 Branch Municipality <span class="text-danger">*</span>
                             </label>
-                            <select name="municipality"
-                                    x-model="selectedMunicipalityName"
-                                    @change="onMunicipalityChange($event)"
+                            <button type="button"
+                                    @click="if (!loadingMunicipalities && municipalities.length > 0) { municipalityDropdownOpen = !municipalityDropdownOpen; provinceDropdownOpen = false; }"
                                     :disabled="loadingMunicipalities || municipalities.length === 0"
-                                    required
-                                    class="w-full p-3 rounded-xl border border-border-subtle bg-surface text-xs font-semibold outline-none focus:border-primary disabled:opacity-50">
-                                <option value="" x-text="loadingMunicipalities ? 'Loading municipalities...' : 'Select Municipality'"></option>
-                                <template x-for="mun in municipalities" :key="mun.code">
-                                    <option :value="mun.name" :data-code="mun.code" x-text="mun.name"></option>
-                                </template>
-                            </select>
+                                    class="w-full p-3 rounded-xl border border-border-subtle bg-surface text-xs font-semibold text-left flex items-center justify-between gap-2 cursor-pointer hover:border-primary disabled:opacity-50 focus:outline-none">
+                                <span class="truncate"
+                                      :class="selectedMunicipalityName ? 'text-text-main' : 'text-text-muted'"
+                                      x-text="loadingMunicipalities ? 'Loading municipalities...' : (selectedMunicipalityName || 'Select Municipality')"></span>
+                                <svg class="w-4 h-4 text-text-muted transition-transform shrink-0" :class="municipalityDropdownOpen ? 'rotate-180' : ''" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/></svg>
+                            </button>
+
+                            <div x-show="municipalityDropdownOpen"
+                                 x-cloak
+                                 x-transition
+                                 class="absolute left-0 right-0 top-full mt-1.5 z-50 bg-surface border border-border-subtle rounded-2xl shadow-xl overflow-hidden">
+                                <div class="p-2 border-b border-border-subtle bg-surface-subtle">
+                                    <input type="text"
+                                           x-model="municipalitySearch"
+                                           placeholder="Search city or municipality..."
+                                           class="w-full px-3 py-1.5 rounded-xl border border-border-subtle bg-surface text-xs outline-none focus:border-primary">
+                                </div>
+                                <div class="max-h-52 overflow-y-auto divide-y divide-border-subtle/40 custom-scrollbar">
+                                    <template x-for="mun in filteredMunicipalities" :key="mun.code">
+                                        <button type="button"
+                                                @click="selectMunicipality(mun)"
+                                                class="w-full px-3.5 py-2.5 text-left text-xs hover:bg-primary/10 transition-colors flex items-center justify-between cursor-pointer"
+                                                :class="selectedMunicipalityName === mun.name ? 'bg-primary/10 text-primary font-bold' : 'text-text-main font-medium'">
+                                            <span x-text="mun.name"></span>
+                                            <span x-show="selectedMunicipalityName === mun.name" class="text-primary font-bold">✓</span>
+                                        </button>
+                                    </template>
+                                </div>
+                            </div>
                         </div>
                     </div>
 

@@ -1,6 +1,6 @@
 @extends('buyer.account-settings', [
     'pageTitle' => 'My Orders',
-    'pageSubtitle' => 'Track your multi-seller purchases, shipment status, and Cash on Delivery or GCash receipts.'
+    'pageSubtitle' => 'Track your purchases (Last-In, First-Out), confirm deliveries, rate completed orders, or Buy Again.'
 ])
 
 @section('option-content')
@@ -24,12 +24,14 @@
         <div class="flex flex-wrap items-center gap-1.5 min-w-0">
             @php
                 $tabs = [
-                    'all'        => ['label' => 'All', 'count' => $counts['all']],
-                    'unpaid'     => ['label' => 'Unpaid / Action Needed', 'count' => $counts['unpaid']],
-                    'processing' => ['label' => 'Processing', 'count' => $counts['processing']],
-                    'shipped'    => ['label' => 'Shipped', 'count' => $counts['shipped']],
-                    'review'     => ['label' => 'To Confirm / Completed', 'count' => $counts['review']],
-                    'returns'    => ['label' => 'Cancelled / Disputed', 'count' => $counts['returns']],
+                    'all'        => ['label' => 'All', 'count' => $counts['all'] ?? 0],
+                    'unpaid'     => ['label' => 'Unpaid / Action Needed', 'count' => $counts['unpaid'] ?? 0],
+                    'processing' => ['label' => 'Processing', 'count' => $counts['processing'] ?? 0],
+                    'shipped'    => ['label' => 'Shipped', 'count' => $counts['shipped'] ?? 0],
+                    'to_confirm' => ['label' => 'To Confirm', 'count' => $counts['to_confirm'] ?? 0],
+                    'to_rate'    => ['label' => 'To Rate', 'count' => $counts['to_rate'] ?? 0],
+                    'completed'  => ['label' => 'Completed', 'count' => $counts['completed'] ?? ($counts['review'] ?? 0)],
+                    'returns'    => ['label' => 'Cancelled / Disputed', 'count' => $counts['returns'] ?? 0],
                 ];
             @endphp
 
@@ -37,7 +39,7 @@
                 <a href="{{ route('user.orders', array_filter(['status' => $key === 'all' ? null : $key, 'search' => $search])) }}"
                    class="px-3.5 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all flex items-center gap-1.5 border {{ $statusTab === $key || ($key === 'all' && !$statusTab) ? 'bg-primary text-surface border-primary shadow-xs' : 'bg-surface text-text-muted border-border-subtle hover:text-text-main hover:bg-surface-subtle' }}">
                     <span>{{ $tab['label'] }}</span>
-                    <span class="px-1.5 py-0.5 rounded-full text-[10px] {{ $statusTab === $key || ($key === 'all' && !$statusTab) ? 'bg-surface/20 text-surface' : 'bg-surface-subtle text-text-main' }}">
+                    <span class="px-1.5 py-0.5 rounded-full text-[10px] {{ $statusTab === $key || ($key === 'all' && !$statusTab) ? 'bg-surface/20 text-surface' : ($key === 'to_rate' && ($tab['count'] ?? 0) > 0 ? 'bg-amber-100 text-amber-800' : 'bg-surface-subtle text-text-main') }}">
                         {{ $tab['count'] }}
                     </span>
                 </a>
@@ -66,8 +68,8 @@
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z" />
                 </svg>
             </div>
-            <h3 class="text-base font-bold text-text-main">No orders found</h3>
-            <p class="text-xs text-text-muted">You don't have any orders matching this filter yet.</p>
+            <h3 class="text-base font-bold text-text-main">No orders found in this section</h3>
+            <p class="text-xs text-text-muted">Your newly placed orders appear at the top in Last-In, First-Out (LIFO) sequence.</p>
             <a href="{{ route('home') }}" class="inline-flex px-5 py-2.5 rounded-xl bg-primary text-surface text-xs font-bold hover:bg-primary-dark transition-colors">
                 Browse Products
             </a>
@@ -79,8 +81,9 @@
                     $payMethod = $so->effective_payment_method;
                     $subm = $so->paymentSubmission;
                     $extra = $so->extra;
+                    $isRated = $so->isRatedByBuyer();
                     $badgeColor = match($so->status) {
-                        'completed'                 => 'bg-green-100 text-green-700 border-green-200',
+                        'completed'                 => $isRated ? 'bg-green-100 text-green-700 border-green-200' : 'bg-amber-100 text-amber-800 border-amber-300',
                         'delivered'                 => 'bg-blue-100 text-blue-700 border-blue-200',
                         'pending_buyer_response'    => 'bg-amber-100 text-amber-800 border-amber-300',
                         'out_for_delivery', 'picked_up', 'at_logistics_hub' => 'bg-indigo-100 text-indigo-700 border-indigo-200',
@@ -133,7 +136,7 @@
                                 <form action="{{ route('user.orders.switch-to-cod', $so->id) }}" method="POST" class="m-0">
                                     @csrf
                                     <button type="submit" class="px-3.5 py-2 rounded-xl bg-primary hover:bg-primary-dark text-white text-xs font-bold shadow-xs transition-colors cursor-pointer">
-                                        Yes, Switch to COD & Continue
+                                        Yes, Switch to COD &amp; Continue
                                     </button>
                                 </form>
 
@@ -193,14 +196,9 @@
                                     ({{ $so->logisticsProfile->business_name ?? 'Logistics Hub' }})
                                 </div>
                             @endif
-                            @if($extra && $extra->buyer_note)
-                                <div class="text-[11px] text-text-main italic truncate">
-                                    Note to Seller: "{{ $extra->buyer_note }}"
-                                </div>
-                            @endif
-                            @if($so->status === 'delivered' && !$so->has_unresolved_dispute && $so->confirmation_deadline_at)
-                                <div class="text-blue-700 font-semibold">
-                                    Auto-completes {{ $so->confirmation_deadline_at->diffForHumans() }} ({{ $so->confirmation_deadline_at->format('M d, h:i A') }})
+                            @if($so->serviceRating)
+                                <div class="text-amber-600 font-bold text-[11px]">
+                                    Your Rating: {{ number_format((float) $so->serviceRating->overall_average_rating, 1) }} / 5.0 ★
                                 </div>
                             @endif
                         </div>
@@ -217,11 +215,23 @@
                                         Order Received
                                     </button>
                                 </form>
+                            @elseif($so->status === 'completed' && !$isRated)
+                                <a href="{{ route('user.orders.rate.show', $so->id) }}"
+                                   class="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-white text-xs font-extrabold shadow-xs transition-colors">
+                                    ★ To Rate
+                                </a>
+                            @elseif($so->status === 'completed' && $isRated)
+                                <form action="{{ route('user.orders.buy-again', $so->id) }}" method="POST" class="m-0">
+                                    @csrf
+                                    <button type="submit" class="px-4 py-2 rounded-xl bg-primary hover:bg-primary-dark text-white text-xs font-bold shadow-xs transition-colors cursor-pointer">
+                                        Buy Again
+                                    </button>
+                                </form>
                             @endif
 
                             <a href="{{ route('user.orders.show', $so->id) }}"
                                class="px-4 py-2 rounded-xl bg-primary-dark hover:bg-text-main text-surface text-xs font-bold transition-colors">
-                                Track & Details
+                                Track &amp; Details
                             </a>
                         </div>
                     </div>

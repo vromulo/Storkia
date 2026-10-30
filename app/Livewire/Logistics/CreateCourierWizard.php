@@ -20,6 +20,7 @@ class CreateCourierWizard extends Component
 
     public int $currentStep = 1;
     public bool $creationSuccessful = false;
+    public bool $isBranchAccount = false;
 
     public string $first_name = '';
     public string $last_name = '';
@@ -30,6 +31,7 @@ class CreateCourierWizard extends Component
 
     public string $logistics_hub_id = '';
     public string $home_hub = '';
+    public string $lockedHubLabel = '';
     public array $eligibleHubs = [];
 
     public string $license_no = '';
@@ -83,12 +85,14 @@ class CreateCourierWizard extends Component
 
         $profile->ensureMainHubExists();
 
+        $this->isBranchAccount = $user->isBranchLogisticsAccount();
+
         $hubsQuery = LogisticsHub::where('parent_logistics_profile_id', $profile->id)
             ->where('status', 'active')
             ->orderByDesc('is_main_hub')
             ->orderBy('municipality');
 
-        if ($user->isBranchLogisticsAccount() && $user->branchLogisticsHub) {
+        if ($this->isBranchAccount && $user->branchLogisticsHub) {
             $hubsQuery->where('id', $user->branchLogisticsHub->id);
         }
 
@@ -106,6 +110,7 @@ class CreateCourierWizard extends Component
         if (! empty($this->eligibleHubs)) {
             $this->logistics_hub_id = (string) $this->eligibleHubs[0]['id'];
             $this->home_hub = $this->eligibleHubs[0]['hub_name'];
+            $this->lockedHubLabel = $this->eligibleHubs[0]['label'];
         }
     }
 
@@ -127,6 +132,12 @@ class CreateCourierWizard extends Component
 
     public function updatedLogisticsHubId($value): void
     {
+        if ($this->isBranchAccount && ! empty($this->eligibleHubs)) {
+            $this->logistics_hub_id = (string) $this->eligibleHubs[0]['id'];
+            $this->home_hub = $this->eligibleHubs[0]['hub_name'];
+            return;
+        }
+
         $found = collect($this->eligibleHubs)->firstWhere('id', (string) $value);
         $this->home_hub = $found ? $found['hub_name'] : '';
     }
@@ -359,22 +370,22 @@ class CreateCourierWizard extends Component
     protected function getStep2Messages(): array
     {
         return [
-            'logistics_hub_id.required'         => 'Please select an eligible Municipality Hub.',
-            'license_no.required'               => 'Driver\'s license number is required.',
-            'license_no.size'                   => 'Driver\'s license number must follow the format A00-00-000000.',
-            'license_no.regex'                  => 'Driver\'s license number must follow the format A00-00-000000.',
-            'license_type.required'             => 'License type is required.',
-            'dl_codes.required'                 => 'Please select at least one DL code.',
-            'dl_codes.min'                      => 'Please select at least one DL code.',
-            'license_expiry_date.required'      => 'License expiry date is required.',
-            'license_expiry_date.after_or_equal'=> 'The driver\'s license is expired. Please provide a valid license.',
-            'vehicle_type.required'             => 'Please select a vehicle type.',
-            'vehicle_type.in'                   => 'Please select a valid vehicle type.',
-            'plate_number.required'             => 'Plate number is required.',
-            'plate_number.min'                  => 'Plate number must be between 6 and 8 characters.',
-            'plate_number.max'                  => 'Plate number must not exceed 8 characters.',
-            'plate_number.regex'                => 'Please enter a valid plate number.',
-            'load_capacity.required'            => 'Load capacity is required.',
+            'logistics_hub_id.required'          => 'Please select an eligible Municipality Hub.',
+            'license_no.required'                => 'Driver\'s license number is required.',
+            'license_no.size'                    => 'Driver\'s license number must follow the format A00-00-000000.',
+            'license_no.regex'                   => 'Driver\'s license number must follow the format A00-00-000000.',
+            'license_type.required'              => 'License type is required.',
+            'dl_codes.required'                  => 'Please select at least one DL code.',
+            'dl_codes.min'                       => 'Please select at least one DL code.',
+            'license_expiry_date.required'       => 'License expiry date is required.',
+            'license_expiry_date.after_or_equal' => 'The driver\'s license is expired. Please provide a valid license.',
+            'vehicle_type.required'              => 'Please select a vehicle type.',
+            'vehicle_type.in'                    => 'Please select a valid vehicle type.',
+            'plate_number.required'              => 'Plate number is required.',
+            'plate_number.min'                   => 'Plate number must be between 6 and 8 characters.',
+            'plate_number.max'                   => 'Plate number must not exceed 8 characters.',
+            'plate_number.regex'                 => 'Please enter a valid plate number.',
+            'load_capacity.required'             => 'Load capacity is required.',
         ];
     }
 
@@ -447,6 +458,9 @@ class CreateCourierWizard extends Component
             $this->email = InternalStorkiaEmailService::buildEmail($this->email_prefix);
             $this->validate($this->getStep1Rules(), $this->getStep1Messages());
         } elseif ($step === 2) {
+            if ($this->isBranchAccount && ! empty($this->eligibleHubs)) {
+                $this->logistics_hub_id = (string) $this->eligibleHubs[0]['id'];
+            }
             $this->validate($this->getStep2Rules(), $this->getStep2Messages());
         } elseif ($step === 3) {
             $this->validate($this->getStep3Rules(), $this->getStep3Messages());
@@ -475,6 +489,10 @@ class CreateCourierWizard extends Component
         $profile = $user?->logisticsProfile;
         if (! $user || ! $profile) {
             abort(403);
+        }
+
+        if ($this->isBranchAccount && ! empty($this->eligibleHubs)) {
+            $this->logistics_hub_id = (string) $this->eligibleHubs[0]['id'];
         }
 
         $this->email_prefix = InternalStorkiaEmailService::normalizePrefix($this->email_prefix);

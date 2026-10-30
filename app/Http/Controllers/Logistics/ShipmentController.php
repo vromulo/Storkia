@@ -12,11 +12,12 @@ use App\Models\Shipment;
 use App\Models\ShipmentTracking;
 use App\Models\ShipmentVerification;
 use App\Models\User;
-use App\Notifications\OrderLifecycleNotification;
 use App\Services\AddressService;
+use App\Services\BuyerAbandonmentService;
 use App\Services\InventoryStockService;
 use App\Services\OrderCompletionService;
 use App\Services\ShipmentVerificationService;
+use App\Services\VoucherService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
@@ -27,7 +28,9 @@ class ShipmentController extends Controller
         protected InventoryStockService $inventoryStockService,
         protected OrderCompletionService $orderCompletionService,
         protected ShipmentVerificationService $shipmentVerificationService,
-        protected AddressService $addressService
+        protected AddressService $addressService,
+        protected BuyerAbandonmentService $buyerAbandonmentService,
+        protected VoucherService $voucherService
     ) {}
 
     public function index(Request $request)
@@ -41,20 +44,22 @@ class ShipmentController extends Controller
         }
 
         $profile->ensureMainHubExists();
-        $this->orderCompletionService->autoCompleteExpiredDeliveredOrders(logisticsProfileId: (int) $profile->id);
+        $this->orderCompletionService->runLifecycleMaintenance(logisticsProfileId: (int) $profile->id);
 
         $activeBranchHub = $user->isBranchLogisticsAccount() ? $user->branchLogisticsHub : null;
 
         $statusTab = $request->query('status', 'all');
         $search = trim((string) $request->query('search', ''));
 
-        $baseQuery = Shipment::where('logistics_profile_id', $profile->id);
+        // Strict isolation: ONLY shipments explicitly assigned to THIS logistics_profile_id
+        $baseQuery = Shipment::where('logistics_profile_id', $profile->id)
+            ->whereHas('sellerOrder', fn ($q) => $q->where('logistics_profile_id', $profile->id));
 
+        // If logged in as a Branch Hub account, strictly limit to packages routed to this exact Branch Hub ID
         if ($activeBranchHub) {
             $baseQuery->where(function ($q) use ($activeBranchHub) {
                 $q->whereHas('packages', fn ($pq) => $pq->where('logistics_hub_id', $activeBranchHub->id))
-                  ->orWhere('pickup_address_snapshot->municipality', 'like', '%' . $activeBranchHub->municipality . '%')
-                  ->orWhere('delivery_address_snapshot->municipality', 'like', '%' . $activeBranchHub->municipality . '%');
+                  ->orWhere('hub_address_snapshot->logistics_hub_id', $activeBranchHub->id);
             });
         }
 
@@ -97,6 +102,7 @@ class ShipmentController extends Controller
             });
         }
 
+        // Strict First-In, First-Out (FIFO) ordering
         $shipments = $query
             ->orderBy('created_at', 'asc')
             ->orderBy('id', 'asc')
@@ -119,11 +125,15 @@ class ShipmentController extends Controller
         $user = $request->user();
         $profile = $user->logisticsProfile;
 
-        if (! $profile || (int) $shipment->logistics_profile_id !== (int) $profile->id) {
-            abort(403);
+        if (
+            ! $profile
+            || (int) $shipment->logistics_profile_id !== (int) $profile->id
+            || (int) $shipment->sellerOrder?->logistics_profile_id !== (int) $profile->id
+        ) {
+            abort(403, 'This shipment is not assigned to your logistics company.');
         }
 
-        $this->orderCompletionService->autoCompleteExpiredDeliveredOrders(logisticsProfileId: (int) $profile->id);
+        $this->orderCompletionService->runLifecycleMaintenance(logisticsProfileId: (int) $profile->id);
 
         $shipment->loadMissing('sellerOrder.items');
         $this->shipmentVerificationService->ensurePackagesForShipment(
@@ -135,6 +145,7 @@ class ShipmentController extends Controller
             'sellerOrder.order',
             'sellerOrder.items',
             'sellerOrder.buyer',
+            'sellerOrder.payment',
             'sellerProfile',
             'currentCourier.currentHubAssignment.hub',
             'currentRider.currentHubAssignment.hub',
@@ -151,67 +162,78 @@ class ShipmentController extends Controller
         ]);
 
         $primaryPackage = $shipment->packages->first();
-        $targetHubId = $primaryPackage?->logistics_hub_id;
+        $targetHubId = $primaryPackage?->logistics_hub_id ?? ($shipment->hub_address_snapshot['logistics_hub_id'] ?? null);
+
+        if ($user->isBranchLogisticsAccount() && $user->branchLogisticsHub) {
+            if ($targetHubId && (int) $targetHubId !== (int) $user->branchLogisticsHub->id) {
+                abort(403, 'This shipment is assigned to another hub branch.');
+            }
+        }
+
         $pickupMun = $this->addressService->normalizeName(
             $primaryPackage?->logisticsHub?->municipality
-            ?? ($shipment->pickup_address_snapshot['municipality'] ?? '')
+            ?? ($shipment->hub_address_snapshot['municipality'] ?? ($shipment->pickup_address_snapshot['municipality'] ?? ''))
         );
 
         $deliveryMun = $this->addressService->normalizeName($shipment->delivery_address_snapshot['municipality'] ?? '');
         $deliveryBarangay = $this->addressService->normalizeName($shipment->delivery_address_snapshot['barangay'] ?? '');
 
-        $couriersQuery = Courier::with(['currentHubAssignment.hub'])
+        $allCouriers = Courier::with(['currentHubAssignment.hub'])
             ->where('logistics_profile_id', $profile->id)
-            ->whereIn('status', ['active', 'on_delivery']);
+            ->whereIn('status', ['active', 'on_delivery'])
+            ->orderBy('first_name')
+            ->get();
 
-        if ($user->isBranchLogisticsAccount() && $user->branchLogisticsHub) {
-            $branchId = (int) $user->branchLogisticsHub->id;
-            $couriersQuery->whereHas('currentHubAssignment', fn ($q) => $q->where('logistics_hub_id', $branchId));
-        }
-
-        $allCouriers = $couriersQuery->orderBy('first_name')->get();
-
-        $matchingHubCouriers = $allCouriers->filter(function (Courier $c) use ($targetHubId, $pickupMun) {
+        // Strictly show ONLY Couriers registered to the designated Hub / Municipality (even for Main Hub!)
+        $availableCouriers = $allCouriers->filter(function (Courier $c) use ($targetHubId, $pickupMun) {
             $assignedHub = $c->assigned_hub;
-            if ($targetHubId && $assignedHub && (int) $assignedHub->id === (int) $targetHubId) {
+            if (! $assignedHub) {
+                return false;
+            }
+            if ($targetHubId && (int) $assignedHub->id === (int) $targetHubId) {
                 return true;
             }
-            if ($pickupMun !== '' && $assignedHub) {
-                return $this->addressService->normalizeName($assignedHub->municipality) === $pickupMun;
+            if ($pickupMun !== '' && $this->addressService->normalizeName($assignedHub->municipality) === $pickupMun) {
+                return true;
             }
             return false;
         })->values();
 
-        $availableCouriers = $matchingHubCouriers->isNotEmpty() ? $matchingHubCouriers : $allCouriers;
-
-        $ridersQuery = Rider::with(['currentHubAssignment.hub', 'barangayCoverages'])
+        $allRiders = Rider::with(['currentHubAssignment.hub', 'barangayCoverages'])
             ->where('logistics_profile_id', $profile->id)
-            ->where('status', 'approved');
+            ->where('status', 'approved')
+            ->orderBy('first_name')
+            ->get();
 
-        if ($user->isBranchLogisticsAccount() && $user->branchLogisticsHub) {
-            $branchId = (int) $user->branchLogisticsHub->id;
-            $ridersQuery->whereHas('currentHubAssignment', fn ($q) => $q->where('logistics_hub_id', $branchId));
-        }
-
-        $allRiders = $ridersQuery->orderBy('first_name')->get();
-
-        $matchingBarangayRiders = $allRiders->filter(function (Rider $r) use ($deliveryBarangay, $deliveryMun) {
-            if ($deliveryBarangay !== '') {
-                $coversBrgy = $r->barangayCoverages->contains(function ($cov) use ($deliveryBarangay) {
-                    return $this->addressService->normalizeName($cov->barangay_name) === $deliveryBarangay;
-                });
-                if ($coversBrgy) {
-                    return true;
-                }
+        // Strictly filter Riders registered to the target Municipality / Hub (even for Main Hub!)
+        $municipalityRiders = $allRiders->filter(function (Rider $r) use ($targetHubId, $deliveryMun, $pickupMun) {
+            $assignedHub = $r->assigned_hub;
+            if (! $assignedHub) {
+                return false;
             }
-            if ($deliveryMun !== '' && $r->assigned_hub) {
-                return $this->addressService->normalizeName($r->assigned_hub->municipality) === $deliveryMun
-                    && $r->barangayCoverages->isEmpty();
+            $riderMun = $this->addressService->normalizeName($assignedHub->municipality);
+            if ($deliveryMun !== '' && $riderMun === $deliveryMun) {
+                return true;
+            }
+            if ($targetHubId && (int) $assignedHub->id === (int) $targetHubId) {
+                return true;
+            }
+            if ($pickupMun !== '' && $riderMun === $pickupMun) {
+                return true;
             }
             return false;
         })->values();
 
-        $availableRiders = $matchingBarangayRiders->isNotEmpty() ? $matchingBarangayRiders : $allRiders;
+        $matchingBarangayRiders = $municipalityRiders->filter(function (Rider $r) use ($deliveryBarangay) {
+            if ($deliveryBarangay === '') {
+                return true;
+            }
+            return $r->barangayCoverages->contains(function ($cov) use ($deliveryBarangay) {
+                return $this->addressService->normalizeName($cov->barangay_name) === $deliveryBarangay;
+            });
+        })->values();
+
+        $availableRiders = $matchingBarangayRiders->isNotEmpty() ? $matchingBarangayRiders : $municipalityRiders;
 
         return view('logistics.shipments.show', compact(
             'profile',
@@ -229,7 +251,7 @@ class ShipmentController extends Controller
         $profile = $user->logisticsProfile;
 
         if (! $profile || (int) $shipment->logistics_profile_id !== (int) $profile->id) {
-            abort(403);
+            abort(403, 'This shipment is not assigned to your logistics company.');
         }
 
         $validated = $request->validate([
@@ -262,9 +284,11 @@ class ShipmentController extends Controller
             'confirmed_at' => now(),
         ]);
 
+        $orderNo = $shipment->sellerOrder?->seller_order_number ?? 'N/A';
+
         return back()->with(
             'success',
-            "Package {$result['package']->package_reference} verified via " . strtoupper($validated['verification_method']) . ". Please review the manifest and click Confirm Physical Receipt at Hub to complete intake."
+            "QR/Package Identified: {$result['package']->package_reference} (Order #{$orderNo}, Tracking #{$shipment->tracking_number}) verified via " . strtoupper($validated['verification_method']) . ". Please review the manifest and click Confirm Physical Receipt at Sorting Hub."
         );
     }
 
@@ -275,11 +299,16 @@ class ShipmentController extends Controller
         $profile = $user->logisticsProfile;
 
         if (! $profile || (int) $shipment->logistics_profile_id !== (int) $profile->id) {
-            abort(403);
+            abort(403, 'This shipment is not assigned to your logistics company.');
         }
 
         $shipment->loadMissing('packages.logisticsHub');
         $primaryPackage = $shipment->packages->first();
+        $targetHubId = $primaryPackage?->logistics_hub_id ?? ($shipment->hub_address_snapshot['logistics_hub_id'] ?? null);
+        $pickupMun = $this->addressService->normalizeName(
+            $primaryPackage?->logisticsHub?->municipality
+            ?? ($shipment->hub_address_snapshot['municipality'] ?? ($shipment->pickup_address_snapshot['municipality'] ?? ''))
+        );
 
         if ($shipment->status === 'awaiting_seller_drop_off' || ($primaryPackage && $primaryPackage->handover_method === 'self_drop_off')) {
             return back()->withErrors([
@@ -288,8 +317,9 @@ class ShipmentController extends Controller
         }
 
         $validated = $request->validate([
-            'courier_id' => ['required', 'integer', 'exists:couriers,id'],
-            'notes'      => ['nullable', 'string', 'max:500'],
+            'courier_id'          => ['required', 'integer', 'exists:couriers,id'],
+            'scheduled_pickup_by' => ['nullable', 'date'],
+            'notes'               => ['nullable', 'string', 'max:500'],
         ]);
 
         /** @var Courier $courier */
@@ -298,8 +328,14 @@ class ShipmentController extends Controller
             ->whereIn('status', ['active', 'on_delivery'])
             ->findOrFail($validated['courier_id']);
 
-        if ($user->isBranchLogisticsAccount() && (int) $courier->assigned_hub?->id !== (int) $user->branchLogisticsHub?->id) {
-            abort(403, 'Branch accounts can only assign couriers belonging to their own Branch Hub.');
+        $courierHub = $courier->assigned_hub;
+        $matchesHubOrMun = ($targetHubId && $courierHub && (int) $courierHub->id === (int) $targetHubId)
+            || ($pickupMun !== '' && $courierHub && $this->addressService->normalizeName($courierHub->municipality) === $pickupMun);
+
+        if (! $matchesHubOrMun) {
+            return back()->withErrors([
+                'courier_id' => "Courier {$courier->full_name} is registered to {$courierHub?->municipality} and cannot be assigned to a shipment routed to another hub municipality.",
+            ]);
         }
 
         DB::transaction(function () use ($shipment, $courier, $profile, $user, $validated) {
@@ -311,20 +347,34 @@ class ShipmentController extends Controller
                 ]);
             }
 
+            // Mark other couriers' pending assignments on this shipment as reassigned
             PickupAssignment::where('shipment_id', $locked->id)
+                ->where('courier_id', '!=', $courier->id)
                 ->whereIn('status', ['assigned', 'accepted'])
                 ->update(['status' => 'reassigned']);
 
-            PickupAssignment::create([
-                'shipment_id'          => $locked->id,
-                'seller_order_id'      => $locked->seller_order_id,
-                'logistics_profile_id' => $profile->id,
-                'courier_id'           => $courier->id,
-                'assigned_by'          => $user->id,
-                'status'               => 'assigned',
-                'assigned_at'          => now(),
-                'notes'                => $validated['notes'] ?? null,
-            ]);
+            $scheduledNote = ! empty($validated['scheduled_pickup_by'])
+                ? '[Scheduled Pickup By: ' . \Carbon\Carbon::parse($validated['scheduled_pickup_by'])->format('M d, Y h:i A') . '] '
+                : '[SLA: Pickup within 2 hours] ';
+
+            // Single-record upsert per (shipment_id, courier_id) so duplicate cards never appear!
+            PickupAssignment::updateOrCreate(
+                [
+                    'shipment_id' => $locked->id,
+                    'courier_id'  => $courier->id,
+                ],
+                [
+                    'seller_order_id'      => $locked->seller_order_id,
+                    'logistics_profile_id' => $profile->id,
+                    'assigned_by'          => $user->id,
+                    'status'               => 'assigned',
+                    'assigned_at'          => now(),
+                    'accepted_at'          => null,
+                    'picked_up_at'         => null,
+                    'handed_over_at'       => null,
+                    'notes'                => trim($scheduledNote . ($validated['notes'] ?? '')),
+                ]
+            );
 
             foreach ($locked->packages as $pkg) {
                 $pkg->update([
@@ -353,7 +403,7 @@ class ShipmentController extends Controller
                 'seller_order_id' => $locked->seller_order_id,
                 'status'          => 'courier_assigned',
                 'title'           => 'First-Mile Courier Assigned',
-                'description'     => "Courier {$courier->full_name} ({$courier->vehicle_type} - {$courier->plate_number}) from {$hubLabel} assigned to pick up package from seller.",
+                'description'     => "Courier {$courier->full_name} ({$courier->vehicle_type} - {$courier->plate_number}) from {$hubLabel} assigned to pick up package from seller. {$scheduledNote}",
                 'location'        => $hubLabel,
                 'actor_type'      => 'Logistics',
                 'actor_id'        => $user->id,
@@ -509,12 +559,13 @@ class ShipmentController extends Controller
         $profile = $user->logisticsProfile;
 
         if (! $profile || (int) $shipment->logistics_profile_id !== (int) $profile->id) {
-            abort(403);
+            abort(403, 'This shipment is not assigned to your logistics company.');
         }
 
         $validated = $request->validate([
-            'rider_id' => ['required', 'integer', 'exists:riders,id'],
-            'notes'    => ['nullable', 'string', 'max:500'],
+            'rider_id'              => ['required', 'integer', 'exists:riders,id'],
+            'scheduled_delivery_by' => ['nullable', 'date'],
+            'notes'                 => ['nullable', 'string', 'max:500'],
         ]);
 
         /** @var Rider $rider */
@@ -523,33 +574,26 @@ class ShipmentController extends Controller
             ->where('status', 'approved')
             ->findOrFail($validated['rider_id']);
 
-        if ($user->isBranchLogisticsAccount() && (int) $rider->assigned_hub?->id !== (int) $user->branchLogisticsHub?->id) {
-            abort(403, 'Branch accounts can only assign riders belonging to their own Branch Hub.');
-        }
+        $shipment->loadMissing('packages.logisticsHub');
+        $primaryPackage = $shipment->packages->first();
+        $targetHubId = $primaryPackage?->logistics_hub_id ?? ($shipment->hub_address_snapshot['logistics_hub_id'] ?? null);
+        $deliveryMun = $this->addressService->normalizeName($shipment->delivery_address_snapshot['municipality'] ?? '');
+        $pickupMun = $this->addressService->normalizeName(
+            $primaryPackage?->logisticsHub?->municipality
+            ?? ($shipment->hub_address_snapshot['municipality'] ?? ($shipment->pickup_address_snapshot['municipality'] ?? ''))
+        );
 
-        $deliveryBarangay = $this->addressService->normalizeName($shipment->delivery_address_snapshot['barangay'] ?? '');
-        if ($deliveryBarangay !== '' && $rider->barangayCoverages->isNotEmpty()) {
-            $anyCompanyRiderCoversBrgy = Rider::where('logistics_profile_id', $profile->id)
-                ->where('status', 'approved')
-                ->whereHas('barangayCoverages', function ($q) {
-                    $q->where('is_active', true);
-                })
-                ->get()
-                ->contains(function (Rider $candidate) use ($deliveryBarangay) {
-                    return $candidate->barangayCoverages->contains(
-                        fn ($c) => $this->addressService->normalizeName($c->barangay_name) === $deliveryBarangay
-                    );
-                });
+        $riderHub = $rider->assigned_hub;
+        $riderMun = $this->addressService->normalizeName($riderHub?->municipality);
 
-            $selectedRiderCoversBrgy = $rider->barangayCoverages->contains(
-                fn ($c) => $this->addressService->normalizeName($c->barangay_name) === $deliveryBarangay
-            );
+        $matchesMunicipalityOrHub = ($deliveryMun !== '' && $riderMun === $deliveryMun)
+            || ($targetHubId && $riderHub && (int) $riderHub->id === (int) $targetHubId)
+            || ($pickupMun !== '' && $riderMun === $pickupMun);
 
-            if ($anyCompanyRiderCoversBrgy && ! $selectedRiderCoversBrgy) {
-                return back()->withErrors([
-                    'rider_id' => "Rider {$rider->full_name} is not assigned to cover Barangay \"{$shipment->delivery_address_snapshot['barangay']}\". Please select a Rider covering that Barangay.",
-                ]);
-            }
+        if (! $matchesMunicipalityOrHub) {
+            return back()->withErrors([
+                'rider_id' => "Rider {$rider->full_name} is registered to {$riderHub?->municipality} and cannot be assigned to a shipment outside their registered hub municipality.",
+            ]);
         }
 
         DB::transaction(function () use ($shipment, $rider, $profile, $user, $validated) {
@@ -561,23 +605,36 @@ class ShipmentController extends Controller
                 ]);
             }
 
+            // Mark other riders' pending assignments on this shipment as reassigned
             DeliveryAssignment::where('shipment_id', $locked->id)
+                ->where('rider_id', '!=', $rider->id)
                 ->whereIn('status', ['assigned', 'accepted', 'collected'])
                 ->update(['status' => 'reassigned']);
 
             $nextAttemptNumber = (int) $locked->delivery_attempts_count + 1;
+            $scheduledNote = ! empty($validated['scheduled_delivery_by'])
+                ? '[Scheduled Delivery By: ' . \Carbon\Carbon::parse($validated['scheduled_delivery_by'])->format('M d, Y h:i A') . '] '
+                : '[SLA: Dispatch within 2 hours] ';
 
-            DeliveryAssignment::create([
-                'shipment_id'          => $locked->id,
-                'seller_order_id'      => $locked->seller_order_id,
-                'logistics_profile_id' => $profile->id,
-                'rider_id'             => $rider->id,
-                'assigned_by'          => $user->id,
-                'attempt_number'       => $nextAttemptNumber,
-                'status'               => 'assigned',
-                'assigned_at'          => now(),
-                'notes'                => $validated['notes'] ?? null,
-            ]);
+            // Single-record upsert per (shipment_id, rider_id) so duplicate cards never appear on Rider dashboard!
+            DeliveryAssignment::updateOrCreate(
+                [
+                    'shipment_id' => $locked->id,
+                    'rider_id'    => $rider->id,
+                ],
+                [
+                    'seller_order_id'      => $locked->seller_order_id,
+                    'logistics_profile_id' => $profile->id,
+                    'assigned_by'          => $user->id,
+                    'attempt_number'       => $nextAttemptNumber,
+                    'status'               => 'assigned',
+                    'assigned_at'          => now(),
+                    'accepted_at'          => null,
+                    'out_for_delivery_at'  => null,
+                    'completed_at'         => null,
+                    'notes'                => trim($scheduledNote . ($validated['notes'] ?? '')),
+                ]
+            );
 
             foreach ($locked->packages as $pkg) {
                 $pkg->update([
@@ -599,7 +656,7 @@ class ShipmentController extends Controller
                 'seller_order_id' => $locked->seller_order_id,
                 'status'          => 'rider_assigned',
                 'title'           => "Last-Mile Delivery Rider Assigned (Attempt #{$nextAttemptNumber})",
-                'description'     => "Rider {$rider->full_name} ({$rider->vehicle_type} - {$rider->plate_number}) assigned for delivery. Awaiting Rider task acceptance and package QR verification.",
+                'description'     => "Rider {$rider->full_name} ({$rider->vehicle_type} - {$rider->plate_number}) assigned for delivery. {$scheduledNote}",
                 'location'        => $rider->assigned_hub?->hub_name ?? $profile->business_name,
                 'actor_type'      => 'Logistics',
                 'actor_id'        => $user->id,
@@ -633,13 +690,28 @@ class ShipmentController extends Controller
                 ->findOrFail($validated['rider_id']);
         }
 
-        DB::transaction(function () use ($shipment, $profile, $user, $validated, $newRider) {
+        $abandonmentShipment = null;
+        $abandonmentOrder = null;
+        $abandonmentReasonText = '';
+        $abandonmentAttempts = 1;
+
+        DB::transaction(function () use (
+            $shipment,
+            $profile,
+            $user,
+            $validated,
+            $newRider,
+            &$abandonmentShipment,
+            &$abandonmentOrder,
+            &$abandonmentReasonText,
+            &$abandonmentAttempts
+        ) {
             $locked = Shipment::with(['sellerOrder.order', 'sellerOrder.payment', 'deliveryAttempts', 'packages'])
                 ->where('id', $shipment->id)
                 ->lockForUpdate()
                 ->firstOrFail();
 
-            if ($locked->status !== 'delivery_failed') {
+            if (! in_array($locked->status, ['delivery_failed', 'returning_to_seller'], true)) {
                 throw ValidationException::withMessages([
                     'shipment' => 'Only shipments with a failed delivery attempt can be resolved here.',
                 ]);
@@ -655,6 +727,12 @@ class ShipmentController extends Controller
             }
 
             if ($validated['resolution'] === 'schedule_redelivery') {
+                if ((int) $locked->delivery_attempts_count >= 3) {
+                    throw ValidationException::withMessages([
+                        'shipment' => 'This parcel has already failed 3 delivery attempts and must be returned to the seller (RTS).',
+                    ]);
+                }
+
                 foreach ($locked->packages as $pkg) {
                     $pkg->update([
                         'rider_accepted_at'         => null,
@@ -667,17 +745,29 @@ class ShipmentController extends Controller
                 if ($newRider) {
                     $nextAttemptNumber = (int) $locked->delivery_attempts_count + 1;
 
-                    DeliveryAssignment::create([
-                        'shipment_id'          => $locked->id,
-                        'seller_order_id'      => $locked->seller_order_id,
-                        'logistics_profile_id' => $profile->id,
-                        'rider_id'             => $newRider->id,
-                        'assigned_by'          => $user->id,
-                        'attempt_number'       => $nextAttemptNumber,
-                        'status'               => 'assigned',
-                        'assigned_at'          => now(),
-                        'notes'                => $validated['notes'] ?? 'Scheduled for redelivery.',
-                    ]);
+                    DeliveryAssignment::where('shipment_id', $locked->id)
+                        ->where('rider_id', '!=', $newRider->id)
+                        ->whereIn('status', ['assigned', 'accepted', 'collected'])
+                        ->update(['status' => 'reassigned']);
+
+                    DeliveryAssignment::updateOrCreate(
+                        [
+                            'shipment_id' => $locked->id,
+                            'rider_id'    => $newRider->id,
+                        ],
+                        [
+                            'seller_order_id'      => $locked->seller_order_id,
+                            'logistics_profile_id' => $profile->id,
+                            'assigned_by'          => $user->id,
+                            'attempt_number'       => $nextAttemptNumber,
+                            'status'               => 'assigned',
+                            'assigned_at'          => now(),
+                            'accepted_at'          => null,
+                            'out_for_delivery_at'  => null,
+                            'completed_at'         => null,
+                            'notes'                => $validated['notes'] ?? 'Scheduled for redelivery.',
+                        ]
+                    );
 
                     $locked->update([
                         'current_rider_id'  => $newRider->id,
@@ -685,7 +775,7 @@ class ShipmentController extends Controller
                         'rider_assigned_at' => now(),
                     ]);
 
-                    $desc = "Logistics scheduled redelivery (Attempt #{$nextAttemptNumber}) and assigned Rider {$newRider->full_name}.";
+                    $desc = "Logistics scheduled redelivery (Attempt #{$nextAttemptNumber} of 3) and assigned Rider {$newRider->full_name}.";
                 } else {
                     $locked->update([
                         'current_rider_id' => null,
@@ -721,6 +811,11 @@ class ShipmentController extends Controller
                     'remarks'         => $desc,
                 ]);
             } else {
+                $failureReason = $latestAttempt?->failure_reason ?: 'Buyer abandoned or failed to receive COD parcel';
+                if (! empty($validated['notes'])) {
+                    $failureReason .= ' (' . trim($validated['notes']) . ')';
+                }
+
                 $locked->update([
                     'status'      => 'returned_to_seller',
                     'returned_at' => now(),
@@ -737,13 +832,14 @@ class ShipmentController extends Controller
                 ]);
 
                 $this->inventoryStockService->restoreStockForSellerOrder($locked->sellerOrder);
+                $this->voucherService->restoreVouchersForSellerOrder($locked->sellerOrder);
 
                 ShipmentTracking::create([
                     'shipment_id'     => $locked->id,
                     'seller_order_id' => $locked->seller_order_id,
                     'status'          => 'returned_to_seller',
-                    'title'           => 'Package Returned to Seller',
-                    'description'     => 'Following unsuccessful delivery, Logistics initiated return to seller and reserved stock was restored.',
+                    'title'           => 'Package Returned to Seller (RTS — Buyer Abandonment Logged)',
+                    'description'     => "Following unsuccessful delivery ({$failureReason}), Logistics initiated Return to Seller (RTS), restored reserved stock, and recorded a COD abandonment strike against the buyer.",
                     'location'        => $profile->business_name,
                     'actor_type'      => 'Logistics',
                     'actor_id'        => $user->id,
@@ -757,12 +853,26 @@ class ShipmentController extends Controller
                     'to_status'       => 'returned_to_seller',
                     'actor_type'      => 'Logistics',
                     'actor_id'        => $user->id,
-                    'remarks'         => 'Failed delivery resolved as Return to Seller. Reserved stock automatically restored.',
+                    'remarks'         => "Failed delivery resolved as Return to Seller (RTS): {$failureReason}. Reserved stock restored and Buyer COD abandonment strike logged.",
                 ]);
 
                 $this->orderCompletionService->syncParentOrderStatus($locked->sellerOrder->order);
+
+                $abandonmentShipment = $locked;
+                $abandonmentOrder = $locked->sellerOrder;
+                $abandonmentReasonText = $failureReason;
+                $abandonmentAttempts = max(1, (int) $locked->delivery_attempts_count);
             }
         });
+
+        if ($abandonmentShipment && $abandonmentOrder) {
+            $this->buyerAbandonmentService->recordCodParcelAbandonment(
+                shipment: $abandonmentShipment,
+                sellerOrder: $abandonmentOrder,
+                abandonmentReason: $abandonmentReasonText,
+                failedAttemptsCount: $abandonmentAttempts
+            );
+        }
 
         return back()->with('success', 'Failed delivery report resolved successfully.');
     }
@@ -791,9 +901,10 @@ class ShipmentController extends Controller
             ->where('logistics_profile_id', $profile->id)
             ->where('status', 'approved');
 
+        // Branch Hub only sees its own registered riders; Main Hub sees all riders across its branches
         if ($user->isBranchLogisticsAccount() && $user->branchLogisticsHub) {
             $branchId = (int) $user->branchLogisticsHub->id;
-            $query->whereHas('currentHubAssignment', fn ($q) => $q->where('logistics_hub_id', $branchId));
+            $query->whereHas('currentHubAssignment', fn ($q) => $q->where('logistics_hub_id', $branchId)->where('is_current', true));
         }
 
         if ($filter === 'available') {

@@ -14,6 +14,8 @@
     $extra = $sellerOrder->extra;
     $evidencePhotos = is_array($extra?->dispute_evidence_photos) ? $extra->dispute_evidence_photos : [];
     $canBuyerCancel = $sellerOrder->canBuyerCancelPreShipment();
+    $isRated = $sellerOrder->isRatedByBuyer();
+    $isIdentityVerified = $isIdentityVerified ?? (auth()->user()?->identityVerification?->status === 'verified');
 @endphp
 
 <div x-data="{
@@ -27,6 +29,17 @@
         isSubmittingDispute: false,
         disputeFilesError: '',
         selectedEvidenceNames: [],
+        refundMethod: 'GCASH',
+        refundPhone: '',
+        sanitizeRefundPhone() {
+            let digits = (this.refundPhone || '').replace(/\D/g, '');
+            if (digits.startsWith('63') && digits.length === 12) {
+                digits = '0' + digits.slice(2);
+            } else if (digits.startsWith('9') && digits.length === 10) {
+                digits = '0' + digits;
+            }
+            this.refundPhone = digits.slice(0, 11);
+        },
         validateEvidenceFiles(event) {
             this.disputeFilesError = '';
             this.selectedEvidenceNames = [];
@@ -81,6 +94,42 @@
         </div>
     @endif
 
+    @if($sellerOrder->status === 'completed')
+        <div class="p-5 rounded-3xl {{ $isRated ? 'bg-green-50 border-2 border-green-200' : 'bg-amber-50 border-2 border-amber-300' }} flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div>
+                @if(!$isRated)
+                    <span class="px-2.5 py-0.5 rounded-full bg-amber-200 text-amber-950 text-[10px] font-extrabold uppercase">Next Step: Rate Your Order</span>
+                    <h3 class="text-base font-bold text-amber-950 mt-1">Order Received! Rate Product, Condition, Seller, Logistics &amp; Rider</h3>
+                    <p class="text-xs text-amber-900 mt-0.5">
+                        Leave your 5-point rating to help the community and unlock the <strong>Buy Again</strong> button for this order.
+                    </p>
+                @else
+                    <span class="px-2.5 py-0.5 rounded-full bg-green-200 text-green-900 text-[10px] font-extrabold uppercase">Order Completed &amp; Rated ({{ number_format((float) $sellerOrder->serviceRating->overall_average_rating, 1) }} ★)</span>
+                    <h3 class="text-base font-bold text-green-950 mt-1">Thank You for Rating This Order!</h3>
+                    <p class="text-xs text-green-800 mt-0.5">
+                        Your ratings for the product, packaging condition, seller, logistics hub, and rider have been recorded.
+                    </p>
+                @endif
+            </div>
+
+            <div class="shrink-0">
+                @if(!$isRated)
+                    <a href="{{ route('user.orders.rate.show', $sellerOrder->id) }}"
+                       class="inline-flex items-center gap-2 px-5 py-3 rounded-2xl bg-amber-500 hover:bg-amber-600 text-white text-xs font-extrabold shadow-sm transition-colors">
+                        ★ To Rate Order &amp; Services
+                    </a>
+                @else
+                    <form action="{{ route('user.orders.buy-again', $sellerOrder->id) }}" method="POST" class="m-0">
+                        @csrf
+                        <button type="submit" class="px-6 py-3 rounded-2xl bg-primary hover:bg-primary-dark text-white text-xs font-bold shadow-sm transition-colors cursor-pointer">
+                            Buy Again
+                        </button>
+                    </form>
+                @endif
+            </div>
+        </div>
+    @endif
+
     @if($sellerOrder->status === 'pending_buyer_response')
         <div class="p-6 rounded-3xl bg-amber-50 border-2 border-amber-300 space-y-4">
             <div class="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-amber-200">
@@ -116,7 +165,7 @@
                             <strong class="font-mono text-primary-dark block">{{ $paymentSubmission->reference_number }} ({{ $paymentSubmission->reference_code }})</strong>
                         </div>
                         <div>
-                            <span class="text-text-muted">Date & Time Submitted:</span>
+                            <span class="text-text-muted">Date &amp; Time Submitted:</span>
                             <strong class="text-text-main block">{{ $paymentSubmission->paid_at?->format('M d, Y h:i A') }}</strong>
                         </div>
                     </div>
@@ -132,7 +181,7 @@
                     <form action="{{ route('user.orders.switch-to-cod', $sellerOrder->id) }}" method="POST" class="m-0">
                         @csrf
                         <button type="submit" class="px-5 py-2.5 rounded-xl bg-primary hover:bg-primary-dark text-white text-xs font-bold shadow-sm transition-colors cursor-pointer">
-                            Yes, Switch to COD & Continue
+                            Yes, Switch to COD &amp; Continue
                         </button>
                     </form>
 
@@ -170,19 +219,26 @@
     @if($sellerOrder->status === 'delivered' && !$sellerOrder->has_unresolved_dispute)
         <div class="p-5 rounded-2xl bg-blue-50 border border-blue-200 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div>
-                <h3 class="text-sm font-bold text-blue-900">Package Delivered — Confirm Receipt or Request Return</h3>
+                <div class="flex items-center gap-2">
+                    <h3 class="text-sm font-bold text-blue-900">Package Delivered — Confirm Receipt or Request Return &amp; Refund</h3>
+                    @if($isIdentityVerified)
+                        <span class="px-2 py-0.5 rounded-full bg-green-100 text-green-800 text-[10px] font-bold">Valid ID Verified ✓</span>
+                    @else
+                        <span class="px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 text-[10px] font-bold">Valid ID Required for Refund</span>
+                    @endif
+                </div>
                 <p class="text-xs text-blue-800 mt-1 leading-relaxed">
                     Please inspect your items. If you don't confirm or report a problem by
                     <strong>{{ $sellerOrder->confirmation_deadline_at?->format('M d, Y h:i A') }}</strong>
                     ({{ $sellerOrder->confirmation_deadline_at?->diffForHumans() }}),
-                    this order will automatically complete.
+                    this order will automatically complete and release commission earnings.
                 </p>
             </div>
-            <div class="flex items-center gap-2.5 shrink-0">
+            <div class="flex flex-wrap items-center gap-2.5 shrink-0">
                 <button type="button"
                         @click.stop="disputeModalOpen = true"
                         class="px-4 py-2.5 rounded-xl border border-red-300 bg-white hover:bg-red-50 text-red-600 text-xs font-bold transition-colors cursor-pointer">
-                    Request Return / Report Problem
+                    Request Return / Refund
                 </button>
                 <form action="{{ route('user.orders.confirm-receipt', $sellerOrder->id) }}" method="POST" class="m-0">
                     @csrf
@@ -197,7 +253,7 @@
     @if($sellerOrder->has_unresolved_dispute || $sellerOrder->status === 'disputed' || $extra?->seller_return_decision)
         <div class="p-5 rounded-2xl bg-red-50 border border-red-200 space-y-3 text-xs">
             <div class="flex flex-wrap items-center justify-between gap-2">
-                <h3 class="text-sm font-bold text-red-900">Return / Delivery Dispute Status</h3>
+                <h3 class="text-sm font-bold text-red-900">Return / Refund Dispute Status</h3>
                 @if($extra?->is_escalated_to_admin)
                     <span class="px-2.5 py-0.5 rounded-full bg-red-200 text-red-950 font-extrabold uppercase text-[10px]">Escalated to Storkia Admin</span>
                 @elseif($extra?->seller_return_decision)
@@ -213,6 +269,18 @@
                 Reported on {{ $sellerOrder->dispute_reported_at?->format('M d, Y h:i A') }}:
                 <em>"{{ $sellerOrder->dispute_reason }}"</em>
             </p>
+
+            @if($extra?->refund_method)
+                <div class="p-3 rounded-xl bg-white border border-red-200 flex flex-wrap items-center justify-between gap-2">
+                    <span>
+                        Refund Payout Method: <strong>{{ $extra->refund_method }}</strong>
+                        @if($extra->refund_account_number)
+                            ({{ $extra->refund_account_name }} &bull; <span class="font-mono">{{ $extra->refund_account_number }}</span>)
+                        @endif
+                    </span>
+                    <span class="font-bold text-primary">Refund Amount: ₱{{ number_format((float) ($extra->refund_amount ?: $sellerOrder->total_amount), 2) }}</span>
+                </div>
+            @endif
 
             @if(!empty($evidencePhotos))
                 <div class="pt-1">
@@ -248,13 +316,6 @@
         </div>
     @endif
 
-    @if(in_array($sellerOrder->status, ['rejected', 'cancelled'], true) && $sellerOrder->rejection_reason)
-        <div class="p-5 rounded-2xl bg-red-50 border border-red-200">
-            <h3 class="text-sm font-bold text-red-900">Order {{ $sellerOrder->status === 'rejected' ? 'Rejected by Seller' : 'Cancelled' }}</h3>
-            <p class="text-xs text-red-800 mt-1">Reason: <em>"{{ $sellerOrder->rejection_reason }}"</em></p>
-        </div>
-    @endif
-
     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div class="p-5 rounded-2xl bg-surface border border-border-subtle space-y-2">
             <h3 class="text-xs font-bold uppercase tracking-wider text-text-muted">Delivery Address Snapshot</h3>
@@ -264,7 +325,7 @@
         </div>
 
         <div class="p-5 rounded-2xl bg-surface border border-border-subtle space-y-2">
-            <h3 class="text-xs font-bold uppercase tracking-wider text-text-muted">Shipment & Payment Info</h3>
+            <h3 class="text-xs font-bold uppercase tracking-wider text-text-muted">Shipment &amp; Payment Info</h3>
             <div class="text-xs space-y-1">
                 <div class="flex justify-between gap-2">
                     <span class="text-text-muted">Seller Store:</span>
@@ -288,12 +349,6 @@
                     <span class="text-text-muted">Payment Method / Status:</span>
                     <span class="font-bold text-text-main uppercase text-right">{{ $payMethod }} ({{ $sellerOrder->payment_status }})</span>
                 </div>
-                @if($paymentSubmission)
-                    <div class="flex justify-between gap-2">
-                        <span class="text-text-muted">GCash Ref # / Code:</span>
-                        <span class="font-mono font-bold text-blue-800 text-right">{{ $paymentSubmission->reference_number }} ({{ $paymentSubmission->reference_code }})</span>
-                    </div>
-                @endif
             </div>
 
             <div class="pt-2 border-t border-border-subtle flex flex-wrap items-center justify-between gap-2">
@@ -309,37 +364,12 @@
                     <button type="button"
                             @click.stop="proofModalOpen = true"
                             class="px-3 py-1.5 rounded-xl bg-primary/10 text-primary hover:bg-primary hover:text-white text-xs font-bold transition-colors cursor-pointer">
-                        View Delivery Photo Proof
+                        Inspect Delivery Photo
                     </button>
                 @endif
             </div>
         </div>
     </div>
-
-    @if($shipment && $shipment->trackingLogs->isNotEmpty())
-        <div class="p-5 sm:p-6 rounded-2xl bg-surface border border-border-subtle space-y-4">
-            <h3 class="text-sm font-bold text-primary-dark">Shipment Tracking Timeline</h3>
-            <div class="relative pl-6 border-l-2 border-primary/30 space-y-5">
-                @foreach($shipment->trackingLogs as $idx => $log)
-                    <div class="relative">
-                        <span class="absolute -left-[31px] top-1 w-3.5 h-3.5 rounded-full border-2 border-white {{ $idx === 0 ? 'bg-primary ring-4 ring-primary/20' : 'bg-gray-300' }}"></span>
-                        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
-                            <h4 class="text-xs sm:text-sm font-bold {{ $idx === 0 ? 'text-primary-dark' : 'text-text-main' }}">
-                                {{ $log->title }}
-                            </h4>
-                            <span class="text-[11px] text-text-muted">{{ $log->occurred_at?->format('M d, Y h:i A') }}</span>
-                        </div>
-                        @if($log->description)
-                            <p class="text-xs text-text-muted mt-0.5">{{ $log->description }}</p>
-                        @endif
-                        @if($log->location)
-                            <p class="text-[11px] text-text-muted/80 mt-0.5">Location: {{ $log->location }}</p>
-                        @endif
-                    </div>
-                @endforeach
-            </div>
-        </div>
-    @endif
 
     <div class="bg-surface rounded-2xl border border-border-subtle overflow-hidden">
         <div class="p-4 sm:px-5 bg-surface-subtle/60 border-b border-border-subtle">
@@ -369,20 +399,7 @@
             @endforeach
         </div>
 
-        @if($extra && $extra->buyer_note)
-            <div class="px-4 sm:px-5 py-3 bg-brand-light/30 border-t border-border-subtle text-xs">
-                <span class="font-bold text-primary-dark">Your Note to Seller:</span>
-                <span class="text-text-main italic ml-1">"{{ $extra->buyer_note }}"</span>
-            </div>
-        @endif
-
         <div class="p-4 sm:px-5 bg-surface-subtle/40 border-t border-border-subtle space-y-1.5 text-xs sm:text-sm">
-            @if($extra && (float) $extra->original_subtotal_amount > 0 && (float) $extra->original_subtotal_amount !== (float) $sellerOrder->subtotal_amount)
-                <div class="flex justify-between text-text-muted">
-                    <span>Original Merchandise Subtotal:</span>
-                    <span class="font-semibold text-text-main">₱{{ number_format((float) $extra->original_subtotal_amount, 2) }}</span>
-                </div>
-            @endif
             @if($extra && (float) $extra->store_voucher_discount > 0)
                 <div class="flex justify-between text-green-700 font-bold">
                     <span>Store Voucher ({{ $extra->store_voucher_code }}):</span>
@@ -416,63 +433,6 @@
     </div>
 
     <template x-teleport="body">
-        <div x-show="cancelModalOpen"
-             x-cloak
-             class="fixed inset-0 z-[185] flex items-center justify-center p-4">
-            <div @click="cancelModalOpen = false" class="absolute inset-0 bg-black/60 backdrop-blur-xs cursor-pointer"></div>
-
-            <div @click.stop class="relative z-10 bg-surface rounded-3xl max-w-md w-full p-6 shadow-2xl border border-border-subtle space-y-4">
-                <div class="flex items-center justify-between pb-3 border-b border-border-subtle">
-                    <h3 class="text-base font-bold text-primary-dark">Cancel Order #{{ $sellerOrder->seller_order_number }}</h3>
-                    <button type="button" @click="cancelModalOpen = false" class="p-1 text-text-muted hover:text-text-main cursor-pointer">&times;</button>
-                </div>
-
-                <div class="p-3 rounded-2xl bg-surface-subtle border border-border-subtle text-[11px] text-text-muted space-y-1">
-                    <span class="font-bold text-primary-dark block">Anti-Sabotage Cancellation Policy (Rolling {{ $cancellationQuota['window_days'] }}-Day Window):</span>
-                    <div>&bull; Max <strong>{{ $cancellationQuota['limit_by_product'] }}</strong> cancellations per same product</div>
-                    <div>&bull; Max <strong>{{ $cancellationQuota['limit_by_seller'] }}</strong> cancellations per same seller store</div>
-                    <div>&bull; Max <strong>{{ $cancellationQuota['limit_by_buyer'] }}</strong> total cancellations ({{ $cancellationQuota['used_by_buyer'] }} used / {{ $cancellationQuota['remaining_buyer'] }} remaining)</div>
-                </div>
-
-                <form action="{{ route('user.orders.cancel', $sellerOrder->id) }}"
-                      method="POST"
-                      @submit="if (isSubmittingCancel) { $event.preventDefault(); } else { isSubmittingCancel = true; }"
-                      class="space-y-4 text-xs">
-                    @csrf
-                    <div>
-                        <label class="block font-bold text-text-muted mb-1">Select Cancellation Reason <span class="text-danger">*</span></label>
-                        <select name="cancel_reason" required class="w-full p-3 rounded-xl border border-border-subtle bg-surface font-semibold outline-none focus:border-primary">
-                            <option value="">-- Choose a reason --</option>
-                            <option value="Changed my mind">Changed my mind</option>
-                            <option value="Need to change delivery address">Need to change delivery address</option>
-                            <option value="Forgot to apply voucher code">Forgot to apply voucher code</option>
-                            <option value="Ordered wrong item or variation">Ordered wrong item or variation</option>
-                            <option value="Found a better price elsewhere">Found a better price elsewhere</option>
-                        </select>
-                    </div>
-
-                    <div>
-                        <label class="block font-bold text-text-muted mb-1">Additional Remarks (Optional)</label>
-                        <textarea name="cancel_notes" rows="2" maxlength="500" placeholder="Optional note for the seller..." class="w-full p-3 rounded-xl border border-border-subtle outline-none focus:border-primary"></textarea>
-                    </div>
-
-                    <div class="flex justify-end gap-2">
-                        <button type="button" @click="cancelModalOpen = false" class="px-4 py-2 rounded-xl bg-surface-subtle text-text-muted font-bold cursor-pointer">
-                            Keep Order
-                        </button>
-                        <button type="submit"
-                                :disabled="isSubmittingCancel"
-                                class="px-5 py-2 rounded-xl bg-danger text-white font-bold hover:opacity-90 cursor-pointer disabled:opacity-50">
-                            <span x-show="!isSubmittingCancel">Confirm Cancel Order</span>
-                            <span x-show="isSubmittingCancel" x-cloak>Cancelling...</span>
-                        </button>
-                    </div>
-                </form>
-            </div>
-        </div>
-    </template>
-
-    <template x-teleport="body">
         <div x-show="disputeModalOpen"
              x-cloak
              class="fixed inset-0 z-[185] flex items-center justify-center p-4">
@@ -480,74 +440,172 @@
                  class="absolute inset-0 bg-black/60 backdrop-blur-xs cursor-pointer"></div>
 
             <div @click.stop
-                 class="relative z-10 bg-surface rounded-3xl max-w-md w-full p-6 shadow-2xl border border-border-subtle space-y-4 max-h-[90vh] overflow-y-auto">
+                 class="relative z-10 bg-surface rounded-3xl max-w-md w-full p-6 shadow-2xl border border-border-subtle space-y-4 max-h-[92vh] overflow-y-auto">
                 <div class="flex items-center justify-between pb-3 border-b border-border-subtle">
-                    <h3 class="text-base font-bold text-primary-dark">Request Return / Report Delivery Problem</h3>
-                    <button type="button" @click="disputeModalOpen = false" class="p-1 text-text-muted hover:text-text-main cursor-pointer">
-                        <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
-                    </button>
+                    <h3 class="text-base font-bold text-primary-dark">Request Return &amp; Refund</h3>
+                    <button type="button" @click="disputeModalOpen = false" class="p-1 text-text-muted hover:text-text-main cursor-pointer">&times;</button>
                 </div>
 
-                <form action="{{ route('user.orders.report-dispute', $sellerOrder->id) }}"
+                @if(!$isIdentityVerified)
+                    <div class="p-4 rounded-2xl bg-amber-50 border border-amber-300 space-y-3 text-xs">
+                        <div class="font-extrabold text-amber-950 text-sm">Valid ID Verification Required for Refunds</div>
+                        <p class="text-amber-900 leading-relaxed">
+                            To protect both buyers and merchants from fraudulent claims, Storkia requires an approved <strong>Valid Government ID</strong> on your account before submitting a Return &amp; Refund request.
+                        </p>
+                        <div class="pt-1 flex justify-end gap-2">
+                            <button type="button" @click="disputeModalOpen = false" class="px-4 py-2 rounded-xl bg-white border border-amber-300 text-amber-900 font-bold cursor-pointer">
+                                Close
+                            </button>
+                            <a href="{{ route('user.identity-verification') }}" class="px-4 py-2 rounded-xl bg-primary text-white font-bold shadow-xs">
+                                Verify Valid ID Now &rarr;
+                            </a>
+                        </div>
+                    </div>
+                @else
+                    <form action="{{ route('user.orders.report-dispute', $sellerOrder->id) }}"
+                          method="POST"
+                          enctype="multipart/form-data"
+                          @submit="if (isSubmittingDispute || disputeFilesError) { $event.preventDefault(); } else { isSubmittingDispute = true; }"
+                          class="space-y-4 text-xs">
+                        @csrf
+
+                        <div class="p-2.5 rounded-xl bg-green-50 border border-green-200 text-green-800 font-semibold flex items-center justify-between">
+                            <span>✓ Valid Government ID Verified</span>
+                            <span>Refundable: ₱{{ number_format((float) $sellerOrder->total_amount, 2) }}</span>
+                        </div>
+
+                        <div>
+                            <label class="block font-bold text-text-muted mb-1">Issue Category <span class="text-danger">*</span></label>
+                            <select name="dispute_reason_category" required class="w-full p-3 rounded-xl border border-border-subtle bg-surface font-semibold">
+                                <option value="Damaged item">Damaged item</option>
+                                <option value="Wrong item or variation received">Wrong item or variation received</option>
+                                <option value="Missing quantity / incomplete parcel">Missing quantity / incomplete parcel</option>
+                                <option value="Defective or not working">Defective or not working</option>
+                            </select>
+                        </div>
+
+                        <div>
+                            <label class="block font-bold text-text-muted mb-1">Refund Payout Destination <span class="text-danger">*</span></label>
+                            <div class="grid grid-cols-2 gap-2">
+                                <label class="p-2.5 rounded-xl border cursor-pointer flex items-center gap-2 font-bold"
+                                       :class="refundMethod === 'GCASH' ? 'border-blue-600 bg-blue-50 text-blue-900' : 'border-border-subtle'">
+                                    <input type="radio" name="refund_method" value="GCASH" x-model="refundMethod">
+                                    <span>GCash Refund</span>
+                                </label>
+                                <label class="p-2.5 rounded-xl border cursor-pointer flex items-center gap-2 font-bold"
+                                       :class="refundMethod === 'WALLET' ? 'border-primary bg-primary/5 text-primary-dark' : 'border-border-subtle'">
+                                    <input type="radio" name="refund_method" value="WALLET" x-model="refundMethod">
+                                    <span>Storkia Wallet</span>
+                                </label>
+                            </div>
+                        </div>
+
+                        <div x-show="refundMethod === 'GCASH'" class="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                            <div>
+                                <label class="block font-bold text-text-muted mb-1">GCash Account Name <span class="text-danger">*</span></label>
+                                <input type="text" name="refund_account_name" :required="refundMethod === 'GCASH'" placeholder="Juan Dela Cruz" class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface">
+                            </div>
+                            <div>
+                                <label class="block font-bold text-text-muted mb-1">GCash Mobile Number <span class="text-danger">*</span></label>
+                                <input type="text" name="refund_account_number" x-model="refundPhone" @input="sanitizeRefundPhone()" maxlength="11" :required="refundMethod === 'GCASH'" placeholder="09171234567" class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface font-mono">
+                            </div>
+                        </div>
+
+                        <div>
+                            <label class="block font-bold text-text-muted mb-1">Describe the Issue (10+ characters) <span class="text-danger">*</span></label>
+                            <textarea name="dispute_reason"
+                                      rows="3"
+                                      required
+                                      minlength="10"
+                                      maxlength="1000"
+                                      placeholder="Explain what went wrong..."
+                                      class="w-full p-3 rounded-xl border border-border-subtle outline-none focus:border-primary"></textarea>
+                        </div>
+
+                        <div>
+                            <label class="block font-bold text-text-muted mb-1">Upload 1 to 5 Evidence Photos (Max 5MB each) <span class="text-danger">*</span></label>
+                            <input type="file"
+                                   name="evidence_photos[]"
+                                   multiple
+                                   required
+                                   accept="image/jpeg,image/png,image/jpg,image/webp"
+                                   @change="validateEvidenceFiles($event)"
+                                   class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:bg-primary/10 file:text-primary file:font-bold cursor-pointer">
+                            <template x-if="disputeFilesError">
+                                <p class="text-danger font-bold mt-1" x-text="disputeFilesError"></p>
+                            </template>
+                        </div>
+
+                        <div class="flex justify-end gap-2">
+                            <button type="button" @click="disputeModalOpen = false" class="px-4 py-2 rounded-xl bg-surface-subtle text-text-muted font-bold cursor-pointer">
+                                Cancel
+                            </button>
+                            <button type="submit"
+                                    :disabled="isSubmittingDispute || !!disputeFilesError"
+                                    class="px-5 py-2 rounded-xl bg-danger text-white font-bold hover:opacity-90 cursor-pointer disabled:opacity-50">
+                                <span x-show="!isSubmittingDispute">Submit Return &amp; Refund</span>
+                                <span x-show="isSubmittingDispute" x-cloak>Submitting...</span>
+                            </button>
+                        </div>
+                    </form>
+                @endif
+            </div>
+        </div>
+    </template>
+
+    <template x-teleport="body">
+        <div x-show="cancelModalOpen"
+             x-cloak
+             class="fixed inset-0 z-[185] flex items-center justify-center p-4">
+            <div @click="cancelModalOpen = false" class="absolute inset-0 bg-black/60 backdrop-blur-xs cursor-pointer"></div>
+            <div @click.stop class="relative z-10 bg-surface rounded-3xl max-w-md w-full p-6 shadow-2xl border border-border-subtle space-y-4">
+                <div class="flex items-center justify-between pb-3 border-b border-border-subtle">
+                    <h3 class="text-base font-bold text-primary-dark">Cancel Order #{{ $sellerOrder->seller_order_number }}</h3>
+                    <button type="button" @click="cancelModalOpen = false" class="p-1 text-text-muted hover:text-text-main cursor-pointer">&times;</button>
+                </div>
+
+                <form action="{{ route('user.orders.cancel', $sellerOrder->id) }}"
                       method="POST"
-                      enctype="multipart/form-data"
-                      @submit="if (isSubmittingDispute || disputeFilesError) { $event.preventDefault(); } else { isSubmittingDispute = true; }"
+                      @submit="isSubmittingCancel = true"
                       class="space-y-4 text-xs">
                     @csrf
-
                     <div>
-                        <label class="block font-bold text-text-muted mb-1">Issue Category <span class="text-danger">*</span></label>
-                        <select name="dispute_reason_category" required class="w-full p-3 rounded-xl border border-border-subtle bg-surface font-semibold">
-                            <option value="Damaged item">Damaged item</option>
-                            <option value="Wrong item or variation received">Wrong item or variation received</option>
-                            <option value="Missing quantity / incomplete parcel">Missing quantity / incomplete parcel</option>
-                            <option value="Defective or not working">Defective or not working</option>
+                        <label class="block font-bold text-text-muted mb-1">Select Cancellation Reason <span class="text-danger">*</span></label>
+                        <select name="cancel_reason" required class="w-full p-3 rounded-xl border border-border-subtle bg-surface font-semibold">
+                            <option value="">-- Choose a reason --</option>
+                            <option value="Changed my mind">Changed my mind</option>
+                            <option value="Need to change delivery address">Need to change delivery address</option>
+                            <option value="Forgot to apply voucher code">Forgot to apply voucher code</option>
+                            <option value="Ordered wrong item or variation">Ordered wrong item or variation</option>
                         </select>
                     </div>
-
-                    <div>
-                        <label class="block font-bold text-text-muted mb-1.5">Describe the issue (10+ characters) <span class="text-danger">*</span></label>
-                        <textarea name="dispute_reason"
-                                  rows="3"
-                                  required
-                                  minlength="10"
-                                  maxlength="1000"
-                                  placeholder="Explain what went wrong (e.g., Basket arrived with a broken rim)..."
-                                  class="w-full p-3 rounded-xl border border-border-subtle outline-none focus:border-primary"></textarea>
-                    </div>
-
-                    <div>
-                        <label class="block font-bold text-text-muted mb-1.5">Upload 1 to 5 Evidence Photos (Max 5MB each) <span class="text-danger">*</span></label>
-                        <input type="file"
-                               name="evidence_photos[]"
-                               multiple
-                                required
-                               accept="image/jpeg,image/png,image/jpg,image/webp"
-                               @change="validateEvidenceFiles($event)"
-                               class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:bg-primary/10 file:text-primary file:font-bold cursor-pointer">
-                        <template x-if="disputeFilesError">
-                            <p class="text-danger font-bold mt-1" x-text="disputeFilesError"></p>
-                        </template>
-                        <template x-if="selectedEvidenceNames.length > 0">
-                            <p class="text-green-700 font-semibold mt-1" x-text="selectedEvidenceNames.length + ' photo(s) selected for WebP upload'"></p>
-                        </template>
-                    </div>
-
                     <div class="flex justify-end gap-2">
-                        <button type="button" @click="disputeModalOpen = false" class="px-4 py-2 rounded-xl bg-surface-subtle text-text-muted font-bold cursor-pointer">
-                            Cancel
-                        </button>
-                        <button type="submit"
-                                :disabled="isSubmittingDispute || !!disputeFilesError"
-                                class="px-5 py-2 rounded-xl bg-danger text-white font-bold hover:opacity-90 cursor-pointer disabled:opacity-50">
-                            <span x-show="!isSubmittingDispute">Submit Return / Dispute</span>
-                            <span x-show="isSubmittingDispute" x-cloak>Submitting...</span>
-                        </button>
+                        <button type="button" @click="cancelModalOpen = false" class="px-4 py-2 rounded-xl bg-surface-subtle text-text-muted font-bold cursor-pointer">Keep Order</button>
+                        <button type="submit" :disabled="isSubmittingCancel" class="px-5 py-2 rounded-xl bg-danger text-white font-bold cursor-pointer">Confirm Cancel</button>
                     </div>
                 </form>
             </div>
         </div>
     </template>
+
+    @if($latestProof)
+        <template x-teleport="body">
+            <div x-show="proofModalOpen"
+                 x-cloak
+                 class="fixed inset-0 z-[185] flex items-center justify-center p-4">
+                <div @click="proofModalOpen = false" class="absolute inset-0 bg-black/75 backdrop-blur-xs cursor-pointer"></div>
+                <div @click.stop class="relative z-10 bg-surface rounded-3xl max-w-lg w-full p-6 shadow-2xl border border-border-subtle space-y-4">
+                    <div class="flex items-center justify-between pb-3 border-b border-border-subtle">
+                        <h3 class="text-base font-bold text-primary-dark">Proof of Delivery</h3>
+                        <button type="button" @click="proofModalOpen = false" class="p-1 text-text-muted hover:text-text-main cursor-pointer">&times;</button>
+                    </div>
+                    <div class="rounded-2xl overflow-hidden bg-surface-subtle border border-border-subtle flex items-center justify-center max-h-[65vh]">
+                        <img src="{{ route('user.orders.proof-image', $latestProof->id) }}" alt="Proof of Delivery" class="max-h-[60vh] w-auto object-contain">
+                    </div>
+                </div>
+            </div>
+        </template>
+    @endif
 
     @if($paymentSubmission)
         <template x-teleport="body">
@@ -557,10 +615,7 @@
                 <div @click="gcashScreenshotModalOpen = false" class="absolute inset-0 bg-black/75 backdrop-blur-xs cursor-pointer"></div>
                 <div @click.stop class="relative z-10 bg-surface rounded-3xl max-w-lg w-full p-6 shadow-2xl border border-border-subtle space-y-4">
                     <div class="flex items-center justify-between pb-3 border-b border-border-subtle">
-                        <div>
-                            <h3 class="text-base font-bold text-primary-dark">Submitted GCash Screenshot (WebP)</h3>
-                            <p class="text-xs text-text-muted">Ref #{{ $paymentSubmission->reference_number }} &bull; Code: {{ $paymentSubmission->reference_code }}</p>
-                        </div>
+                        <h3 class="text-base font-bold text-primary-dark">Submitted GCash Screenshot (WebP)</h3>
                         <button type="button" @click="gcashScreenshotModalOpen = false" class="p-1 text-text-muted hover:text-text-main cursor-pointer">&times;</button>
                     </div>
                     <div class="rounded-2xl overflow-hidden bg-surface-subtle border border-border-subtle flex items-center justify-center max-h-[65vh]">
@@ -587,36 +642,6 @@
             </div>
         </div>
     </template>
-
-    @if($latestProof)
-        <template x-teleport="body">
-            <div x-show="proofModalOpen"
-                 x-cloak
-                 class="fixed inset-0 z-[185] flex items-center justify-center p-4">
-                <div @click="proofModalOpen = false"
-                     class="absolute inset-0 bg-black/75 backdrop-blur-xs cursor-pointer"></div>
-
-                <div @click.stop
-                     class="relative z-10 bg-surface rounded-3xl max-w-lg w-full p-6 shadow-2xl border border-border-subtle space-y-4">
-                    <div class="flex items-center justify-between pb-3 border-b border-border-subtle">
-                        <div>
-                            <h3 class="text-base font-bold text-primary-dark">Proof of Delivery</h3>
-                            <p class="text-xs text-text-muted">Captured {{ $latestProof->captured_at?->format('M d, Y h:i A') }} &bull; Recipient: {{ $latestProof->recipient_name ?: 'Buyer' }}</p>
-                        </div>
-                        <button type="button" @click="proofModalOpen = false" class="p-1 text-text-muted hover:text-text-main cursor-pointer">
-                            <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
-                        </button>
-                    </div>
-                    <div class="rounded-2xl overflow-hidden bg-surface-subtle border border-border-subtle flex items-center justify-center max-h-[65vh]">
-                        <img src="{{ route('user.orders.proof-image', $latestProof->id) }}" alt="Proof of Delivery" class="max-h-[60vh] w-auto object-contain">
-                    </div>
-                    @if($latestProof->notes)
-                        <p class="text-xs text-text-muted">Rider Notes: <em>"{{ $latestProof->notes }}"</em></p>
-                    @endif
-                </div>
-            </div>
-        </template>
-    @endif
 
 </div>
 @endsection

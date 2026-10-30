@@ -61,6 +61,19 @@ class StorkVoucher extends Model
         return $this->hasMany(BuyerVoucherClaim::class, 'voucher_id');
     }
 
+    public function isExpired(): bool
+    {
+        return $this->status === 'expired'
+            || ($this->ends_at !== null && now()->greaterThan($this->ends_at));
+    }
+
+    public function isUpcoming(): bool
+    {
+        return $this->status === 'active'
+            && $this->starts_at !== null
+            && now()->lessThan($this->starts_at);
+    }
+
     public function isCurrentlyOngoing(): bool
     {
         return $this->status === 'active'
@@ -69,6 +82,40 @@ class StorkVoucher extends Model
             && now()->greaterThanOrEqualTo($this->starts_at)
             && now()->lessThanOrEqualTo($this->ends_at)
             && $this->used_count < $this->total_usage_limit;
+    }
+
+    public function getEffectiveStatusAttribute(): string
+    {
+        if ($this->status === 'ended') {
+            return 'ended';
+        }
+
+        if ($this->isExpired()) {
+            return 'expired';
+        }
+
+        if ((int) $this->used_count >= (int) $this->total_usage_limit) {
+            return 'fully_redeemed';
+        }
+
+        if ($this->isUpcoming()) {
+            return 'upcoming';
+        }
+
+        return 'ongoing';
+    }
+
+    public function getExpirationSummaryAttribute(): string
+    {
+        if (! $this->ends_at) {
+            return 'No expiration date';
+        }
+
+        if ($this->isExpired()) {
+            return 'Expired on ' . $this->ends_at->format('M d, Y h:i A');
+        }
+
+        return 'Expires ' . $this->ends_at->format('M d, Y h:i A') . ' (' . $this->ends_at->diffForHumans() . ')';
     }
 
     public function getBadgeLabelAttribute(): string

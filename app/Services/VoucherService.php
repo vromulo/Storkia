@@ -11,6 +11,14 @@ use Illuminate\Validation\ValidationException;
 
 class VoucherService
 {
+    public function expireOverdueVouchers(): int
+    {
+        return StorkVoucher::where('status', 'active')
+            ->whereNotNull('ends_at')
+            ->where('ends_at', '<', now())
+            ->update(['status' => 'expired']);
+    }
+
     public function normalizeCode(?string $rawCode): string
     {
         return strtoupper(trim((string) $rawCode));
@@ -18,6 +26,8 @@ class VoucherService
 
     public function claimVoucherByCode(int $buyerId, string $rawCode): StorkVoucher
     {
+        $this->expireOverdueVouchers();
+
         $code = $this->normalizeCode($rawCode);
         if ($code === '') {
             throw ValidationException::withMessages([
@@ -58,6 +68,21 @@ class VoucherService
 
     public function assertVoucherActiveAndAvailable(StorkVoucher $voucher, int $buyerId): void
     {
+        if ($voucher->ends_at && now()->gt($voucher->ends_at)) {
+            if ($voucher->status === 'active') {
+                $voucher->update(['status' => 'expired']);
+            }
+            throw ValidationException::withMessages([
+                'voucher' => "Voucher \"{$voucher->code}\" expired on {$voucher->ends_at->format('M d, Y h:i A')}.",
+            ]);
+        }
+
+        if ($voucher->status === 'expired') {
+            throw ValidationException::withMessages([
+                'voucher' => "Voucher \"{$voucher->code}\" has already expired.",
+            ]);
+        }
+
         if ($voucher->status !== 'active') {
             throw ValidationException::withMessages([
                 'voucher' => "Voucher \"{$voucher->code}\" has ended and is no longer valid.",
@@ -67,12 +92,6 @@ class VoucherService
         if ($voucher->starts_at && now()->lt($voucher->starts_at)) {
             throw ValidationException::withMessages([
                 'voucher' => "Voucher \"{$voucher->code}\" has not started yet (Starts {$voucher->starts_at->format('M d, Y h:i A')}).",
-            ]);
-        }
-
-        if ($voucher->ends_at && now()->gt($voucher->ends_at)) {
-            throw ValidationException::withMessages([
-                'voucher' => "Voucher \"{$voucher->code}\" has already expired.",
             ]);
         }
 
@@ -100,6 +119,7 @@ class VoucherService
         array $packageItems,
         float $packageSubtotal
     ): float {
+        $this->expireOverdueVouchers();
         $this->assertVoucherActiveAndAvailable($voucher, $buyerId);
 
         if ($voucher->scope !== 'store' || (int) $voucher->seller_profile_id !== $sellerProfileId) {
@@ -155,6 +175,7 @@ class VoucherService
         float $overallMerchandiseSubtotal,
         float $overallShippingTotal
     ): float {
+        $this->expireOverdueVouchers();
         $this->assertVoucherActiveAndAvailable($voucher, $buyerId);
 
         $minSpend = round((float) $voucher->min_spend, 2);
@@ -222,6 +243,8 @@ class VoucherService
 
     public function restoreVouchersForSellerOrder(SellerOrder $sellerOrder): void
     {
+        $this->expireOverdueVouchers();
+
         $extra = SellerOrderExtra::where('seller_order_id', $sellerOrder->id)->first();
         if (! $extra) {
             return;
@@ -235,8 +258,13 @@ class VoucherService
 
         foreach ($voucherIds as $vId) {
             $voucher = StorkVoucher::where('id', $vId)->lockForUpdate()->first();
-            if ($voucher && (int) $voucher->used_count > 0) {
-                $voucher->decrement('used_count');
+            if ($voucher) {
+                if ((int) $voucher->used_count > 0) {
+                    $voucher->decrement('used_count');
+                }
+                if ($voucher->ends_at && now()->gt($voucher->ends_at) && $voucher->status === 'active') {
+                    $voucher->update(['status' => 'expired']);
+                }
             }
 
             $claim = BuyerVoucherClaim::where('voucher_id', $vId)
@@ -252,6 +280,8 @@ class VoucherService
 
     public function getBuyerAvailableVouchers(int $buyerId): Collection
     {
+        $this->expireOverdueVouchers();
+
         return StorkVoucher::with('sellerProfile')
             ->where('status', 'active')
             ->where('ends_at', '>=', now())

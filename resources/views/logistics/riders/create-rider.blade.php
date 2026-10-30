@@ -1,18 +1,43 @@
 @extends('layouts.logistics', ['title' => 'Storkia - Create Rider Account'])
 
 @section('content')
+@php
+    $isBranchAccount = $isBranchAccount ?? (auth()->user()?->isBranchLogisticsAccount() ?? false);
+    $lockedBranchHub = $lockedBranchHub ?? ($isBranchAccount ? auth()->user()?->branchLogisticsHub : null);
+
+    $hubsArray = $hubs->map(fn ($h) => [
+        'id'           => (string) $h->id,
+        'label'        => ($h->is_main_hub ? 'Main Hub' : 'Branch Hub') . ' — ' . $h->municipality . ' (' . $h->hub_name . ')',
+        'municipality' => $h->municipality,
+        'province'     => $h->province,
+        'hub_name'     => $h->hub_name,
+    ])->values();
+
+    $defaultHubId = (string) ($lockedBranchHub?->id ?? ($hubs->first()?->id ?? ''));
+    $defaultHubLabel = $hubsArray->firstWhere('id', $defaultHubId)['label'] ?? 'Select Company Hub';
+@endphp
+
 <div x-data="{
-    emailPrefix: '',
-    selectedHubId: '{{ $hubs->first()?->id ?? '' }}',
+    emailPrefix: @js(old('email_prefix', '')),
+    hubsOptions: @js($hubsArray),
+    selectedHubId: @js((string) old('logistics_hub_id', $defaultHubId)),
+    selectedHubLabel: @js($defaultHubLabel),
+    hubDropdownOpen: false,
+    vehicleDropdownOpen: false,
+    selectedVehicleType: @js(old('vehicle_type', 'Motorcycle')),
+    vehicleTypes: ['Motorcycle', 'Bicycle / E-Bike', 'Tricycle / Three-Wheeler', 'Sedan / Hatchback'],
     hubBarangaysMap: {{ json_encode($hubs->mapWithKeys(fn($h) => [$h->id => app(\App\Services\AddressService::class)->getBarangaysForLocation($h->province, $h->municipality, $h->municipality_code)])) }},
-    selectedBarangays: [],
+    selectedBarangays: @js(old('barangays', [])),
     sanitizePrefix() {
         this.emailPrefix = (this.emailPrefix || '').toLowerCase().replace(/@.*$/, '').replace(/[^a-z0-9._-]/g, '').slice(0, 40);
     },
     currentBarangays() {
         return this.hubBarangaysMap[this.selectedHubId] || [];
     },
-    onHubChange() {
+    selectHub(hub) {
+        this.selectedHubId = String(hub.id);
+        this.selectedHubLabel = hub.label;
+        this.hubDropdownOpen = false;
         this.selectedBarangays = [];
     }
 }" class="max-w-3xl mx-auto select-none space-y-6">
@@ -23,11 +48,14 @@
             <svg class="w-4 h-4 text-text-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
             </svg>
-            Back to Rider Applications
+            Back to Rider Directory
         </a>
 
         <span class="inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-bold bg-brand-light/60 text-primary-dark border border-border-subtle">
             {{ $profile->business_name }}
+            @if($isBranchAccount && $lockedBranchHub)
+                &bull; {{ $lockedBranchHub->municipality }} Branch
+            @endif
         </span>
     </div>
 
@@ -35,7 +63,11 @@
         <div class="mb-8">
             <h1 class="text-2xl font-bold text-primary-dark">Create Last-Mile Rider Account</h1>
             <p class="text-xs text-text-muted mt-1">
-                Logistics creates active rider accounts directly. Rider logs in using their internal <strong>@storkia.shop</strong> email and password.
+                @if($isBranchAccount && $lockedBranchHub)
+                    Branch Hub Mode: Riders created here are automatically locked and assigned to <strong>{{ $lockedBranchHub->hub_name }} ({{ $lockedBranchHub->municipality }})</strong>.
+                @else
+                    Main Hub Mode: Select which of your company hubs (Main Hub or Branch Hub) this rider will be registered under.
+                @endif
             </p>
         </div>
 
@@ -49,6 +81,8 @@
 
         <form action="{{ route('logistics.riders.store') }}" method="POST" enctype="multipart/form-data" class="space-y-6 text-xs">
             @csrf
+            <input type="hidden" name="logistics_hub_id" :value="selectedHubId">
+            <input type="hidden" name="vehicle_type" :value="selectedVehicleType">
 
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
@@ -77,22 +111,44 @@
                     <label class="block font-bold text-text-muted uppercase tracking-wider mb-1.5">
                         Assign Company Hub (Municipality) <span class="text-danger">*</span>
                     </label>
-                    <select name="logistics_hub_id"
-                            x-model="selectedHubId"
-                            @change="onHubChange()"
-                            required
-                            class="w-full p-3 rounded-xl border border-border-subtle bg-surface text-xs font-semibold outline-none focus:border-primary">
-                        @foreach($hubs as $h)
-                            <option value="{{ $h->id }}">{{ $h->display_type }} — {{ $h->municipality }} ({{ $h->hub_name }})</option>
-                        @endforeach
-                    </select>
+
+                    @if($isBranchAccount && $lockedBranchHub)
+                        <div class="w-full p-3 rounded-xl border border-border-subtle bg-surface-subtle text-xs font-bold text-primary-dark flex items-center justify-between select-none cursor-not-allowed">
+                            <span class="truncate">Branch Hub — {{ $lockedBranchHub->municipality }} ({{ $lockedBranchHub->hub_name }})</span>
+                            <span class="px-2 py-0.5 rounded bg-brand-light/60 text-[10px] font-extrabold uppercase shrink-0">Read-Only</span>
+                        </div>
+                    @else
+                        <div class="relative" @click.away="hubDropdownOpen = false">
+                            <button type="button"
+                                    @click="hubDropdownOpen = !hubDropdownOpen"
+                                    class="w-full p-3 rounded-xl border border-border-subtle bg-surface text-xs font-semibold text-left flex items-center justify-between gap-2 cursor-pointer hover:border-primary focus:outline-none">
+                                <span class="truncate text-text-main" x-text="selectedHubLabel"></span>
+                                <svg class="w-4 h-4 text-text-muted transition-transform shrink-0" :class="hubDropdownOpen ? 'rotate-180' : ''" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/></svg>
+                            </button>
+
+                            <div x-show="hubDropdownOpen"
+                                 x-cloak
+                                 x-transition
+                                 class="absolute left-0 right-0 top-full mt-1.5 z-50 bg-surface border border-border-subtle rounded-2xl shadow-xl overflow-hidden max-h-56 overflow-y-auto divide-y divide-border-subtle/40 custom-scrollbar">
+                                <template x-for="hub in hubsOptions" :key="hub.id">
+                                    <button type="button"
+                                            @click="selectHub(hub)"
+                                            class="w-full px-4 py-2.5 text-left text-xs hover:bg-primary/10 transition-colors flex items-center justify-between cursor-pointer"
+                                            :class="String(selectedHubId) === String(hub.id) ? 'bg-primary/10 text-primary font-bold' : 'text-text-main font-medium'">
+                                        <span x-text="hub.label"></span>
+                                        <span x-show="String(selectedHubId) === String(hub.id)" class="text-primary font-bold">✓</span>
+                                    </button>
+                                </template>
+                            </div>
+                        </div>
+                    @endif
                 </div>
             </div>
 
             <div>
                 <div class="flex items-center justify-between mb-1.5">
                     <label class="block font-bold text-text-muted uppercase tracking-wider">
-                        Assigned Barangay Coverage (Select Barangays) <span class="text-danger">*</span>
+                        Assigned Barangay Coverage (Select Barangays in Hub Municipality) <span class="text-danger">*</span>
                     </label>
                     <span class="text-[11px] text-primary font-bold" x-text="selectedBarangays.length + ' barangay(s) selected'"></span>
                 </div>
@@ -144,15 +200,32 @@
                     <label class="block font-bold text-text-muted uppercase tracking-wider mb-1.5">License Expiry Date <span class="text-danger">*</span></label>
                     <input type="date" name="license_expiry_date" value="{{ old('license_expiry_date') }}" required min="{{ now()->format('Y-m-d') }}" class="w-full p-3 rounded-xl border border-border-subtle bg-surface">
                 </div>
-                <div>
+
+                <div class="relative" @click.away="vehicleDropdownOpen = false">
                     <label class="block font-bold text-text-muted uppercase tracking-wider mb-1.5">Vehicle Type <span class="text-danger">*</span></label>
-                    <select name="vehicle_type" required class="w-full p-3 rounded-xl border border-border-subtle bg-surface font-semibold">
-                        <option value="Motorcycle">Motorcycle</option>
-                        <option value="Bicycle / E-Bike">Bicycle / E-Bike</option>
-                        <option value="Tricycle / Three-Wheeler">Tricycle / Three-Wheeler</option>
-                        <option value="Sedan / Hatchback">Sedan / Hatchback</option>
-                    </select>
+                    <button type="button"
+                            @click="vehicleDropdownOpen = !vehicleDropdownOpen"
+                            class="w-full p-3 rounded-xl border border-border-subtle bg-surface text-xs font-semibold text-left flex items-center justify-between gap-2 cursor-pointer hover:border-primary">
+                        <span class="truncate text-text-main" x-text="selectedVehicleType"></span>
+                        <svg class="w-4 h-4 text-text-muted transition-transform shrink-0" :class="vehicleDropdownOpen ? 'rotate-180' : ''" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/></svg>
+                    </button>
+
+                    <div x-show="vehicleDropdownOpen"
+                         x-cloak
+                         x-transition
+                         class="absolute left-0 right-0 top-full mt-1.5 z-50 bg-surface border border-border-subtle rounded-2xl shadow-xl overflow-hidden divide-y divide-border-subtle/40">
+                        <template x-for="vType in vehicleTypes" :key="vType">
+                            <button type="button"
+                                    @click="selectedVehicleType = vType; vehicleDropdownOpen = false"
+                                    class="w-full px-3.5 py-2.5 text-left text-xs hover:bg-primary/10 transition-colors flex items-center justify-between cursor-pointer"
+                                    :class="selectedVehicleType === vType ? 'bg-primary/10 text-primary font-bold' : 'text-text-main font-medium'">
+                                <span x-text="vType"></span>
+                                <span x-show="selectedVehicleType === vType" class="text-primary font-bold">✓</span>
+                            </button>
+                        </template>
+                    </div>
                 </div>
+
                 <div>
                     <label class="block font-bold text-text-muted uppercase tracking-wider mb-1.5">Plate Number <span class="text-danger">*</span></label>
                     <input type="text" name="plate_number" value="{{ old('plate_number') }}" required placeholder="ABC1234" class="w-full p-3 rounded-xl border border-border-subtle bg-surface font-mono uppercase">

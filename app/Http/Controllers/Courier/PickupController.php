@@ -12,6 +12,7 @@ use App\Models\ShipmentVerification;
 use App\Notifications\OrderLifecycleNotification;
 use App\Services\OrderCompletionService;
 use App\Services\ShipmentVerificationService;
+use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
@@ -28,31 +29,57 @@ class PickupController extends Controller
     {
         /** @var Courier $courier */
         $courier = Auth::guard('courier')->user();
-        $courier->loadMissing('logisticsProfile');
+        $courier->loadMissing(['logisticsProfile', 'currentHubAssignment.hub']);
 
         $statusFilter = $request->query('status', 'active');
         $search = trim((string) $request->query('search', ''));
 
-        $baseQuery = PickupAssignment::where('courier_id', $courier->id);
+        // Strict de-duplication: only keep the latest PickupAssignment id per shipment_id for this courier
+        $latestIdsPerShipment = PickupAssignment::where('courier_id', $courier->id)
+            ->where('logistics_profile_id', $courier->logistics_profile_id)
+            ->selectRaw('MAX(id) as id')
+            ->groupBy('shipment_id')
+            ->pluck('id')
+            ->all();
+
+        // Active tasks MUST currently be assigned to this courier on the shipment record (current_courier_id === $courier->id)
+        $activeQuery = PickupAssignment::whereIn('id', $latestIdsPerShipment)
+            ->where('courier_id', $courier->id)
+            ->whereIn('status', ['assigned', 'accepted', 'picked_up', 'in_transit_to_hub'])
+            ->whereHas('shipment', function ($q) use ($courier) {
+                $q->where('current_courier_id', $courier->id)
+                  ->where('logistics_profile_id', $courier->logistics_profile_id);
+            });
+
+        $completedQuery = PickupAssignment::whereIn('id', $latestIdsPerShipment)
+            ->where('courier_id', $courier->id)
+            ->where('status', 'completed');
+
+        $allQuery = PickupAssignment::whereIn('id', $latestIdsPerShipment)
+            ->where('courier_id', $courier->id)
+            ->where(function ($q) use ($courier) {
+                $q->where('status', 'completed')
+                  ->orWhereHas('shipment', fn ($sq) => $sq->where('current_courier_id', $courier->id));
+            });
 
         $counts = [
-            'active'    => (clone $baseQuery)->whereIn('status', ['assigned', 'accepted', 'picked_up', 'in_transit_to_hub'])->count(),
-            'completed' => (clone $baseQuery)->where('status', 'completed')->count(),
-            'all'       => (clone $baseQuery)->count(),
+            'active'    => (clone $activeQuery)->count(),
+            'completed' => (clone $completedQuery)->count(),
+            'all'       => (clone $allQuery)->count(),
         ];
 
-        $query = PickupAssignment::with([
+        $query = match ($statusFilter) {
+            'completed' => clone $completedQuery,
+            'all'       => clone $allQuery,
+            default     => clone $activeQuery,
+        };
+
+        $query->with([
             'shipment.sellerProfile',
             'shipment.logisticsProfile',
             'shipment.packages.verifications',
             'sellerOrder.items',
-        ])->where('courier_id', $courier->id);
-
-        if ($statusFilter === 'active') {
-            $query->whereIn('status', ['assigned', 'accepted', 'picked_up', 'in_transit_to_hub']);
-        } elseif ($statusFilter === 'completed') {
-            $query->where('status', 'completed');
-        }
+        ]);
 
         if ($search !== '') {
             $query->whereHas('shipment', function ($q) use ($search) {
@@ -62,6 +89,7 @@ class PickupController extends Controller
             });
         }
 
+        // Strict First-In, First-Out (FIFO) ordering
         $assignments = $query
             ->orderBy('created_at', 'asc')
             ->orderBy('id', 'asc')
@@ -77,6 +105,49 @@ class PickupController extends Controller
         ));
     }
 
+    public function report(Request $request)
+    {
+        /** @var Courier $courier */
+        $courier = Auth::guard('courier')->user();
+        $courier->loadMissing(['logisticsProfile', 'currentHubAssignment.hub']);
+
+        $fromDate = $request->query('from_date', now()->startOfMonth()->toDateString());
+        $toDate = $request->query('to_date', now()->toDateString());
+
+        $start = Carbon::parse($fromDate)->startOfDay();
+        $end = Carbon::parse($toDate)->endOfDay();
+
+        if ($end->lt($start)) {
+            [$start, $end] = [$end->copy()->startOfDay(), $start->copy()->endOfDay()];
+        }
+
+        $assignmentsInPeriod = PickupAssignment::with(['shipment.sellerProfile', 'sellerOrder'])
+            ->where('courier_id', $courier->id)
+            ->whereBetween('created_at', [$start, $end])
+            ->orderBy('created_at', 'asc')
+            ->orderBy('id', 'asc')
+            ->get();
+
+        $completedPickups = $assignmentsInPeriod->where('status', 'completed');
+        $totalWeightHauled = (float) $completedPickups->sum(fn ($a) => (float) ($a->shipment?->total_weight ?? 0));
+
+        $summary = [
+            'total_assigned'      => $assignmentsInPeriod->count(),
+            'completed_count'     => $completedPickups->count(),
+            'active_count'        => $assignmentsInPeriod->whereIn('status', ['assigned', 'accepted', 'picked_up', 'in_transit_to_hub'])->count(),
+            'reassigned_count'    => $assignmentsInPeriod->where('status', 'reassigned')->count(),
+            'total_weight_hauled' => round($totalWeightHauled, 2),
+        ];
+
+        return view('courier.report', compact(
+            'courier',
+            'fromDate',
+            'toDate',
+            'assignmentsInPeriod',
+            'summary'
+        ));
+    }
+
     public function acceptAssignment(Request $request, PickupAssignment $assignment)
     {
         /** @var Courier $courier */
@@ -88,6 +159,12 @@ class PickupController extends Controller
 
         DB::transaction(function () use ($assignment, $courier) {
             $locked = PickupAssignment::with('shipment')->where('id', $assignment->id)->lockForUpdate()->firstOrFail();
+
+            if (! $locked->shipment || (int) $locked->shipment->current_courier_id !== (int) $courier->id) {
+                throw ValidationException::withMessages([
+                    'pickup' => 'This shipment is not currently assigned to your courier account.',
+                ]);
+            }
 
             if ($locked->status !== 'assigned') {
                 throw ValidationException::withMessages([
@@ -133,8 +210,10 @@ class PickupController extends Controller
         ]);
 
         $shipment = $assignment->shipment;
-        if (! $shipment) {
-            abort(404);
+        if (! $shipment || (int) $shipment->current_courier_id !== (int) $courier->id) {
+            return back()->withErrors([
+                'lookup_input' => 'This shipment is not currently assigned to your courier account.',
+            ]);
         }
 
         try {
@@ -323,6 +402,12 @@ class PickupController extends Controller
 
         DB::transaction(function () use ($assignment, $courier) {
             $locked = PickupAssignment::with(['shipment.logisticsProfile'])->where('id', $assignment->id)->lockForUpdate()->firstOrFail();
+
+            if (! $locked->shipment || (int) $locked->shipment->current_courier_id !== (int) $courier->id) {
+                throw ValidationException::withMessages([
+                    'pickup' => 'You are no longer the active courier assigned to this shipment.',
+                ]);
+            }
 
             if ($locked->status !== 'picked_up') {
                 throw ValidationException::withMessages([

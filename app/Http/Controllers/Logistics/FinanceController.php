@@ -6,13 +6,19 @@ use App\Http\Controllers\Controller;
 use App\Models\CodCollection;
 use App\Models\CodRemittance;
 use App\Models\CommissionRecord;
+use App\Models\Courier;
+use App\Models\Rider;
 use App\Models\SellerOrder;
 use App\Models\SellerProfile;
 use App\Models\SellerSettlement;
 use App\Models\SellerSettlementItem;
+use App\Models\Shipment;
+use App\Models\WalletTransaction;
 use App\Notifications\OrderLifecycleNotification;
 use App\Services\CommissionCalculatorService;
 use App\Services\OrderCompletionService;
+use App\Services\RoleWalletService;
+use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -22,7 +28,8 @@ class FinanceController extends Controller
 {
     public function __construct(
         protected CommissionCalculatorService $commissionCalculatorService,
-        protected OrderCompletionService $orderCompletionService
+        protected OrderCompletionService $orderCompletionService,
+        protected RoleWalletService $roleWalletService
     ) {}
 
     public function index(Request $request)
@@ -32,9 +39,31 @@ class FinanceController extends Controller
             abort(403);
         }
 
-        $this->orderCompletionService->autoCompleteExpiredDeliveredOrders(logisticsProfileId: (int) $profile->id);
+        $this->orderCompletionService->runLifecycleMaintenance(logisticsProfileId: (int) $profile->id);
+
+        $completedOrders = SellerOrder::where('logistics_profile_id', $profile->id)
+            ->where('status', 'completed')
+            ->get();
+
+        foreach ($completedOrders as $compOrder) {
+            $this->roleWalletService->releaseCompletedOrderEarnings($compOrder);
+        }
+
+        $logisticsWallet = $this->roleWalletService->getOrCreateWallet(
+            ownerType: 'Logistics',
+            ownerId: (int) $profile->id,
+            ownerName: $profile->business_name
+        );
 
         $tab = $request->query('tab', 'remittances');
+        $fromDate = $request->query('from_date', now()->startOfMonth()->toDateString());
+        $toDate = $request->query('to_date', now()->toDateString());
+
+        $start = Carbon::parse($fromDate)->startOfDay();
+        $end = Carbon::parse($toDate)->endOfDay();
+        if ($end->lt($start)) {
+            [$start, $end] = [$end->copy()->startOfDay(), $start->copy()->endOfDay()];
+        }
 
         $remittances = CodRemittance::with(['rider', 'items.sellerOrder', 'verifier'])
             ->where('logistics_profile_id', $profile->id)
@@ -74,7 +103,42 @@ class FinanceController extends Controller
             ->orderBy('id', 'asc')
             ->paginate(10, ['*'], 'settlements_page');
 
+        $periodCommissions = CommissionRecord::with(['sellerOrder', 'sellerProfile', 'rider'])
+            ->where('logistics_profile_id', $profile->id)
+            ->whereBetween('calculated_at', [$start, $end])
+            ->orderBy('calculated_at', 'asc')
+            ->get();
+
+        $periodShipments = Shipment::where('logistics_profile_id', $profile->id)
+            ->whereBetween('created_at', [$start, $end])
+            ->get();
+
+        $reportSummary = [
+            'from_date'                   => $start->toDateString(),
+            'to_date'                     => $end->toDateString(),
+            'period_shipments_total'      => $periodShipments->count(),
+            'period_delivered_count'      => $periodShipments->where('status', 'delivered')->count(),
+            'period_failed_rts_count'     => $periodShipments->whereIn('status', ['delivery_failed', 'returned_to_seller', 'returning_to_seller'])->count(),
+            'period_gross_shipping'       => round((float) $periodCommissions->sum('shipping_fee'), 2),
+            'period_logistics_10_comm'    => round((float) $periodCommissions->sum('logistics_commission_amount'), 2),
+            'period_logistics_80_ops'     => round((float) $periodCommissions->sum('logistics_operational_revenue'), 2),
+            'period_logistics_90_total'   => round((float) $periodCommissions->sum('logistics_total_earning'), 2),
+            'period_rider_10_comm'        => round((float) $periodCommissions->sum('rider_commission_amount'), 2),
+            'active_couriers_count'       => Courier::where('logistics_profile_id', $profile->id)->whereIn('status', ['active', 'on_delivery'])->count(),
+            'active_riders_count'         => Rider::where('logistics_profile_id', $profile->id)->where('status', 'approved')->count(),
+        ];
+
+        $walletTransactions = WalletTransaction::with(['sellerOrder', 'shipment'])
+            ->where('owner_type', 'Logistics')
+            ->where('owner_id', $profile->id)
+            ->whereBetween('created_at', [$start, $end])
+            ->orderBy('created_at', 'asc')
+            ->orderBy('id', 'asc')
+            ->get();
+
         $metrics = [
+            'wallet_available'            => (float) $logisticsWallet->available_balance,
+            'wallet_pending_escrow'       => (float) $logisticsWallet->pending_balance,
             'total_cod_collected'         => (float) CodCollection::where('logistics_profile_id', $profile->id)->sum('collected_amount'),
             'pending_remittance_verify'   => (float) CodRemittance::where('logistics_profile_id', $profile->id)->where('status', 'submitted')->sum('total_collected_amount'),
             'logistics_10_commission'     => (float) CommissionRecord::where('logistics_profile_id', $profile->id)->sum('logistics_commission_amount'),
@@ -87,11 +151,17 @@ class FinanceController extends Controller
 
         return view('logistics.finance.index', compact(
             'profile',
+            'logisticsWallet',
             'tab',
+            'fromDate',
+            'toDate',
             'remittances',
             'codCollections',
             'pendingSellerPayouts',
             'settlements',
+            'periodCommissions',
+            'walletTransactions',
+            'reportSummary',
             'metrics'
         ));
     }
@@ -106,7 +176,11 @@ class FinanceController extends Controller
         }
 
         DB::transaction(function () use ($remittance, $profile, $user) {
-            $lockedRemittance = CodRemittance::with(['items.collection.sellerOrder.payment', 'items.collection.sellerOrder.order'])
+            $lockedRemittance = CodRemittance::with([
+                'items.collection.sellerOrder.payment',
+                'items.collection.sellerOrder.order',
+                'items.collection.sellerOrder.extra',
+            ])
                 ->where('id', $remittance->id)
                 ->lockForUpdate()
                 ->firstOrFail();
@@ -141,42 +215,21 @@ class FinanceController extends Controller
                 }
 
                 $sellerOrder->update([
-                    'payment_status' => 'remitted',
+                    'payment_status' => $sellerOrder->status === 'completed' ? 'settled' : 'remitted',
                 ]);
 
                 $sellerOrder->payment?->update([
-                    'status'      => 'remitted',
+                    'status'      => $sellerOrder->status === 'completed' ? 'settled' : 'remitted',
                     'remitted_at' => now(),
                 ]);
 
-                if (! CommissionRecord::where('seller_order_id', $sellerOrder->id)->exists()) {
-                    $split = $this->commissionCalculatorService->calculateSplitBase(
-                        productSubtotal: (float) $sellerOrder->subtotal_amount,
-                        shippingFee: (float) $sellerOrder->shipping_fee
-                    );
+                // Always calculate using calculateOrderSplitWithSubsidies so Free Shipping vouchers never reduce Logistics/Rider earnings!
+                $this->roleWalletService->ensureOrderCommissionRecord($sellerOrder);
 
-                    CommissionRecord::create([
-                        'seller_order_id'               => $sellerOrder->id,
-                        'shipment_id'                   => $collection->shipment_id,
-                        'cod_collection_id'             => $collection->id,
-                        'seller_profile_id'             => $sellerOrder->seller_profile_id,
-                        'logistics_profile_id'          => $profile->id,
-                        'rider_id'                      => $collection->rider_id,
-                        'product_subtotal'              => $split['product_subtotal'],
-                        'shipping_fee'                  => $split['shipping_fee'],
-                        'total_cod_amount'              => $split['total_cod_amount'],
-                        'admin_commission_rate'         => $split['admin_commission_rate'],
-                        'admin_commission_amount'       => $split['admin_commission_amount'],
-                        'seller_net_earning'            => $split['seller_net_earning'],
-                        'logistics_commission_rate'     => $split['logistics_commission_rate'],
-                        'logistics_commission_amount'   => $split['logistics_commission_amount'],
-                        'rider_commission_rate'         => $split['rider_commission_rate'],
-                        'rider_commission_amount'       => $split['rider_commission_amount'],
-                        'logistics_operational_revenue' => $split['logistics_operational_revenue'],
-                        'logistics_total_earning'       => $split['logistics_total_earning'],
-                        'status'                        => 'recorded',
-                        'calculated_at'                 => now(),
-                    ]);
+                if ($sellerOrder->status === 'completed') {
+                    $this->roleWalletService->releaseCompletedOrderEarnings($sellerOrder);
+                } else {
+                    $this->roleWalletService->recordPendingEscrowOnDelivery($sellerOrder);
                 }
 
                 if ($sellerOrder->order) {
@@ -256,13 +309,7 @@ class FinanceController extends Controller
                 /** @var SellerOrder|null $so */
                 $so = $rec->sellerOrder;
                 if ($so) {
-                    $so->update([
-                        'payment_status' => 'settled',
-                    ]);
-                    $so->payment?->update([
-                        'status'     => 'settled',
-                        'settled_at' => now(),
-                    ]);
+                    $this->roleWalletService->releaseCompletedOrderEarnings($so);
                     if ($so->order) {
                         $this->orderCompletionService->syncParentOrderStatus($so->order);
                     }
@@ -274,7 +321,7 @@ class FinanceController extends Controller
 
         try {
             $sellerProfile->user?->notify(new OrderLifecycleNotification(
-                title: 'Seller Settlement Released',
+                title: 'Seller Settlement Released to E-Wallet',
                 message: "{$profile->business_name} released settlement #{$settlement->settlement_reference} of ₱" . number_format((float) $settlement->net_settlement_amount, 2) . " (90% of Product Subtotal).",
                 type: 'info',
                 url: route('seller.settlements.index')

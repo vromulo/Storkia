@@ -24,16 +24,28 @@ class RiderApplicationController extends Controller
 
     public function index(Request $request)
     {
-        $profile = $request->user()->logisticsProfile;
+        /** @var User $user */
+        $user = $request->user();
+        $profile = $user->logisticsProfile;
         if (! $profile) {
             abort(403, 'Your logistics hub must be approved to manage riders.');
         }
 
+        $isBranchAccount = $user->isBranchLogisticsAccount();
+        $branchHub = $isBranchAccount ? $user->branchLogisticsHub : null;
+
         $status = $request->query('status', 'all');
         $search = trim((string) $request->query('search', ''));
 
-        $query = Rider::with(['currentHubAssignment.hub', 'barangayCoverages'])
-            ->where('logistics_profile_id', $profile->id);
+        $baseQuery = Rider::where('logistics_profile_id', $profile->id);
+
+        if ($isBranchAccount && $branchHub) {
+            $baseQuery->whereHas('currentHubAssignment', function ($q) use ($branchHub) {
+                $q->where('logistics_hub_id', $branchHub->id)->where('is_current', true);
+            });
+        }
+
+        $query = (clone $baseQuery)->with(['currentHubAssignment.hub', 'barangayCoverages']);
 
         if (in_array($status, ['pending', 'approved', 'rejected'], true)) {
             $query->where('status', $status);
@@ -49,37 +61,62 @@ class RiderApplicationController extends Controller
             });
         }
 
-        $applicants = $query->latest('id')->paginate(10)->withQueryString();
+        $applicants = $query
+            ->orderBy('created_at', 'asc')
+            ->orderBy('id', 'asc')
+            ->paginate(10)
+            ->withQueryString();
 
         $counts = [
-            'all'      => Rider::where('logistics_profile_id', $profile->id)->count(),
-            'pending'  => Rider::where('logistics_profile_id', $profile->id)->where('status', 'pending')->count(),
-            'approved' => Rider::where('logistics_profile_id', $profile->id)->where('status', 'approved')->count(),
-            'rejected' => Rider::where('logistics_profile_id', $profile->id)->where('status', 'rejected')->count(),
+            'all'      => (clone $baseQuery)->count(),
+            'pending'  => (clone $baseQuery)->where('status', 'pending')->count(),
+            'approved' => (clone $baseQuery)->where('status', 'approved')->count(),
+            'rejected' => (clone $baseQuery)->where('status', 'rejected')->count(),
         ];
 
-        return view('logistics.riders.applications', compact('applicants', 'counts', 'status', 'search', 'profile'));
+        return view('logistics.riders.applications', compact(
+            'applicants',
+            'counts',
+            'status',
+            'search',
+            'profile',
+            'isBranchAccount',
+            'branchHub'
+        ));
     }
 
     public function create(Request $request)
     {
-        $profile = $request->user()->logisticsProfile;
+        /** @var User $user */
+        $user = $request->user();
+        $profile = $user->logisticsProfile;
         if (! $profile) {
             abort(403);
         }
 
-        $hubs = LogisticsHub::where('parent_logistics_profile_id', $profile->id)
-            ->where('status', 'active')
-            ->orderByDesc('is_main_hub')
-            ->orderBy('municipality')
-            ->get();
+        $profile->ensureMainHubExists();
 
-        if ($hubs->isEmpty()) {
-            $profile->ensureMainHubExists();
-            $hubs = LogisticsHub::where('parent_logistics_profile_id', $profile->id)->get();
+        $isBranchAccount = $user->isBranchLogisticsAccount();
+        $lockedBranchHub = $isBranchAccount ? $user->branchLogisticsHub : null;
+
+        if ($isBranchAccount && $lockedBranchHub) {
+            // Branch Hub accounts can ONLY register riders to their own Branch Hub (read-only)
+            $hubs = collect([$lockedBranchHub]);
+        } else {
+            // Main Hub accounts can select any active hub under their own company
+            $hubs = LogisticsHub::where('parent_logistics_profile_id', $profile->id)
+                ->where('status', 'active')
+                ->orderByDesc('is_main_hub')
+                ->orderBy('municipality')
+                ->get();
         }
 
-        return view('logistics.riders.create-rider', compact('profile', 'hubs'));
+        return view('logistics.riders.create-rider', compact(
+            'profile',
+            'hubs',
+            'isBranchAccount',
+            'lockedBranchHub'
+        ));
     }
 
     public function store(Request $request)
@@ -89,6 +126,13 @@ class RiderApplicationController extends Controller
         $profile = $user->logisticsProfile;
         if (! $profile) {
             abort(403);
+        }
+
+        $isBranchAccount = $user->isBranchLogisticsAccount();
+        $lockedBranchHub = $isBranchAccount ? $user->branchLogisticsHub : null;
+
+        if ($isBranchAccount && $lockedBranchHub) {
+            $request->merge(['logistics_hub_id' => $lockedBranchHub->id]);
         }
 
         $normalizedPrefix = InternalStorkiaEmailService::normalizePrefix($request->input('email_prefix'));
@@ -120,10 +164,21 @@ class RiderApplicationController extends Controller
             ]
         ));
 
-        /** @var LogisticsHub $targetHub */
-        $targetHub = LogisticsHub::where('parent_logistics_profile_id', $profile->id)
-            ->where('status', 'active')
-            ->findOrFail($validated['logistics_hub_id']);
+        $hubQuery = LogisticsHub::where('parent_logistics_profile_id', $profile->id)
+            ->where('status', 'active');
+
+        if ($isBranchAccount && $lockedBranchHub) {
+            $hubQuery->where('id', $lockedBranchHub->id);
+        }
+
+        /** @var LogisticsHub|null $targetHub */
+        $targetHub = $hubQuery->find($validated['logistics_hub_id']);
+
+        if (! $targetHub) {
+            throw ValidationException::withMessages([
+                'logistics_hub_id' => 'You can only assign riders to an active hub belonging to your own logistics account.',
+            ]);
+        }
 
         $eligibleBarangays = collect($this->addressService->getBarangaysForLocation(
             provinceName: (string) $targetHub->province,
@@ -163,7 +218,7 @@ class RiderApplicationController extends Controller
 
         $formattedContact = '+63' . ltrim(preg_replace('/\D/', '', $validated['contact_no']), '0');
 
-        DB::transaction(function () use ($profile, $targetHub, $user, $validated, $fullEmail, $formattedContact, $resolvedBarangays) {
+        DB::transaction(function () use ($request, $profile, $targetHub, $user, $validated, $fullEmail, $formattedContact, $resolvedBarangays) {
             $licensePath = $request->file('drivers_license')->store('rider_documents/licenses', 'public');
             $orCrPath = $request->file('vehicle_or_cr')->store('rider_documents/or_cr', 'public');
 
@@ -195,7 +250,7 @@ class RiderApplicationController extends Controller
                 'is_current'           => true,
                 'assigned_by'          => $user->id,
                 'assigned_at'          => now(),
-                'remarks'              => 'Created directly by Logistics hub',
+                'remarks'              => "Assigned to {$targetHub->hub_name} ({$targetHub->municipality})",
             ]);
 
             foreach ($resolvedBarangays as $item) {
@@ -215,13 +270,19 @@ class RiderApplicationController extends Controller
 
         return redirect()
             ->route('logistics.rider-applications.index')
-            ->with('success', "Rider account {$fullEmail} created and assigned successfully!");
+            ->with('success', "Rider account {$fullEmail} created and assigned to {$targetHub->hub_name} ({$targetHub->municipality})!");
     }
 
     public function approve(Request $request, Rider $rider)
     {
-        $profile = $request->user()->logisticsProfile;
+        /** @var User $user */
+        $user = $request->user();
+        $profile = $user->logisticsProfile;
         if (! $profile || (int) $rider->logistics_profile_id !== (int) $profile->id) {
+            abort(403);
+        }
+
+        if ($user->isBranchLogisticsAccount() && (int) $rider->assigned_hub?->id !== (int) $user->branchLogisticsHub?->id) {
             abort(403);
         }
 
@@ -236,8 +297,14 @@ class RiderApplicationController extends Controller
 
     public function reject(Request $request, Rider $rider)
     {
-        $profile = $request->user()->logisticsProfile;
+        /** @var User $user */
+        $user = $request->user();
+        $profile = $user->logisticsProfile;
         if (! $profile || (int) $rider->logistics_profile_id !== (int) $profile->id) {
+            abort(403);
+        }
+
+        if ($user->isBranchLogisticsAccount() && (int) $rider->assigned_hub?->id !== (int) $user->branchLogisticsHub?->id) {
             abort(403);
         }
 
@@ -252,8 +319,14 @@ class RiderApplicationController extends Controller
 
     public function document(Request $request, Rider $rider, string $type)
     {
-        $profile = $request->user()->logisticsProfile;
+        /** @var User $user */
+        $user = $request->user();
+        $profile = $user->logisticsProfile;
         if (! $profile || (int) $rider->logistics_profile_id !== (int) $profile->id) {
+            abort(403);
+        }
+
+        if ($user->isBranchLogisticsAccount() && (int) $rider->assigned_hub?->id !== (int) $user->branchLogisticsHub?->id) {
             abort(403);
         }
 

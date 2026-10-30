@@ -139,9 +139,33 @@ class SellerOrder extends Model
         return $this->hasOne(SellerSettlementItem::class, 'seller_order_id');
     }
 
+    public function serviceRating(): HasOne
+    {
+        return $this->hasOne(OrderServiceRating::class, 'seller_order_id');
+    }
+
+    public function itemReviews(): HasMany
+    {
+        return $this->hasMany(OrderItemReview::class, 'seller_order_id');
+    }
+
+    public function rtsClaim(): HasOne
+    {
+        return $this->hasOne(SellerRtsClaim::class, 'seller_order_id');
+    }
+
     public function statusHistories(): HasMany
     {
         return $this->hasMany(OrderStatusHistory::class, 'seller_order_id')->latest('id');
+    }
+
+    public function isRatedByBuyer(): bool
+    {
+        if ($this->relationLoaded('serviceRating')) {
+            return $this->serviceRating !== null;
+        }
+
+        return $this->serviceRating()->exists();
     }
 
     public function canBuyerCancelPreShipment(): bool
@@ -182,7 +206,7 @@ class SellerOrder extends Model
             'delivered'                 => 'Delivered (Awaiting Confirmation)',
             'delivery_failed'           => 'Delivery Attempt Failed',
             'disputed'                  => 'Delivery Issue / Return Requested',
-            'completed'                 => 'Completed',
+            'completed'                 => $this->isRatedByBuyer() ? 'Completed (Rated)' : 'Completed (To Rate)',
             'rejected'                  => 'Rejected by Seller',
             'cancelled'                 => 'Cancelled',
             'returned_to_seller'        => 'Returned to Seller',

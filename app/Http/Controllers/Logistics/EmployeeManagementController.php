@@ -50,6 +50,7 @@ class EmployeeManagementController extends Controller
 
         $selectedHubId = $request->query('hub_id');
         if (! $isMainAccount && $activeBranchHub) {
+            // Branch Hub accounts are strictly locked to viewing only their own branch's registered employees
             $selectedHubId = (string) $activeBranchHub->id;
         } elseif ($selectedHubId !== null && $selectedHubId !== '' && ! in_array((int) $selectedHubId, $eligibleHubIds, true)) {
             $selectedHubId = null;
@@ -68,12 +69,12 @@ class EmployeeManagementController extends Controller
             'currentHubAssignment.hub',
             'hubAssignments.hub',
             'barangayCoverages',
-            'deliveryAssignments' => fn ($q) => $q->whereIn('status', ['assigned', 'collected', 'out_for_delivery']),
+            'deliveryAssignments' => fn ($q) => $q->whereIn('status', ['assigned', 'accepted', 'collected', 'out_for_delivery']),
         ])->where('logistics_profile_id', $profile->id);
 
         if ($selectedHubId) {
-            $couriersQuery->whereHas('currentHubAssignment', fn ($q) => $q->where('logistics_hub_id', (int) $selectedHubId));
-            $ridersQuery->whereHas('currentHubAssignment', fn ($q) => $q->where('logistics_hub_id', (int) $selectedHubId));
+            $couriersQuery->whereHas('currentHubAssignment', fn ($q) => $q->where('logistics_hub_id', (int) $selectedHubId)->where('is_current', true));
+            $ridersQuery->whereHas('currentHubAssignment', fn ($q) => $q->where('logistics_hub_id', (int) $selectedHubId)->where('is_current', true));
         }
 
         if ($search !== '') {
@@ -93,8 +94,9 @@ class EmployeeManagementController extends Controller
             });
         }
 
-        $couriers = $couriersQuery->latest('id')->get();
-        $riders = $ridersQuery->latest('id')->get();
+        // Strict First-In, First-Out (FIFO) ordering
+        $couriers = $couriersQuery->orderBy('created_at', 'asc')->orderBy('id', 'asc')->get();
+        $riders = $ridersQuery->orderBy('created_at', 'asc')->orderBy('id', 'asc')->get();
 
         $hubBarangaysMap = [];
         foreach ($companyHubs as $h) {
@@ -139,7 +141,7 @@ class EmployeeManagementController extends Controller
 
         $validated = $request->validate([
             'logistics_hub_id' => ['required', 'integer', 'exists:logistics_hubs,id'],
-            'remarks' => ['nullable', 'string', 'max:255'],
+            'remarks'          => ['nullable', 'string', 'max:255'],
         ]);
 
         /** @var LogisticsHub $targetHub */
@@ -165,20 +167,20 @@ class EmployeeManagementController extends Controller
             LogisticsEmployeeHubAssignment::where('courier_id', $courier->id)
                 ->where('is_current', true)
                 ->update([
-                    'is_current' => false,
+                    'is_current'    => false,
                     'unassigned_at' => now(),
                 ]);
 
             LogisticsEmployeeHubAssignment::create([
                 'logistics_profile_id' => $profile->id,
-                'logistics_hub_id' => $targetHub->id,
-                'employee_type' => 'courier',
-                'courier_id' => $courier->id,
-                'municipality' => $targetHub->municipality,
-                'is_current' => true,
-                'assigned_by' => $user->id,
-                'assigned_at' => now(),
-                'remarks' => $validated['remarks'] ?: "Assigned to {$targetHub->hub_name} ({$targetHub->municipality})",
+                'logistics_hub_id'     => $targetHub->id,
+                'employee_type'        => 'courier',
+                'courier_id'           => $courier->id,
+                'municipality'         => $targetHub->municipality,
+                'is_current'           => true,
+                'assigned_by'          => $user->id,
+                'assigned_at'          => now(),
+                'remarks'              => $validated['remarks'] ?: "Assigned to {$targetHub->hub_name} ({$targetHub->municipality})",
             ]);
 
             $courier->update([
@@ -209,12 +211,12 @@ class EmployeeManagementController extends Controller
 
         $validated = $request->validate([
             'logistics_hub_id' => ['required', 'integer', 'exists:logistics_hubs,id'],
-            'barangays' => ['required', 'array', 'min:1'],
-            'barangays.*' => ['required', 'string', 'max:120'],
-            'remarks' => ['nullable', 'string', 'max:255'],
+            'barangays'        => ['required', 'array', 'min:1'],
+            'barangays.*'      => ['required', 'string', 'max:120'],
+            'remarks'          => ['nullable', 'string', 'max:255'],
         ], [
             'barangays.required' => 'Please select at least one Barangay within the hub municipality.',
-            'barangays.min' => 'Please select at least one Barangay within the hub municipality.',
+            'barangays.min'      => 'Please select at least one Barangay within the hub municipality.',
         ]);
 
         /** @var LogisticsHub $targetHub */
@@ -227,7 +229,7 @@ class EmployeeManagementController extends Controller
         }
 
         $hasActiveDelivery = DeliveryAssignment::where('rider_id', $rider->id)
-            ->whereIn('status', ['assigned', 'collected', 'out_for_delivery'])
+            ->whereIn('status', ['assigned', 'accepted', 'collected', 'out_for_delivery'])
             ->exists();
 
         if ($hasActiveDelivery && (int) $rider->assigned_hub?->id !== (int) $targetHub->id) {
@@ -268,20 +270,20 @@ class EmployeeManagementController extends Controller
             LogisticsEmployeeHubAssignment::where('rider_id', $rider->id)
                 ->where('is_current', true)
                 ->update([
-                    'is_current' => false,
+                    'is_current'    => false,
                     'unassigned_at' => now(),
                 ]);
 
             LogisticsEmployeeHubAssignment::create([
                 'logistics_profile_id' => $profile->id,
-                'logistics_hub_id' => $targetHub->id,
-                'employee_type' => 'rider',
-                'rider_id' => $rider->id,
-                'municipality' => $targetHub->municipality,
-                'is_current' => true,
-                'assigned_by' => $user->id,
-                'assigned_at' => now(),
-                'remarks' => $validated['remarks'] ?: "Assigned to {$targetHub->hub_name} ({$targetHub->municipality})",
+                'logistics_hub_id'     => $targetHub->id,
+                'employee_type'        => 'rider',
+                'rider_id'             => $rider->id,
+                'municipality'         => $targetHub->municipality,
+                'is_current'           => true,
+                'assigned_by'          => $user->id,
+                'assigned_at'          => now(),
+                'remarks'              => $validated['remarks'] ?: "Assigned to {$targetHub->hub_name} ({$targetHub->municipality})",
             ]);
 
             RiderBarangayCoverage::where('rider_id', $rider->id)
@@ -291,14 +293,14 @@ class EmployeeManagementController extends Controller
             foreach ($resolvedSelections as $item) {
                 RiderBarangayCoverage::create([
                     'logistics_profile_id' => $profile->id,
-                    'logistics_hub_id' => $targetHub->id,
-                    'rider_id' => $rider->id,
-                    'municipality_code' => $targetHub->municipality_code,
-                    'municipality' => $targetHub->municipality,
-                    'barangay_code' => $item['code'] ?: null,
-                    'barangay_name' => $item['name'],
-                    'is_active' => true,
-                    'assigned_by' => $user->id,
+                    'logistics_hub_id'     => $targetHub->id,
+                    'rider_id'             => $rider->id,
+                    'municipality_code'    => $targetHub->municipality_code,
+                    'municipality'         => $targetHub->municipality,
+                    'barangay_code'        => $item['code'] ?: null,
+                    'barangay_name'        => $item['name'],
+                    'is_active'            => true,
+                    'assigned_by'          => $user->id,
                 ]);
             }
         });
@@ -321,8 +323,8 @@ class EmployeeManagementController extends Controller
 
         $validated = $request->validate([
             'employee_type' => ['required', 'in:courier,rider'],
-            'employee_id' => ['required', 'integer'],
-            'status' => ['required', 'string'],
+            'employee_id'   => ['required', 'integer'],
+            'status'        => ['required', 'string'],
         ]);
 
         if ($validated['employee_type'] === 'courier') {
@@ -354,7 +356,7 @@ class EmployeeManagementController extends Controller
         }
 
         $rider->update([
-            'status' => $validated['status'],
+            'status'      => $validated['status'],
             'approved_at' => $validated['status'] === 'approved' ? now() : $rider->approved_at,
             'rejected_at' => $validated['status'] === 'rejected' ? now() : null,
         ]);

@@ -5,18 +5,26 @@ namespace App\Http\Controllers\Seller;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Seller\StoreProductRequest;
 use App\Http\Requests\Seller\UpdateProductRequest;
+use App\Models\OrderItem;
 use App\Models\Product;
 use App\Models\ProductApproval;
 use App\Models\SellerCategory;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\Rule;
-use Intervention\Image\ImageManager;
+use Illuminate\Validation\ValidationException;
 use Intervention\Image\Drivers\Gd\Driver;
 use Intervention\Image\Encoders\WebpEncoder;
+use Intervention\Image\ImageManager;
 
 class ProductController extends Controller
 {
+    public const MAX_SAFE_PRICE = 9999999.99;
+    public const MAX_SAFE_WEIGHT_KG = 99999.99;
+    public const MAX_SAFE_STOCK = 9999999;
+
     public static function getCategoriesList(): array
     {
         return [
@@ -128,6 +136,88 @@ class ProductController extends Controller
         return array_values(array_unique(array_merge([$primary], $others)));
     }
 
+    public function hasUnfinishedOrders(int $productId, ?string $variantName = null): bool
+    {
+        $unfinishedStatuses = [
+            'pending_seller_acceptance',
+            'pending_buyer_response',
+            'accepted',
+            'preparing',
+            'ready_for_pickup',
+            'pickup_assigned',
+            'picked_up',
+            'at_logistics_hub',
+            'out_for_delivery',
+            'delivered',
+            'delivery_failed',
+            'disputed',
+        ];
+
+        return OrderItem::where('product_id', $productId)
+            ->when($variantName !== null && $variantName !== '', function ($q) use ($variantName) {
+                $q->where(function ($vq) use ($variantName) {
+                    $vq->where('variant_name', $variantName)
+                       ->orWhere('sub_variant_name', $variantName);
+                });
+            })
+            ->whereHas('sellerOrder', fn ($sq) => $sq->whereIn('status', $unfinishedStatuses))
+            ->exists();
+    }
+
+    private function sanitizeNumericPrice(mixed $rawPrice, string $fieldLabel = 'Price'): float
+    {
+        if (! is_numeric($rawPrice)) {
+            throw ValidationException::withMessages([
+                'price' => "{$fieldLabel} must be a valid number.",
+            ]);
+        }
+
+        $value = (float) $rawPrice;
+        if (! is_finite($value) || $value < 0 || $value > self::MAX_SAFE_PRICE) {
+            throw ValidationException::withMessages([
+                'price' => "{$fieldLabel} cannot exceed ₱" . number_format(self::MAX_SAFE_PRICE, 2) . '.',
+            ]);
+        }
+
+        return round($value, 2);
+    }
+
+    private function sanitizeNumericWeight(mixed $rawWeight, string $fieldLabel = 'Weight'): float
+    {
+        if (! is_numeric($rawWeight)) {
+            throw ValidationException::withMessages([
+                'weight' => "{$fieldLabel} must be a valid number in kilograms.",
+            ]);
+        }
+
+        $value = (float) $rawWeight;
+        if (! is_finite($value) || $value < 0 || $value > self::MAX_SAFE_WEIGHT_KG) {
+            throw ValidationException::withMessages([
+                'weight' => "{$fieldLabel} cannot exceed " . number_format(self::MAX_SAFE_WEIGHT_KG, 2) . ' kg.',
+            ]);
+        }
+
+        return round($value, 3);
+    }
+
+    private function sanitizeIntegerStock(mixed $rawStock, string $fieldLabel = 'Stock'): int
+    {
+        if (! is_numeric($rawStock)) {
+            throw ValidationException::withMessages([
+                'stock' => "{$fieldLabel} must be a valid whole number.",
+            ]);
+        }
+
+        $value = (int) $rawStock;
+        if ($value < 0 || $value > self::MAX_SAFE_STOCK) {
+            throw ValidationException::withMessages([
+                'stock' => "{$fieldLabel} cannot exceed " . number_format(self::MAX_SAFE_STOCK) . ' units.',
+            ]);
+        }
+
+        return $value;
+    }
+
     private function optimizeAndStoreImage($file, $folder)
     {
         $extension = $file->getClientOriginalExtension();
@@ -157,7 +247,7 @@ class ProductController extends Controller
         $allowedCategories = $this->getSellerAllowedCategories();
 
         $selectedCategory = $request->query('category');
-        if ($selectedCategory !== null && !in_array($selectedCategory, $allowedCategories, true)) {
+        if ($selectedCategory !== null && ! in_array($selectedCategory, $allowedCategories, true)) {
             return redirect()->route('seller.products.index');
         }
 
@@ -190,7 +280,11 @@ class ProductController extends Controller
             }
         }
 
-        $products = $productsQuery->latest()->paginate(10)->withQueryString();
+        $products = $productsQuery
+            ->orderBy('created_at', 'asc')
+            ->orderBy('id', 'asc')
+            ->paginate(10)
+            ->withQueryString();
 
         return view('seller.products.index', compact(
             'products',
@@ -233,24 +327,23 @@ class ProductController extends Controller
     {
         $sellerProfile = auth()->user()->sellerProfile;
 
-        if (!$sellerProfile || $sellerCategory->seller_profile_id !== $sellerProfile->id) {
+        if (! $sellerProfile || $sellerCategory->seller_profile_id !== $sellerProfile->id) {
             abort(403, 'Unauthorized action.');
         }
 
-        $productCount = Product::where('user_id', auth()->id())
+        // Move any products in the deleted secondary category to 'Uncategorized' or primary category (SEL-SCAT-009)
+        $primaryCategory = $sellerProfile->line_of_business ?? 'Pet';
+        Product::where('user_id', auth()->id())
             ->where('category', $sellerCategory->category)
-            ->count();
-
-        if ($productCount > 0) {
-            return redirect()->route('seller.products.index')->withErrors([
-                'category' => "Cannot remove \"{$sellerCategory->category}\" because it still has {$productCount} product(s) in All Products.",
+            ->update([
+                'category'    => $primaryCategory,
+                'subcategory' => 'Uncategorized',
             ]);
-        }
 
         $categoryName = $sellerCategory->category;
         $sellerCategory->delete();
 
-        return redirect()->route('seller.products.index')->with('success', "Category \"{$categoryName}\" removed successfully.");
+        return redirect()->route('seller.products.index')->with('success', "Category \"{$categoryName}\" removed. Any products inside it were moved to Uncategorized.");
     }
 
     public function create(Request $request)
@@ -260,7 +353,7 @@ class ProductController extends Controller
         $allowedCategories = $this->getSellerAllowedCategories();
 
         $selectedCategory = $request->query('category', $primaryCategory);
-        if (!in_array($selectedCategory, $allowedCategories, true)) {
+        if (! in_array($selectedCategory, $allowedCategories, true)) {
             $selectedCategory = $primaryCategory;
         }
 
@@ -269,30 +362,42 @@ class ProductController extends Controller
 
     public function inventory()
     {
-        $products = Product::with('approval')->where('user_id', auth()->id())->latest()->get(['id', 'name', 'stock_quantity']);
+        $products = Product::with('approval')
+            ->where('user_id', auth()->id())
+            ->orderBy('created_at', 'asc')
+            ->orderBy('id', 'asc')
+            ->get(['id', 'name', 'stock_quantity']);
+
         return view('seller.products.inventory', compact('products'));
     }
 
     public function archived()
     {
-        $products = Product::with('approval')->onlyTrashed()->where('user_id', auth()->id())->latest()->get();
+        $products = Product::with('approval')
+            ->onlyTrashed()
+            ->where('user_id', auth()->id())
+            ->orderBy('created_at', 'asc')
+            ->orderBy('id', 'asc')
+            ->get();
+
         return view('seller.products.archived', compact('products'));
     }
 
     public function store(StoreProductRequest $request)
     {
+        $isDraft = $request->boolean('save_as_draft');
         $validated = $request->validated();
         $categoriesList = self::getCategoriesList();
         $allowedCategories = $this->getSellerAllowedCategories();
         $primaryCategory = auth()->user()->sellerProfile->line_of_business ?? 'Pet';
 
         $targetCategory = $validated['category'] ?? $primaryCategory;
-        if (!in_array($targetCategory, $allowedCategories, true)) {
+        if (! in_array($targetCategory, $allowedCategories, true)) {
             return back()->withErrors(['category' => 'You are not authorized to add products to this category.'])->withInput();
         }
 
         $validSubcategories = array_column($categoriesList[$targetCategory] ?? [], 'name');
-        if (!in_array($validated['subcategory'], $validSubcategories, true)) {
+        if (! $isDraft && ! in_array($validated['subcategory'], $validSubcategories, true)) {
             return back()->withErrors(['subcategory' => 'The selected subcategory does not belong to ' . $targetCategory . '.'])->withInput();
         }
 
@@ -303,7 +408,7 @@ class ProductController extends Controller
             }
         }
 
-        $priceDependency = !empty($validated['sub_variant_title']) ? 'sub' : 'main';
+        $priceDependency = ! empty($validated['sub_variant_title']) ? 'sub' : 'main';
         $variantsData = [
             'title'            => $validated['variant_title'] ?? null,
             'sub_title'        => $validated['sub_variant_title'] ?? null,
@@ -316,7 +421,7 @@ class ProductController extends Controller
         $totalStock = 0;
         $uploadedVariantFiles = $request->file('variant_pictures') ?? [];
 
-        if (!empty($validated['variant_names'])) {
+        if (! empty($validated['variant_names'])) {
             $seenVariants = [];
 
             foreach ($validated['variant_names'] as $vId => $vName) {
@@ -345,11 +450,11 @@ class ProductController extends Controller
                 }
 
                 if ($priceDependency === 'main') {
-                    $item['price']  = (float) ($validated['variant_prices'][$vId] ?? 0);
-                    $item['weight'] = (float) ($validated['variant_weights'][$vId] ?? 0);
-                    $item['stock']  = (int) ($validated['variant_stocks'][$vId] ?? 0);
+                    $item['price']  = $this->sanitizeNumericPrice($validated['variant_prices'][$vId] ?? 0, "Variant \"{$vName}\" price");
+                    $item['weight'] = $this->sanitizeNumericWeight($validated['variant_weights'][$vId] ?? 0, "Variant \"{$vName}\" weight");
+                    $item['stock']  = $this->sanitizeIntegerStock($validated['variant_stocks'][$vId] ?? 0, "Variant \"{$vName}\" stock");
 
-                    $totalStock += $item['stock'];
+                    $totalStock = min(self::MAX_SAFE_STOCK, $totalStock + $item['stock']);
                     if (is_null($minPrice) || $item['price'] < $minPrice) {
                         $minPrice = $item['price'];
                     }
@@ -358,7 +463,7 @@ class ProductController extends Controller
                     }
                 }
 
-                if (!empty($validated['sub_variant_names'][$vId])) {
+                if (! empty($validated['sub_variant_names'][$vId])) {
                     $seenSubs = [];
                     foreach ($validated['sub_variant_names'][$vId] as $sId => $sName) {
                         $normalizedSName = strtolower(trim($sName));
@@ -378,11 +483,11 @@ class ProductController extends Controller
                         ];
 
                         if ($priceDependency === 'sub') {
-                            $sub['price']  = (float) ($validated['sub_variant_prices'][$vId][$sId] ?? 0);
-                            $sub['weight'] = (float) ($validated['sub_variant_weights'][$vId][$sId] ?? 0);
-                            $sub['stock']  = (int) ($validated['sub_variant_stocks'][$vId][$sId] ?? 0);
+                            $sub['price']  = $this->sanitizeNumericPrice($validated['sub_variant_prices'][$vId][$sId] ?? 0, "Subvariant \"{$sName}\" price");
+                            $sub['weight'] = $this->sanitizeNumericWeight($validated['sub_variant_weights'][$vId][$sId] ?? 0, "Subvariant \"{$sName}\" weight");
+                            $sub['stock']  = $this->sanitizeIntegerStock($validated['sub_variant_stocks'][$vId][$sId] ?? 0, "Subvariant \"{$sName}\" stock");
 
-                            $totalStock += $sub['stock'];
+                            $totalStock = min(self::MAX_SAFE_STOCK, $totalStock + $sub['stock']);
                             if (is_null($minPrice) || $sub['price'] < $minPrice) {
                                 $minPrice = $sub['price'];
                             }
@@ -399,26 +504,39 @@ class ProductController extends Controller
             }
         }
 
-        $product = Product::create([
+        $safeBasePrice = $this->sanitizeNumericPrice($minPrice ?? 0, 'Product price');
+        $safeBaseWeight = (string) $this->sanitizeNumericWeight($baseWeight ?? 0, 'Product weight');
+        $safeDiscount = min(99.0, max(0.0, (float) ($validated['discount'] ?? 0)));
+
+        $productPayload = [
             'user_id'                 => auth()->id(),
             'name'                    => $validated['name'],
             'category'                => $targetCategory,
-            'subcategory'             => $validated['subcategory'],
-            'price'                   => $minPrice ?? 0,
-            'weight'                  => $baseWeight ?? '0',
-            'discount'                => $validated['discount'] ?? 0,
-            'stock_quantity'          => $totalStock,
+            'subcategory'             => $validated['subcategory'] ?? 'Uncategorized',
+            'price'                   => $safeBasePrice,
+            'weight'                  => $safeBaseWeight,
+            'discount'                => $safeDiscount,
+            'stock_quantity'          => min(self::MAX_SAFE_STOCK, $totalStock),
             'description'             => $validated['description'] ?? null,
             'additional_descriptions' => $validated['additional_descriptions'] ?? null,
             'pictures'                => $picturePaths,
             'variants'                => count($variantsData['items']) > 0 ? $variantsData : null,
             'has_pending_variants'    => false,
-        ]);
+        ];
+
+        if (Schema::hasColumn('products', 'publish_status')) {
+            $productPayload['publish_status'] = $isDraft ? 'draft' : 'active';
+            $productPayload['per_buyer_limit'] = $request->filled('per_buyer_limit')
+                ? max(1, (int) $request->input('per_buyer_limit'))
+                : null;
+        }
+
+        $product = Product::create($productPayload);
 
         $specifications = $request->input('specifications');
         if (is_array($specifications)) {
-            $validSpecs = array_filter($specifications, function($spec) {
-                return !empty($spec['title']) && !empty($spec['description']);
+            $validSpecs = array_filter($specifications, function ($spec) {
+                return ! empty($spec['title']) && ! empty($spec['description']);
             });
             if (count($validSpecs) > 0) {
                 $product->specifications()->createMany($validSpecs);
@@ -428,10 +546,134 @@ class ProductController extends Controller
         ProductApproval::create([
             'product_id' => $product->id,
             'user_id'    => auth()->id(),
-            'status'     => 'Pending',
+            'status'     => $isDraft ? 'Draft' : 'Pending',
         ]);
 
-        return redirect()->route('seller.products.index', ['category' => $targetCategory])->with('success', 'Product submitted and pending review.');
+        return redirect()
+            ->route('seller.products.index', ['category' => $targetCategory])
+            ->with('success', $isDraft ? 'Product saved as Draft.' : 'Product submitted and pending review.');
+    }
+
+    public function duplicate(Product $product)
+    {
+        if ($product->user_id !== auth()->id()) {
+            abort(403, 'Unauthorized action.');
+        }
+
+        $newProduct = DB::transaction(function () use ($product) {
+            $copyData = [
+                'user_id'                 => auth()->id(),
+                'name'                    => substr($product->name . ' (Copy)', 0, 120),
+                'category'                => $product->category,
+                'subcategory'             => $product->subcategory,
+                'price'                   => $product->price,
+                'weight'                  => $product->weight,
+                'discount'                => $product->discount,
+                'stock_quantity'          => $product->stock_quantity,
+                'description'             => $product->description,
+                'additional_descriptions' => $product->additional_descriptions,
+                'pictures'                => $product->pictures,
+                'variants'                => $product->raw_variants ?? $product->variants,
+                'has_pending_variants'    => false,
+            ];
+
+            if (Schema::hasColumn('products', 'publish_status')) {
+                $copyData['publish_status'] = 'draft';
+                $copyData['per_buyer_limit'] = $product->per_buyer_limit ?? null;
+            }
+
+            $duplicated = Product::create($copyData);
+
+            foreach ($product->specifications as $spec) {
+                $duplicated->specifications()->create([
+                    'title'       => $spec->title,
+                    'description' => $spec->description,
+                ]);
+            }
+
+            ProductApproval::create([
+                'product_id' => $duplicated->id,
+                'user_id'    => auth()->id(),
+                'status'     => 'Draft',
+            ]);
+
+            return $duplicated;
+        });
+
+        return back()->with('success', "Product duplicated as Draft: \"{$newProduct->name}\".");
+    }
+
+    public function togglePublishStatus(Product $product)
+    {
+        if ($product->user_id !== auth()->id()) {
+            abort(403, 'Unauthorized action.');
+        }
+
+        if (! Schema::hasColumn('products', 'publish_status')) {
+            return back()->withErrors(['error' => 'Publish status column is not available.']);
+        }
+
+        $current = $product->publish_status ?? 'active';
+        if ($current === 'draft') {
+            if (empty($product->name) || empty($product->pictures) || (float) $product->price <= 0) {
+                return back()->withErrors([
+                    'publish' => 'Cannot publish a draft with missing name, price, or product images.',
+                ]);
+            }
+            $product->update(['publish_status' => 'active']);
+            $product->approval?->update(['status' => 'Pending']);
+
+            return back()->with('success', "Draft \"{$product->name}\" submitted for publication.");
+        }
+
+        $nextStatus = $current === 'active' ? 'inactive' : 'active';
+        $product->update(['publish_status' => $nextStatus]);
+
+        return back()->with('success', "Product \"{$product->name}\" is now " . ucfirst($nextStatus) . '.');
+    }
+
+    public function bulkAction(Request $request)
+    {
+        $validated = $request->validate([
+            'action'        => ['required', 'in:deactivate,activate,delete'],
+            'product_ids'   => ['required', 'array', 'min:1'],
+            'product_ids.*' => ['required', 'integer'],
+        ]);
+
+        $products = Product::where('user_id', auth()->id())
+            ->whereIn('id', $validated['product_ids'])
+            ->get();
+
+        $processed = 0;
+        $skippedNames = [];
+
+        foreach ($products as $prod) {
+            if ($validated['action'] === 'deactivate') {
+                if (Schema::hasColumn('products', 'publish_status')) {
+                    $prod->update(['publish_status' => 'inactive']);
+                }
+                $processed++;
+            } elseif ($validated['action'] === 'activate') {
+                if (Schema::hasColumn('products', 'publish_status')) {
+                    $prod->update(['publish_status' => 'active']);
+                }
+                $processed++;
+            } elseif ($validated['action'] === 'delete') {
+                if ($this->hasUnfinishedOrders((int) $prod->id)) {
+                    $skippedNames[] = $prod->name;
+                    continue;
+                }
+                $prod->delete();
+                $processed++;
+            }
+        }
+
+        $msg = "Bulk {$validated['action']} completed for {$processed} product(s).";
+        if (! empty($skippedNames)) {
+            $msg .= ' Skipped ' . implode(', ', $skippedNames) . ' because they have unfinished orders.';
+        }
+
+        return back()->with('success', $msg);
     }
 
     public function update(UpdateProductRequest $request, Product $product)
@@ -449,18 +691,24 @@ class ProductController extends Controller
         $isApprovedProduct = $currentApprovalStatus === 'Approved';
 
         $dataToUpdate = [
-            'discount'                => $validated['discount'] ?? 0,
+            'discount'                => min(99.0, max(0.0, (float) ($validated['discount'] ?? 0))),
             'description'             => $validated['description'] ?? null,
             'additional_descriptions' => $validated['additional_descriptions'] ?? null,
         ];
 
-        if (!$isApprovedProduct) {
+        if (Schema::hasColumn('products', 'per_buyer_limit') && $request->has('per_buyer_limit')) {
+            $dataToUpdate['per_buyer_limit'] = $request->filled('per_buyer_limit')
+                ? max(1, (int) $request->input('per_buyer_limit'))
+                : null;
+        }
+
+        if (! $isApprovedProduct) {
             $categoriesList = self::getCategoriesList();
             $primaryCategory = auth()->user()->sellerProfile->line_of_business ?? 'Pet';
             $productCategory = $product->category ?? $primaryCategory;
             $validSubcategories = array_column($categoriesList[$productCategory] ?? [], 'name');
 
-            if (!empty($validSubcategories) && !in_array($validated['subcategory'], $validSubcategories, true)) {
+            if (! empty($validSubcategories) && ! in_array($validated['subcategory'], $validSubcategories, true)) {
                 return back()->withErrors(['subcategory' => 'The selected subcategory does not belong to ' . $productCategory . '.'])->withInput();
             }
 
@@ -488,12 +736,18 @@ class ProductController extends Controller
 
             if ($request->has('variant_names')) {
                 foreach ($request->variant_names as $vIndex => $vName) {
-                    if (!isset($variantsData['items'][$vIndex])) {
+                    if (! isset($variantsData['items'][$vIndex])) {
                         continue;
                     }
 
                     $isArchivedVariant = isset($request->archive_variants[$vIndex]) && (int) $request->archive_variants[$vIndex] === 1;
                     if ($isArchivedVariant) {
+                        $existingVarLabel = $variantsData['items'][$vIndex]['name'] ?? '';
+                        if ($this->hasUnfinishedOrders((int) $product->id, $existingVarLabel)) {
+                            return back()->withErrors([
+                                'variant_names' => "Cannot remove or archive variant \"{$existingVarLabel}\" because it has unfinished orders.",
+                            ])->withInput();
+                        }
                         $variantsData['items'][$vIndex]['is_archived'] = true;
                         continue;
                     }
@@ -501,50 +755,57 @@ class ProductController extends Controller
                     $existingVStatus = $variantsData['items'][$vIndex]['status'] ?? 'Approved';
                     $variantsData['items'][$vIndex]['name'] = trim((string) $vName);
 
-                    if (!$isApprovedProduct || $existingVStatus === 'Disapproved') {
+                    if (! $isApprovedProduct || $existingVStatus === 'Disapproved') {
                         $variantsData['items'][$vIndex]['status'] = 'Pending';
                     }
 
                     if ($request->hasFile("variant_pictures.{$vIndex}")) {
-                        if (!empty($variantsData['items'][$vIndex]['image'])) {
+                        if (! empty($variantsData['items'][$vIndex]['image'])) {
                             Storage::disk('public')->delete($variantsData['items'][$vIndex]['image']);
                         }
                         $variantsData['items'][$vIndex]['image'] = $this->optimizeAndStoreImage($request->file("variant_pictures.{$vIndex}"), 'variants');
                     }
 
                     if ($priceDependency === 'main') {
-                        $variantsData['items'][$vIndex]['price']  = (float) ($request->variant_prices[$vIndex] ?? $variantsData['items'][$vIndex]['price']);
-                        $variantsData['items'][$vIndex]['weight'] = (float) ($request->variant_weights[$vIndex] ?? $variantsData['items'][$vIndex]['weight']);
-                        $variantsData['items'][$vIndex]['stock']  = (int) ($request->variant_stocks[$vIndex] ?? $variantsData['items'][$vIndex]['stock']);
+                        $variantsData['items'][$vIndex]['price']  = $this->sanitizeNumericPrice($request->variant_prices[$vIndex] ?? $variantsData['items'][$vIndex]['price'], "Variant \"{$vName}\" price");
+                        $variantsData['items'][$vIndex]['weight'] = $this->sanitizeNumericWeight($request->variant_weights[$vIndex] ?? $variantsData['items'][$vIndex]['weight'], "Variant \"{$vName}\" weight");
+                        $variantsData['items'][$vIndex]['stock']  = $this->sanitizeIntegerStock($request->variant_stocks[$vIndex] ?? $variantsData['items'][$vIndex]['stock'], "Variant \"{$vName}\" stock");
                     }
 
                     if (isset($variantsData['items'][$vIndex]['subs']) && is_array($variantsData['items'][$vIndex]['subs'])) {
                         foreach ($variantsData['items'][$vIndex]['subs'] as $sIndex => $sub) {
                             $isArchivedSub = isset($request->archive_sub_variants[$vIndex][$sIndex]) && (int) $request->archive_sub_variants[$vIndex][$sIndex] === 1;
                             if ($isArchivedSub) {
+                                $existingSubLabel = $sub['name'] ?? '';
+                                if ($this->hasUnfinishedOrders((int) $product->id, $existingSubLabel)) {
+                                    return back()->withErrors([
+                                        'sub_variant_names' => "Cannot remove or archive sub-variant \"{$existingSubLabel}\" because it has unfinished orders.",
+                                    ])->withInput();
+                                }
                                 $variantsData['items'][$vIndex]['subs'][$sIndex]['is_archived'] = true;
                                 continue;
                             }
 
                             if (isset($request->sub_variant_names[$vIndex][$sIndex])) {
                                 $existingSubStatus = $variantsData['items'][$vIndex]['subs'][$sIndex]['status'] ?? 'Approved';
-                                $variantsData['items'][$vIndex]['subs'][$sIndex]['name'] = trim((string) $request->sub_variant_names[$vIndex][$sIndex]);
+                                $sLabel = trim((string) $request->sub_variant_names[$vIndex][$sIndex]);
+                                $variantsData['items'][$vIndex]['subs'][$sIndex]['name'] = $sLabel;
 
-                                if (!$isApprovedProduct || $existingSubStatus === 'Disapproved') {
+                                if (! $isApprovedProduct || $existingSubStatus === 'Disapproved') {
                                     $variantsData['items'][$vIndex]['subs'][$sIndex]['status'] = 'Pending';
                                 }
 
                                 if ($priceDependency === 'sub') {
-                                    $variantsData['items'][$vIndex]['subs'][$sIndex]['price']  = (float) ($request->sub_variant_prices[$vIndex][$sIndex] ?? $sub['price']);
-                                    $variantsData['items'][$vIndex]['subs'][$sIndex]['weight'] = (float) ($request->sub_variant_weights[$vIndex][$sIndex] ?? $sub['weight']);
-                                    $variantsData['items'][$vIndex]['subs'][$sIndex]['stock']  = (int) ($request->sub_variant_stocks[$vIndex][$sIndex] ?? $sub['stock']);
+                                    $variantsData['items'][$vIndex]['subs'][$sIndex]['price']  = $this->sanitizeNumericPrice($request->sub_variant_prices[$vIndex][$sIndex] ?? $sub['price'], "Subvariant \"{$sLabel}\" price");
+                                    $variantsData['items'][$vIndex]['subs'][$sIndex]['weight'] = $this->sanitizeNumericWeight($request->sub_variant_weights[$vIndex][$sIndex] ?? $sub['weight'], "Subvariant \"{$sLabel}\" weight");
+                                    $variantsData['items'][$vIndex]['subs'][$sIndex]['stock']  = $this->sanitizeIntegerStock($request->sub_variant_stocks[$vIndex][$sIndex] ?? $sub['stock'], "Subvariant \"{$sLabel}\" stock");
                                 }
                             }
                         }
                     }
 
                     if (isset($request->new_existing_sub_variant_names[$vIndex]) && is_array($request->new_existing_sub_variant_names[$vIndex])) {
-                        if (!isset($variantsData['items'][$vIndex]['subs']) || !is_array($variantsData['items'][$vIndex]['subs'])) {
+                        if (! isset($variantsData['items'][$vIndex]['subs']) || ! is_array($variantsData['items'][$vIndex]['subs'])) {
                             $variantsData['items'][$vIndex]['subs'] = [];
                         }
 
@@ -559,9 +820,9 @@ class ProductController extends Controller
                                 'name'        => $trimmedNsName,
                                 'status'      => 'Pending',
                                 'is_archived' => false,
-                                'price'       => (float) ($request->new_existing_sub_variant_prices[$vIndex][$nsIndex] ?? 0),
-                                'weight'      => (float) ($request->new_existing_sub_variant_weights[$vIndex][$nsIndex] ?? 0),
-                                'stock'       => (int) ($request->new_existing_sub_variant_stocks[$vIndex][$nsIndex] ?? 0),
+                                'price'       => $this->sanitizeNumericPrice($request->new_existing_sub_variant_prices[$vIndex][$nsIndex] ?? 0, "Subvariant \"{$trimmedNsName}\" price"),
+                                'weight'      => $this->sanitizeNumericWeight($request->new_existing_sub_variant_weights[$vIndex][$nsIndex] ?? 0, "Subvariant \"{$trimmedNsName}\" weight"),
+                                'stock'       => $this->sanitizeIntegerStock($request->new_existing_sub_variant_stocks[$vIndex][$nsIndex] ?? 0, "Subvariant \"{$trimmedNsName}\" stock"),
                             ];
                         }
                     }
@@ -580,9 +841,9 @@ class ProductController extends Controller
                         'name'        => $trimmedNName,
                         'status'      => 'Pending',
                         'is_archived' => false,
-                        'price'       => $priceDependency === 'main' ? (float) ($request->new_variant_prices[$nIndex] ?? 0) : null,
-                        'weight'      => $priceDependency === 'main' ? (float) ($request->new_variant_weights[$nIndex] ?? 0) : null,
-                        'stock'       => $priceDependency === 'main' ? (int) ($request->new_variant_stocks[$nIndex] ?? 0) : null,
+                        'price'       => $priceDependency === 'main' ? $this->sanitizeNumericPrice($request->new_variant_prices[$nIndex] ?? 0, "Variant \"{$trimmedNName}\" price") : null,
+                        'weight'      => $priceDependency === 'main' ? $this->sanitizeNumericWeight($request->new_variant_weights[$nIndex] ?? 0, "Variant \"{$trimmedNName}\" weight") : null,
+                        'stock'       => $priceDependency === 'main' ? $this->sanitizeIntegerStock($request->new_variant_stocks[$nIndex] ?? 0, "Variant \"{$trimmedNName}\" stock") : null,
                         'image'       => null,
                         'subs'        => [],
                     ];
@@ -603,9 +864,9 @@ class ProductController extends Controller
                                 'name'        => $trimmedSubName,
                                 'status'      => 'Pending',
                                 'is_archived' => false,
-                                'price'       => (float) ($request->new_sub_variant_prices[$nIndex][$nsIndex] ?? 0),
-                                'weight'      => (float) ($request->new_sub_variant_weights[$nIndex][$nsIndex] ?? 0),
-                                'stock'       => (int) ($request->new_sub_variant_stocks[$nIndex][$nsIndex] ?? 0),
+                                'price'       => $this->sanitizeNumericPrice($request->new_sub_variant_prices[$nIndex][$nsIndex] ?? 0, "Subvariant \"{$trimmedSubName}\" price"),
+                                'weight'      => $this->sanitizeNumericWeight($request->new_sub_variant_weights[$nIndex][$nsIndex] ?? 0, "Subvariant \"{$trimmedSubName}\" weight"),
+                                'stock'       => $this->sanitizeIntegerStock($request->new_sub_variant_stocks[$nIndex][$nsIndex] ?? 0, "Subvariant \"{$trimmedSubName}\" stock"),
                             ];
                         }
                     }
@@ -616,7 +877,7 @@ class ProductController extends Controller
 
             $seenVariantNames = [];
             foreach ($variantsData['items'] as $vItem) {
-                if (!empty($vItem['is_archived']) || ($vItem['status'] ?? '') === 'Disapproved') {
+                if (! empty($vItem['is_archived']) || ($vItem['status'] ?? '') === 'Disapproved') {
                     continue;
                 }
 
@@ -628,10 +889,10 @@ class ProductController extends Controller
                     $seenVariantNames[] = $normVName;
                 }
 
-                if (!empty($vItem['subs']) && is_array($vItem['subs'])) {
+                if (! empty($vItem['subs']) && is_array($vItem['subs'])) {
                     $seenSubNames = [];
                     foreach ($vItem['subs'] as $sItem) {
-                        if (!empty($sItem['is_archived']) || ($sItem['status'] ?? '') === 'Disapproved') {
+                        if (! empty($sItem['is_archived']) || ($sItem['status'] ?? '') === 'Disapproved') {
                             continue;
                         }
                         $normSName = strtolower(trim($sItem['name'] ?? ''));
@@ -651,7 +912,7 @@ class ProductController extends Controller
             $hasAnyPendingAdditions = false;
 
             foreach ($variantsData['items'] as $item) {
-                if (!empty($item['is_archived'])) {
+                if (! empty($item['is_archived'])) {
                     continue;
                 }
 
@@ -664,10 +925,10 @@ class ProductController extends Controller
                     continue;
                 }
 
-                $countItemInTotals = !$isApprovedProduct || $itemStatus === 'Approved';
+                $countItemInTotals = ! $isApprovedProduct || $itemStatus === 'Approved';
 
                 if ($priceDependency === 'main' && $countItemInTotals) {
-                    $totalStock += (int) ($item['stock'] ?? 0);
+                    $totalStock = min(self::MAX_SAFE_STOCK, $totalStock + (int) ($item['stock'] ?? 0));
                     if (is_null($minPrice) || (float) $item['price'] < $minPrice) {
                         $minPrice = (float) $item['price'];
                     }
@@ -678,7 +939,7 @@ class ProductController extends Controller
 
                 if (isset($item['subs']) && count($item['subs']) > 0) {
                     foreach ($item['subs'] as $sub) {
-                        if (!empty($sub['is_archived'])) {
+                        if (! empty($sub['is_archived'])) {
                             continue;
                         }
 
@@ -691,10 +952,10 @@ class ProductController extends Controller
                             continue;
                         }
 
-                        $countSubInTotals = !$isApprovedProduct || ($itemStatus === 'Approved' && $subStatus === 'Approved');
+                        $countSubInTotals = ! $isApprovedProduct || ($itemStatus === 'Approved' && $subStatus === 'Approved');
 
                         if ($priceDependency === 'sub' && $countSubInTotals) {
-                            $totalStock += (int) ($sub['stock'] ?? 0);
+                            $totalStock = min(self::MAX_SAFE_STOCK, $totalStock + (int) ($sub['stock'] ?? 0));
                             if (is_null($minPrice) || (float) $sub['price'] < $minPrice) {
                                 $minPrice = (float) $sub['price'];
                             }
@@ -707,10 +968,14 @@ class ProductController extends Controller
             }
 
             $dataToUpdate['variants'] = $variantsData;
-            $dataToUpdate['price'] = $minPrice ?? $product->price;
-            $dataToUpdate['weight'] = $baseWeight ?? $product->weight;
-            $dataToUpdate['stock_quantity'] = $totalStock;
+            $dataToUpdate['price'] = $this->sanitizeNumericPrice($minPrice ?? $product->price, 'Product price');
+            $dataToUpdate['weight'] = (string) $this->sanitizeNumericWeight($baseWeight ?? $product->weight, 'Product weight');
+            $dataToUpdate['stock_quantity'] = min(self::MAX_SAFE_STOCK, $totalStock);
             $dataToUpdate['has_pending_variants'] = $isApprovedProduct ? $hasAnyPendingAdditions : false;
+
+            if (Schema::hasColumn('products', 'low_stock_alerted') && $totalStock > 5) {
+                $dataToUpdate['low_stock_alerted'] = false;
+            }
         }
 
         $product->update($dataToUpdate);
@@ -718,20 +983,20 @@ class ProductController extends Controller
         $product->specifications()->delete();
         $specifications = $request->input('specifications');
         if (is_array($specifications)) {
-            $validSpecs = array_filter($specifications, function($spec) {
-                return !empty($spec['title']) && !empty($spec['description']);
+            $validSpecs = array_filter($specifications, function ($spec) {
+                return ! empty($spec['title']) && ! empty($spec['description']);
             });
             if (count($validSpecs) > 0) {
                 $product->specifications()->createMany($validSpecs);
             }
         }
 
-        if ($isApprovedProduct && !empty($dataToUpdate['has_pending_variants'])) {
+        if ($isApprovedProduct && ! empty($dataToUpdate['has_pending_variants'])) {
             $product->approval?->touch();
             return back()->with('success', 'Changes saved. New variants/subvariants have been submitted for admin review.');
         }
 
-        if (!$isApprovedProduct && $product->approval) {
+        if (! $isApprovedProduct && $product->approval) {
             $product->approval->update([
                 'status'           => 'Pending',
                 'disapproval_type' => null,
@@ -747,6 +1012,13 @@ class ProductController extends Controller
         if ($product->user_id !== auth()->id()) {
             abort(403, 'Unauthorized action.');
         }
+
+        if ($this->hasUnfinishedOrders((int) $product->id)) {
+            return back()->withErrors([
+                'product' => "Cannot delete or archive \"{$product->name}\" because it currently has unfinished orders.",
+            ]);
+        }
+
         $product->delete();
         return back()->with('success', 'Product archived.');
     }
@@ -761,6 +1033,13 @@ class ProductController extends Controller
     public function forceDelete(int $id)
     {
         $product = Product::withTrashed()->where('user_id', auth()->id())->findOrFail($id);
+
+        if ($this->hasUnfinishedOrders((int) $product->id)) {
+            return back()->withErrors([
+                'product' => "Cannot permanently delete \"{$product->name}\" because it has unfinished orders.",
+            ]);
+        }
+
         if ($product->pictures && is_array($product->pictures)) {
             foreach ($product->pictures as $pic) {
                 Storage::disk('public')->delete($pic);

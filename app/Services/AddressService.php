@@ -8,48 +8,159 @@ use Illuminate\Support\Facades\Http;
 class AddressService
 {
     protected const CACHE_TTL_HOURS = 24;
+    public const NCR_PROVINCE_CODE = '130000000';
 
     public function getProvinces(): array
     {
-        return Cache::remember('psgc_provinces', now()->addHours(self::CACHE_TTL_HOURS), function () {
+        return Cache::remember('psgc_provinces_v3', now()->addHours(self::CACHE_TTL_HOURS), function () {
+            $provinces = [];
+
             try {
-                $response = Http::timeout(8)->get('https://psgc.gitlab.io/api/provinces');
-                return $response->successful() ? $response->json() : [];
+                $response = Http::withoutVerifying()->timeout(10)->get('https://psgc.gitlab.io/api/provinces');
+                if ($response->successful() && is_array($response->json())) {
+                    $provinces = $response->json();
+                }
             } catch (\Throwable $e) {
-                return [];
+                $provinces = [];
             }
+
+            $hasNcr = collect($provinces)->contains(function ($prov) {
+                $code = (string) ($prov['code'] ?? '');
+                $name = strtolower(trim((string) ($prov['name'] ?? '')));
+                return $code === self::NCR_PROVINCE_CODE
+                    || str_contains($name, 'metro manila')
+                    || str_contains($name, 'national capital region');
+            });
+
+            if (! $hasNcr) {
+                array_unshift($provinces, [
+                    'code'            => self::NCR_PROVINCE_CODE,
+                    'name'            => 'Metro Manila',
+                    'regionCode'      => self::NCR_PROVINCE_CODE,
+                    'islandGroupCode' => 'luzon',
+                ]);
+            }
+
+            usort($provinces, fn ($a, $b) => strcasecmp((string) ($a['name'] ?? ''), (string) ($b['name'] ?? '')));
+
+            return $provinces;
         });
     }
 
     public function getMunicipalities(string $provinceCode): array
     {
-        if (empty($provinceCode)) {
+        $cleanCode = trim($provinceCode);
+        if ($cleanCode === '') {
             return [];
         }
 
-        return Cache::remember("psgc_municipalities_{$provinceCode}", now()->addHours(self::CACHE_TTL_HOURS), function () use ($provinceCode) {
-            try {
-                $response = Http::timeout(8)->get("https://psgc.gitlab.io/api/provinces/{$provinceCode}/cities-municipalities");
-                return $response->successful() ? $response->json() : [];
-            } catch (\Throwable $e) {
-                return [];
+        return Cache::remember("psgc_municipalities_v3_{$cleanCode}", now()->addHours(self::CACHE_TTL_HOURS), function () use ($cleanCode) {
+            $normalizedInput = $this->normalizeName($cleanCode);
+
+            if (
+                $cleanCode === self::NCR_PROVINCE_CODE
+                || in_array($normalizedInput, ['metro manila', 'ncr', 'national capital region', 'manila'], true)
+            ) {
+                return $this->getNcrCitiesAndMunicipalities();
             }
+
+            $municipalities = [];
+
+            try {
+                $provResponse = Http::withoutVerifying()->timeout(10)->get("https://psgc.gitlab.io/api/provinces/{$cleanCode}/cities-municipalities");
+                if ($provResponse->successful() && is_array($provResponse->json())) {
+                    $municipalities = $provResponse->json();
+                }
+
+                $matchedProv = collect($this->getProvinces())->firstWhere('code', $cleanCode);
+                $regionCode = $matchedProv['regionCode'] ?? null;
+
+                // Merge Independent Cities (HUCs / ICCs) in the same region that have provinceCode === false
+                if ($regionCode) {
+                    $regResponse = Http::withoutVerifying()->timeout(10)->get("https://psgc.gitlab.io/api/regions/{$regionCode}/cities-municipalities");
+                    if ($regResponse->successful() && is_array($regResponse->json())) {
+                        $existingCodes = collect($municipalities)->pluck('code')->all();
+                        foreach ($regResponse->json() as $cityItem) {
+                            $itemProvCode = $cityItem['provinceCode'] ?? null;
+                            if (
+                                ($itemProvCode === false || $itemProvCode === null || $itemProvCode === $cleanCode)
+                                && ! in_array($cityItem['code'] ?? '', $existingCodes, true)
+                            ) {
+                                $municipalities[] = $cityItem;
+                            }
+                        }
+                    }
+                }
+            } catch (\Throwable $e) {
+            }
+
+            usort($municipalities, fn ($a, $b) => strcasecmp((string) ($a['name'] ?? ''), (string) ($b['name'] ?? '')));
+
+            return $municipalities;
         });
+    }
+
+    protected function getNcrCitiesAndMunicipalities(): array
+    {
+        try {
+            $response = Http::withoutVerifying()->timeout(10)->get('https://psgc.gitlab.io/api/regions/130000000/cities-municipalities');
+            if ($response->successful() && is_array($response->json()) && ! empty($response->json())) {
+                $items = $response->json();
+                usort($items, fn ($a, $b) => strcasecmp((string) ($a['name'] ?? ''), (string) ($b['name'] ?? '')));
+                return $items;
+            }
+        } catch (\Throwable $e) {
+        }
+
+        return [
+            ['code' => '137501000', 'name' => 'City of Caloocan'],
+            ['code' => '137601000', 'name' => 'City of Las Piñas'],
+            ['code' => '137602000', 'name' => 'City of Makati'],
+            ['code' => '137502000', 'name' => 'City of Malabon'],
+            ['code' => '137401000', 'name' => 'City of Mandaluyong'],
+            ['code' => '133900000', 'name' => 'City of Manila'],
+            ['code' => '137402000', 'name' => 'City of Marikina'],
+            ['code' => '137603000', 'name' => 'City of Muntinlupa'],
+            ['code' => '137503000', 'name' => 'City of Navotas'],
+            ['code' => '137604000', 'name' => 'City of Parañaque'],
+            ['code' => '137605000', 'name' => 'City of Pasay'],
+            ['code' => '137403000', 'name' => 'City of Pasig'],
+            ['code' => '137404000', 'name' => 'Quezon City'],
+            ['code' => '137405000', 'name' => 'City of San Juan'],
+            ['code' => '137607000', 'name' => 'City of Taguig'],
+            ['code' => '137504000', 'name' => 'City of Valenzuela'],
+            ['code' => '137606000', 'name' => 'Pateros'],
+        ];
     }
 
     public function getBarangays(string $municipalityCode): array
     {
-        if (empty($municipalityCode)) {
+        $cleanCode = trim($municipalityCode);
+        if ($cleanCode === '') {
             return [];
         }
 
-        return Cache::remember("psgc_barangays_{$municipalityCode}", now()->addHours(self::CACHE_TTL_HOURS), function () use ($municipalityCode) {
-            try {
-                $response = Http::timeout(8)->get("https://psgc.gitlab.io/api/cities-municipalities/{$municipalityCode}/barangays");
-                return $response->successful() ? $response->json() : [];
-            } catch (\Throwable $e) {
-                return [];
+        return Cache::remember("psgc_barangays_v3_{$cleanCode}", now()->addHours(self::CACHE_TTL_HOURS), function () use ($cleanCode) {
+            $endpoints = [
+                "https://psgc.gitlab.io/api/cities-municipalities/{$cleanCode}/barangays",
+                "https://psgc.gitlab.io/api/cities/{$cleanCode}/barangays",
+                "https://psgc.gitlab.io/api/municipalities/{$cleanCode}/barangays",
+                "https://psgc.gitlab.io/api/sub-municipalities/{$cleanCode}/barangays",
+            ];
+
+            foreach ($endpoints as $url) {
+                try {
+                    $response = Http::withoutVerifying()->timeout(10)->get($url);
+                    if ($response->successful() && is_array($response->json()) && ! empty($response->json())) {
+                        $barangays = $response->json();
+                        usort($barangays, fn ($a, $b) => strcasecmp((string) ($a['name'] ?? ''), (string) ($b['name'] ?? '')));
+                        return $barangays;
+                    }
+                } catch (\Throwable $e) {
+                }
             }
+
+            return [];
         });
     }
 
@@ -58,6 +169,13 @@ class AddressService
         $target = $this->normalizeName($provinceName);
         if ($target === '') {
             return null;
+        }
+
+        if (in_array($target, ['metro manila', 'ncr', 'national capital region', 'manila'], true)) {
+            return [
+                'code' => self::NCR_PROVINCE_CODE,
+                'name' => 'Metro Manila',
+            ];
         }
 
         foreach ($this->getProvinces() as $prov) {

@@ -3,13 +3,16 @@
     $hasProfile = $user && $user->logisticsProfile !== null;
     $isMainLogistics = $user && $user->isMainLogisticsAccount();
     $isRiderApplicationRoute = request()->routeIs('logistics.rider-applications*');
-    $isCourierRoute = request()->routeIs('logistics.couriers*');
-    $isActiveRidersRoute = request()->routeIs('logistics.riders*');
-    $isEmployeesRoute = request()->routeIs('logistics.employees*') || request()->routeIs('rider.register');
-    $isRiderRoute = $isRiderApplicationRoute || $isCourierRoute || $isActiveRidersRoute || $isEmployeesRoute;
+    $isCourierIndexRoute = request()->routeIs('logistics.couriers.index');
+    $isCreateCourierRoute = request()->routeIs('logistics.couriers.create');
+    $isCreateRiderRoute = request()->routeIs('rider.register') || request()->routeIs('logistics.riders.create');
+    $isActiveRidersRoute = request()->routeIs('logistics.riders.active');
+    $isEmployeesRoute = request()->routeIs('logistics.employees*');
+    $isRiderRoute = $isRiderApplicationRoute || $isCourierIndexRoute || $isCreateCourierRoute || $isCreateRiderRoute || $isActiveRidersRoute || $isEmployeesRoute;
     $isBranchesRoute = request()->routeIs('logistics.branches*');
     $isShipmentsRoute = request()->routeIs('logistics.shipments*');
-    $isFinanceRoute = request()->routeIs('logistics.finance*');
+    $isZonesRoute = request()->routeIs('logistics.zones*');
+    $isFinanceRoute = request()->routeIs('logistics.finance*') || request()->routeIs('logistics.reports*');
 @endphp
 
 <aside :class="sidebarOpen ? 'w-72' : 'w-20'" class="relative flex flex-col h-screen border-r border-border-subtle shadow-lg transition-all duration-300 ease-in-out bg-gradient-to-b from-surface via-surface to-brand-light/30 flex-shrink-0 z-40">
@@ -49,7 +52,7 @@
                     <svg class="w-6 h-6 flex-shrink-0 {{ $isShipmentsRoute ? 'text-primary' : 'text-text-muted group-hover:text-primary' }} transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16V6a1 1 0 00-1-1H4a1 1 0 00-1 1v10a1 1 0 001 1h1m8-1a1 1 0 01-1 1H9m4-1V8a1 1 0 011-1h2.586a1 1 0 01.707.293l3.414 3.414a1 1 0 01.293.707V16a1 1 0 01-1 1h-1m-6-1a1 1 0 001 1h1M5 17a2 2 0 104 0m-4 0a2 2 0 114 0m6 0a2 2 0 104 0m-4 0a2 2 0 114 0" />
                     </svg>
-                    <span x-show="sidebarOpen" x-transition.opacity.duration.300ms class="ml-3">Shipments & Dispatch</span>
+                    <span x-show="sidebarOpen" x-transition.opacity.duration.300ms class="ml-3">Shipments &amp; Dispatch</span>
                 </div>
                 <svg x-show="sidebarOpen" class="w-4 h-4 transition-transform duration-200 text-text-muted group-hover:text-primary" :class="{'rotate-180': activeDropdown === 'shipments'}" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
@@ -65,6 +68,16 @@
                 <a href="{{ route('logistics.shipments.index', ['status' => 'failed_returned']) }}" class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ request('status') === 'failed_returned' ? 'text-primary font-bold bg-brand-light/40' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">Failed / Returned</a>
             </div>
         </div>
+
+        <a href="{{ route('logistics.zones.index') }}"
+            @click="activeDropdown = null"
+            class="flex items-center px-3 py-3 rounded-xl transition-all duration-200 font-medium group whitespace-nowrap text-sm cursor-pointer {{ $isZonesRoute ? 'text-primary font-bold bg-brand-light/60 shadow-xs' : 'text-text-muted hover:bg-brand-light/30 hover:text-primary' }}"
+            :title="!sidebarOpen ? 'Zones, Rates & Exceptions' : ''">
+            <svg class="w-6 h-6 flex-shrink-0 transition-colors {{ $isZonesRoute ? 'text-primary' : 'text-text-muted group-hover:text-primary' }}" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
+            </svg>
+            <span x-show="sidebarOpen" x-transition.opacity.duration.300ms class="ml-3">Zones, Rates &amp; Exceptions</span>
+        </a>
 
         @if($isMainLogistics)
         <a href="{{ route('logistics.branches.index') }}"
@@ -93,23 +106,23 @@
                 </svg>
             </button>
             <div x-show="activeDropdown === 'riders' && sidebarOpen" x-collapse x-cloak class="ml-6 pl-4 my-1 border-l-2 border-border-subtle/70 space-y-1">
-                <a href="{{ route('logistics.employees.index') }}" class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ request()->routeIs('logistics.employees*') ? 'text-primary font-bold bg-brand-light/40' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">Hub & Barangay Assignments</a>
-                <a href="{{ route('logistics.couriers.create') }}" class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ request()->routeIs('logistics.couriers.create') ? 'text-primary font-bold bg-brand-light/40' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">Create Courier Account</a>
-                <a href="{{ route('rider.register') }}" class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ request()->routeIs('rider.register') || request()->routeIs('logistics.riders.create') ? 'text-primary font-bold bg-brand-light/40' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">Create Rider Account</a>
-                <a href="{{ route('logistics.couriers.index') }}" class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ request()->routeIs('logistics.couriers.index') ? 'text-primary font-bold bg-brand-light/40' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">All Couriers (First-Mile)</a>
+                <a href="{{ route('logistics.employees.index') }}" class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ $isEmployeesRoute ? 'text-primary font-bold bg-brand-light/40' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">Hub &amp; Barangay Assignments</a>
+                <a href="{{ route('logistics.couriers.create') }}" class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ $isCreateCourierRoute ? 'text-primary font-bold bg-brand-light/40' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">Create Courier Account</a>
+                <a href="{{ route('logistics.riders.create') }}" class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ $isCreateRiderRoute ? 'text-primary font-bold bg-brand-light/40' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">Create Rider Account</a>
+                <a href="{{ route('logistics.couriers.index') }}" class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ $isCourierIndexRoute ? 'text-primary font-bold bg-brand-light/40' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">All Couriers (First-Mile)</a>
                 <a href="{{ route('logistics.riders.active') }}" class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ $isActiveRidersRoute ? 'text-primary font-bold bg-brand-light/40' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">All Approved Riders</a>
-                <a href="{{ route('logistics.rider-applications.index') }}" class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ $isRiderApplicationRoute ? 'text-primary font-bold bg-brand-light/40' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">Rider Directory & Docs</a>
+                <a href="{{ route('logistics.rider-applications.index') }}" class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ $isRiderApplicationRoute ? 'text-primary font-bold bg-brand-light/40' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">Rider Directory &amp; Docs</a>
             </div>
         </div>
 
         <a href="{{ route('logistics.finance.index') }}"
             @click="activeDropdown = null"
             class="flex items-center px-3 py-3 rounded-xl transition-all duration-200 font-medium group whitespace-nowrap text-sm cursor-pointer {{ $isFinanceRoute ? 'text-primary font-bold bg-brand-light/60 shadow-xs' : 'text-text-muted hover:bg-brand-light/30 hover:text-primary' }}"
-            :title="!sidebarOpen ? 'COD & Settlements' : ''">
+            :title="!sidebarOpen ? 'COD & E-Wallet Reports' : ''">
             <svg class="w-6 h-6 flex-shrink-0 transition-colors {{ $isFinanceRoute ? 'text-primary' : 'text-text-muted group-hover:text-primary' }}" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
-            <span x-show="sidebarOpen" x-transition.opacity.duration.300ms class="ml-3">COD & Settlements</span>
+            <span x-show="sidebarOpen" x-transition.opacity.duration.300ms class="ml-3">COD &amp; E-Wallet Reports</span>
         </a>
 
         @if($isMainLogistics)

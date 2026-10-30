@@ -3,8 +3,12 @@
 namespace App\Http\Controllers\Buyer;
 
 use App\Http\Controllers\Controller;
+use App\Models\Cart;
 use App\Models\DeliveryProof;
+use App\Models\OrderItemReview;
+use App\Models\OrderServiceRating;
 use App\Models\OrderStatusHistory;
+use App\Models\Product;
 use App\Models\SellerOrder;
 use App\Models\SellerOrderExtra;
 use App\Notifications\OrderLifecycleNotification;
@@ -33,7 +37,7 @@ class OrderController extends Controller
     public function index(Request $request)
     {
         $user = $request->user();
-        $this->orderCompletionService->autoCompleteExpiredDeliveredOrders(buyerId: (int) $user->id);
+        $this->orderCompletionService->runLifecycleMaintenance(buyerId: (int) $user->id);
 
         $statusTab = $request->query('status', 'all');
         $search = trim((string) $request->query('search', ''));
@@ -45,7 +49,9 @@ class OrderController extends Controller
             'unpaid'     => (clone $baseQuery)->whereIn('payment_status', ['unpaid', 'flagged'])->whereNotIn('status', ['rejected', 'cancelled', 'returned_to_seller'])->count(),
             'processing' => (clone $baseQuery)->whereIn('status', ['pending_seller_acceptance', 'pending_buyer_response', 'accepted', 'preparing', 'ready_for_pickup', 'pickup_assigned'])->count(),
             'shipped'    => (clone $baseQuery)->whereIn('status', ['picked_up', 'at_logistics_hub', 'out_for_delivery', 'delivery_failed'])->count(),
-            'review'     => (clone $baseQuery)->whereIn('status', ['delivered', 'completed'])->count(),
+            'to_confirm' => (clone $baseQuery)->where('status', 'delivered')->count(),
+            'to_rate'    => (clone $baseQuery)->where('status', 'completed')->whereDoesntHave('serviceRating')->count(),
+            'completed'  => (clone $baseQuery)->where('status', 'completed')->whereHas('serviceRating')->count(),
             'returns'    => (clone $baseQuery)->whereIn('status', ['disputed', 'rejected', 'cancelled', 'returned_to_seller'])->count(),
         ];
 
@@ -59,13 +65,17 @@ class OrderController extends Controller
             'payment',
             'paymentSubmission',
             'extra',
+            'serviceRating',
+            'itemReviews',
         ])->where('buyer_id', $user->id);
 
         match ($statusTab) {
             'unpaid'     => $query->whereIn('payment_status', ['unpaid', 'flagged'])->whereNotIn('status', ['rejected', 'cancelled', 'returned_to_seller']),
             'processing' => $query->whereIn('status', ['pending_seller_acceptance', 'pending_buyer_response', 'accepted', 'preparing', 'ready_for_pickup', 'pickup_assigned']),
             'shipped'    => $query->whereIn('status', ['picked_up', 'at_logistics_hub', 'out_for_delivery', 'delivery_failed']),
-            'review'     => $query->whereIn('status', ['delivered', 'completed']),
+            'to_confirm' => $query->where('status', 'delivered'),
+            'to_rate'    => $query->where('status', 'completed')->whereDoesntHave('serviceRating'),
+            'completed', 'review' => $query->where('status', 'completed')->whereHas('serviceRating'),
             'returns'    => $query->whereIn('status', ['disputed', 'rejected', 'cancelled', 'returned_to_seller']),
             default      => null,
         };
@@ -79,6 +89,7 @@ class OrderController extends Controller
             });
         }
 
+        // Buyer-only Last-In, First-Out (LIFO) ordering so newly placed orders appear first
         $sellerOrders = $query
             ->orderByDesc('created_at')
             ->orderByDesc('id')
@@ -86,23 +97,26 @@ class OrderController extends Controller
             ->withQueryString();
 
         $cancellationQuota = $this->cancellationGuardService->getBuyerQuotaSummary((int) $user->id);
+        $isIdentityVerified = $user->identityVerification?->status === 'verified';
 
         return view('buyer.option.orders.index', compact(
             'sellerOrders',
             'statusTab',
             'search',
             'counts',
-            'cancellationQuota'
+            'cancellationQuota',
+            'isIdentityVerified'
         ));
     }
 
     public function show(Request $request, SellerOrder $sellerOrder)
     {
-        if ((int) $sellerOrder->buyer_id !== (int) $request->user()->id) {
+        $user = $request->user();
+        if ((int) $sellerOrder->buyer_id !== (int) $user->id) {
             abort(403);
         }
 
-        $this->orderCompletionService->autoCompleteExpiredDeliveredOrders(buyerId: (int) $request->user()->id);
+        $this->orderCompletionService->runLifecycleMaintenance(buyerId: (int) $user->id);
         $sellerOrder->refresh();
 
         $sellerOrder->load([
@@ -113,6 +127,8 @@ class OrderController extends Controller
             'payment',
             'paymentSubmission',
             'extra',
+            'serviceRating',
+            'itemReviews',
             'statusHistories',
             'shipment.packages',
             'shipment.trackingLogs',
@@ -122,9 +138,238 @@ class OrderController extends Controller
             'shipment.deliveryProofs',
         ]);
 
-        $cancellationQuota = $this->cancellationGuardService->getBuyerQuotaSummary((int) $request->user()->id);
+        $cancellationQuota = $this->cancellationGuardService->getBuyerQuotaSummary((int) $user->id);
+        $isIdentityVerified = $user->identityVerification?->status === 'verified';
 
-        return view('buyer.option.orders.show', compact('sellerOrder', 'cancellationQuota'));
+        return view('buyer.option.orders.show', compact(
+            'sellerOrder',
+            'cancellationQuota',
+            'isIdentityVerified'
+        ));
+    }
+
+    public function showRatePage(Request $request, SellerOrder $sellerOrder)
+    {
+        $user = $request->user();
+        if ((int) $sellerOrder->buyer_id !== (int) $user->id) {
+            abort(403);
+        }
+
+        $sellerOrder->load([
+            'order',
+            'items.product',
+            'sellerProfile',
+            'logisticsProfile',
+            'shipment.currentRider',
+            'serviceRating',
+            'itemReviews',
+        ]);
+
+        if ($sellerOrder->status !== 'completed') {
+            return redirect()
+                ->route('user.orders.show', $sellerOrder->id)
+                ->withErrors(['rate' => 'You can only rate an order after confirming receipt (Order Completed).']);
+        }
+
+        if ($sellerOrder->serviceRating) {
+            return redirect()
+                ->route('user.orders.show', $sellerOrder->id)
+                ->with('success', 'You have already rated this completed order. You can now use Buy Again anytime!');
+        }
+
+        return view('buyer.option.orders.rate', compact('sellerOrder'));
+    }
+
+    public function submitRatings(Request $request, SellerOrder $sellerOrder)
+    {
+        $user = $request->user();
+        if ((int) $sellerOrder->buyer_id !== (int) $user->id) {
+            abort(403);
+        }
+
+        $sellerOrder->load(['items', 'sellerProfile', 'logisticsProfile', 'shipment']);
+
+        if ($sellerOrder->status !== 'completed') {
+            return redirect()
+                ->route('user.orders.show', $sellerOrder->id)
+                ->withErrors(['rate' => 'Only completed orders can be rated.']);
+        }
+
+        if ($sellerOrder->serviceRating()->exists()) {
+            return redirect()
+                ->route('user.orders', ['status' => 'completed'])
+                ->with('success', 'This order has already been rated.');
+        }
+
+        $validated = $request->validate([
+            'item_ratings'             => ['required', 'array'],
+            'item_ratings.*'           => ['required', 'integer', 'min:1', 'max:5'],
+            'item_reviews'             => ['nullable', 'array'],
+            'item_reviews.*'           => ['nullable', 'string', 'max:1000'],
+            'item_photos'              => ['nullable', 'array'],
+            'item_photos.*'            => ['nullable', 'image', 'mimes:jpeg,png,jpg,webp', 'max:5120'],
+            'parcel_condition_rating'  => ['required', 'integer', 'min:1', 'max:5'],
+            'seller_service_rating'    => ['required', 'integer', 'min:1', 'max:5'],
+            'logistics_hub_rating'     => ['required', 'integer', 'min:1', 'max:5'],
+            'rider_delivery_rating'    => ['required', 'integer', 'min:1', 'max:5'],
+            'review_comment'           => ['nullable', 'string', 'max:1000'],
+        ], [
+            'item_ratings.required'            => 'Please select a star rating (1 to 5) for each purchased product.',
+            'parcel_condition_rating.required' => 'Please rate the parcel and packaging condition.',
+            'seller_service_rating.required'   => 'Please rate the seller store service.',
+            'logistics_hub_rating.required'    => 'Please rate the logistics hub handling.',
+            'rider_delivery_rating.required'   => 'Please rate the delivery rider service.',
+        ]);
+
+        $manager = ImageManager::usingDriver(Driver::class);
+
+        DB::transaction(function () use ($request, $user, $sellerOrder, $validated, $manager) {
+            $itemRatingValues = [];
+
+            foreach ($sellerOrder->items as $item) {
+                $ratingVal = (int) ($validated['item_ratings'][$item->id] ?? 5);
+                $ratingVal = max(1, min(5, $ratingVal));
+                $itemRatingValues[] = $ratingVal;
+
+                $reviewText = trim((string) ($validated['item_reviews'][$item->id] ?? ''));
+                $photoPath = null;
+
+                if ($request->hasFile("item_photos.{$item->id}")) {
+                    $file = $request->file("item_photos.{$item->id}");
+                    $filename = 'rev_' . $sellerOrder->id . '_' . $item->id . '_' . time() . '.webp';
+                    $photoPath = 'product_reviews/' . $filename;
+
+                    $img = $manager->decode($file->getRealPath());
+                    $img->scaleDown(width: 1200, height: 1200);
+                    $encoded = $img->encode(new WebpEncoder(quality: 82));
+
+                    Storage::disk('public')->put($photoPath, $encoded->toString());
+                }
+
+                OrderItemReview::updateOrCreate(
+                    ['order_item_id' => $item->id],
+                    [
+                        'order_id'          => $sellerOrder->order_id,
+                        'seller_order_id'   => $sellerOrder->id,
+                        'product_id'        => $item->product_id,
+                        'seller_profile_id' => $sellerOrder->seller_profile_id,
+                        'buyer_id'          => $user->id,
+                        'rating'            => $ratingVal,
+                        'review_text'       => $reviewText !== '' ? $reviewText : ($validated['review_comment'] ?? null),
+                        'review_photo_path' => $photoPath,
+                    ]
+                );
+            }
+
+            $avgProductQuality = count($itemRatingValues) > 0
+                ? (int) round(array_sum($itemRatingValues) / count($itemRatingValues))
+                : 5;
+
+            $overallAvg = round((
+                $avgProductQuality
+                + (int) $validated['parcel_condition_rating']
+                + (int) $validated['seller_service_rating']
+                + (int) $validated['logistics_hub_rating']
+                + (int) $validated['rider_delivery_rating']
+            ) / 5, 2);
+
+            OrderServiceRating::updateOrCreate(
+                ['seller_order_id' => $sellerOrder->id],
+                [
+                    'order_id'                => $sellerOrder->order_id,
+                    'buyer_id'                => $user->id,
+                    'seller_profile_id'       => $sellerOrder->seller_profile_id,
+                    'logistics_profile_id'    => $sellerOrder->logistics_profile_id ?? $sellerOrder->shipment?->logistics_profile_id,
+                    'rider_id'                => $sellerOrder->shipment?->current_rider_id,
+                    'product_quality_rating'  => $avgProductQuality,
+                    'parcel_condition_rating' => (int) $validated['parcel_condition_rating'],
+                    'seller_service_rating'   => (int) $validated['seller_service_rating'],
+                    'logistics_hub_rating'    => (int) $validated['logistics_hub_rating'],
+                    'rider_delivery_rating'   => (int) $validated['rider_delivery_rating'],
+                    'overall_average_rating'  => $overallAvg,
+                    'review_comment'          => $validated['review_comment'] ? trim($validated['review_comment']) : null,
+                ]
+            );
+
+            OrderStatusHistory::create([
+                'order_id'        => $sellerOrder->order_id,
+                'seller_order_id' => $sellerOrder->id,
+                'from_status'     => 'completed',
+                'to_status'       => 'completed',
+                'actor_type'      => 'Buyer',
+                'actor_id'        => $user->id,
+                'remarks'         => "Buyer submitted 5-point ratings (Overall {$overallAvg}/5.0 ★). Order moved to Completed (Buy Again).",
+            ]);
+        });
+
+        return redirect()
+            ->route('user.orders', ['status' => 'completed'])
+            ->with('success', "Thank you for rating Order #{$sellerOrder->seller_order_number}! Your review is now live and the Buy Again button is unlocked.");
+    }
+
+    public function buyAgain(Request $request, SellerOrder $sellerOrder)
+    {
+        $user = $request->user();
+        if ((int) $sellerOrder->buyer_id !== (int) $user->id) {
+            abort(403);
+        }
+
+        $sellerOrder->loadMissing('items.product');
+        $addedCount = 0;
+
+        foreach ($sellerOrder->items as $item) {
+            $product = Product::with('approval')->find($item->product_id);
+            if (! $product || $product->approval?->status !== 'Approved') {
+                continue;
+            }
+
+            try {
+                $resolved = $this->inventoryStockService->resolveProductSelection(
+                    $product,
+                    $item->variant_name,
+                    $item->sub_variant_name
+                );
+
+                if ($resolved['available_stock'] < 1) {
+                    continue;
+                }
+
+                $qtyToAdd = min((int) $item->quantity, (int) $resolved['available_stock']);
+
+                $existingCart = Cart::where('user_id', $user->id)
+                    ->where('product_id', $product->id)
+                    ->where('variant', $item->variant_name)
+                    ->where('sub_variant', $item->sub_variant_name)
+                    ->first();
+
+                if ($existingCart) {
+                    $existingCart->update([
+                        'quantity' => min((int) $resolved['available_stock'], (int) $existingCart->quantity + $qtyToAdd),
+                    ]);
+                } else {
+                    Cart::create([
+                        'user_id'     => $user->id,
+                        'product_id'  => $product->id,
+                        'variant'     => $item->variant_name,
+                        'sub_variant' => $item->sub_variant_name,
+                        'quantity'    => $qtyToAdd,
+                    ]);
+                }
+
+                $addedCount++;
+            } catch (\Throwable $e) {
+            }
+        }
+
+        if ($addedCount === 0) {
+            return back()->withErrors([
+                'buy_again' => 'The items in this order are currently out of stock or unavailable for reorder.',
+            ]);
+        }
+
+        return redirect()
+            ->route('cart.index')
+            ->with('success', "{$addedCount} item(s) from Order #{$sellerOrder->seller_order_number} have been added to your Shopping Cart!");
     }
 
     public function switchToCod(Request $request, SellerOrder $sellerOrder)
@@ -379,28 +624,54 @@ class OrderController extends Controller
             isAutoCompleted: false
         );
 
-        return back()->with('success', "Thank you! Order #{$sellerOrder->seller_order_number} has been confirmed and completed.");
+        return redirect()
+            ->route('user.orders', ['status' => 'to_rate'])
+            ->with('success', "Order #{$sellerOrder->seller_order_number} confirmed and completed! You can now tap 'To Rate' to rate the product, condition, seller, logistics, and rider.");
     }
 
     public function reportDispute(Request $request, SellerOrder $sellerOrder)
     {
-        if ((int) $sellerOrder->buyer_id !== (int) $request->user()->id) {
+        $user = $request->user();
+        if ((int) $sellerOrder->buyer_id !== (int) $user->id) {
             abort(403);
         }
+
+        // Privilege Gate: Valid ID Verification is strictly required before submitting a Return / Refund request
+        $latestVerification = $user->identityVerification;
+        if (! $latestVerification || $latestVerification->status !== 'verified') {
+            throw ValidationException::withMessages([
+                'identity_verification' => 'Valid ID Verification Required: You must have an approved Valid Government ID on your account to request a Return & Refund. Please complete Identity Verification in your Account Management settings first.',
+            ]);
+        }
+
+        $rawRefundPhone = preg_replace('/\D/', '', (string) $request->input('refund_account_number'));
+        if (str_starts_with($rawRefundPhone, '63') && strlen($rawRefundPhone) === 12) {
+            $rawRefundPhone = '0' . substr($rawRefundPhone, 2);
+        } elseif (strlen($rawRefundPhone) === 10 && str_starts_with($rawRefundPhone, '9')) {
+            $rawRefundPhone = '0' . $rawRefundPhone;
+        }
+        $request->merge(['refund_account_number' => $rawRefundPhone]);
 
         $validated = $request->validate([
             'dispute_reason_category' => ['required', 'string', 'max:120'],
             'dispute_reason'          => ['required', 'string', 'min:10', 'max:1000'],
+            'refund_method'           => ['required', 'in:GCASH,WALLET'],
+            'refund_account_name'     => ['required_if:refund_method,GCASH', 'nullable', 'string', 'max:120'],
+            'refund_account_number'   => ['required_if:refund_method,GCASH', 'nullable', 'regex:/^09\d{9}$/'],
             'evidence_photos'         => ['required', 'array', 'min:1', 'max:5'],
             'evidence_photos.*'       => ['required', 'image', 'mimes:jpeg,png,jpg,webp', 'max:5120'],
         ], [
-            'dispute_reason_category.required' => 'Please select a return/dispute reason category.',
-            'dispute_reason.required'          => 'Please describe the delivery issue.',
-            'dispute_reason.min'               => 'Please provide at least 10 characters explaining the issue.',
-            'evidence_photos.required'         => 'Please upload 1 to 5 photo evidence files.',
-            'evidence_photos.min'              => 'Please upload at least 1 evidence photo.',
-            'evidence_photos.max'              => 'You may upload a maximum of 5 evidence photos.',
-            'evidence_photos.*.max'            => 'Each evidence photo must not exceed 5MB.',
+            'dispute_reason_category.required'  => 'Please select a return/refund reason category.',
+            'dispute_reason.required'           => 'Please describe the delivery issue.',
+            'dispute_reason.min'                => 'Please provide at least 10 characters explaining the issue.',
+            'refund_method.required'            => 'Please choose how you want to receive your refund (GCash or Storkia Wallet).',
+            'refund_account_name.required_if'   => 'Please enter your GCash account name for the refund.',
+            'refund_account_number.required_if' => 'Please enter your 11-digit GCash number starting with 09 for the refund.',
+            'refund_account_number.regex'       => 'Refund GCash number must be a valid 11-digit mobile number starting with 09.',
+            'evidence_photos.required'          => 'Please upload 1 to 5 photo evidence files.',
+            'evidence_photos.min'               => 'Please upload at least 1 evidence photo.',
+            'evidence_photos.max'               => 'You may upload a maximum of 5 evidence photos.',
+            'evidence_photos.*.max'             => 'Each evidence photo must not exceed 5MB.',
         ]);
 
         $storedPhotos = [];
@@ -418,11 +689,15 @@ class OrderController extends Controller
             $storedPhotos[] = $path;
         }
 
-        $fullReason = '[' . trim($validated['dispute_reason_category']) . '] ' . trim($validated['dispute_reason']);
+        $refundSummary = $validated['refund_method'] === 'GCASH'
+            ? "Refund via GCash ({$validated['refund_account_name']} - {$validated['refund_account_number']})"
+            : 'Refund via Storkia Buyer Wallet';
+
+        $fullReason = '[' . trim($validated['dispute_reason_category']) . ' | ' . $refundSummary . '] ' . trim($validated['dispute_reason']);
 
         $this->orderCompletionService->reportDeliveryProblem(
             sellerOrder: $sellerOrder,
-            buyerId: $request->user()->id,
+            buyerId: $user->id,
             reason: $fullReason
         );
 
@@ -434,9 +709,14 @@ class OrderController extends Controller
         $extra->update([
             'dispute_reason_category' => trim($validated['dispute_reason_category']),
             'dispute_evidence_photos' => $storedPhotos,
+            'refund_method'           => $validated['refund_method'],
+            'refund_account_name'     => $validated['refund_method'] === 'GCASH' ? trim((string) $validated['refund_account_name']) : $user->full_name,
+            'refund_account_number'   => $validated['refund_method'] === 'GCASH' ? $validated['refund_account_number'] : null,
+            'refund_amount'           => $sellerOrder->total_amount,
+            'refund_status'           => 'pending_approval',
         ]);
 
-        return back()->with('success', 'Your return/dispute request and photo evidence have been submitted. Automatic order completion is now paused while under review.');
+        return back()->with('success', 'Your Valid-ID-verified Return & Refund request and photo evidence have been submitted. Automatic order completion is now paused while under review.');
     }
 
     public function escalateDispute(Request $request, SellerOrder $sellerOrder)
@@ -471,10 +751,10 @@ class OrderController extends Controller
             'to_status'       => 'disputed',
             'actor_type'      => 'Buyer',
             'actor_id'        => $request->user()->id,
-            'remarks'         => 'Buyer escalated declined return request to Storkia Admin for final resolution.',
+            'remarks'         => 'Buyer escalated declined return/refund request to Storkia Admin for final resolution.',
         ]);
 
-        return back()->with('success', 'Your dispute has been escalated to Storkia Admin for final review.');
+        return back()->with('success', 'Your refund dispute has been escalated to Storkia Admin for final review.');
     }
 
     public function proofImage(Request $request, DeliveryProof $proof)

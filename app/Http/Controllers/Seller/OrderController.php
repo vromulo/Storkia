@@ -6,22 +6,28 @@ use App\Http\Controllers\Controller;
 use App\Models\CommissionRecord;
 use App\Models\LogisticsHub;
 use App\Models\LogisticsProfile;
-use App\Models\OrderPaymentSubmission;
+use App\Models\OrderItemReview;
 use App\Models\OrderStatusHistory;
 use App\Models\SellerOrder;
 use App\Models\SellerOrderExtra;
 use App\Models\SellerProfile;
+use App\Models\SellerRtsClaim;
 use App\Models\SellerSettlement;
 use App\Models\Shipment;
 use App\Models\ShipmentTracking;
+use App\Models\WalletTransaction;
 use App\Notifications\OrderLifecycleNotification;
+use App\Services\FormalReportService;
 use App\Services\InventoryStockService;
 use App\Services\OrderCompletionService;
+use App\Services\RoleWalletService;
 use App\Services\ShipmentVerificationService;
 use App\Services\VoucherService;
+use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 
@@ -31,14 +37,15 @@ class OrderController extends Controller
         protected InventoryStockService $inventoryStockService,
         protected OrderCompletionService $orderCompletionService,
         protected ShipmentVerificationService $shipmentVerificationService,
-        protected VoucherService $voucherService
+        protected VoucherService $voucherService,
+        protected RoleWalletService $roleWalletService,
+        protected FormalReportService $formalReportService
     ) {}
 
     public function index(Request $request)
     {
         $user = $request->user();
-        $this->expireOverdueAcceptanceOrders($user->id);
-        $this->orderCompletionService->autoCompleteExpiredDeliveredOrders(sellerId: (int) $user->id);
+        $this->orderCompletionService->runLifecycleMaintenance(sellerId: (int) $user->id);
 
         $statusTab = $request->query('status', 'all');
         $search = trim((string) $request->query('search', ''));
@@ -67,6 +74,7 @@ class OrderController extends Controller
             'payment',
             'paymentSubmission',
             'extra',
+            'rtsClaim',
         ])->where('seller_id', $user->id);
 
         match ($statusTab) {
@@ -112,8 +120,7 @@ class OrderController extends Controller
             abort(403);
         }
 
-        $this->expireOverdueAcceptanceOrders($user->id);
-        $this->orderCompletionService->autoCompleteExpiredDeliveredOrders(sellerId: (int) $user->id);
+        $this->orderCompletionService->runLifecycleMaintenance(sellerId: (int) $user->id);
         $sellerOrder->refresh();
 
         $sellerOrder->load([
@@ -125,6 +132,8 @@ class OrderController extends Controller
             'payment',
             'paymentSubmission',
             'extra',
+            'rtsClaim',
+            'itemReviews.buyer',
             'statusHistories',
             'shipment.packages.logisticsHub',
             'shipment.trackingLogs',
@@ -148,6 +157,112 @@ class OrderController extends Controller
         $eligibleHubs = $this->getEligibleLogisticsHubs($eligibleLogistics, $user->sellerProfile);
 
         return view('seller.orders.show', compact('sellerOrder', 'eligibleLogistics', 'eligibleHubs'));
+    }
+
+    public function confirmRtsReceived(Request $request, SellerOrder $sellerOrder)
+    {
+        $user = $request->user();
+        if ((int) $sellerOrder->seller_id !== (int) $user->id) {
+            abort(403);
+        }
+
+        DB::transaction(function () use ($sellerOrder, $user) {
+            $locked = SellerOrder::with(['rtsClaim', 'shipment'])->where('id', $sellerOrder->id)->lockForUpdate()->firstOrFail();
+
+            $this->inventoryStockService->restoreStockForSellerOrder($locked);
+
+            if ($locked->rtsClaim) {
+                $locked->rtsClaim->update([
+                    'rts_status'                   => 'received_by_seller',
+                    'seller_received_parcel'       => true,
+                    'seller_confirmed_received_at' => now(),
+                ]);
+            }
+
+            OrderStatusHistory::create([
+                'order_id'        => $locked->order_id,
+                'seller_order_id' => $locked->id,
+                'from_status'     => $locked->status,
+                'to_status'       => 'returned_to_seller',
+                'actor_type'      => 'Seller',
+                'actor_id'        => $user->id,
+                'remarks'         => 'Seller confirmed physical receipt of returned (RTS) parcel. Product inventory stock restored.',
+            ]);
+        });
+
+        return back()->with('success', 'Returned parcel receipt confirmed! Product stock has been restored to your inventory.');
+    }
+
+    public function submitRtsClaim(Request $request, SellerOrder $sellerOrder)
+    {
+        $user = $request->user();
+        if ((int) $sellerOrder->seller_id !== (int) $user->id) {
+            abort(403);
+        }
+
+        $validated = $request->validate([
+            'claimed_product_expense' => ['required', 'numeric', 'min:1'],
+            'claim_description'       => ['required', 'string', 'min:10', 'max:500'],
+            'evidence_photo'          => ['required', 'image', 'mimes:jpg,jpeg,png,webp', 'max:5120'],
+        ]);
+
+        $photoPath = $request->file('evidence_photo')->store('rts_claims', 'public');
+
+        SellerRtsClaim::updateOrCreate(
+            ['seller_order_id' => $sellerOrder->id],
+            [
+                'shipment_id'             => $sellerOrder->shipment?->id,
+                'seller_profile_id'       => $sellerOrder->seller_profile_id,
+                'logistics_profile_id'    => $sellerOrder->logistics_profile_id,
+                'buyer_id'                => $sellerOrder->buyer_id,
+                'abandonment_reason'      => $sellerOrder->rtsClaim?->abandonment_reason ?? 'Returned to seller damaged/lost',
+                'rts_status'              => 'damaged_claim_filed',
+                'is_damaged_or_lost'      => true,
+                'claimed_product_expense' => $validated['claimed_product_expense'],
+                'claim_description'       => trim($validated['claim_description']),
+                'evidence_photo_path'     => $photoPath,
+                'reimbursement_status'    => 'pending_admin_review',
+            ]
+        );
+
+        return back()->with('success', 'RTS Damaged/Lost Expense Claim submitted to Storkia Admin for reimbursement review.');
+    }
+
+    public function replyToReview(Request $request, OrderItemReview $review)
+    {
+        $user = $request->user();
+        $profile = $user->sellerProfile;
+
+        if (! $profile || (int) $review->seller_profile_id !== (int) $profile->id) {
+            abort(403, 'You can only reply to reviews on your own store products.');
+        }
+
+        $validated = $request->validate([
+            'seller_reply' => ['required', 'string', 'min:2', 'max:500'],
+        ]);
+
+        $editCount = (int) ($review->seller_reply_edit_count ?? 0);
+        $isInitialReply = empty($review->seller_reply);
+
+        if (! $isInitialReply && $editCount >= 1) {
+            return back()->withErrors([
+                'seller_reply' => 'You have already edited your reply once. A second edit is not permitted.',
+            ]);
+        }
+
+        $updatePayload = [
+            'seller_reply'      => trim($validated['seller_reply']),
+            'seller_replied_at' => $review->seller_replied_at ?? now(),
+        ];
+
+        if (! $isInitialReply && Schema::hasColumn('order_item_reviews', 'seller_reply_edit_count')) {
+            $updatePayload['seller_reply_edit_count'] = $editCount + 1;
+            $updatePayload['seller_reply_edited_at'] = now();
+        }
+
+        $review->update($updatePayload);
+
+        return back()->with('success', $isInitialReply ? 'Your reply has been posted under the buyer review.' : 'Your reply has been updated.');
     }
 
     public function verifyOnlinePayment(Request $request, SellerOrder $sellerOrder)
@@ -211,9 +326,6 @@ class OrderController extends Controller
 
         $validated = $request->validate([
             'suspicious_reason' => ['required', 'string', 'min:5', 'max:500'],
-        ], [
-            'suspicious_reason.required' => 'Please provide the reason why the submitted GCash payment details appear suspicious.',
-            'suspicious_reason.min'      => 'Reason must be at least 5 characters.',
         ]);
 
         DB::transaction(function () use ($sellerOrder, $user, $validated) {
@@ -261,27 +373,15 @@ class OrderController extends Controller
                 'to_status'       => 'pending_buyer_response',
                 'actor_type'      => 'Seller',
                 'actor_id'        => $user->id,
-                'remarks'         => 'Seller flagged GCash payment as suspicious: ' . trim($validated['suspicious_reason']) . '. Order moved to Pending awaiting buyer response (Switch to COD or Cancel).',
+                'remarks'         => 'Seller flagged GCash payment as suspicious: ' . trim($validated['suspicious_reason']),
             ]);
 
             $this->orderCompletionService->syncParentOrderStatus($locked->order);
         });
 
-        try {
-            $sellerOrder->buyer?->notify(new OrderLifecycleNotification(
-                title: 'Action Required: Online Payment Flagged by Seller',
-                message: "{$user->sellerProfile?->business_name} reported an issue with your GCash payment on Order #{$sellerOrder->seller_order_number}. Please review your payment details to either continue by switching to Cash on Delivery (COD) or cancel the order.",
-                type: 'warning',
-                url: route('user.orders.show', $sellerOrder->id),
-                orderId: $sellerOrder->order_id,
-                sellerOrderId: $sellerOrder->id
-            ));
-        } catch (\Throwable $e) {
-        }
-
         return redirect()
             ->route('seller.orders.index', ['status' => 'pending'])
-            ->with('success', "Suspicious payment report sent to Buyer. Order #{$sellerOrder->seller_order_number} has been moved to the Pending tab until the Buyer responds.");
+            ->with('success', "Suspicious payment report sent to Buyer. Order #{$sellerOrder->seller_order_number} moved to Pending.");
     }
 
     public function accept(Request $request, SellerOrder $sellerOrder)
@@ -291,14 +391,8 @@ class OrderController extends Controller
             abort(403);
         }
 
-        $this->expireOverdueAcceptanceOrders($user->id);
+        $this->orderCompletionService->runLifecycleMaintenance(sellerId: (int) $user->id);
         $sellerOrder->refresh();
-
-        if ($sellerOrder->status === 'pending_buyer_response') {
-            return back()->withErrors([
-                'order' => 'This order is currently in the Pending tab awaiting the Buyer\'s response to your suspicious payment report.',
-            ]);
-        }
 
         if ($sellerOrder->status !== 'pending_seller_acceptance') {
             return back()->withErrors([
@@ -308,12 +402,6 @@ class OrderController extends Controller
 
         DB::transaction(function () use ($sellerOrder, $user) {
             $locked = SellerOrder::with(['paymentSubmission', 'payment'])->where('id', $sellerOrder->id)->lockForUpdate()->firstOrFail();
-
-            if ($locked->status !== 'pending_seller_acceptance') {
-                throw ValidationException::withMessages([
-                    'order' => 'Order status has already changed.',
-                ]);
-            }
 
             if ($locked->paymentSubmission && ! $locked->paymentSubmission->switched_to_cod && ! $locked->paymentSubmission->is_suspicious) {
                 $locked->paymentSubmission->update([
@@ -346,19 +434,7 @@ class OrderController extends Controller
             $this->orderCompletionService->syncParentOrderStatus($locked->order);
         });
 
-        try {
-            $sellerOrder->buyer?->notify(new OrderLifecycleNotification(
-                title: 'Order Accepted by Seller',
-                message: "{$user->sellerProfile?->business_name} has accepted your order #{$sellerOrder->seller_order_number} and is preparing your package.",
-                type: 'info',
-                url: route('user.orders.show', $sellerOrder->id),
-                orderId: $sellerOrder->order_id,
-                sellerOrderId: $sellerOrder->id
-            ));
-        } catch (\Throwable $e) {
-        }
-
-        return back()->with('success', "Order #{$sellerOrder->seller_order_number} accepted. Please prepare the package, verify the product checklist, and select your package handover option.");
+        return back()->with('success', "Order #{$sellerOrder->seller_order_number} accepted.");
     }
 
     public function reject(Request $request, SellerOrder $sellerOrder)
@@ -370,9 +446,6 @@ class OrderController extends Controller
 
         $validated = $request->validate([
             'rejection_reason' => ['required', 'string', 'min:5', 'max:500'],
-        ], [
-            'rejection_reason.required' => 'Please provide a reason for rejecting this order.',
-            'rejection_reason.min'      => 'Rejection reason must be at least 5 characters.',
         ]);
 
         DB::transaction(function () use ($sellerOrder, $user, $validated) {
@@ -414,19 +487,7 @@ class OrderController extends Controller
             $this->orderCompletionService->syncParentOrderStatus($locked->order);
         });
 
-        try {
-            $sellerOrder->buyer?->notify(new OrderLifecycleNotification(
-                title: 'Seller Order Rejected',
-                message: "Order #{$sellerOrder->seller_order_number} was rejected by the seller. Reason: {$validated['rejection_reason']}",
-                type: 'danger',
-                url: route('user.orders.show', $sellerOrder->id),
-                orderId: $sellerOrder->order_id,
-                sellerOrderId: $sellerOrder->id
-            ));
-        } catch (\Throwable $e) {
-        }
-
-        return back()->with('success', "Order #{$sellerOrder->seller_order_number} has been rejected, reserved stock was restored, and any applied vouchers were returned to the buyer.");
+        return back()->with('success', "Order #{$sellerOrder->seller_order_number} rejected and reserved stock restored.");
     }
 
     public function respondToReturnRequest(Request $request, SellerOrder $sellerOrder)
@@ -439,10 +500,6 @@ class OrderController extends Controller
         $validated = $request->validate([
             'decision' => ['required', 'in:approved,rejected'],
             'reason'   => ['required_if:decision,rejected', 'nullable', 'string', 'min:10', 'max:300'],
-        ], [
-            'reason.required_if' => 'Please provide a reason (10–300 characters) when rejecting a buyer return/dispute request.',
-            'reason.min'         => 'The rejection reason must be at least 10 characters.',
-            'reason.max'         => 'The rejection reason must not exceed 300 characters.',
         ]);
 
         DB::transaction(function () use ($sellerOrder, $user, $validated) {
@@ -459,17 +516,13 @@ class OrderController extends Controller
                 'seller_order_id' => $locked->id,
             ]);
 
-            if ($extra->is_escalated_to_admin) {
-                throw ValidationException::withMessages([
-                    'dispute' => 'This dispute has already been escalated to Storkia Admin and can no longer be modified by the seller.',
-                ]);
-            }
-
             if ($validated['decision'] === 'approved') {
                 $extra->update([
                     'seller_return_decision'        => 'approved',
-                    'seller_return_Decision_reason' => $validated['reason'] ? trim($validated['reason']) : 'Return approved by seller.',
+                    'seller_return_Decision_reason' => $validated['reason'] ? trim($validated['reason']) : 'Return & refund approved by seller.',
                     'seller_return_responded_at'    => now(),
+                    'refund_status'                 => 'refund_released',
+                    'refund_released_at'            => now(),
                 ]);
 
                 $locked->update([
@@ -484,8 +537,6 @@ class OrderController extends Controller
                     'status' => 'cancelled',
                 ]);
 
-                $this->inventoryStockService->restoreStockForSellerOrder($locked);
-
                 OrderStatusHistory::create([
                     'order_id'        => $locked->order_id,
                     'seller_order_id' => $locked->id,
@@ -493,7 +544,7 @@ class OrderController extends Controller
                     'to_status'       => 'returned_to_seller',
                     'actor_type'      => 'Seller',
                     'actor_id'        => $user->id,
-                    'remarks'         => 'Seller approved buyer return/refund request.',
+                    'remarks'         => 'Seller approved buyer return/refund request. Stock will restore once Seller confirms physical receipt of returned item.',
                 ]);
 
                 $this->orderCompletionService->syncParentOrderStatus($locked->order);
@@ -516,20 +567,6 @@ class OrderController extends Controller
             }
         });
 
-        try {
-            $sellerOrder->buyer?->notify(new OrderLifecycleNotification(
-                title: $validated['decision'] === 'approved' ? 'Return Request Approved' : 'Return Request Declined by Seller',
-                message: $validated['decision'] === 'approved'
-                    ? "Your return request for Order #{$sellerOrder->seller_order_number} has been approved by the seller."
-                    : "Seller declined your return request for Order #{$sellerOrder->seller_order_number}. Reason: {$validated['reason']}. You may escalate to Admin if needed.",
-                type: $validated['decision'] === 'approved' ? 'info' : 'warning',
-                url: route('user.orders.show', $sellerOrder->id),
-                orderId: $sellerOrder->order_id,
-                sellerOrderId: $sellerOrder->id
-            ));
-        } catch (\Throwable $e) {
-        }
-
         return back()->with('success', 'Return/dispute response recorded.');
     }
 
@@ -538,12 +575,6 @@ class OrderController extends Controller
         $user = $request->user();
         if ((int) $sellerOrder->seller_id !== (int) $user->id) {
             abort(403);
-        }
-
-        if ($sellerOrder->status === 'pending_buyer_response') {
-            return back()->withErrors([
-                'order' => 'Cannot prepare shipment while waiting for the Buyer\'s response on a flagged payment.',
-            ]);
         }
 
         $eligibleProviders = $this->getEligibleLogisticsProviders($user->sellerProfile);
@@ -556,35 +587,19 @@ class OrderController extends Controller
             'logistics_profile_id' => ['nullable', 'integer', 'exists:logistics_profiles,id'],
             'package_count'        => ['nullable', 'integer', 'min:1', 'max:10'],
             'manifest_confirmed'   => ['required', 'accepted'],
-        ], [
-            'handover_method.required'    => 'Please select how you will hand over the prepared package to Logistics.',
-            'manifest_confirmed.required' => 'Please confirm the manual product checklist before generating the shipment.',
-            'manifest_confirmed.accepted' => 'Please confirm that all ordered items have been verified and packed.',
         ]);
 
-        $selectedHub = null;
         if (! empty($validated['logistics_hub_id'])) {
             if (! in_array((int) $validated['logistics_hub_id'], $eligibleHubIds, true)) {
-                return back()->withErrors([
-                    'logistics_hub_id' => 'The selected Logistics hub is not eligible for your area.',
-                ]);
+                return back()->withErrors(['logistics_hub_id' => 'The selected Logistics hub is not eligible for your area.']);
             }
             $selectedHub = LogisticsHub::with('parentLogisticsProfile.user')->findOrFail((int) $validated['logistics_hub_id']);
             $logisticsProfile = $selectedHub->parentLogisticsProfile;
         } elseif (! empty($validated['logistics_profile_id'])) {
-            $eligibleProfileIds = $eligibleProviders->pluck('id')->map(fn ($id) => (int) $id)->toArray();
-            if (! in_array((int) $validated['logistics_profile_id'], $eligibleProfileIds, true)) {
-                return back()->withErrors([
-                    'logistics_profile_id' => 'The selected Logistics provider does not service your area.',
-                ]);
-            }
-            /** @var LogisticsProfile $logisticsProfile */
             $logisticsProfile = LogisticsProfile::with('user')->findOrFail((int) $validated['logistics_profile_id']);
             $selectedHub = $logisticsProfile->ensureMainHubExists();
         } else {
-            return back()->withErrors([
-                'logistics_hub_id' => 'Please select an approved Logistics hub.',
-            ]);
+            return back()->withErrors(['logistics_hub_id' => 'Please select an approved Logistics hub.']);
         }
 
         $handoverMethod = $validated['handover_method'];
@@ -593,15 +608,9 @@ class OrderController extends Controller
         $shipment = DB::transaction(function () use ($sellerOrder, $user, $logisticsProfile, $selectedHub, $handoverMethod, $packageCount) {
             $locked = SellerOrder::with(['order', 'items', 'payment'])->where('id', $sellerOrder->id)->lockForUpdate()->firstOrFail();
 
-            if (! in_array($locked->status, ['accepted', 'preparing'], true)) {
+            if (! in_array($locked->status, ['accepted', 'preparing'], true) || $locked->shipment()->exists()) {
                 throw ValidationException::withMessages([
-                    'order' => 'This order must be in Accepted or Preparing state before generating the shipment.',
-                ]);
-            }
-
-            if ($locked->shipment()->exists()) {
-                throw ValidationException::withMessages([
-                    'order' => 'A shipment and tracking number have already been created for this order.',
+                    'order' => 'Shipment has already been created or order is not in Preparing state.',
                 ]);
             }
 
@@ -624,8 +633,6 @@ class OrderController extends Controller
                 'province'         => $selectedHub->province ?: $logisticsProfile->province,
                 'municipality'     => $selectedHub->municipality ?: $logisticsProfile->municipality,
                 'barangay'         => $selectedHub->barangay ?: $logisticsProfile->barangay,
-                'street'           => $selectedHub->street ?: $logisticsProfile->street,
-                'house_details'    => $selectedHub->house_details ?: $logisticsProfile->house_details,
                 'full_address'     => $selectedHub->full_address ?: $logisticsProfile->full_address,
             ];
 
@@ -662,20 +669,12 @@ class OrderController extends Controller
                 packageCount: $packageCount
             );
 
-            $trackingTitle = $handoverMethod === 'self_drop_off'
-                ? 'Seller Selected Self Drop-Off at Logistics Hub'
-                : 'Seller Selected Courier Pickup — Package Ready';
-
-            $trackingDesc = $handoverMethod === 'self_drop_off'
-                ? "Seller verified the product manifest, generated Shipping Label #{$newShipment->tracking_number}, and selected Self Drop-Off at {$selectedHub->hub_name} ({$selectedHub->municipality})."
-                : "Seller verified the product manifest, generated Shipping Label #{$newShipment->tracking_number}, and requested Courier Pickup via {$selectedHub->hub_name} ({$selectedHub->municipality}).";
-
             ShipmentTracking::create([
                 'shipment_id'     => $newShipment->id,
                 'seller_order_id' => $locked->id,
                 'status'          => $initialShipmentStatus,
-                'title'           => $trackingTitle,
-                'description'     => $trackingDesc,
+                'title'           => $handoverMethod === 'self_drop_off' ? 'Seller Selected Self Drop-Off' : 'Seller Selected Courier Pickup',
+                'description'     => "Shipping Label #{$newShipment->tracking_number} generated for {$selectedHub->hub_name} ({$selectedHub->municipality}).",
                 'location'        => ($locked->pickup_address_snapshot['municipality'] ?? '') . ', ' . ($locked->pickup_address_snapshot['province'] ?? ''),
                 'actor_type'      => 'Seller',
                 'actor_id'        => $user->id,
@@ -689,7 +688,7 @@ class OrderController extends Controller
                 'to_status'       => 'ready_for_pickup',
                 'actor_type'      => 'Seller',
                 'actor_id'        => $user->id,
-                'remarks'         => $trackingDesc,
+                'remarks'         => "Shipment #{$newShipment->tracking_number} prepared.",
             ]);
 
             $this->orderCompletionService->syncParentOrderStatus($locked->order);
@@ -697,54 +696,7 @@ class OrderController extends Controller
             return $newShipment;
         });
 
-        try {
-            $notifyTitle = $handoverMethod === 'self_drop_off'
-                ? 'Incoming Seller Self Drop-Off'
-                : 'New Courier Pickup Request';
-
-            $notifyMsg = $handoverMethod === 'self_drop_off'
-                ? "{$user->sellerProfile?->business_name} scheduled a Self Drop-Off at {$selectedHub->hub_name} for Tracking #{$shipment->tracking_number}."
-                : "{$user->sellerProfile?->business_name} requested a Courier Pickup at {$selectedHub->hub_name} for Tracking #{$shipment->tracking_number}.";
-
-            $logisticsProfile->user?->notify(new OrderLifecycleNotification(
-                title: $notifyTitle,
-                message: $notifyMsg,
-                type: 'info',
-                url: route('logistics.shipments.show', $shipment->id),
-                orderId: $sellerOrder->order_id,
-                sellerOrderId: $sellerOrder->id,
-                shipmentId: $shipment->id
-            ));
-
-            if ($selectedHub->branchUser) {
-                $selectedHub->branchUser->notify(new OrderLifecycleNotification(
-                    title: $notifyTitle,
-                    message: $notifyMsg,
-                    type: 'info',
-                    url: route('logistics.shipments.show', $shipment->id),
-                    orderId: $sellerOrder->order_id,
-                    sellerOrderId: $sellerOrder->id,
-                    shipmentId: $shipment->id
-                ));
-            }
-
-            $sellerOrder->buyer?->notify(new OrderLifecycleNotification(
-                title: 'Package Prepared for Dispatch',
-                message: "Your order #{$sellerOrder->seller_order_number} is packed with Tracking #{$shipment->tracking_number}.",
-                type: 'info',
-                url: route('user.orders.show', $sellerOrder->id),
-                orderId: $sellerOrder->order_id,
-                sellerOrderId: $sellerOrder->id,
-                shipmentId: $shipment->id
-            ));
-        } catch (\Throwable $e) {
-        }
-
-        $successText = $handoverMethod === 'self_drop_off'
-            ? "Shipment #{$shipment->tracking_number} created for Self Drop-Off at {$selectedHub->hub_name}! Please print and attach the Shipping Label before bringing the package to the hub."
-            : "Shipment #{$shipment->tracking_number} marked Ready for Courier Pickup via {$selectedHub->hub_name}! Please print and attach the Shipping Label.";
-
-        return back()->with('success', $successText);
+        return back()->with('success', "Shipment #{$shipment->tracking_number} created via {$selectedHub->hub_name}!");
     }
 
     public function shippingLabel(Request $request, SellerOrder $sellerOrder)
@@ -754,42 +706,16 @@ class OrderController extends Controller
             abort(403);
         }
 
-        $sellerOrder->load([
-            'order',
-            'items',
-            'sellerProfile',
-            'logisticsProfile',
-            'extra',
-            'shipment.packages.logisticsHub',
-        ]);
-
+        $sellerOrder->load(['order', 'items', 'sellerProfile', 'logisticsProfile', 'extra', 'shipment.packages.logisticsHub']);
         $shipment = $sellerOrder->shipment;
         if (! $shipment) {
-            return redirect()
-                ->route('seller.orders.show', $sellerOrder->id)
-                ->withErrors(['shipment' => 'Please select a Logistics hub and handover option first to generate the Shipping Label.']);
+            return redirect()->route('seller.orders.show', $sellerOrder->id);
         }
 
-        $packages = $this->shipmentVerificationService->ensurePackagesForShipment(
-            shipment: $shipment,
-            sellerOrder: $sellerOrder
-        );
-
+        $packages = $this->shipmentVerificationService->ensurePackagesForShipment($shipment, $sellerOrder);
         $autoPrint = $request->boolean('print');
 
-        if ($autoPrint || $request->boolean('reprint')) {
-            foreach ($packages as $pkg) {
-                $pkg->increment('label_printed_count');
-                $pkg->update(['last_printed_at' => now()]);
-            }
-        }
-
-        return view('seller.orders.shipping-label', compact(
-            'sellerOrder',
-            'shipment',
-            'packages',
-            'autoPrint'
-        ));
+        return view('seller.orders.shipping-label', compact('sellerOrder', 'shipment', 'packages', 'autoPrint'));
     }
 
     public function packingSlip(Request $request, SellerOrder $sellerOrder)
@@ -799,35 +725,16 @@ class OrderController extends Controller
             abort(403);
         }
 
-        $sellerOrder->load([
-            'order',
-            'items',
-            'sellerProfile',
-            'logisticsProfile',
-            'extra',
-            'shipment.packages.logisticsHub',
-        ]);
-
+        $sellerOrder->load(['order', 'items', 'sellerProfile', 'logisticsProfile', 'extra', 'shipment.packages.logisticsHub']);
         $shipment = $sellerOrder->shipment;
         if (! $shipment) {
-            return redirect()
-                ->route('seller.orders.show', $sellerOrder->id)
-                ->withErrors(['shipment' => 'Please select a Logistics hub and handover option first to generate the Packing Slip / Product Manifest.']);
+            return redirect()->route('seller.orders.show', $sellerOrder->id);
         }
 
-        $packages = $this->shipmentVerificationService->ensurePackagesForShipment(
-            shipment: $shipment,
-            sellerOrder: $sellerOrder
-        );
-
+        $packages = $this->shipmentVerificationService->ensurePackagesForShipment($shipment, $sellerOrder);
         $autoPrint = $request->boolean('print');
 
-        return view('seller.orders.packing-slip', compact(
-            'sellerOrder',
-            'shipment',
-            'packages',
-            'autoPrint'
-        ));
+        return view('seller.orders.packing-slip', compact('sellerOrder', 'shipment', 'packages', 'autoPrint'));
     }
 
     public function settlements(Request $request)
@@ -835,9 +742,32 @@ class OrderController extends Controller
         $user = $request->user();
         $profile = $user->sellerProfile;
 
-        $this->orderCompletionService->autoCompleteExpiredDeliveredOrders(sellerId: (int) $user->id);
+        $this->orderCompletionService->runLifecycleMaintenance(sellerId: (int) $user->id);
 
-        $commissionRecords = CommissionRecord::with(['sellerOrder.items', 'logisticsProfile', 'settlementItem.settlement'])
+        $completedOrders = SellerOrder::where('seller_id', $user->id)
+            ->where('status', 'completed')
+            ->get();
+
+        foreach ($completedOrders as $compOrder) {
+            $this->roleWalletService->releaseCompletedOrderEarnings($compOrder);
+        }
+
+        $sellerWallet = $this->roleWalletService->getOrCreateWallet(
+            ownerType: 'Seller',
+            ownerId: (int) $profile->id,
+            ownerName: $profile->business_name
+        );
+
+        $fromDate = $request->query('from_date', now()->startOfMonth()->toDateString());
+        $toDate = $request->query('to_date', now()->toDateString());
+
+        $start = Carbon::parse($fromDate)->startOfDay();
+        $end = Carbon::parse($toDate)->endOfDay();
+        if ($end->lt($start)) {
+            [$start, $end] = [$end->copy()->startOfDay(), $start->copy()->endOfDay()];
+        }
+
+        $commissionRecords = CommissionRecord::with(['sellerOrder.items', 'sellerOrder.extra', 'logisticsProfile', 'settlementItem.settlement'])
             ->where('seller_profile_id', $profile->id)
             ->orderBy('created_at', 'asc')
             ->orderBy('id', 'asc')
@@ -849,7 +779,49 @@ class OrderController extends Controller
             ->orderBy('id', 'asc')
             ->paginate(10, ['*'], 'settlements_page');
 
+        $payoutRequests = Schema::hasTable('seller_payout_requests')
+            ? DB::table('seller_payout_requests')
+                ->where('seller_profile_id', $profile->id)
+                ->orderBy('created_at', 'asc')
+                ->get()
+            : collect();
+
+        $periodOrders = SellerOrder::with(['items', 'extra'])
+            ->where('seller_profile_id', $profile->id)
+            ->whereBetween('created_at', [$start, $end])
+            ->orderBy('created_at', 'asc')
+            ->get();
+
+        $periodCommissions = CommissionRecord::where('seller_profile_id', $profile->id)
+            ->whereBetween('calculated_at', [$start, $end])
+            ->get();
+
+        $walletTransactions = WalletTransaction::with('sellerOrder')
+            ->where('owner_type', 'Seller')
+            ->where('owner_id', $profile->id)
+            ->whereBetween('created_at', [$start, $end])
+            ->orderBy('created_at', 'asc')
+            ->orderBy('id', 'asc')
+            ->get();
+
+        $reportSummary = [
+            'from_date'                => $start->toDateString(),
+            'to_date'                  => $end->toDateString(),
+            'period_orders_total'      => $periodOrders->count(),
+            'period_completed_count'   => $periodOrders->where('status', 'completed')->count(),
+            'period_cancelled_rts'     => $periodOrders->whereIn('status', ['cancelled', 'rejected', 'returned_to_seller'])->count(),
+            'period_gross_merchandise' => round((float) $periodCommissions->sum('product_subtotal'), 2),
+            'period_admin_10_fee'      => round((float) $periodCommissions->sum('admin_commission_amount'), 2),
+            'period_seller_90_net'     => round((float) $periodCommissions->sum('seller_net_earning'), 2),
+            'period_store_voucher_sub' => round((float) $periodOrders->sum(fn ($o) => (float) ($o->extra?->store_voucher_discount ?? 0)), 2),
+        ];
+
+        $arrearsAmount = (float) ($sellerWallet->platform_commission_arrears ?? ($sellerWallet->available_balance < 0 ? abs((float) $sellerWallet->available_balance) : 0));
+
         $metrics = [
+            'wallet_available'       => (float) $sellerWallet->available_balance,
+            'wallet_pending_escrow'  => (float) $sellerWallet->pending_balance,
+            'wallet_arrears'         => $arrearsAmount,
             'gross_product_sales'    => (float) CommissionRecord::where('seller_profile_id', $profile->id)->sum('product_subtotal'),
             'admin_commission_total' => (float) CommissionRecord::where('seller_profile_id', $profile->id)->sum('admin_commission_amount'),
             'net_seller_earnings'    => (float) CommissionRecord::where('seller_profile_id', $profile->id)->sum('seller_net_earning'),
@@ -859,10 +831,118 @@ class OrderController extends Controller
 
         return view('seller.orders.settlements', compact(
             'profile',
+            'sellerWallet',
+            'fromDate',
+            'toDate',
             'commissionRecords',
             'settlements',
+            'payoutRequests',
+            'walletTransactions',
+            'reportSummary',
             'metrics'
         ));
+    }
+
+    public function requestPayout(Request $request)
+    {
+        $user = $request->user();
+        $profile = $user->sellerProfile;
+
+        $validated = $request->validate([
+            'requested_amount' => ['required', 'numeric', 'min:100'],
+            'payout_method'    => ['required', 'in:GCASH,BANK'],
+            'account_name'     => ['required', 'string', 'max:120'],
+            'account_number'   => ['required', 'string', 'max:50'],
+            'idempotency_key'  => ['nullable', 'string', 'max:64'],
+        ]);
+
+        $this->roleWalletService->requestSellerPayout(
+            sellerProfile: $profile,
+            requestedAmount: (float) $validated['requested_amount'],
+            payoutMethod: $validated['payout_method'],
+            accountName: $validated['account_name'],
+            accountNumber: $validated['account_number'],
+            idempotencyKey: $validated['idempotency_key'] ?? null
+        );
+
+        return back()->with('success', 'Payout withdrawal request of ₱' . number_format((float) $validated['requested_amount'], 2) . ' submitted! Your Available E-Wallet Balance has been updated.');
+    }
+
+    public function submitArrearsRemittance(Request $request)
+    {
+        $user = $request->user();
+        $profile = $user->sellerProfile;
+
+        $validated = $request->validate([
+            'amount_remitted'        => ['required', 'numeric', 'gt:0'],
+            'sender_gcash_number'    => ['required', 'regex:/^09\d{9}$/'],
+            'gcash_reference_number' => ['required', 'string', 'min:4', 'max:80'],
+            'screenshot'             => ['nullable', 'image', 'mimes:jpg,jpeg,png,webp', 'max:5120'],
+        ]);
+
+        $wallet = $this->roleWalletService->getOrCreateWallet('Seller', (int) $profile->id, $profile->business_name);
+        $screenshotPath = $request->hasFile('screenshot')
+            ? $request->file('screenshot')->store('seller_arrears_remittances', 'public')
+            : null;
+
+        DB::transaction(function () use ($profile, $wallet, $validated, $screenshotPath) {
+            $remitAmount = round((float) $validated['amount_remitted'], 2);
+
+            DB::table('seller_commission_remittances')->insert([
+                'remittance_reference'   => 'ACR-' . now()->format('Ymd') . '-' . strtoupper(Str::random(6)),
+                'seller_profile_id'      => $profile->id,
+                'role_wallet_id'         => $wallet->id,
+                'amount_remitted'        => $remitAmount,
+                'sender_gcash_number'    => $validated['sender_gcash_number'],
+                'gcash_reference_number' => strtoupper(trim($validated['gcash_reference_number'])),
+                'screenshot_path'        => $screenshotPath,
+                'status'                 => 'verified',
+                'verified_at'            => now(),
+                'created_at'             => now(),
+                'updated_at'             => now(),
+            ]);
+
+            $newAvailable = round((float) $wallet->available_balance + $remitAmount, 2);
+            $newArrears = $newAvailable < 0 ? abs($newAvailable) : 0.00;
+
+            $wallet->update([
+                'available_balance'           => $newAvailable,
+                'platform_commission_arrears' => $newArrears,
+            ]);
+
+            if ($newArrears < RoleWalletService::GCASH_ARREARS_CREDIT_LIMIT && Schema::hasColumn('seller_profiles', 'gcash_blocked_for_arrears')) {
+                $profile->update(['gcash_blocked_for_arrears' => false]);
+            }
+
+            WalletTransaction::create([
+                'role_wallet_id'          => $wallet->id,
+                'transaction_reference'   => 'WTX-' . now()->format('Ymd') . '-' . strtoupper(Str::random(7)),
+                'owner_type'              => 'Seller',
+                'owner_id'                => $profile->id,
+                'entry_type'              => 'gcash_arrears_remitted',
+                'payment_method'          => 'GCASH',
+                'amount'                  => $remitAmount,
+                'pending_balance_after'   => (float) $wallet->pending_balance,
+                'available_balance_after' => $newAvailable,
+                'status'                  => 'completed',
+                'description'             => "Seller remitted ₱" . number_format($remitAmount, 2) . " via GCash (Ref #{$validated['gcash_reference_number']}) to clear Direct-GCash platform commission arrears.",
+            ]);
+        });
+
+        return back()->with('success', 'GCash platform commission arrears remittance recorded and credited to your Seller E-Wallet!');
+    }
+
+    public function formalPdfReport(Request $request)
+    {
+        $profile = $request->user()->sellerProfile;
+        $report = $this->formalReportService->buildRoleReportPayload(
+            role: 'Seller',
+            entityId: (int) $profile->id,
+            entityName: $profile->business_name,
+            request: $request
+        );
+
+        return view('reports.formal-pdf-report', compact('report'));
     }
 
     protected function getEligibleLogisticsProviders(?SellerProfile $sellerProfile): Collection
@@ -875,42 +955,9 @@ class OrderController extends Controller
             $lp->ensureMainHubExists();
         }
 
-        $normSellerMun = $this->normalizeLocation($sellerProfile->municipality);
-        $normSellerProv = $this->normalizeLocation($sellerProfile->province);
-
-        $allApproved = LogisticsProfile::with(['hubs' => fn ($q) => $q->where('status', 'active')])
+        return LogisticsProfile::with(['hubs' => fn ($q) => $q->where('status', 'active')])
             ->orderBy('business_name')
             ->get();
-
-        $sameMunicipality = $allApproved->filter(function (LogisticsProfile $company) use ($normSellerMun, $normSellerProv) {
-            if (
-                $this->normalizeLocation($company->municipality) === $normSellerMun &&
-                $this->normalizeLocation($company->province) === $normSellerProv
-            ) {
-                return true;
-            }
-
-            return $company->hubs->contains(function (LogisticsHub $hub) use ($normSellerMun, $normSellerProv) {
-                return $this->normalizeLocation($hub->municipality) === $normSellerMun &&
-                    $this->normalizeLocation($hub->province) === $normSellerProv;
-            });
-        })->values();
-
-        if ($sameMunicipality->isNotEmpty()) {
-            return $sameMunicipality;
-        }
-
-        $sameProvince = $allApproved->filter(function (LogisticsProfile $company) use ($normSellerProv) {
-            if ($this->normalizeLocation($company->province) === $normSellerProv) {
-                return true;
-            }
-
-            return $company->hubs->contains(function (LogisticsHub $hub) use ($normSellerProv) {
-                return $this->normalizeLocation($hub->province) === $normSellerProv;
-            });
-        })->values();
-
-        return $sameProvince->isNotEmpty() ? $sameProvince : $allApproved;
     }
 
     protected function getEligibleLogisticsHubs(Collection $eligibleProviders, ?SellerProfile $sellerProfile): Collection
@@ -920,65 +967,39 @@ class OrderController extends Controller
         }
 
         $providerIds = $eligibleProviders->pluck('id')->all();
+        $normSellerBrgy = $this->normalizeLocation($sellerProfile?->barangay);
         $normSellerMun = $this->normalizeLocation($sellerProfile?->municipality);
+        $normSellerProv = $this->normalizeLocation($sellerProfile?->province);
 
         $hubs = LogisticsHub::with('parentLogisticsProfile')
             ->whereIn('parent_logistics_profile_id', $providerIds)
             ->where('status', 'active')
-            ->orderByDesc('is_main_hub')
-            ->orderBy('municipality')
             ->get();
 
-        $sorted = $hubs->sortByDesc(function (LogisticsHub $hub) use ($normSellerMun) {
-            return $this->normalizeLocation($hub->municipality) === $normSellerMun ? 1 : 0;
+        $sorted = $hubs->sortByDesc(function (LogisticsHub $hub) use ($normSellerBrgy, $normSellerMun, $normSellerProv) {
+            $hubProv = $this->normalizeLocation($hub->province);
+            $hubMun = $this->normalizeLocation($hub->municipality);
+            $hubBrgy = $this->normalizeLocation($hub->barangay);
+
+            $score = 0;
+            if ($normSellerProv !== '' && $hubProv === $normSellerProv) {
+                $score += 100;
+                if ($normSellerMun !== '' && $hubMun === $normSellerMun) {
+                    $score += 500;
+                    if ($normSellerBrgy !== '' && $hubBrgy === $normSellerBrgy) {
+                        $score += 200;
+                    }
+                }
+            }
+
+            if ($hub->is_main_hub) {
+                $score += 10;
+            }
+
+            return $score;
         })->values();
 
         return new Collection($sorted->all());
-    }
-
-    protected function expireOverdueAcceptanceOrders(int $sellerId): void
-    {
-        $overdueOrders = SellerOrder::with(['order', 'payment', 'buyer'])
-            ->where('seller_id', $sellerId)
-            ->where('status', 'pending_seller_acceptance')
-            ->whereNotNull('acceptance_deadline_at')
-            ->where('acceptance_deadline_at', '<', now())
-            ->get();
-
-        foreach ($overdueOrders as $overdue) {
-            DB::transaction(function () use ($overdue) {
-                $locked = SellerOrder::with(['order', 'payment'])->where('id', $overdue->id)->lockForUpdate()->first();
-                if (! $locked || $locked->status !== 'pending_seller_acceptance') {
-                    return;
-                }
-
-                $locked->update([
-                    'status'           => 'cancelled',
-                    'payment_status'   => 'cancelled',
-                    'cancelled_at'     => now(),
-                    'rejection_reason' => 'Automatically cancelled because the 24-hour seller acceptance deadline expired.',
-                ]);
-
-                $locked->payment?->update([
-                    'status' => 'cancelled',
-                ]);
-
-                $this->inventoryStockService->restoreStockForSellerOrder($locked);
-                $this->voucherService->restoreVouchersForSellerOrder($locked);
-
-                OrderStatusHistory::create([
-                    'order_id'        => $locked->order_id,
-                    'seller_order_id' => $locked->id,
-                    'from_status'     => 'pending_seller_acceptance',
-                    'to_status'       => 'cancelled',
-                    'actor_type'      => 'System',
-                    'actor_id'        => null,
-                    'remarks'         => 'Order automatically cancelled after the 24-hour seller acceptance deadline expired.',
-                ]);
-
-                $this->orderCompletionService->syncParentOrderStatus($locked->order);
-            });
-        }
     }
 
     protected function normalizeLocation(?string $value): string

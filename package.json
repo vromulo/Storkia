@@ -5,7 +5,7 @@
     "scripts": {
         "dev": "vite",
         "build": "vite build",
-        "serve": "concurrently \"php artisan reverb:start\" \"php artisan serve --host=127.0.0.1 --port=8002\""
+        "serve": "concurrently \"php artisan reverb:start\" \"php artisan serve --host=127.0.0.1 --port=8000\""
     },
     "devDependencies": {
         "@tailwindcss/vite": "^4.0.0",

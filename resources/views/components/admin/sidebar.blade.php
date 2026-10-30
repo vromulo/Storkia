@@ -17,11 +17,10 @@
 
     <nav x-data="{ 
         activeDropdown: '{{ match(true) {
-            request()->is('admin/applications*') => 'applications',
-            request()->is('admin/users*') => 'users',
-            request()->is('admin/complaints*') => 'complaints',
-            request()->is('admin/reports*') => 'reports',
-            request()->is('admin/settings*') => 'settings',
+            request()->is('admin/applications*') || request()->routeIs('admin.applications.*') => 'applications',
+            request()->is('admin/accounts*') || request()->routeIs('admin.accounts.*') => 'accounts',
+            request()->is('admin/complaints*') || request()->routeIs('admin.complaints.*') => 'complaints',
+            request()->is('admin/reports*') || request()->routeIs('admin.reports.*') => 'reports',
             default => null,
         } }}'
     }" class="flex-1 overflow-y-auto overflow-x-hidden p-3 space-y-1.5 custom-scrollbar">
@@ -51,7 +50,8 @@
                 </svg>
             </button>
             <div x-show="activeDropdown === 'applications' && sidebarOpen" x-collapse x-cloak class="ml-6 pl-4 my-1 border-l-2 border-border-subtle/70 space-y-1">
-                <a href="{{ route('admin.applications.identity') }}" class="block px-3 py-2 text-xs rounded-lg text-text-muted hover:text-text-main hover:bg-brand-light/25 transition-all whitespace-nowrap cursor-pointer">
+                <a href="{{ route('admin.applications.identity') }}"
+                   class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ request()->routeIs('admin.applications.identity') ? 'bg-primary/10 text-primary font-bold shadow-xs' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">
                     Buyer Applications
                 </a>
                 <a href="{{ route('admin.applications.sellers') }}"
@@ -61,6 +61,52 @@
                 <a href="{{ route('admin.applications.logistics') }}"
                     class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ request()->routeIs('admin.applications.logistics') ? 'bg-primary/10 text-primary font-bold shadow-xs' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">
                     Logistics Applications
+                </a>
+            </div>
+        </div>
+
+        @php
+            $isAccountsActive = request()->is('admin/accounts*') || request()->routeIs('admin.accounts.*');
+            $currentAccountRole = request()->query('role', 'Buyer');
+        @endphp
+        <div>
+            <button @click="if(!sidebarOpen) { sidebarOpen = true; activeDropdown = 'accounts'; } else { activeDropdown = activeDropdown === 'accounts' ? null : 'accounts'; }" 
+                    class="flex items-center justify-between w-full px-3 py-3 rounded-xl transition-all duration-200 font-medium group whitespace-nowrap text-sm cursor-pointer {{ $isAccountsActive ? 'text-primary font-bold bg-brand-light/20' : 'text-text-muted hover:bg-brand-light/30 hover:text-primary' }}" 
+                    :title="!sidebarOpen ? 'Account Management' : ''">
+                <div class="flex items-center">
+                    <svg class="w-6 h-6 flex-shrink-0 transition-colors {{ $isAccountsActive ? 'text-primary' : 'text-text-muted group-hover:text-primary' }}" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" />
+                    </svg>
+                    <span x-show="sidebarOpen" x-transition.opacity.duration.300ms class="ml-3">Account Management</span>
+                </div>
+                <svg x-show="sidebarOpen" class="w-4 h-4 transition-transform duration-200 text-text-muted group-hover:text-primary" :class="{'rotate-180': activeDropdown === 'accounts'}" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                </svg>
+            </button>
+            <div x-show="activeDropdown === 'accounts' && sidebarOpen" x-collapse x-cloak class="ml-6 pl-4 my-1 border-l-2 border-border-subtle/70 space-y-1">
+                <a href="{{ route('admin.accounts.index', ['role' => 'Buyer']) }}"
+                   class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ $isAccountsActive && $currentAccountRole === 'Buyer' ? 'bg-primary/10 text-primary font-bold shadow-xs' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">
+                    Buyers Directory
+                </a>
+                <a href="{{ route('admin.accounts.index', ['role' => 'Seller']) }}"
+                   class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ $isAccountsActive && $currentAccountRole === 'Seller' ? 'bg-primary/10 text-primary font-bold shadow-xs' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">
+                    Sellers Directory
+                </a>
+                <a href="{{ route('admin.accounts.index', ['role' => 'Logistics']) }}"
+                   class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ $isAccountsActive && $currentAccountRole === 'Logistics' ? 'bg-primary/10 text-primary font-bold shadow-xs' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">
+                    Logistics Hubs
+                </a>
+                <a href="{{ route('admin.accounts.index', ['role' => 'Courier']) }}"
+                   class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ $isAccountsActive && $currentAccountRole === 'Courier' ? 'bg-primary/10 text-primary font-bold shadow-xs' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">
+                    First-Mile Couriers
+                </a>
+                <a href="{{ route('admin.accounts.index', ['role' => 'Rider']) }}"
+                   class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ $isAccountsActive && $currentAccountRole === 'Rider' ? 'bg-primary/10 text-primary font-bold shadow-xs' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">
+                    Last-Mile Riders
+                </a>
+                <a href="{{ route('admin.accounts.index', ['role' => 'Appeals']) }}"
+                   class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ $isAccountsActive && $currentAccountRole === 'Appeals' ? 'bg-primary/10 text-primary font-bold shadow-xs' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">
+                    3-Strike Ban Appeals
                 </a>
             </div>
         </div>
@@ -76,7 +122,10 @@
             <span x-show="sidebarOpen" x-transition.opacity.duration.300ms class="ml-3">Seller Compliance</span>
         </a>
 
-        @php $isComplaintsActive = request()->is('admin/complaints*') || request()->routeIs('admin.complaints.*'); @endphp
+        @php
+            $isComplaintsActive = request()->is('admin/complaints*') || request()->routeIs('admin.complaints.*');
+            $currentComplaintStatus = request()->query('status', 'unresolved');
+        @endphp
         <div>
             <button @click="if(!sidebarOpen) { sidebarOpen = true; activeDropdown = 'complaints'; } else { activeDropdown = activeDropdown === 'complaints' ? null : 'complaints'; }" 
                     class="flex items-center justify-between w-full px-3 py-3 rounded-xl transition-all duration-200 font-medium group whitespace-nowrap text-sm cursor-pointer {{ $isComplaintsActive ? 'text-primary font-bold bg-brand-light/20' : 'text-text-muted hover:bg-brand-light/30 hover:text-primary' }}" 
@@ -92,9 +141,18 @@
                 </svg>
             </button>
             <div x-show="activeDropdown === 'complaints' && sidebarOpen" x-collapse x-cloak class="ml-6 pl-4 my-1 border-l-2 border-border-subtle/70 space-y-1">
-                <a href="{{ route('admin.complaints.index', ['status' => 'all']) }}" class="block px-3 py-2 text-xs rounded-lg text-text-muted hover:text-text-main hover:bg-brand-light/25 transition-all whitespace-nowrap cursor-pointer">All Complaints</a>
-                <a href="{{ route('admin.complaints.index', ['status' => 'unresolved']) }}" class="block px-3 py-2 text-xs rounded-lg text-text-muted hover:text-text-main hover:bg-brand-light/25 transition-all whitespace-nowrap cursor-pointer">Unresolved Disputes</a>
-                <a href="{{ route('admin.complaints.index', ['status' => 'resolved']) }}" class="block px-3 py-2 text-xs rounded-lg text-text-muted hover:text-text-main hover:bg-brand-light/25 transition-all whitespace-nowrap cursor-pointer">Resolved</a>
+                <a href="{{ route('admin.complaints.index', ['status' => 'all']) }}"
+                   class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ $isComplaintsActive && $currentComplaintStatus === 'all' ? 'bg-primary/10 text-primary font-bold shadow-xs' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">
+                    All Complaints
+                </a>
+                <a href="{{ route('admin.complaints.index', ['status' => 'unresolved']) }}"
+                   class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ $isComplaintsActive && $currentComplaintStatus === 'unresolved' ? 'bg-primary/10 text-primary font-bold shadow-xs' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">
+                    Unresolved Disputes
+                </a>
+                <a href="{{ route('admin.complaints.index', ['status' => 'resolved']) }}"
+                   class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ $isComplaintsActive && $currentComplaintStatus === 'resolved' ? 'bg-primary/10 text-primary font-bold shadow-xs' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">
+                    Resolved
+                </a>
             </div>
         </div>
 
@@ -102,11 +160,77 @@
         <a href="{{ route('admin.commissions.index') }}"
            @click="activeDropdown = null"
            class="flex items-center px-3 py-3 rounded-xl transition-all duration-200 font-medium group whitespace-nowrap text-sm cursor-pointer {{ $isCommissionsActive ? 'bg-brand-light/60 text-primary font-bold shadow-xs' : 'text-text-muted hover:bg-brand-light/30 hover:text-primary' }}"
-           :title="!sidebarOpen ? 'Commissions' : ''">
+           :title="!sidebarOpen ? 'Commissions & Vouchers' : ''">
             <svg class="w-6 h-6 flex-shrink-0 {{ $isCommissionsActive ? 'text-primary' : 'text-text-muted group-hover:text-primary' }} transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
-            <span x-show="sidebarOpen" x-transition.opacity.duration.300ms class="ml-3">Commissions &amp; Ledger</span>
+            <span x-show="sidebarOpen" x-transition.opacity.duration.300ms class="ml-3">Commissions &amp; Vouchers</span>
+        </a>
+
+        @php
+            $isReportsActive = request()->is('admin/reports*') || request()->routeIs('admin.reports.*');
+            $currentReportRoleTab = request()->query('role_tab', 'sellers');
+        @endphp
+        <div>
+            <button @click="if(!sidebarOpen) { sidebarOpen = true; activeDropdown = 'reports'; } else { activeDropdown = activeDropdown === 'reports' ? null : 'reports'; }" 
+                    class="flex items-center justify-between w-full px-3 py-3 rounded-xl transition-all duration-200 font-medium group whitespace-nowrap text-sm cursor-pointer {{ $isReportsActive ? 'text-primary font-bold bg-brand-light/20' : 'text-text-muted hover:bg-brand-light/30 hover:text-primary' }}" 
+                    :title="!sidebarOpen ? 'Sales & Role Reports' : ''">
+                <div class="flex items-center">
+                    <svg class="w-6 h-6 flex-shrink-0 transition-colors {{ $isReportsActive ? 'text-primary' : 'text-text-muted group-hover:text-primary' }}" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                    </svg>
+                    <span x-show="sidebarOpen" x-transition.opacity.duration.300ms class="ml-3">Sales &amp; Role Reports</span>
+                </div>
+                <svg x-show="sidebarOpen" class="w-4 h-4 transition-transform duration-200 text-text-muted group-hover:text-primary" :class="{'rotate-180': activeDropdown === 'reports'}" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                </svg>
+            </button>
+            <div x-show="activeDropdown === 'reports' && sidebarOpen" x-collapse x-cloak class="ml-6 pl-4 my-1 border-l-2 border-border-subtle/70 space-y-1">
+                <a href="{{ route('admin.reports.sales', ['role_tab' => 'sellers']) }}"
+                   class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ $isReportsActive && $currentReportRoleTab === 'sellers' ? 'bg-primary/10 text-primary font-bold shadow-xs' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">
+                    Seller Stores Report
+                </a>
+                <a href="{{ route('admin.reports.sales', ['role_tab' => 'logistics']) }}"
+                   class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ $isReportsActive && $currentReportRoleTab === 'logistics' ? 'bg-primary/10 text-primary font-bold shadow-xs' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">
+                    Logistics Hubs Report
+                </a>
+                <a href="{{ route('admin.reports.sales', ['role_tab' => 'couriers']) }}"
+                   class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ $isReportsActive && $currentReportRoleTab === 'couriers' ? 'bg-primary/10 text-primary font-bold shadow-xs' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">
+                    First-Mile Couriers Report
+                </a>
+                <a href="{{ route('admin.reports.sales', ['role_tab' => 'riders']) }}"
+                   class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ $isReportsActive && $currentReportRoleTab === 'riders' ? 'bg-primary/10 text-primary font-bold shadow-xs' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">
+                    Last-Mile Riders Report
+                </a>
+                <a href="{{ route('admin.reports.formal-pdf') }}"
+                   target="_blank"
+                   class="block px-3 py-2 text-xs rounded-lg text-primary font-bold hover:bg-brand-light/25 transition-all whitespace-nowrap cursor-pointer">
+                    Formal Printable PDF Statement &nearr;
+                </a>
+            </div>
+        </div>
+
+        @php $isAuditLogsActive = request()->routeIs('admin.audit-logs.*'); @endphp
+        <a href="{{ route('admin.audit-logs.index') }}"
+           @click="activeDropdown = null"
+           class="flex items-center px-3 py-3 rounded-xl transition-all duration-200 font-medium group whitespace-nowrap text-sm cursor-pointer {{ $isAuditLogsActive ? 'bg-brand-light/60 text-primary font-bold shadow-xs' : 'text-text-muted hover:bg-brand-light/30 hover:text-primary' }}"
+           :title="!sidebarOpen ? 'Audit & Security Logs' : ''">
+            <svg class="w-6 h-6 flex-shrink-0 {{ $isAuditLogsActive ? 'text-primary' : 'text-text-muted group-hover:text-primary' }} transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+            </svg>
+            <span x-show="sidebarOpen" x-transition.opacity.duration.300ms class="ml-3">Audit &amp; Security Logs</span>
+        </a>
+
+        @php $isSettingsActive = request()->routeIs('admin.settings.*'); @endphp
+        <a href="{{ route('admin.settings.index') }}"
+           @click="activeDropdown = null"
+           class="flex items-center px-3 py-3 rounded-xl transition-all duration-200 font-medium group whitespace-nowrap text-sm cursor-pointer {{ $isSettingsActive ? 'bg-brand-light/60 text-primary font-bold shadow-xs' : 'text-text-muted hover:bg-brand-light/30 hover:text-primary' }}"
+           :title="!sidebarOpen ? 'Platform & Hero Settings' : ''">
+            <svg class="w-6 h-6 flex-shrink-0 {{ $isSettingsActive ? 'text-primary' : 'text-text-muted group-hover:text-primary' }} transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+            </svg>
+            <span x-show="sidebarOpen" x-transition.opacity.duration.300ms class="ml-3">Platform &amp; Hero Settings</span>
         </a>
     </nav>
 
