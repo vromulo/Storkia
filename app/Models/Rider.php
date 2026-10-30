@@ -30,6 +30,9 @@ class Rider extends Authenticatable
         'status',
         'approved_at',
         'rejected_at',
+        'is_online',
+        'last_seen_at',
+        'sla_strikes',
     ];
 
     protected $hidden = [
@@ -40,12 +43,15 @@ class Rider extends Authenticatable
     protected function casts(): array
     {
         return [
-            'birthday' => 'date',
+            'birthday'            => 'date',
             'license_expiry_date' => 'date',
-            'email_verified_at' => 'datetime',
-            'approved_at' => 'datetime',
-            'rejected_at' => 'datetime',
-            'password' => 'hashed',
+            'email_verified_at'   => 'datetime',
+            'approved_at'         => 'datetime',
+            'rejected_at'         => 'datetime',
+            'password'            => 'hashed',
+            'is_online'           => 'boolean',
+            'last_seen_at'        => 'datetime',
+            'sla_strikes'         => 'integer',
         ];
     }
 
@@ -145,7 +151,6 @@ class Rider extends Authenticatable
     public function getFormattedBarangayCoverageAttribute(): string
     {
         $names = $this->covered_barangay_names;
-
         return ! empty($names) ? implode(', ', $names) : 'All Barangays in Hub Municipality';
     }
 

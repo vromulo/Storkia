@@ -27,12 +27,17 @@ class Product extends Model
         'has_pending_variants',
         'weight',
         'stock_quantity',
+        'publish_status',
+        'per_buyer_limit',
+        'low_stock_alerted',
     ];
 
     protected $casts = [
         'pictures'             => 'array',
         'variants'             => 'array',
         'has_pending_variants' => 'boolean',
+        'per_buyer_limit'      => 'integer',
+        'low_stock_alerted'    => 'boolean',
     ];
 
     public function getRawVariantsAttribute(): ?array
@@ -102,6 +107,7 @@ class Product extends Model
         }
 
         $request = request();
+
         if ($request->routeIs('seller.*', 'admin.*') || $request->is('seller/*', 'admin/*')) {
             return true;
         }

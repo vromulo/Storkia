@@ -34,6 +34,12 @@ class SellerOrderExtra extends Model
         'seller_return_responded_at',
         'is_escalated_to_admin',
         'escalated_at',
+        'refund_method',
+        'refund_account_name',
+        'refund_account_number',
+        'refund_amount',
+        'refund_status',
+        'refund_released_at',
     ];
 
     protected function casts(): array
@@ -48,6 +54,8 @@ class SellerOrderExtra extends Model
             'seller_return_responded_at' => 'datetime',
             'is_escalated_to_admin'      => 'boolean',
             'escalated_at'               => 'datetime',
+            'refund_amount'              => 'decimal:2',
+            'refund_released_at'         => 'datetime',
         ];
     }
 

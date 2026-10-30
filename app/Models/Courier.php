@@ -33,6 +33,9 @@ class Courier extends Authenticatable
         'nbi_clearance_path',
         'password',
         'status',
+        'is_online',
+        'last_seen_at',
+        'sla_strikes',
     ];
 
     protected $hidden = [
@@ -43,12 +46,15 @@ class Courier extends Authenticatable
     protected function casts(): array
     {
         return [
-            'birthday' => 'date',
+            'birthday'            => 'date',
             'license_expiry_date' => 'date',
-            'email_verified_at' => 'datetime',
-            'dl_codes' => 'array',
-            'load_capacity' => 'integer',
-            'password' => 'hashed',
+            'email_verified_at'   => 'datetime',
+            'dl_codes'            => 'array',
+            'load_capacity'       => 'integer',
+            'password'            => 'hashed',
+            'is_online'           => 'boolean',
+            'last_seen_at'        => 'datetime',
+            'sla_strikes'         => 'integer',
         ];
     }
 

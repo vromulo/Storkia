@@ -15,6 +15,7 @@ class RoleWallet extends Model
         'owner_name',
         'pending_balance',
         'available_balance',
+        'platform_commission_arrears',
         'total_earned',
         'total_withdrawn',
         'last_credited_at',
@@ -23,11 +24,12 @@ class RoleWallet extends Model
     protected function casts(): array
     {
         return [
-            'pending_balance'   => 'decimal:2',
-            'available_balance' => 'decimal:2',
-            'total_earned'      => 'decimal:2',
-            'total_withdrawn'   => 'decimal:2',
-            'last_credited_at'  => 'datetime',
+            'pending_balance'             => 'decimal:2',
+            'available_balance'           => 'decimal:2',
+            'platform_commission_arrears' => 'decimal:2',
+            'total_earned'                => 'decimal:2',
+            'total_withdrawn'             => 'decimal:2',
+            'last_credited_at'            => 'datetime',
         ];
     }
 

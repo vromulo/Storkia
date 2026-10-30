@@ -21,7 +21,21 @@ class SellerProfile extends Model
         'logo_path',
         'id_path',
         'permit_path',
+        'is_on_vacation',
+        'store_description',
+        'banner_path',
+        'sla_strikes',
+        'gcash_blocked_for_arrears',
     ];
+
+    protected function casts(): array
+    {
+        return [
+            'is_on_vacation'            => 'boolean',
+            'sla_strikes'               => 'integer',
+            'gcash_blocked_for_arrears' => 'boolean',
+        ];
+    }
 
     public function user()
     {
@@ -80,6 +94,10 @@ class SellerProfile extends Model
 
     public function hasActiveGcashAccount(): bool
     {
+        if ($this->gcash_blocked_for_arrears) {
+            return false;
+        }
+
         $account = $this->relationLoaded('gcashAccount')
             ? $this->gcashAccount
             : $this->gcashAccount()->first();

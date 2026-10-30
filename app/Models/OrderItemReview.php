@@ -19,15 +19,25 @@ class OrderItemReview extends Model
         'rating',
         'review_text',
         'review_photo_path',
+        'review_photos',
+        'edit_count',
+        'edited_at',
         'seller_reply',
         'seller_replied_at',
+        'seller_reply_edit_count',
+        'seller_reply_edited_at',
     ];
 
     protected function casts(): array
     {
         return [
-            'rating'            => 'integer',
-            'seller_replied_at' => 'datetime',
+            'rating'                  => 'integer',
+            'review_photos'           => 'array',
+            'edit_count'              => 'integer',
+            'edited_at'               => 'datetime',
+            'seller_replied_at'       => 'datetime',
+            'seller_reply_edit_count' => 'integer',
+            'seller_reply_edited_at'  => 'datetime',
         ];
     }
 

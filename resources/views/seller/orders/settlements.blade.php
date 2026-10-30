@@ -20,7 +20,7 @@
         <div>
             <h1 class="text-3xl font-bold text-primary-dark">Seller E-Wallet, Payouts &amp; Financial Report</h1>
             <p class="text-sm text-text-muted mt-1">
-                Split-Base Policy: You earn <strong>90%</strong> of your Commissionable Product Subtotal (10% Admin Commission)[cite: 5]. Direct-to-Seller GCash orders automatically offset their 10% Admin Commission + Shipping Fee against your E-Wallet.
+                Split-Base Policy: You earn <strong>90%</strong> of your Commissionable Product Subtotal (10% Admin Commission). Direct-to-Seller GCash orders automatically offset their 10% Admin Commission + Shipping Fee against your E-Wallet.
             </p>
         </div>
 
