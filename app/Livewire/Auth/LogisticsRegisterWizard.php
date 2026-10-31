@@ -60,6 +60,9 @@ class LogisticsRegisterWizard extends Component
     public string $password = '';
     public string $password_confirmation = '';
 
+    // Step 7: Terms & Conditions Acceptance
+    public bool $accept_terms = false;
+
     public function mount(AddressService $addressService)
     {
         $this->provinces = $addressService->getProvinces();
@@ -90,6 +93,10 @@ class LogisticsRegisterWizard extends Component
             } elseif ($propertyName === 'password_confirmation') {
                 $this->validateOnly('password_confirmation', ['password_confirmation' => ['required', 'same:password']]);
             }
+        } elseif ($this->currentStep === 7 && $propertyName === 'accept_terms') {
+            $this->validateOnly('accept_terms', ['accept_terms' => ['accepted']], [
+                'accept_terms.accepted' => 'You must agree to the Storkia Terms & Conditions before submitting your application.',
+            ]);
         }
     }
 
@@ -262,7 +269,12 @@ class LogisticsRegisterWizard extends Component
 
     public function register()
     {
-        $this->validate($this->getStep6Rules(), $this->getStep6Messages());
+        $this->validate(
+            array_merge($this->getStep6Rules(), ['accept_terms' => ['accepted']]),
+            array_merge($this->getStep6Messages(), [
+                'accept_terms.accepted' => 'You must agree to the Storkia Terms & Conditions before submitting your application.',
+            ])
+        );
 
         $this->email = strtolower(trim($this->email));
 

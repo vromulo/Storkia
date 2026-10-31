@@ -34,6 +34,7 @@
                         {{ $label }}
                     </span>
                 </div>
+
                 @if ($num < 3)
                     <div class="w-6 sm:w-8 h-[1px] {{ $currentStep > $num ? 'bg-primary-dark/40' : 'bg-border-subtle' }}"></div>
                 @endif
@@ -52,7 +53,6 @@
                     <input 
                         type="email" 
                         wire:model.live.debounce.500ms="email" 
-                        x-on:input="$event.target.value = $event.target.value.replace(/[\s\u200b]+/g, '')"
                         @if ($codeSent) disabled @endif
                         class="w-full py-3 bg-transparent text-text-main text-base outline-none placeholder:text-text-muted/40 disabled:text-text-muted/50"
                         placeholder="name@example.com"
@@ -112,7 +112,7 @@
                         <span wire:loading wire:target="verifyCode">Verifying...</span>
                     </button>
 
-                    <div class="text-center" x-data="{ seconds: {{ $resendCooldown }} }"
+                    <div class="text-center" x-data="{ seconds: {{ $resendCooldown }} }" 
                          x-init="let t = setInterval(() => { if (seconds > 0) seconds--; else clearInterval(t); }, 1000)">
                         <button 
                             type="button" 
@@ -144,7 +144,7 @@
                         <input 
                             type="text" 
                             wire:model.live.debounce.500ms="first_name"
-                            x-on:input="$event.target.value = $event.target.value.replace(/[\u00f1\u00d1]|[nN]\u0303|\u0303/g, '').replace(/^\s+/, '').replace(/ {2,}/g, ' ').replace(/\b\w/g, c => c.toUpperCase())"
+                            x-on:input="$event.target.value = $event.target.value.replace(/^\s+/, '').replace(/ {2,}/g, ' ').replace(/\b\w/g, c => c.toUpperCase())"
                             class="capitalize w-full py-2.5 bg-transparent text-text-main text-base outline-none placeholder:text-text-muted/40"
                             placeholder="John"
                         >
@@ -162,7 +162,7 @@
                             type="text" 
                             wire:model.live.debounce.500ms="middle_initial" 
                             maxlength="1"
-                            x-on:input="$event.target.value = $event.target.value.replace(/[\u00f1\u00d1]|[nN]\u0303|\u0303/g, '').replace(/\s+/g, '').toUpperCase()"
+                            x-on:input="$event.target.value = $event.target.value.replace(/\s+/g, '').toUpperCase()"
                             class="uppercase w-full py-2.5 bg-transparent text-text-main text-base outline-none placeholder:text-text-muted/40 text-center sm:text-left"
                             placeholder="D"
                         >
@@ -180,7 +180,7 @@
                     <input 
                         type="text" 
                         wire:model.live.debounce.500ms="last_name"
-                        x-on:input="$event.target.value = $event.target.value.replace(/[\u00f1\u00d1]|[nN]\u0303|\u0303/g, '').replace(/^\s+/, '').replace(/ {2,}/g, ' ').replace(/\b\w/g, c => c.toUpperCase())"
+                        x-on:input="$event.target.value = $event.target.value.replace(/^\s+/, '').replace(/ {2,}/g, ' ').replace(/\b\w/g, c => c.toUpperCase())"
                         class="capitalize w-full py-2.5 bg-transparent text-text-main text-base outline-none placeholder:text-text-muted/40"
                         placeholder="Doe"
                     >
@@ -254,9 +254,9 @@
         </div>
     @endif
 
-    {{-- STEP 3: Password --}}
+    {{-- STEP 3: Password & Terms Agreement --}}
     @if ($currentStep === 3)
-        <div class="space-y-5" x-data="{ showPass: false, showConfirm: false }">
+        <div class="space-y-5" x-data="{ showPass: false, showConfirm: false, termsModalOpen: false }">
             {{-- Password --}}
             <div>
                 <label class="block text-xs uppercase tracking-wider font-bold text-text-muted mb-1.5">
@@ -316,17 +316,36 @@
             <!-- Password Requirements Indicator -->
             <div class="pt-2 grid grid-cols-2 gap-1.5 text-[11px] text-text-muted">
                 <span class="flex items-center gap-1 {{ strlen($password) >= 8 ? 'text-success font-semibold' : '' }}">
-                    <span>{{ strlen($password) >= 8 ? '✓' : '•' }}</span> 8+ characters
+                    <span>{{ strlen($password) >= 8 ? '✓' : '○' }}</span> 8+ characters
                 </span>
                 <span class="flex items-center gap-1 {{ preg_match('/[A-Z]/', $password) ? 'text-success font-semibold' : '' }}">
-                    <span>{{ preg_match('/[A-Z]/', $password) ? '✓' : '•' }}</span> 1 uppercase
+                    <span>{{ preg_match('/[A-Z]/', $password) ? '✓' : '○' }}</span> 1 uppercase
                 </span>
                 <span class="flex items-center gap-1 {{ preg_match('/[0-9]/', $password) ? 'text-success font-semibold' : '' }}">
-                    <span>{{ preg_match('/[0-9]/', $password) ? '✓' : '•' }}</span> 1 number
+                    <span>{{ preg_match('/[0-9]/', $password) ? '✓' : '○' }}</span> 1 number
                 </span>
                 <span class="flex items-center gap-1 {{ preg_match('/[\W_]/', $password) ? 'text-success font-semibold' : '' }}">
-                    <span>{{ preg_match('/[\W_]/', $password) ? '✓' : '•' }}</span> 1 special symbol
+                    <span>{{ preg_match('/[\W_]/', $password) ? '✓' : '○' }}</span> 1 special symbol
                 </span>
+            </div>
+
+            <!-- Terms & Conditions Checkbox -->
+            <div class="pt-3 border-t border-border-subtle/70">
+                <label class="flex items-start gap-2.5 cursor-pointer select-none">
+                    <input type="checkbox"
+                           wire:model.live="accept_terms"
+                           class="mt-0.5 w-4 h-4 rounded border-border-subtle text-primary-dark focus:ring-primary-dark cursor-pointer">
+                    <span class="text-xs text-text-muted leading-relaxed">
+                        I have read and agree to the
+                        <button type="button"
+                                @click.stop="termsModalOpen = true"
+                                class="font-bold text-primary hover:text-primary-dark underline cursor-pointer">
+                            Terms &amp; Conditions
+                        </button>
+                </label>
+                @error('accept_terms')
+                    <p class="text-danger text-xs mt-1.5 font-medium">{{ $message }}</p>
+                @enderror
             </div>
 
             <div class="flex items-center gap-3 pt-4">
@@ -348,6 +367,53 @@
                     <span wire:loading wire:target="register">Creating Account...</span>
                 </button>
             </div>
+
+            <!-- Inline Terms & Conditions Modal -->
+            <template x-teleport="body">
+                <div x-show="termsModalOpen"
+                     x-cloak
+                     @keydown.escape.window="termsModalOpen = false"
+                     class="fixed inset-0 z-[220] flex items-center justify-center p-4 bg-black/65 backdrop-blur-xs">
+                    <div @click.away="termsModalOpen = false"
+                         class="bg-surface rounded-3xl max-w-4xl w-full max-h-[88vh] flex flex-col shadow-2xl border border-border-subtle overflow-hidden">
+                        <div class="px-6 py-4 border-b border-border-subtle flex items-center justify-between bg-surface shrink-0">
+                            <div>
+                                <h3 class="text-base sm:text-lg font-bold text-primary-dark">Storkia Terms &amp; Conditions</h3>
+                                <p class="text-xs text-text-muted">Review the Buyer &amp; Platform Agreement below</p>
+                            </div>
+                            <button type="button"
+                                    @click="termsModalOpen = false"
+                                    class="p-1.5 rounded-xl text-text-muted hover:text-text-main hover:bg-surface-subtle cursor-pointer">
+                                &times;
+                            </button>
+                        </div>
+
+                        <div class="p-6 overflow-y-auto flex-1 custom-scrollbar bg-surface-subtle/40">
+                            <x-ui.terms-content default-tab="buyer" :compact="true" />
+                        </div>
+
+                        <div class="px-6 py-4 border-t border-border-subtle bg-surface flex items-center justify-between gap-3 shrink-0">
+                            <a href="{{ route('terms', ['role' => 'buyer']) }}"
+                               target="_blank"
+                               class="text-xs font-bold text-primary hover:underline">
+                                Open in New Tab &nearr;
+                            </a>
+                            <div class="flex items-center gap-2.5">
+                                <button type="button"
+                                        @click="termsModalOpen = false"
+                                        class="px-4 py-2 rounded-xl bg-surface-subtle text-text-muted text-xs font-bold cursor-pointer">
+                                    Close
+                                </button>
+                                <button type="button"
+                                        @click="$wire.set('accept_terms', true); termsModalOpen = false"
+                                        class="px-5 py-2.5 rounded-xl bg-primary-dark hover:bg-text-main text-white text-xs font-bold shadow-xs cursor-pointer">
+                                    I Understand &amp; Accept Terms
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </template>
         </div>
     @endif
 

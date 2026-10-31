@@ -20,6 +20,7 @@ use App\Http\Controllers\Buyer\ProfileController;
 
 Route::middleware('throttle:120,1')->group(function () {
     Route::view('/', 'buyer.landing-page')->name('landing');
+    Route::view('/terms-and-conditions', 'buyer.terms-and-conditions')->name('terms');
     Route::get('/shop', [HomeController::class, 'index'])->name('home');
     Route::get('/sellers', [SellerController::class, 'index'])->name('sellers.index');
     Route::get('/sellers/{seller}', [SellerController::class, 'show'])->name('sellers.show');

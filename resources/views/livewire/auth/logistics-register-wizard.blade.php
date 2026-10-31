@@ -117,7 +117,8 @@
                             <span wire:loading.remove wire:target="verifyCode">Verify & Continue</span>
                             <span wire:loading wire:target="verifyCode">Verifying...</span>
                         </button>
-                        <div class="text-center" x-data="{ seconds: {{ $resendCooldown }} }"
+
+                        <div class="text-center" x-data="{ seconds: {{ $resendCooldown }} }" 
                              x-init="let t = setInterval(() => { if (seconds > 0) seconds--; else clearInterval(t); }, 1000)">
                             <button 
                                 type="button" 
@@ -153,6 +154,7 @@
                         </div>
                         @error('first_name') <p class="text-danger text-xs mt-1 font-medium">{{ $message }}</p> @enderror
                     </div>
+
                     <div class="sm:col-span-1">
                         <label class="block text-xs uppercase tracking-wider font-bold text-text-muted mb-1.5">M.I.</label>
                         <div class="relative border-b {{ $errors->has('middle_initial') ? 'border-danger' : 'border-border-subtle focus-within:border-text-main' }} transition-colors">
@@ -351,7 +353,6 @@
                         :class="isDragging ? 'border-primary bg-brand-light/20' : 'border-border-subtle hover:border-text-main/50'"
                         class="relative rounded-2xl border-2 border-dashed p-4 transition-all duration-200 overflow-hidden bg-surface group"
                     >
-                        <!-- Livewire Upload Spinner Overlay -->
                         <div 
                             wire:loading.flex 
                             wire:target="valid_id" 
@@ -364,14 +365,12 @@
                             <p class="text-xs font-semibold text-primary-dark">Uploading Valid ID...</p>
                         </div>
 
-                        <!-- Active Preview State -->
                         @if ($valid_id)
                             <div class="flex items-center justify-between gap-3">
                                 <div class="flex items-center gap-3 overflow-hidden">
                                     @php
                                         $validIdExt = strtolower(pathinfo($valid_id->getClientOriginalName(), PATHINFO_EXTENSION));
                                     @endphp
-
                                     @if(in_array($validIdExt, ['jpg', 'jpeg', 'png', 'webp']))
                                         <img src="{{ $valid_id->temporaryUrl() }}" alt="Valid ID" class="w-12 h-12 object-cover rounded-xl border border-border-subtle shrink-0 shadow-xs">
                                     @else
@@ -403,7 +402,6 @@
                                 </label>
                             </div>
                         @else
-                            <!-- Empty Drop Target -->
                             <label for="logistics_valid_id_file" class="flex flex-col items-center justify-center py-4 cursor-pointer">
                                 <div class="w-9 h-9 rounded-full bg-surface-subtle flex items-center justify-center mb-2 text-text-muted group-hover:text-primary group-hover:bg-brand-light/30 transition-colors">
                                     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -451,7 +449,6 @@
                         :class="isDragging ? 'border-primary bg-brand-light/20' : 'border-border-subtle hover:border-text-main/50'"
                         class="relative rounded-2xl border-2 border-dashed p-4 transition-all duration-200 overflow-hidden bg-surface group"
                     >
-                        <!-- Livewire Upload Spinner Overlay -->
                         <div 
                             wire:loading.flex 
                             wire:target="business_permit" 
@@ -464,14 +461,12 @@
                             <p class="text-xs font-semibold text-primary-dark">Uploading Permit...</p>
                         </div>
 
-                        <!-- Active Preview State -->
                         @if ($business_permit)
                             <div class="flex items-center justify-between gap-3">
                                 <div class="flex items-center gap-3 overflow-hidden">
                                     @php
                                         $permitExt = strtolower(pathinfo($business_permit->getClientOriginalName(), PATHINFO_EXTENSION));
                                     @endphp
-
                                     @if(in_array($permitExt, ['jpg', 'jpeg', 'png', 'webp']))
                                         <img src="{{ $business_permit->temporaryUrl() }}" alt="Business Permit" class="w-12 h-12 object-cover rounded-xl border border-border-subtle shrink-0 shadow-xs">
                                     @else
@@ -503,7 +498,6 @@
                                 </label>
                             </div>
                         @else
-                            <!-- Empty Drop Target -->
                             <label for="logistics_permit_file" class="flex flex-col items-center justify-center py-4 cursor-pointer">
                                 <div class="w-9 h-9 rounded-full bg-surface-subtle flex items-center justify-center mb-2 text-text-muted group-hover:text-primary group-hover:bg-brand-light/30 transition-colors">
                                     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -586,16 +580,16 @@
                 <!-- Password Requirements Indicator -->
                 <div class="pt-2 grid grid-cols-2 gap-1.5 text-[11px] text-text-muted">
                     <span class="flex items-center gap-1 {{ strlen($password) >= 8 ? 'text-success font-semibold' : '' }}">
-                        <span>{{ strlen($password) >= 8 ? '✓' : '•' }}</span> 8+ characters
+                        <span>{{ strlen($password) >= 8 ? '✓' : '○' }}</span> 8+ characters
                     </span>
                     <span class="flex items-center gap-1 {{ preg_match('/[A-Z]/', $password) ? 'text-success font-semibold' : '' }}">
-                        <span>{{ preg_match('/[A-Z]/', $password) ? '✓' : '•' }}</span> 1 uppercase
+                        <span>{{ preg_match('/[A-Z]/', $password) ? '✓' : '○' }}</span> 1 uppercase
                     </span>
                     <span class="flex items-center gap-1 {{ preg_match('/[0-9]/', $password) ? 'text-success font-semibold' : '' }}">
-                        <span>{{ preg_match('/[0-9]/', $password) ? '✓' : '•' }}</span> 1 number
+                        <span>{{ preg_match('/[0-9]/', $password) ? '✓' : '○' }}</span> 1 number
                     </span>
                     <span class="flex items-center gap-1 {{ preg_match('/[\W_]/', $password) ? 'text-success font-semibold' : '' }}">
-                        <span>{{ preg_match('/[\W_]/', $password) ? '✓' : '•' }}</span> 1 special symbol
+                        <span>{{ preg_match('/[\W_]/', $password) ? '✓' : '○' }}</span> 1 special symbol
                     </span>
                 </div>
 
@@ -606,9 +600,9 @@
             </div>
         @endif
 
-        {{-- STEP 7: Review & Submit --}}
+        {{-- STEP 7: Review, Terms & Submit --}}
         @if ($currentStep === 7)
-            <div class="space-y-6 text-xs">
+            <div class="space-y-6 text-xs" x-data="{ termsModalOpen: false }">
                 <div class="space-y-5">
                     <div class="border-b border-border-subtle/70 pb-3">
                         <div class="flex justify-between items-center mb-2">
@@ -654,6 +648,25 @@
                     </div>
                 </div>
 
+                <!-- Logistics Terms & Conditions Agreement Checkbox -->
+                <div class="p-3.5 rounded-2xl bg-surface-subtle/70 border border-border-subtle">
+                    <label class="flex items-start gap-2.5 cursor-pointer select-none">
+                        <input type="checkbox"
+                               wire:model.live="accept_terms"
+                               class="mt-0.5 w-4 h-4 rounded border-border-subtle text-primary-dark focus:ring-primary-dark cursor-pointer">
+                        <span class="text-xs text-text-muted leading-relaxed">
+                            I agree to the
+                            <button type="button"
+                                    @click.stop="termsModalOpen = true"
+                                    class="font-bold text-primary hover:text-primary-dark underline cursor-pointer">
+                                Terms &amp; Conditions
+                            </button>
+                    </label>
+                    @error('accept_terms')
+                        <p class="text-danger text-xs mt-1.5 font-medium">{{ $message }}</p>
+                    @enderror
+                </div>
+
                 <div class="flex items-center gap-3 pt-2">
                     <button type="button" wire:click="backToStep(6)" class="py-3 px-5 text-text-muted hover:text-text-main text-sm font-medium transition-colors cursor-pointer">Back</button>
                     <button 
@@ -666,6 +679,53 @@
                         <span wire:loading wire:target="register">Submitting Application...</span>
                     </button>
                 </div>
+
+                <!-- Inline Logistics Terms Modal -->
+                <template x-teleport="body">
+                    <div x-show="termsModalOpen"
+                         x-cloak
+                         @keydown.escape.window="termsModalOpen = false"
+                         class="fixed inset-0 z-[220] flex items-center justify-center p-4 bg-black/65 backdrop-blur-xs">
+                        <div @click.away="termsModalOpen = false"
+                             class="bg-surface rounded-3xl max-w-4xl w-full max-h-[88vh] flex flex-col shadow-2xl border border-border-subtle overflow-hidden">
+                            <div class="px-6 py-4 border-b border-border-subtle flex items-center justify-between bg-surface shrink-0">
+                                <div>
+                                    <h3 class="text-base sm:text-lg font-bold text-primary-dark">Storkia Logistics Hub &amp; Fleet Terms &amp; Conditions</h3>
+                                    <p class="text-xs text-text-muted">Review the Sorting Hub, Courier &amp; Rider Operational Agreement</p>
+                                </div>
+                                <button type="button"
+                                        @click="termsModalOpen = false"
+                                        class="p-1.5 rounded-xl text-text-muted hover:text-text-main hover:bg-surface-subtle cursor-pointer">
+                                    &times;
+                                </button>
+                            </div>
+
+                            <div class="p-6 overflow-y-auto flex-1 custom-scrollbar bg-surface-subtle/40">
+                                <x-ui.terms-content default-tab="logistics" :compact="true" />
+                            </div>
+
+                            <div class="px-6 py-4 border-t border-border-subtle bg-surface flex items-center justify-between gap-3 shrink-0">
+                                <a href="{{ route('terms', ['role' => 'logistics']) }}"
+                                   target="_blank"
+                                   class="text-xs font-bold text-primary hover:underline">
+                                    Open in New Tab &nearr;
+                                </a>
+                                <div class="flex items-center gap-2.5">
+                                    <button type="button"
+                                            @click="termsModalOpen = false"
+                                            class="px-4 py-2 rounded-xl bg-surface-subtle text-text-muted text-xs font-bold cursor-pointer">
+                                        Close
+                                    </button>
+                                    <button type="button"
+                                            @click="$wire.set('accept_terms', true); termsModalOpen = false"
+                                            class="px-5 py-2.5 rounded-xl bg-primary-dark hover:bg-text-main text-white text-xs font-bold shadow-xs cursor-pointer">
+                                        I Understand &amp; Accept Terms
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </template>
             </div>
         @endif
 
