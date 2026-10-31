@@ -20,28 +20,27 @@
     $company = [
         ['label' => 'About Storkia',               'href' => route('landing') . '#about'],
         ['label' => 'Careers',                     'href' => '#'],
-        ['label' => 'Become a Seller',             'href' => '#'],
-        ['label' => 'Become a Logistics Partner',  'href' => '#'],
+        ['label' => 'Become a Seller',             'href' => route('seller.register')],
+        ['label' => 'Become a Logistics Partner',  'href' => route('logistics.register')],
         ['label' => 'Read our Blog',               'href' => '#'],
     ];
 
     $care = [
         ['label' => 'Help Center',           'href' => '#'],
-        ['label' => 'Track Your Order',      'href' => '#'],
-        ['label' => 'Returns & Refunds',     'href' => '#'],
-        ['label' => 'Shipping Information',  'href' => '#'],
+        ['label' => 'Track Your Order',      'href' => route('user.orders')],
+        ['label' => 'Returns & Refunds',     'href' => route('terms', ['role' => 'buyer'])],
+        ['label' => 'Shipping Information',  'href' => route('terms', ['role' => 'logistics'])],
         ['label' => 'Contact Us',            'href' => '#'],
     ];
 
     $legal = [
-        ['label' => 'Privacy Policy',    'href' => '#'],
-        ['label' => 'Terms of Service',  'href' => '#'],
-        ['label' => 'Cookie Policy',     'href' => '#'],
+        ['label' => 'Privacy Policy',        'href' => '#'],
+        ['label' => 'Terms & Conditions',    'href' => route('terms')],
+        ['label' => 'Cookie Policy',         'href' => '#'],
     ];
 @endphp
 
 <footer class="relative z-20 overflow-hidden bg-[#111] text-white font-sans pt-16 sm:pt-20 pb-8">
-
     <!-- Brand gradient edge (echoes the hero headline gradient) -->
     <div aria-hidden="true" class="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-primary via-secondary to-primary"></div>
 
@@ -50,7 +49,6 @@
     <div aria-hidden="true" class="pointer-events-none absolute bottom-0 left-0 h-[300px] w-[300px] md:h-[550px] md:w-[550px] -translate-x-1/3 translate-y-1/3 rounded-full bg-secondary/15 blur-[60px] md:blur-[100px]"></div>
 
     <div class="relative z-10 max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-12">
-
         <!-- Main footer grid -->
         <div class="grid grid-cols-1 gap-12 sm:grid-cols-2 lg:grid-cols-[1.6fr_1fr_1fr] lg:gap-16 mb-14">
 
@@ -62,7 +60,6 @@
                 <p class="mb-8 max-w-sm text-sm sm:text-base leading-relaxed text-white/70">
                     Fast delivery. Exclusive deals. Right to your doorstep. Experience the fastest routing and secure handling in the city.
                 </p>
-
                 <div class="flex gap-3">
                     @foreach ($socials as $social)
                         <a href="#" class="flex h-11 w-11 items-center justify-center rounded-full border border-white/10 bg-white/5 text-white/70 backdrop-blur-sm transition-all duration-300 hover:-translate-y-1 hover:border-primary hover:bg-primary hover:text-white hover:shadow-[0_6px_20px_rgba(207,65,115,0.35)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white">
@@ -111,12 +108,10 @@
             <p class="text-xs text-white/50">
                 &copy; {{ date('Y') }} {{ config('app.name', 'Storkia') }}. All rights reserved.
             </p>
-
             <div class="flex flex-wrap items-center justify-center gap-x-6 gap-y-3 text-xs text-white/50">
                 @foreach ($legal as $item)
                     <a href="{{ $item['href'] }}" class="transition-colors hover:text-white focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-white">{{ $item['label'] }}</a>
                 @endforeach
-
             </div>
         </div>
     </div>

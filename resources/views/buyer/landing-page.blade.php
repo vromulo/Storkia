@@ -14,12 +14,21 @@
         ->inRandomOrder()
         ->take(4)
         ->get();
+
+    // Registered logistics partners. A row in logistics_profiles means the account is approved.
+    // Capped at 12 so the scrolling list stays light.
+    $logisticsPartners = \App\Models\LogisticsProfile::query()
+        ->withCount(['hubs as active_hubs_count' => fn ($q) => $q->where('status', 'active')])
+        ->orderBy('business_name')
+        ->take(12)
+        ->get();
 @endphp
 
 <div class="bg-surface font-sans antialiased text-text-main overflow-x-clip selection:bg-primary selection:text-white relative">
 
     <!-- Sticky Hero Background Layer (Stays fixed on desktop & mobile while content scrolls over it) -->
-    <div class="sticky top-0 left-0 w-full h-svh -mb-[100svh] z-0 pointer-events-none overflow-hidden">
+    <div class="fixed inset-0 w-full h-svh z-0 pointer-events-none overflow-hidden">
+        
         <!-- Responsive Background Picture -->
         <picture class="absolute inset-0 w-full h-full block">
             <!-- Mobile Photo (< 768px / md) -->
@@ -261,66 +270,99 @@
                     </a>
                 </div>
                 
-                <!-- Right: Frosted Courier Cards -->
+                <!-- Right: Registered logistics partners (from the database) -->
                 @php
-                    $couriers = [
+                    $logiCount = $logisticsPartners->count();
+                    $logiScrolls = $logiCount > 2;
+                    $logiThemes = [
                         [
-                            'name'     => 'SwiftExpress',
-                            'desc'     => 'Same-day delivery specialists for urban zones. Real-time tracking included directly in your Storkia app.',
-                            'gradient' => 'from-primary to-primary-dark',
-                            'iconColor'=> 'text-white',
-                            'spot'     => 'rgba(207,65,115,0.24)',
-                            'hover'    => 'hover:border-primary/40 hover:shadow-[0_12px_40px_-12px_rgba(207,65,115,0.5)]',
-                            'icon'     => ['M13 10V3L4 14h7v7l9-11h-7z'],
+                            'gradient'  => 'from-primary to-primary-dark',
+                            'iconColor' => 'text-white',
+                            'spot'      => 'rgba(207,65,115,0.24)',
+                            'hover'     => 'hover:border-primary/40 hover:shadow-[0_12px_40px_-12px_rgba(207,65,115,0.5)]',
                         ],
                         [
-                            'name'     => 'SecureFreight',
-                            'desc'     => 'Heavy and fragile item secure transport with dedicated handling protocols. Your delicate items are safe.',
-                            'gradient' => 'from-secondary to-[#F9A8D4]',
-                            'iconColor'=> 'text-[#111]',
-                            'spot'     => 'rgba(243,147,153,0.2)',
-                            'hover'    => 'hover:border-secondary/40 hover:shadow-[0_12px_40px_-12px_rgba(243,147,153,0.4)]',
-                            'icon'     => ['M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z'],
+                            'gradient'  => 'from-secondary to-[#F9A8D4]',
+                            'iconColor' => 'text-[#111]',
+                            'spot'      => 'rgba(243,147,153,0.2)',
+                            'hover'     => 'hover:border-secondary/40 hover:shadow-[0_12px_40px_-12px_rgba(243,147,153,0.4)]',
                         ],
                     ];
                 @endphp
-                
-                <!-- Right: Frosted Courier Cards -->
-                <div class="lg:w-1/2 w-full flex flex-col gap-4 sm:gap-6">
-                    @foreach ($couriers as $courier)
-                        <article data-spotlight
-                                style="--spot: {{ $courier['spot'] }}"
-                                class="group relative overflow-hidden rounded-[1.5rem] sm:rounded-[2rem] border border-white/10 bg-white/5 p-6 sm:p-10 shadow-lg backdrop-blur-xl cursor-default transition-all duration-500 ease-out hover:-translate-y-1 hover:bg-white/[0.08] motion-reduce:transition-none motion-reduce:hover:translate-y-0 {{ $courier['hover'] }}">
-                
-                            <!-- Cursor-following spotlight (appears on hover) -->
-                            <span aria-hidden="true"
-                                class="pointer-events-none absolute inset-0 opacity-0 transition-opacity duration-500 group-hover:opacity-100"
-                                style="background: radial-gradient(420px circle at var(--x, 50%) var(--y, 0%), var(--spot), transparent 65%);"></span>
-                
-                            <!-- Glass edge highlight -->
+
+                <div class="lg:w-1/2 w-full">
+                    @if ($logiCount === 0)
+                        <!-- No logistics registered yet -->
+                        <article class="relative overflow-hidden rounded-[1.5rem] sm:rounded-[2rem] border border-white/10 bg-white/5 p-6 sm:p-10 shadow-lg backdrop-blur-xl">
                             <span aria-hidden="true" class="pointer-events-none absolute inset-x-8 top-0 h-px bg-gradient-to-r from-transparent via-white/40 to-transparent"></span>
-                
                             <div class="relative mb-3 sm:mb-4 flex items-center gap-4 sm:gap-5">
-                                <!-- Icon with soft colored glow -->
-                                <div class="relative flex-shrink-0">
-                                    <div aria-hidden="true" class="absolute inset-0 rounded-full bg-gradient-to-br {{ $courier['gradient'] }} opacity-40 blur-lg transition-opacity duration-500 group-hover:opacity-90"></div>
-                                    <div class="relative flex h-12 w-12 sm:h-14 sm:w-14 items-center justify-center rounded-full bg-gradient-to-br {{ $courier['gradient'] }} shadow-lg ring-1 ring-white/20 transition-transform duration-500 group-hover:-rotate-6 group-hover:scale-110">
-                                        <svg class="h-6 w-6 sm:h-7 sm:w-7 {{ $courier['iconColor'] }}" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-                                            @foreach ($courier['icon'] as $d)
-                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="{{ $d }}"></path>
-                                            @endforeach
-                                        </svg>
-                                    </div>
+                                <div class="flex h-12 w-12 sm:h-14 sm:w-14 flex-shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-primary to-primary-dark shadow-lg ring-1 ring-white/20">
+                                    <svg class="h-6 w-6 sm:h-7 sm:w-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
                                 </div>
-                
-                                <h3 class="break-words text-xl sm:text-2xl md:text-3xl font-extrabold tracking-tight">{{ $courier['name'] }}</h3>
+                                <h3 class="text-xl sm:text-2xl md:text-3xl font-extrabold tracking-tight">Partners coming soon</h3>
                             </div>
-                
-                            <p class="relative text-sm sm:text-lg font-medium leading-relaxed text-white/70 text-pretty">{{ $courier['desc'] }}</p>
+                            <p class="relative text-sm sm:text-lg font-medium leading-relaxed text-white/70 text-pretty">Our logistics partners will appear here once they are registered.</p>
                         </article>
-                    @endforeach
+                    @else
+                        <div class="{{ $logiScrolls ? 'logi-viewport' : '' }}"
+                             @if ($logiScrolls) role="region" aria-label="Registered logistics partners" @endif>
+                            <div class="{{ $logiScrolls ? 'logi-track' : '' }}"
+                                 @if ($logiScrolls) style="--logi-dur: {{ max(16, $logiCount * 6) }}s" @endif>
+
+                                {{-- When there are more than 2 partners the list is rendered twice for a seamless loop --}}
+                                @foreach (range(0, $logiScrolls ? 1 : 0) as $copy)
+                                    <div class="flex flex-col gap-4 sm:gap-6 {{ $logiScrolls ? 'px-2 pb-4 sm:pb-6' : '' }}"
+                                         @if ($copy === 1) aria-hidden="true" @endif>
+                                        @foreach ($logisticsPartners as $partner)
+                                            @php $theme = $logiThemes[$loop->index % 2]; @endphp
+                                            <article data-spotlight
+                                                     style="--spot: {{ $theme['spot'] }}"
+                                                     class="group relative overflow-hidden rounded-[1.5rem] sm:rounded-[2rem] border border-white/10 bg-white/5 p-6 sm:p-10 shadow-lg backdrop-blur-xl cursor-default transition-all duration-500 ease-out hover:-translate-y-1 hover:bg-white/[0.08] motion-reduce:transition-none motion-reduce:hover:translate-y-0 {{ $theme['hover'] }}">
+
+                                                <!-- Cursor-following spotlight (appears on hover) -->
+                                                <span aria-hidden="true"
+                                                      class="pointer-events-none absolute inset-0 opacity-0 transition-opacity duration-500 group-hover:opacity-100"
+                                                      style="background: radial-gradient(420px circle at var(--x, 50%) var(--y, 0%), var(--spot), transparent 65%);"></span>
+
+                                                <!-- Glass edge highlight -->
+                                                <span aria-hidden="true" class="pointer-events-none absolute inset-x-8 top-0 h-px bg-gradient-to-r from-transparent via-white/40 to-transparent"></span>
+
+                                                <div class="relative flex items-center gap-4 sm:gap-5">
+                                                    <!-- Logo (or initial) with soft colored glow -->
+                                                    <div class="relative flex-shrink-0">
+                                                        <div aria-hidden="true" class="absolute inset-0 rounded-full bg-gradient-to-br {{ $theme['gradient'] }} opacity-40 blur-lg transition-opacity duration-500 group-hover:opacity-90"></div>
+                                                        <div class="relative flex h-12 w-12 sm:h-14 sm:w-14 items-center justify-center overflow-hidden rounded-full {{ $partner->logo_path ? 'bg-white' : 'bg-gradient-to-br ' . $theme['gradient'] }} shadow-lg ring-1 ring-white/20 transition-transform duration-500 group-hover:-rotate-6 group-hover:scale-110">
+                                                            @if ($partner->logo_path)
+                                                                <img src="{{ Storage::url($partner->logo_path) }}" alt="" loading="lazy" class="h-full w-full object-cover">
+                                                            @else
+                                                                <span class="text-lg sm:text-xl font-extrabold {{ $theme['iconColor'] }}">{{ strtoupper(mb_substr($partner->business_name, 0, 1)) }}</span>
+                                                            @endif
+                                                        </div>
+                                                    </div>
+
+                                                    <h3 class="min-w-0 break-words text-xl sm:text-2xl md:text-3xl font-extrabold tracking-tight line-clamp-2">{{ $partner->business_name }}</h3>
+                                                </div>
+
+                                                <div class="relative mt-4 flex flex-wrap items-center gap-x-4 gap-y-2">
+                                                    <p class="flex min-w-0 items-center gap-2 text-sm sm:text-base font-medium text-white/70">
+                                                        <svg class="h-4 w-4 flex-shrink-0 text-white/50" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
+                                                        <span class="line-clamp-1">{{ $partner->municipality }}, {{ $partner->province }}</span>
+                                                    </p>
+                                                    @if ($partner->active_hubs_count > 0)
+                                                        <span class="rounded-full border border-white/15 bg-white/5 px-3 py-1 text-xs font-bold text-white/80">
+                                                            {{ $partner->active_hubs_count }} {{ \Illuminate\Support\Str::plural('hub', $partner->active_hubs_count) }}
+                                                        </span>
+                                                    @endif
+                                                </div>
+                                            </article>
+                                        @endforeach
+                                    </div>
+                                @endforeach
+                            </div>
+                        </div>
+                    @endif
                 </div>
-                
+
                 <script>
                     // Moves the spotlight with the mouse (desktop only; touch devices skip it)
                     document.addEventListener('DOMContentLoaded', () => {
@@ -687,6 +729,35 @@
     }
     .animate-kia-jump {
         animation: kia-jump 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+    }
+
+    /* Logistics partners: vertical infinite scroll (only used when there are more than 2) */
+    .logi-viewport {
+        height: 22rem;
+        overflow: hidden;
+        -webkit-mask-image: linear-gradient(to bottom, transparent, #000 10%, #000 90%, transparent);
+                mask-image: linear-gradient(to bottom, transparent, #000 10%, #000 90%, transparent);
+    }
+    @media (min-width: 640px)  { .logi-viewport { height: 26rem; } }
+    @media (min-width: 1024px) { .logi-viewport { height: 28rem; } }
+
+    .logi-track {
+        animation: logi-scroll var(--logi-dur, 30s) linear infinite;
+        will-change: transform;
+    }
+    /* The list is rendered twice, so moving by 50% lands exactly where it started */
+    @keyframes logi-scroll {
+        from { transform: translateY(0); }
+        to   { transform: translateY(-50%); }
+    }
+    .logi-viewport:hover .logi-track,
+    .logi-viewport:focus-within .logi-track {
+        animation-play-state: paused;
+    }
+    @media (prefers-reduced-motion: reduce) {
+        .logi-track { animation: none; }
+        .logi-track > [aria-hidden="true"] { display: none; }
+        .logi-viewport { overflow-y: auto; -webkit-mask-image: none; mask-image: none; }
     }
 
     .scroll-reveal {

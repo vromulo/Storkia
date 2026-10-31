@@ -42,8 +42,11 @@
      }"
      @scroll.window.passive="scrolled = window.scrollY > 16"
      @resize.window="if (window.innerWidth >= 768) mobileMenuOpen = false; moveIndicator()"
-     @keydown.escape.window="mobileMenuOpen = false"
-     @click.outside="mobileMenuOpen = false"
+     @keydown.escape.window="mobileMenuOpen = false">
+
+<!-- Moved to <body> so no parent wrapper (transform, filter, animation, overflow) can stop it staying fixed -->
+<template x-teleport="body">
+<div @click.outside="mobileMenuOpen = false"
      :class="scrolled
         ? 'bg-surface/75 shadow-[inset_0_-1px_0_0_rgba(231,229,228,0.6),0_8px_24px_-12px_rgba(0,0,0,0.12)]'
         : 'bg-surface/40'"
@@ -130,4 +133,6 @@
             @endforeach
         </nav>
     </div>
+</div>
+</template>
 </div>
