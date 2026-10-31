@@ -52,6 +52,7 @@
                     <input 
                         type="email" 
                         wire:model.live.debounce.500ms="email" 
+                        x-on:input="$event.target.value = $event.target.value.replace(/[\s\u200b]+/g, '')"
                         @if ($codeSent) disabled @endif
                         class="w-full py-3 bg-transparent text-text-main text-base outline-none placeholder:text-text-muted/40 disabled:text-text-muted/50"
                         placeholder="name@example.com"
@@ -143,7 +144,7 @@
                         <input 
                             type="text" 
                             wire:model.live.debounce.500ms="first_name"
-                            x-on:input="$event.target.value = $event.target.value.replace(/^\s+/, '').replace(/ {2,}/g, ' ').replace(/\b\w/g, c => c.toUpperCase())"
+                            x-on:input="$event.target.value = $event.target.value.replace(/[\u00f1\u00d1]|[nN]\u0303|\u0303/g, '').replace(/^\s+/, '').replace(/ {2,}/g, ' ').replace(/\b\w/g, c => c.toUpperCase())"
                             class="capitalize w-full py-2.5 bg-transparent text-text-main text-base outline-none placeholder:text-text-muted/40"
                             placeholder="John"
                         >
@@ -161,7 +162,7 @@
                             type="text" 
                             wire:model.live.debounce.500ms="middle_initial" 
                             maxlength="1"
-                            x-on:input="$event.target.value = $event.target.value.replace(/\s+/g, '').toUpperCase()"
+                            x-on:input="$event.target.value = $event.target.value.replace(/[\u00f1\u00d1]|[nN]\u0303|\u0303/g, '').replace(/\s+/g, '').toUpperCase()"
                             class="uppercase w-full py-2.5 bg-transparent text-text-main text-base outline-none placeholder:text-text-muted/40 text-center sm:text-left"
                             placeholder="D"
                         >
@@ -179,7 +180,7 @@
                     <input 
                         type="text" 
                         wire:model.live.debounce.500ms="last_name"
-                        x-on:input="$event.target.value = $event.target.value.replace(/^\s+/, '').replace(/ {2,}/g, ' ').replace(/\b\w/g, c => c.toUpperCase())"
+                        x-on:input="$event.target.value = $event.target.value.replace(/[\u00f1\u00d1]|[nN]\u0303|\u0303/g, '').replace(/^\s+/, '').replace(/ {2,}/g, ' ').replace(/\b\w/g, c => c.toUpperCase())"
                         class="capitalize w-full py-2.5 bg-transparent text-text-main text-base outline-none placeholder:text-text-muted/40"
                         placeholder="Doe"
                     >

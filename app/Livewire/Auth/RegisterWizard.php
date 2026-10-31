@@ -34,7 +34,11 @@ class RegisterWizard extends Component
     public function updated($propertyName)
     {
         if (in_array($propertyName, ['first_name', 'last_name', 'middle_initial'])) {
-            $this->$propertyName = ltrim(preg_replace('/ {2,}/', ' ', $this->$propertyName));
+            $this->$propertyName = ltrim(preg_replace('/ {2,}/', ' ', $this->stripEnye($this->$propertyName)));
+        }
+
+        if ($propertyName === 'email') {
+            $this->email = $this->stripWhitespace($this->email);
         }
 
         if ($this->currentStep === 1 && $propertyName === 'email') {
@@ -55,7 +59,7 @@ class RegisterWizard extends Component
 
     public function sendCode(OtpService $otpService): void
     {
-        $this->email = strtolower(trim($this->email));
+        $this->email = $this->normalizeEmail($this->email);
 
         $this->validateOnly('email', ['email' => ['required', 'email:rfc,dns']]);
 
@@ -89,7 +93,7 @@ class RegisterWizard extends Component
 
     public function verifyCode(OtpService $otpService): void
     {
-        $this->email = strtolower(trim($this->email));
+        $this->email = $this->normalizeEmail($this->email);
         $this->validateOnly('code', ['code' => ['required', 'digits:6']]);
 
         [$valid, $error, $token, $remaining] = $otpService->verifyOtp($this->email, $this->code);
@@ -105,11 +109,45 @@ class RegisterWizard extends Component
         $this->resetErrorBag();
     }
 
+    /**
+     * Name length rule: 1 and 51 characters are rejected, 2 and 50 are accepted.
+     * Measured on the trimmed value so stray leading/trailing spaces can't pad a name.
+     */
+    protected function nameLengthRule(string $label): \Closure
+    {
+        return function ($attribute, $value, $fail) use ($label) {
+            $length = mb_strlen(trim((string) $value));
+
+            if ($length < 2) {
+                $fail("{$label} must be at least 2 characters.");
+            } elseif ($length > 50) {
+                $fail("{$label} must not be more than 50 characters.");
+            }
+        };
+    }
+
+    /** Removes ñ/Ñ, including the decomposed form (n/N + combining tilde U+0303). */
+    protected function stripEnye(string $value): string
+    {
+        return preg_replace('/[\x{00F1}\x{00D1}]|[nN]\x{0303}|\x{0303}/u', '', $value) ?? $value;
+    }
+
+    /** Removes every whitespace character (including NBSP / zero-width) from a value. */
+    protected function stripWhitespace(string $value): string
+    {
+        return preg_replace('/[\s\x{00A0}\x{200B}\x{FEFF}]+/u', '', $value) ?? $value;
+    }
+
+    protected function normalizeEmail(string $email): string
+    {
+        return strtolower($this->stripWhitespace($email));
+    }
+
     protected function getStep2Rules(): array
     {
         return [
-            'first_name' => ['required', 'string', 'regex:/^[A-Za-z\s]+$/'],
-            'last_name' => ['required', 'string', 'regex:/^[A-Za-z\s]+$/'],
+            'first_name' => ['required', 'string', $this->nameLengthRule('First name'), 'regex:/^[A-Za-z\s]+$/'],
+            'last_name' => ['required', 'string', $this->nameLengthRule('Last name'), 'regex:/^[A-Za-z\s]+$/'],
             'middle_initial' => ['nullable', 'string', 'regex:/^[A-Za-z]$/'],
             'sex' => ['required', 'in:male,female'],
             'birthday' => ['required', 'date', 'before_or_equal:' . now()->subYears(18)->format('Y-m-d'), 'after_or_equal:' . now()->subYears(100)->format('Y-m-d')],
@@ -129,6 +167,9 @@ class RegisterWizard extends Component
 
     public function goToPasswordStep(): void
     {
+        $this->first_name = trim($this->first_name);
+        $this->last_name = trim($this->last_name);
+
         $this->validate($this->getStep2Rules(), $this->getStep2Messages());
         $this->currentStep = 3;
     }
@@ -168,7 +209,7 @@ class RegisterWizard extends Component
     {
         $this->validate($this->getStep3Rules(), $this->getStep3Messages());
 
-        $this->email = strtolower(trim($this->email));
+        $this->email = $this->normalizeEmail($this->email);
 
         $record = RegistrationOtp::where('email', $this->email)
             ->where('verification_token', $this->verificationToken)
