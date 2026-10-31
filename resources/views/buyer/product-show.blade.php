@@ -90,6 +90,7 @@
     perBuyerLimit: {{ $perBuyerLimit }},
     isWishlisted: {{ $isWishlisted ? 'true' : 'false' }},
     isTogglingWishlist: false,
+    isAddingToCart: false,
     toastMessage: '',
     toastType: 'danger',
     showToast: false,
@@ -188,7 +189,51 @@
         if (isBuyNow) {
             this.$refs.buyNowForm.submit();
         } else {
-            this.$refs.addToCartForm.submit();
+            this.addToCart();
+        }
+    },
+    async addToCart() {
+        if (this.isAddingToCart) return;
+        this.isAddingToCart = true;
+        const form = this.$refs.addToCartForm;
+        const button = this.$refs.addToCartBtn;
+        try {
+            const response = await fetch(form.action, {
+                method: 'POST',
+                headers: {
+                    'Accept': 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest',
+                    'X-CSRF-TOKEN': form.querySelector('input[name=_token]').value
+                },
+                body: new FormData(form),
+                credentials: 'same-origin'
+            });
+
+            // Session expired -> Laravel redirects to the login page
+            if (response.redirected && /\/login/.test(response.url)) {
+                window.location.href = '{{ route('login') }}';
+                return;
+            }
+
+            const isJson = (response.headers.get('content-type') || '').includes('application/json');
+            const data = isJson ? await response.json().catch(() => ({})) : {};
+
+            if (!response.ok || data.success === false) {
+                const firstError = data.errors ? Object.values(data.errors)[0]?.[0] : null;
+                this.triggerToast(firstError || data.message || 'Unable to add this item to your cart right now.');
+                return;
+            }
+
+            const count = Number.isFinite(Number(data.cart_count))
+                ? Number(data.cart_count)
+                : window.getCartBadgeCount() + 1;
+
+            await window.flyToCart({ source: button, imageUrl: this.mainImage });
+            window.setCartBadge(count);
+        } catch (e) {
+            this.triggerToast('Unable to add this item to your cart right now.');
+        } finally {
+            this.isAddingToCart = false;
         }
     }
 }" class="bg-surface-subtle font-sans antialiased text-text-main min-h-screen pb-16 relative overflow-x-hidden">
@@ -493,11 +538,12 @@
                                 <input type="hidden" name="sub_variant" x-bind:value="selectedSubName">
 
                                 <button type="button"
-                                        :disabled="isStoreOnVacation || activeStock <= 0"
+                                        x-ref="addToCartBtn"
+                                        :disabled="isStoreOnVacation || activeStock <= 0 || isAddingToCart"
                                         @click="validateAndSubmit(true, false)"
                                         :class="(isStoreOnVacation || activeStock <= 0) ? 'bg-gray-200 text-gray-500 cursor-not-allowed' : 'bg-primary/10 text-primary border border-primary/30 hover:bg-primary hover:text-white cursor-pointer'"
                                         class="w-full font-bold py-3.5 px-6 rounded-2xl transition-all duration-300 flex items-center justify-center gap-2.5 shadow-2xs">
-                                    <span x-text="isStoreOnVacation ? 'Store On Vacation' : (activeStock <= 0 ? 'Sold Out' : 'Add To Cart')"></span>
+                                    <span x-text="isStoreOnVacation ? 'Store On Vacation' : (activeStock <= 0 ? 'Sold Out' : (isAddingToCart ? 'Adding...' : 'Add To Cart'))"></span>
                                 </button>
                             </form>
 

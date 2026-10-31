@@ -6,7 +6,6 @@
         $cartItems = \App\Models\Cart::with('product')
             ->where('user_id', auth()->id())
             ->latest()
-            ->take(6)
             ->get();
             
         foreach ($cartItems as$item) {

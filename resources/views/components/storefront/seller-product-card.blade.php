@@ -1,13 +1,77 @@
-@props(['product', 'fromCategory' => null])
+@props(['product', 'fromCategory' => null, 'isWishlisted' => null])
 
 @php
     $productShowUrl = $fromCategory 
         ? route('product.show', [$product->id, 'from_category' => $fromCategory]) 
         : route('product.show', $product->id);
+
+    if ($isWishlisted === null) {
+        if (isset($product->is_wishlisted)) {
+            $isWishlisted = (bool) $product->is_wishlisted;
+        } elseif (auth()->check()) {
+            $authUserId = auth()->id();
+            if (class_exists(\App\Models\Wishlist::class)) {
+                $isWishlisted = \App\Models\Wishlist::where('user_id', $authUserId)
+                    ->where('product_id', $product->id)
+                    ->exists();
+            } elseif (\Illuminate\Support\Facades\Schema::hasTable('wishlists')) {
+                $isWishlisted = \Illuminate\Support\Facades\DB::table('wishlists')
+                    ->where('user_id', $authUserId)
+                    ->where('product_id', $product->id)
+                    ->exists();
+            } else {
+                $isWishlisted = false;
+            }
+        } else {
+            $isWishlisted = false;
+        }
+    } else {
+        $isWishlisted = (bool) $isWishlisted;
+    }
 @endphp
 
 <div 
-    x-data="{ imageLoaded: false }" 
+    x-data="{
+        imageLoaded: false,
+        isWishlisted: {{ $isWishlisted ? 'true' : 'false' }},
+        isTogglingWishlist: false,
+        toastMessage: '',
+        toastType: 'danger',
+        showToast: false,
+        triggerToast(msg, type = 'danger') {
+            this.toastMessage = msg;
+            this.toastType = type;
+            this.showToast = true;
+            setTimeout(() => this.showToast = false, 4000);
+        },
+        async toggleWishlist(isAuth) {
+            if (!isAuth) {
+                window.location.href = '{{ route('login') }}';
+                return;
+            }
+            if (this.isTogglingWishlist) return;
+            this.isTogglingWishlist = true;
+            try {
+                const res = await fetch('/user/wishlist/toggle/{{ $product->id }}', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json',
+                        'X-CSRF-TOKEN': '{{ csrf_token() }}'
+                    }
+                });
+                const data = await res.json();
+                if (res.ok && data.success) {
+                    this.isWishlisted = data.wishlisted;
+                    this.triggerToast(data.message, 'success');
+                }
+            } catch (e) {
+                this.triggerToast('Unable to update wishlist right now.');
+            } finally {
+                this.isTogglingWishlist = false;
+            }
+        }
+    }" 
     x-init="if ($refs.img?.complete) imageLoaded = true"
     class="group relative flex flex-col cursor-pointer w-full h-full"
 >
@@ -71,9 +135,38 @@
     </a>
 
     <!-- Floating Wishlist Button -->
-    <button type="button" @click.stop class="absolute top-2 sm:top-2.5 right-2 sm:right-2.5 z-20 w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-surface shadow-xs border border-border-subtle flex items-center justify-center text-text-main hover:text-primary transition-colors cursor-pointer" aria-label="Add to wishlist">
-        <svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5 sm:w-4 sm:h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
+    <button 
+        type="button" 
+        @click.stop.prevent="toggleWishlist({{ auth()->check() ? 'true' : 'false' }})" 
+        :disabled="isTogglingWishlist"
+        title="Save to Wishlist"
+        aria-label="Add to wishlist"
+        class="absolute top-2 sm:top-2.5 right-2 sm:right-2.5 z-20 w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-surface hover:bg-white shadow-xs border border-border-subtle flex items-center justify-center transition-transform active:scale-95 cursor-pointer"
+    >
+        <svg 
+            xmlns="http://www.w3.org/2000/svg" 
+            class="w-3.5 h-3.5 sm:w-4 sm:h-4 transition-colors" 
+            :class="isWishlisted ? 'text-danger fill-danger' : 'text-text-main hover:text-danger'"
+            fill="none" 
+            viewBox="0 0 24 24" 
+            stroke="currentColor"
+            stroke-width="1.8"
+        >
+            <path stroke-linecap="round" stroke-linejoin="round" d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
         </svg>
     </button>
+
+    <div 
+        x-show="showToast"
+        x-cloak
+        style="display: none;"
+        class="fixed top-24 right-6 z-[100] bg-surface border border-border-subtle rounded-2xl shadow-2xl font-sans flex items-start gap-3 min-w-[300px] overflow-hidden cursor-default"
+        @click.stop
+    >
+        <div class="absolute left-0 top-0 bottom-0 w-1.5" :class="toastType === 'success' ? 'bg-green-600' : 'bg-danger'"></div>
+        <div class="py-3 pl-5 pr-8">
+            <h4 class="text-text-main text-sm font-bold mb-0.5" x-text="toastType === 'success' ? 'Success' : 'Notice'"></h4>
+            <p class="text-text-muted text-xs font-medium leading-relaxed" x-text="toastMessage"></p>
+        </div>
+    </div>
 </div>

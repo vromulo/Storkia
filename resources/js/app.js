@@ -9,6 +9,11 @@ import cartPageManager from './buyer/cart-manager';
 import categoryPageManager from './buyer/category-manager';
 import idCameraCapture from './buyer/id-camera-capture';
 import profileManager from './buyer/profile-manager';
+import { flyToCart, setCartBadge, getCartBadgeCount } from './buyer/cart-fly';
+
+window.flyToCart = flyToCart;
+window.setCartBadge = setCartBadge;
+window.getCartBadgeCount = getCartBadgeCount;
 
 document.addEventListener('alpine:init', () => {
     Alpine.data('variantManager', variantManager);

@@ -14,6 +14,7 @@ export default function categoryPageManager(config = {}) {
         visibleLimit: 24,
         batchIncrement: 16,
         isFilterModalOpen: false,
+        isLoadingMore: false,
 
         get minPercent() {
             if (this.maxAllowed <= this.minAllowed) return 0;
@@ -91,6 +92,34 @@ export default function categoryPageManager(config = {}) {
 
         showMore() {
             this.visibleLimit += this.batchIncrement;
+        },
+
+        // Infinite scroll: same sentinel pattern as buyer/home.blade.php
+        initBatchScroll() {
+            this.$nextTick(() => {
+                const sentinel = this.$refs.homeScrollSentinel;
+                if (!sentinel || typeof IntersectionObserver === 'undefined') return;
+
+                const observer = new IntersectionObserver((entries) => {
+                    entries.forEach((entry) => {
+                        if (entry.isIntersecting && this.hasMore && !this.isLoadingMore) {
+                            this.isLoadingMore = true;
+                            setTimeout(() => {
+                                this.showMore();
+                                this.isLoadingMore = false;
+                                // If the sentinel is still in range after the new batch renders
+                                // (tall screens), re-observing fires the next batch.
+                                this.$nextTick(() => {
+                                    observer.unobserve(sentinel);
+                                    observer.observe(sentinel);
+                                });
+                            }, 200);
+                        }
+                    });
+                }, { rootMargin: '180px' });
+
+                observer.observe(sentinel);
+            });
         },
 
         get filteredProductIds() {

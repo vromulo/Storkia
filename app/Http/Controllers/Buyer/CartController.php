@@ -64,7 +64,7 @@ class CartController extends Controller
             || ($product->approval && $product->approval->status !== 'Approved')
             || (Schema::hasColumn('products', 'publish_status') && in_array($product->publish_status, ['draft', 'inactive'], true))
         ) {
-            return back()->withErrors([
+            throw ValidationException::withMessages([
                 'product' => "Product \"{$product->name}\" is currently unavailable.",
             ]);
         }
@@ -87,7 +87,7 @@ class CartController extends Controller
         $newQuantity = ($cart ? (int) $cart->quantity : 0) + (int) $validated['quantity'];
 
         if ($newQuantity > (int) $resolved['available_stock']) {
-            return back()->withErrors([
+            throw ValidationException::withMessages([
                 'quantity' => "Only {$resolved['available_stock']} unit(s) available for \"{$product->name}\".",
             ]);
         }
@@ -130,6 +130,16 @@ class CartController extends Controller
                 'quantity'    => $newQuantity,
                 'variant'     => $validated['variant'] ?? null,
                 'sub_variant' => $validated['sub_variant'] ?? null,
+            ]);
+        }
+
+        $cartCount = Cart::where('user_id', $userId)->count();
+
+        if ($request->wantsJson()) {
+            return response()->json([
+                'success'    => true,
+                'message'    => 'Product added to your cart.',
+                'cart_count' => $cartCount,
             ]);
         }
 
