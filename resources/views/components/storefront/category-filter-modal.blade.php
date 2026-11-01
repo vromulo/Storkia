@@ -1,4 +1,4 @@
-@props(['subcategories' => []])
+@props(['subcategories' => [], 'showSubcategories' => true])
 
 <div 
     x-show="isFilterModalOpen" 
@@ -60,6 +60,7 @@
         <!-- Modal Body (Scrollable) -->
         <div class="p-6 overflow-y-auto space-y-8 custom-scrollbar">
 
+            @if($showSubcategories)
             <!-- Section 1: Subcategories Filter Chips -->
             <div class="space-y-3">
                 <div class="flex items-center justify-between">
@@ -105,8 +106,10 @@
                 </div>
             </div>
 
+            @endif
+
             <!-- Section 2: Synchronized Price Range (Slider + Numerical Inputs) -->
-            <div class="pt-6 space-y-5">
+            <div class="{{ $showSubcategories ? 'pt-6 ' : '' }}space-y-5">
                 <div class="flex items-center justify-between">
                     <label class="text-xs font-bold text-text-muted uppercase tracking-wider">
                         Price Range (₱)

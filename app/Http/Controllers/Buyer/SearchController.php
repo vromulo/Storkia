@@ -3,11 +3,18 @@
 namespace App\Http\Controllers\Buyer;
 
 use App\Http\Controllers\Controller;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\Request;
+use App\Models\BuyerWishlist;
 use App\Models\Product;
+use App\Services\SearchTypoCorrectionService;
 
 class SearchController extends Controller
 {
+    public function __construct(
+        protected SearchTypoCorrectionService $typoCorrectionService
+    ) {}
+
     /**
      * Master list of all categories and subcategories, ensuring filters 
      * aren't limited only to products currently existing in the database.
@@ -30,21 +37,26 @@ class SearchController extends Controller
         ];
     }
 
-    public function index(Request $request)
+    /**
+     * Single place that decides which products the search can see, so the exact
+     * search and the typo-correction vocabulary always agree.
+     */
+    protected function baseProductsQuery(): Builder
     {
-        $query = $request->input('q');
-        $category = $request->input('category');
-        $subcategory = $request->input('subcategory');
+        return Product::query();
+    }
 
-        $productsQuery = Product::query();
+    protected function runSearch(?string $query, ?string $category, ?string $subcategory)
+    {
+        $productsQuery = $this->baseProductsQuery();
 
         if ($query) {
             $words = array_filter(explode(' ', $query), fn($w) => strlen($w) > 2);
-            
+
             $productsQuery->where(function($qBuilder) use ($query, $words) {
                 $qBuilder->where('name', 'LIKE', "%{$query}%")
                          ->orWhere('category', 'LIKE', "%{$query}%");
-                
+
                 foreach ($words as $word) {
                     $qBuilder->orWhere('name', 'LIKE', "%{$word}%");
                 }
@@ -54,19 +66,86 @@ class SearchController extends Controller
         if ($category) {
             $productsQuery->where('category', $category);
         }
-        
+
         if ($subcategory) {
             $productsQuery->where('subcategory', $subcategory);
         }
 
-        $products = $productsQuery->paginate(16)->withQueryString();
+        // Infinite scroll: the whole result set is sent once and revealed in
+        // batches on the page (same approach as the category and home pages).
+        return $productsQuery->latest()->latest('id')->get();
+    }
+
+    public function index(Request $request)
+    {
+        $query = trim((string) $request->input('q', '')) ?: null;
+        $category = $request->input('category');
+        $subcategory = $request->input('subcategory');
+        $forceExact = $request->boolean('exact');
+
+        $products = $this->runSearch($query, $category, $subcategory);
+
+        // BUY-SRCH-004: typo tolerance. Only kicks in when the search found
+        // nothing, and only shows corrected results if they actually exist.
+        $correctedQuery = null;
+
+        if ($query && $products->isEmpty() && ! $forceExact) {
+            $correction = $this->typoCorrectionService->correct($query, $this->baseProductsQuery());
+
+            if ($correction) {
+                $correctedProducts = $this->runSearch($correction['query'], $category, $subcategory);
+
+                if ($correctedProducts->isNotEmpty()) {
+                    $products = $correctedProducts;
+                    $correctedQuery = $correction['query'];
+                }
+            }
+        }
 
         // Use the hardcoded master list for the dropdowns
         $allCategoryData = $this->getAllCategories();
         $categories = array_keys($allCategoryData);
         $subcategories = ($category && isset($allCategoryData[$category])) ? $allCategoryData[$category] : [];
 
-        return view('buyer.search.search', compact('products', 'query', 'categories', 'subcategories', 'category', 'subcategory'));
+        // BUY-SRCH-007: price metadata for the same Alpine filter the category page uses.
+        $productMetadata = $products->map(function ($p) {
+            $basePrice = (float) ($p->price ?? 0);
+            $discount = (float) ($p->discount ?? 0);
+            $effectivePrice = $discount > 0
+                ? round($basePrice - ($basePrice * ($discount / 100)), 2)
+                : round($basePrice, 2);
+
+            return [
+                'id'          => (int) $p->id,
+                'subcategory' => trim((string) ($p->subcategory ?? '')) ?: 'General',
+                'price'       => $effectivePrice,
+            ];
+        })->values();
+
+        $minPrice = (int) floor((float) ($productMetadata->min('price') ?? 0));
+        $maxBase = (float) ($products->max(fn ($p) => (float) ($p->price ?? 0)) ?? 0);
+        $maxPrice = (int) ceil($maxBase > 0 ? $maxBase : 5000);
+        $maxPrice = max($maxPrice, $minPrice);
+
+        // Cards render for every result at once now, so hand them the wishlist
+        // state up front instead of letting each card look it up on its own.
+        $wishlistedProductIds = auth()->check()
+            ? BuyerWishlist::where('buyer_id', auth()->id())->pluck('product_id')->map(fn ($id) => (int) $id)->all()
+            : [];
+
+        return view('buyer.search.search', compact(
+            'products',
+            'query',
+            'categories',
+            'subcategories',
+            'category',
+            'subcategory',
+            'correctedQuery',
+            'productMetadata',
+            'minPrice',
+            'maxPrice',
+            'wishlistedProductIds'
+        ));
     }
 
     public function suggestions(Request $request)
