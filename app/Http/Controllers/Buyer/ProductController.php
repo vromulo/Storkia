@@ -10,11 +10,17 @@ use App\Models\Product;
 use App\Models\SellerProfile;
 use App\Models\SellerStoreFollow;
 use App\Models\StorkVoucher;
+use App\Services\SuperDealPricingService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 
 class ProductController extends Controller
 {
+    public function __construct(
+        protected SuperDealPricingService $superDealPricingService
+    ) {
+    }
+
     public function show(Product $product)
     {
         $product->loadMissing(['specifications', 'approval', 'user.sellerProfile']);
@@ -90,6 +96,10 @@ class ProductController extends Controller
             ? BuyerVoucherClaim::where('buyer_id', $user->id)->pluck('voucher_id')->all()
             : [];
 
+        // Same pricing rules checkout uses (Super Deal -> Store Sale -> product discount -> regular),
+        // so the price shown here matches the home page card and what the buyer is charged.
+        $dealPricing = $this->superDealPricingService->resolveDisplayPricing($product, (float) ($product->price ?? 0));
+
         $candidates = Product::with(['approval', 'user.sellerProfile'])
             ->where('id', '!=', $product->id)
             ->where('stock_quantity', '>', 0)
@@ -114,7 +124,8 @@ class ProductController extends Controller
             'isWishlisted',
             'storeVouchers',
             'claimedVoucherIds',
-            'recommendedProducts'
+            'recommendedProducts',
+            'dealPricing'
         ));
     }
 }

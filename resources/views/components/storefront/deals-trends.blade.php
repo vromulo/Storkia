@@ -2,8 +2,11 @@
     $activeSuperDeals = collect();
     $slotEndTimeMs = now()->endOfDay()->timestamp * 1000;
 
+    $pricingService = app(\App\Services\SuperDealPricingService::class);
+
     if (\Illuminate\Support\Facades\Schema::hasTable('super_deals')) {
         $rawDeals = \Illuminate\Support\Facades\DB::table('super_deals')
+            ->where('deal_type', 'super_deal')
             ->where('status', 'active')
             ->where('starts_at', '<=', now())
             ->where('ends_at', '>=', now())
@@ -23,9 +26,8 @@
                         : (int) $prod->stock_quantity;
 
                     if ($remQty > 0) {
-                        $prod->super_deal_price = $rd->deal_price !== null
-                            ? (float) $rd->deal_price
-                            : round((float) $prod->price * (1 - ((float) ($rd->discount_percentage ?? 20) / 100)), 2);
+                        // Same calculation checkout uses, so the card, product page and cart all agree.
+                        $prod->super_deal_price = $pricingService->superDealUnitPrice($rd, (float) $prod->price);
                         $prod->super_deal_left = $remQty;
                         $activeSuperDeals->push($prod);
                     }
@@ -34,9 +36,8 @@
         }
     }
 
-    $dealProducts = $activeSuperDeals->isNotEmpty()
-        ? $activeSuperDeals
-        : (isset($products) ? $products->take(3) : collect());
+    // Only real, active Super Deals are listed (no placeholder products with invented discounts).
+    $dealProducts = $activeSuperDeals;
 @endphp
 
 <section x-data="{
@@ -86,14 +87,11 @@
             <div class="grid grid-cols-3 gap-3 sm:gap-4 pt-4">
                 @forelse($dealProducts as $deal)
                     @php
-                        $dealDiscount = $deal->discount > 0 ? $deal->discount : 25;
-                        $discounted = isset($deal->super_deal_price)
-                            ? (float) $deal->super_deal_price
-                            : ($deal->price - ($deal->price * ($dealDiscount / 100)));
+                        $discounted = (float) $deal->super_deal_price;
                         $pctOff = $deal->price > 0
                             ? max(1, round((1 - ($discounted / $deal->price)) * 100))
-                            : $dealDiscount;
-                        $unitsLeft = $deal->super_deal_left ?? (int) ($deal->stock_quantity ?? 10);
+                            : 0;
+                        $unitsLeft = (int) $deal->super_deal_left;
                     @endphp
 
                     <div class="group/card relative flex flex-col">

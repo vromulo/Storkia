@@ -37,9 +37,11 @@ class SuperDealController extends Controller
             : collect();
 
         $bundles = Schema::hasTable('bundle_deals')
-            ->where('seller_profile_id', $profile->id)
-            ->orderBy('starts_at', 'asc')
-            ->get();
+            ? DB::table('bundle_deals')
+                ->where('seller_profile_id', $profile->id)
+                ->orderBy('starts_at', 'asc')
+                ->get()
+            : collect();
 
         $productsById = $products->keyBy('id');
 

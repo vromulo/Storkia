@@ -5,10 +5,11 @@
     $cartItems = collect();
     $groupedCart = collect();
     $initialAlpineData = [];
+    $cartPricingService = app(\App\Services\SuperDealPricingService::class);
 
     if (auth()->check()) {
         $cartItems = \App\Models\Cart::with(['product.sellerProfile'])
-            ->where('user_id', auth()->id())
+            ->where('user_id', auth()->id())z
             ->latest()
             ->get();
 
@@ -50,10 +51,10 @@
                 }
             }
 
-            $discountPercent = (float) ($product->discount ?? 0);
-            $effectivePrice = $discountPercent > 0 
-                ? $basePrice - ($basePrice * ($discountPercent / 100)) 
-                : $basePrice;
+            // Same pricing rules as checkout (Super Deal -> Store Sale -> product discount -> regular).
+            $pricing = $cartPricingService->resolveDisplayPricing($product, $basePrice);
+            $discountPercent = (float) $pricing['percent_off'];
+            $effectivePrice = (float) $pricing['unit_price'];
 
             $storeName = $item->product->sellerProfile->business_name 
                 ?? $item->product->user->first_name 

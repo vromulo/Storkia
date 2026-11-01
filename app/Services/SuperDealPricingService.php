@@ -91,8 +91,19 @@ class SuperDealPricingService
 
     public function resolveEffectiveStoreSalePrice(Product $product, float $baseUnitPrice): float
     {
-        $storeSale = $this->getActiveStoreSale((int) $product->id);
+        return $this->storeSaleOrProductDiscountPrice(
+            $this->getActiveStoreSale((int) $product->id),
+            $product,
+            $baseUnitPrice
+        );
+    }
 
+    /**
+     * Price after the Store Sale (if any) or the product's own discount %.
+     * Shared by checkout and the display resolver so both always agree.
+     */
+    protected function storeSaleOrProductDiscountPrice(?object $storeSale, Product $product, float $baseUnitPrice): float
+    {
         if ($storeSale) {
             if ($storeSale->deal_price !== null && (float) $storeSale->deal_price > 0) {
                 return min($baseUnitPrice, round((float) $storeSale->deal_price, 2));
@@ -108,6 +119,103 @@ class SuperDealPricingService
         }
 
         return round($baseUnitPrice, 2);
+    }
+
+    /**
+     * Unit price of one unit sold under a Super Deal.
+     * A fixed deal_price applies to every variant of the product (never above that variant's own price);
+     * otherwise the discount percentage is taken off the variant's price.
+     */
+    public function superDealUnitPrice(object $deal, float $baseUnitPrice): float
+    {
+        if ($deal->deal_price !== null && (float) $deal->deal_price > 0) {
+            return min(round($baseUnitPrice, 2), round((float) $deal->deal_price, 2));
+        }
+
+        return round($baseUnitPrice * (1 - ((float) ($deal->discount_percentage ?? 0) / 100)), 2);
+    }
+
+    /**
+     * The price a buyer should SEE for a product (home card, product page, cart).
+     * Priority matches checkout: Super Deal -> Store Sale -> product discount -> regular price.
+     * Read-only (does not run the expiry UPDATE), so it is cheap to call per cart item.
+     */
+    public function resolveDisplayPricing(Product $product, float $baseUnitPrice): array
+    {
+        $base = round($baseUnitPrice, 2);
+
+        $result = [
+            'type'           => 'regular',
+            'label'          => null,
+            'original_price' => $base,
+            'unit_price'     => $base,
+            'percent_off'    => 0,
+            'units_left'     => null,
+            'ends_at'        => null,
+            'deal_price'     => null,
+            'deal_percent'   => null,
+        ];
+
+        $storeSale = null;
+        $superDeal = null;
+
+        if (Schema::hasTable('super_deals')) {
+            $rows = DB::table('super_deals')
+                ->where('product_id', $product->id)
+                ->whereIn('deal_type', ['super_deal', 'store_sale'])
+                ->where('status', 'active')
+                ->where('starts_at', '<=', now())
+                ->where('ends_at', '>=', now())
+                ->orderBy('ends_at', 'asc')
+                ->get();
+
+            $storeSale = $rows->firstWhere('deal_type', 'store_sale');
+            $superDeal = $rows->firstWhere('deal_type', 'super_deal');
+
+            // Same rule as getActiveSuperDeal(): a sold-out Super Deal slot no longer applies.
+            if ($superDeal && $superDeal->flash_quantity !== null
+                && (int) $superDeal->sold_quantity >= (int) $superDeal->flash_quantity) {
+                $superDeal = null;
+            }
+        }
+
+        if ($superDeal) {
+            $result['type']         = 'super_deal';
+            $result['label']        = 'Super Deal';
+            $result['unit_price']   = $this->superDealUnitPrice($superDeal, $base);
+            $result['units_left']   = $superDeal->flash_quantity !== null
+                ? max(0, (int) $superDeal->flash_quantity - (int) $superDeal->sold_quantity)
+                : null;
+            $result['ends_at']      = $superDeal->ends_at;
+            $result['deal_price']   = ($superDeal->deal_price !== null && (float) $superDeal->deal_price > 0)
+                ? round((float) $superDeal->deal_price, 2) : null;
+            $result['deal_percent'] = $result['deal_price'] === null
+                ? (float) ($superDeal->discount_percentage ?? 0) : null;
+        } else {
+            $price = $this->storeSaleOrProductDiscountPrice($storeSale, $product, $base);
+
+            if ($price < $base) {
+                $result['type']       = $storeSale ? 'store_sale' : 'product_discount';
+                $result['label']      = $storeSale ? 'Store Sale' : null;
+                $result['unit_price'] = $price;
+                $result['ends_at']    = $storeSale?->ends_at;
+
+                if ($storeSale) {
+                    $result['deal_price'] = ($storeSale->deal_price !== null && (float) $storeSale->deal_price > 0)
+                        ? round((float) $storeSale->deal_price, 2) : null;
+                    $result['deal_percent'] = $result['deal_price'] === null
+                        ? (float) ($storeSale->discount_percentage ?? 0) : null;
+                } else {
+                    $result['deal_percent'] = (float) ($product->discount ?? 0);
+                }
+            }
+        }
+
+        $result['percent_off'] = ($base > 0 && $result['unit_price'] < $base)
+            ? max(1, (int) round((1 - ($result['unit_price'] / $base)) * 100))
+            : 0;
+
+        return $result;
     }
 
     public function buildSplitCheckoutLines(
@@ -140,9 +248,7 @@ class SuperDealPricingService
             ]];
         }
 
-        $superDealPrice = $superDeal->deal_price !== null && (float) $superDeal->deal_price > 0
-            ? round((float) $superDeal->deal_price, 2)
-            : round($baseUnitPrice * (1 - ((float) ($superDeal->discount_percentage ?? 0) / 100)), 2);
+        $superDealPrice = $this->superDealUnitPrice($superDeal, $baseUnitPrice);
 
         $remainingSuperQty = $superDeal->flash_quantity !== null
             ? max(0, (int) $superDeal->flash_quantity - (int) $superDeal->sold_quantity)

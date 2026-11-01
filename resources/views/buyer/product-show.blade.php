@@ -96,6 +96,11 @@
     showToast: false,
     basePrice: {{ (float) ($product->price ?? 0) }},
     discount: {{ (float) ($product->discount ?? 0) }},
+    dealType: '{{ $dealPricing['type'] }}',
+    dealLabel: '{{ $dealPricing['label'] ?? '' }}',
+    dealFixedPrice: {{ $dealPricing['deal_price'] !== null ? (float) $dealPricing['deal_price'] : 'null' }},
+    dealPercent: {{ (float) ($dealPricing['deal_percent'] ?? 0) }},
+    dealUnitsLeft: {{ $dealPricing['units_left'] !== null ? (int) $dealPricing['units_left'] : 'null' }},
     totalStock: {{ (int) $totalStock }},
     activePrice: {{ (float) ($product->price ?? 0) }},
     activeStock: {{ (int) $totalStock }},
@@ -111,7 +116,27 @@
         return this.activeStock;
     },
     get discountedPrice() {
-        return this.discount > 0 ? this.activePrice - (this.activePrice * (this.discount / 100)) : this.activePrice;
+        const price = this.activePrice;
+        let result = price;
+
+        if (this.dealType === 'super_deal' || this.dealType === 'store_sale') {
+            // A fixed deal price applies to every variant (never above that variant's own price).
+            if (this.dealFixedPrice !== null) {
+                result = Math.min(price, this.dealFixedPrice);
+            } else if (this.dealPercent > 0) {
+                result = price * (1 - (this.dealPercent / 100));
+            } else if (this.discount > 0) {
+                result = price * (1 - (this.discount / 100));
+            }
+        } else if (this.discount > 0) {
+            result = price * (1 - (this.discount / 100));
+        }
+
+        return Math.round(result * 100) / 100;
+    },
+    get discountPercentShown() {
+        if (this.activePrice <= 0 || this.discountedPrice >= this.activePrice) return 0;
+        return Math.max(1, Math.round((1 - (this.discountedPrice / this.activePrice)) * 100));
     },
     formatMoney(value) {
         return Number(value).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -352,11 +377,17 @@
 
                         <div class="bg-gradient-to-r from-primary/5 via-surface-subtle to-surface rounded-2xl p-5 mb-5 border border-primary/10 flex flex-wrap items-baseline gap-3.5">
                             <span class="text-3xl sm:text-4xl font-extrabold text-primary tracking-tight" x-text="'₱' + formatMoney(discountedPrice)"></span>
-                            <template x-if="discount > 0">
+                            <template x-if="discountPercentShown > 0">
                                 <span class="text-text-muted line-through text-base sm:text-lg font-medium" x-text="'₱' + formatMoney(activePrice)"></span>
                             </template>
-                            <template x-if="discount > 0">
-                                <span class="bg-danger/10 text-danger text-xs px-2.5 py-1 rounded-full font-extrabold uppercase tracking-wider" x-text="discount + '% OFF'"></span>
+                            <template x-if="discountPercentShown > 0">
+                                <span class="bg-danger/10 text-danger text-xs px-2.5 py-1 rounded-full font-extrabold uppercase tracking-wider" x-text="discountPercentShown + '% OFF'"></span>
+                            </template>
+                            <template x-if="dealLabel">
+                                <span class="bg-primary text-white text-xs px-2.5 py-1 rounded-full font-extrabold uppercase tracking-wider" x-text="dealLabel"></span>
+                            </template>
+                            <template x-if="dealType === 'super_deal' && dealUnitsLeft !== null">
+                                <span class="basis-full text-xs font-bold text-primary" x-text="dealUnitsLeft + ' left at Super Deal price'"></span>
                             </template>
                         </div>
 
