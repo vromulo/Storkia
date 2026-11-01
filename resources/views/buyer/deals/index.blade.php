@@ -6,7 +6,7 @@
 
             <x-ui.breadcrumbs :items="['Super Deals']" class="mb-3" />
 
-            {{-- Header: title on the left, live countdown to the next deal that ends on the right --}}
+            {{-- Header: title and short description --}}
             <header class="rounded-2xl border border-brand-light bg-brand-light/30 px-5 py-5 sm:px-7 sm:py-6 mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                 <div class="max-w-xl">
                     <div class="flex items-center gap-2.5">
@@ -18,44 +18,10 @@
                         </h1>
                     </div>
                     <p class="mt-2 text-sm text-text-muted leading-relaxed">
-                        Limited-time prices from verified stores. When the timer or the deal stock runs out, the price goes back to normal.
+                        Limited-time prices from verified stores. When a deal's schedule ends or its deal stock runs out, the price goes back to normal.
                     </p>
                 </div>
 
-                @if ($nextEndMs)
-                    <div
-                        x-data="{
-                            endAtMs: {{ (int) $nextEndMs }},
-                            nowMs: {{ now()->timestamp * 1000 }},
-                            text: '--:--:--',
-                            tick() {
-                                const diff = Math.max(0, Math.floor((this.endAtMs - this.nowMs) / 1000));
-                                const d = Math.floor(diff / 86400);
-                                const h = String(Math.floor((diff % 86400) / 3600)).padStart(2, '0');
-                                const m = String(Math.floor((diff % 3600) / 60)).padStart(2, '0');
-                                const s = String(diff % 60).padStart(2, '0');
-                                this.text = (d > 0 ? d + 'd ' : '') + h + ':' + m + ':' + s;
-                                return diff;
-                            },
-                            start() {
-                                if (this.tick() === 0) { return; }
-                                const timer = setInterval(() => {
-                                    this.nowMs += 1000;
-                                    if (this.tick() === 0) {
-                                        clearInterval(timer);
-                                        // A deal just ended: reload so the list drops it.
-                                        setTimeout(() => window.location.reload(), 2000);
-                                    }
-                                }, 1000);
-                            }
-                        }"
-                        x-init="start()"
-                        class="shrink-0"
-                    >
-                        <p class="text-xs font-medium text-text-muted mb-1">Next deal ends in</p>
-                        <span class="inline-block px-4 py-1.5 rounded-xl bg-primary-dark text-white font-mono text-xl sm:text-2xl font-extrabold tracking-wider tabular-nums" x-text="text" aria-live="off">--:--:--</span>
-                    </div>
-                @endif
             </header>
 
             @if ($totalAll > 0)

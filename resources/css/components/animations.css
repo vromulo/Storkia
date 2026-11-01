@@ -12,3 +12,45 @@
     transform-origin: center center;
     will-change: transform;
 }
+
+
+
+
+
+
+
+/* "SUPER DEAL" label: brand primary with a light sweep that glides across it */
+.super-deal-label {
+    overflow: hidden;
+    isolation: isolate;
+    background: linear-gradient(
+        135deg,
+        var(--color-primary) 0%,
+        color-mix(in srgb, var(--color-primary) 72%, white) 50%,
+        var(--color-primary) 100%
+    );
+    box-shadow: 0 1px 6px color-mix(in srgb, var(--color-primary) 55%, transparent);
+}
+
+.super-deal-label::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    background: linear-gradient(110deg, transparent 30%, rgb(255 255 255 / 0.75) 50%, transparent 70%);
+    transform: translateX(-120%);
+    animation: super-deal-shine 2.6s ease-in-out infinite;
+}
+
+@keyframes super-deal-shine {
+    0%   { transform: translateX(-120%); }
+    55%, 100% { transform: translateX(120%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .super-deal-label::after {
+        animation: none;
+        display: none;
+    }
+}

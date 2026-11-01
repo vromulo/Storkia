@@ -36,6 +36,11 @@
     $isStoreOnVacation = (bool) ($seller?->is_on_vacation ?? false);
     $perBuyerLimit = (int) ($product->per_buyer_limit ?? 0);
 
+    // Countdown runs to the end of the schedule the seller set for this Super Deal.
+    $dealEndsAtMs = (($dealPricing['type'] ?? null) === 'super_deal' && !empty($dealPricing['ends_at']))
+        ? \Carbon\Carbon::parse($dealPricing['ends_at'])->timestamp * 1000
+        : null;
+
     $storeStats = [
         'chat_response_rate' => $stats['chat_response_rate'] ?? 98,
         'following'          => $stats['following'] ?? 0,
@@ -101,6 +106,10 @@
     dealFixedPrice: {{ $dealPricing['deal_price'] !== null ? (float) $dealPricing['deal_price'] : 'null' }},
     dealPercent: {{ (float) ($dealPricing['deal_percent'] ?? 0) }},
     dealUnitsLeft: {{ $dealPricing['units_left'] !== null ? (int) $dealPricing['units_left'] : 'null' }},
+    dealEndsAtMs: {{ $dealEndsAtMs !== null ? (int) $dealEndsAtMs : 'null' }},
+    dealClockOffsetMs: {{ now()->timestamp * 1000 }} - Date.now(),
+    dealCountdown: '',
+    dealTimer: null,
     totalStock: {{ (int) $totalStock }},
     activePrice: {{ (float) ($product->price ?? 0) }},
     activeStock: {{ (int) $totalStock }},
@@ -137,6 +146,22 @@
     get discountPercentShown() {
         if (this.activePrice <= 0 || this.discountedPrice >= this.activePrice) return 0;
         return Math.max(1, Math.round((1 - (this.discountedPrice / this.activePrice)) * 100));
+    },
+    startDealCountdown() {
+        if (!this.dealEndsAtMs) return;
+        const pad = (n) => String(n).padStart(2, '0');
+        const tick = () => {
+            const diff = Math.max(0, Math.floor((this.dealEndsAtMs - (Date.now() + this.dealClockOffsetMs)) / 1000));
+            const d = Math.floor(diff / 86400);
+            this.dealCountdown = (d > 0 ? d + 'd ' : '') + pad(Math.floor((diff % 86400) / 3600)) + ':' + pad(Math.floor((diff % 3600) / 60)) + ':' + pad(diff % 60);
+            if (diff === 0) {
+                clearInterval(this.dealTimer);
+                // The deal just ended: reload so the price goes back to normal.
+                setTimeout(() => window.location.reload(), 2000);
+            }
+        };
+        tick();
+        this.dealTimer = setInterval(tick, 1000);
     },
     formatMoney(value) {
         return Number(value).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -261,7 +286,7 @@
             this.isAddingToCart = false;
         }
     }
-}" class="bg-surface-subtle font-sans antialiased text-text-main min-h-screen pb-16 relative overflow-x-hidden">
+}" x-init="startDealCountdown()" class="bg-surface-subtle font-sans antialiased text-text-main min-h-screen pb-16 relative overflow-x-hidden">
 
     <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-6 sm:pt-8 space-y-6">
         <x-ui.breadcrumbs :items="$breadcrumbItems" />
@@ -388,6 +413,13 @@
                             </template>
                             <template x-if="dealType === 'super_deal' && dealUnitsLeft !== null">
                                 <span class="basis-full text-xs font-bold text-primary" x-text="dealUnitsLeft + ' left at Super Deal price'"></span>
+                            </template>
+                            <template x-if="dealType === 'super_deal' && dealEndsAtMs">
+                                <div class="basis-full flex items-center gap-2 text-xs font-bold text-primary-dark">
+                                    <svg class="w-4 h-4 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6l4 2m6-2a10 10 0 11-20 0 10 10 0 0120 0z"/></svg>
+                                    <span>Ends in</span>
+                                    <span class="px-2 py-0.5 rounded-md bg-primary-dark text-white font-mono tracking-wider tabular-nums" x-text="dealCountdown" aria-live="off"></span>
+                                </div>
                             </template>
                         </div>
 

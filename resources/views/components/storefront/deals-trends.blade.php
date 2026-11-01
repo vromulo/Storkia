@@ -1,6 +1,5 @@
 @php
     $activeSuperDeals = collect();
-    $slotEndTimeMs = now()->endOfDay()->timestamp * 1000;
 
     $pricingService = app(\App\Services\SuperDealPricingService::class);
 
@@ -15,9 +14,6 @@
             ->get();
 
         if ($rawDeals->isNotEmpty()) {
-            $firstEnd = \Carbon\Carbon::parse($rawDeals->first()->ends_at);
-            $slotEndTimeMs = $firstEnd->timestamp * 1000;
-
             foreach ($rawDeals as $rd) {
                 $prod = \App\Models\Product::find($rd->product_id);
                 if ($prod && (int) $prod->stock_quantity > 0) {
@@ -40,25 +36,7 @@
     $dealProducts = $activeSuperDeals;
 @endphp
 
-<section x-data="{
-    endAtMs: {{ $slotEndTimeMs }},
-    nowMs: {{ now()->timestamp * 1000 }},
-    countdownText: '00:00:00',
-    initTimer() {
-        this.tick();
-        setInterval(() => {
-            this.nowMs += 1000;
-            this.tick();
-        }, 1000);
-    },
-    tick() {
-        const diff = Math.max(0, Math.floor((this.endAtMs - this.nowMs) / 1000));
-        const h = String(Math.floor(diff / 3600)).padStart(2, '0');
-        const m = String(Math.floor((diff % 3600) / 60)).padStart(2, '0');
-        const s = String(diff % 60).padStart(2, '0');
-        this.countdownText = `${h}:${m}:${s}`;
-    }
-}" x-init="initTimer()" class="grid grid-cols-1 lg:grid-cols-12 gap-5 lg:gap-6 mb-10">
+<section class="grid grid-cols-1 lg:grid-cols-12 gap-5 lg:gap-6 mb-10">
 
     <!-- 1. LEFT CONTAINER: Super Deals -->
     <div class="lg:col-span-6 bg-surface rounded-2xl border border-border-subtle p-5 sm:p-6 shadow-xs flex flex-col justify-between relative overflow-hidden group">
@@ -73,7 +51,6 @@
                     <h2 class="text-lg sm:text-xl font-bold font-serif text-main uppercase tracking-tight">
                         Super Deals
                     </h2>
-                    <span class="px-2.5 py-0.5 rounded-lg bg-primary-dark text-white font-mono text-xs font-extrabold tracking-wider" x-text="countdownText"></span>
                 </div>
 
                 <a href="{{ Route::has('deals.index') ? route('deals.index') : '#products-grid' }}" class="text-xs font-semibold text-text-main hover:text-primary transition-colors inline-flex items-center gap-1">

@@ -28,6 +28,24 @@
     } else {
         $isWishlisted = (bool) $isWishlisted;
     }
+
+    // Live Super Deal for this product (one shared query per request, see SuperDealPricingService).
+    $dealService   = app(\App\Services\SuperDealPricingService::class);
+    $liveSuperDeal = $dealService->liveSuperDealFor((int) $product->id);
+    $isSuperDeal   = $liveSuperDeal !== null;
+    $dealUnitPrice = null;
+    $dealPercent   = 0;
+
+    if ($isSuperDeal) {
+        $regularPrice  = round((float) $product->price, 2);
+        $dealUnitPrice = $dealService->superDealUnitPrice($liveSuperDeal, $regularPrice);
+
+        if ($regularPrice > 0 && $dealUnitPrice < $regularPrice) {
+            $dealPercent = max(1, (int) round((1 - ($dealUnitPrice / $regularPrice)) * 100));
+        } else {
+            $dealUnitPrice = null; // the deal gives no reduction here, keep the normal price display
+        }
+    }
 @endphp
 
 <div 
@@ -99,9 +117,20 @@
                 </svg>
             @endif
 
-            @if($product->discount > 0)
+            @if($dealPercent > 0)
+                <span class="absolute top-2 sm:top-2.5 left-2 sm:left-2.5 bg-price text-surface text-[10px] sm:text-xs font-bold px-1.5 sm:px-2 py-0.5 rounded-md shadow-xs z-20">
+                    -{{ $dealPercent }}%
+                </span>
+            @elseif(!$isSuperDeal && $product->discount > 0)
                 <span class="absolute top-2 sm:top-2.5 left-2 sm:left-2.5 bg-price text-surface text-[10px] sm:text-xs font-bold px-1.5 sm:px-2 py-0.5 rounded-md shadow-xs z-20">
                     -{{ number_format($product->discount, 0) }}%
+                </span>
+            @endif
+
+            @if($isSuperDeal)
+                <span class="super-deal-label absolute bottom-2 left-2 z-20 inline-flex items-center gap-1 text-white text-[9px] sm:text-[10px] font-extrabold uppercase tracking-wider px-2 py-0.5 rounded-md">
+                    <svg class="relative z-10 w-2.5 h-2.5 fill-current" viewBox="0 0 24 24" aria-hidden="true"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" /></svg>
+                    <span class="relative z-10">SUPER DEAL</span>
                 </span>
             @endif
         </div>
@@ -113,7 +142,16 @@
             </h3>
 
             <div class="mt-0.5">
-                @if($product->discount > 0)
+                @if($dealUnitPrice !== null)
+                    <div class="flex items-baseline gap-1 sm:gap-2 flex-wrap">
+                        <span class="text-sm sm:text-lg font-bold text-price">
+                            ₱{{ number_format($dealUnitPrice, 2) }}
+                        </span>
+                        <span class="text-[10px] sm:text-xs text-text-muted line-through">
+                            ₱{{ number_format($product->price, 2) }}
+                        </span>
+                    </div>
+                @elseif(!$isSuperDeal && $product->discount > 0)
                     @php
                         $discountedPrice = $product->price - ($product->price * ($product->discount / 100));
                     @endphp

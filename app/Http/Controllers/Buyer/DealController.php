@@ -41,8 +41,6 @@ class DealController extends Controller
             ->sortKeys()
             ->all();
 
-        $nextEndMs = $allDeals->isNotEmpty() ? $allDeals->min('ends_ts') * 1000 : null;
-
         $deals = $category !== null
             ? $allDeals->filter(fn ($deal) => $deal->product->category === $category)
             : $allDeals;
@@ -62,7 +60,6 @@ class DealController extends Controller
             'category'   => $category,
             'sorts'      => self::SORTS,
             'sort'       => $sort,
-            'nextEndMs'  => $nextEndMs,
         ]);
     }
 

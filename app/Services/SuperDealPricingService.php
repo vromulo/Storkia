@@ -11,6 +11,11 @@ use Illuminate\Validation\ValidationException;
 
 class SuperDealPricingService
 {
+    /** @var array<int, object|null>|null */
+    protected static ?array $liveSuperDealCache = null;
+
+    protected static int $liveSuperDealCachedAt = 0;
+
     public function expireEndedPromotions(): void
     {
         if (Schema::hasTable('super_deals')) {
@@ -69,6 +74,56 @@ class SuperDealPricingService
         }
 
         return $deal;
+    }
+
+    /**
+     * Live Super Deals keyed by product id, loaded with ONE query and reused for the rest of the
+     * request, so listing cards (home, category, search...) never query once per product.
+     * Same rule as getActiveSuperDeal(): the earliest-ending live deal wins, and a sold-out
+     * Super Deal slot no longer applies.
+     *
+     * @return array<int, object|null>
+     */
+    public function liveSuperDealMap(): array
+    {
+        if (static::$liveSuperDealCache !== null && (time() - static::$liveSuperDealCachedAt) < 30) {
+            return static::$liveSuperDealCache;
+        }
+
+        $map = [];
+
+        if (Schema::hasTable('super_deals')) {
+            $rows = DB::table('super_deals')
+                ->where('deal_type', 'super_deal')
+                ->where('status', 'active')
+                ->where('starts_at', '<=', now())
+                ->where('ends_at', '>=', now())
+                ->orderBy('ends_at', 'asc')
+                ->orderBy('id', 'asc')
+                ->get();
+
+            foreach ($rows as $row) {
+                $pid = (int) $row->product_id;
+                if (array_key_exists($pid, $map)) {
+                    continue; // the earliest-ending deal for this product was already taken
+                }
+
+                $soldOut = $row->flash_quantity !== null
+                    && (int) $row->sold_quantity >= (int) $row->flash_quantity;
+
+                $map[$pid] = $soldOut ? null : $row;
+            }
+        }
+
+        static::$liveSuperDealCache    = $map;
+        static::$liveSuperDealCachedAt = time();
+
+        return $map;
+    }
+
+    public function liveSuperDealFor(int $productId): ?object
+    {
+        return $this->liveSuperDealMap()[$productId] ?? null;
     }
 
     public function getActiveStoreSale(int $productId): ?object

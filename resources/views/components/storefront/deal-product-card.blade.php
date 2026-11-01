@@ -9,11 +9,6 @@
 @php
     $product  = $deal->product;
     $almostGone = $deal->has_flash_cap && $deal->claimed_percent >= 80;
-    $endsIn   = $deal->ends_at->diffForHumans(now(), [
-        'parts'  => 2,
-        'short'  => true,
-        'syntax' => \Carbon\CarbonInterface::DIFF_ABSOLUTE,
-    ]);
 @endphp
 
 <div
@@ -77,11 +72,6 @@
                     -{{ $deal->percent_off }}%
                 </span>
             @endif
-
-            <span class="absolute bottom-2 left-2 z-20 inline-flex items-center gap-1 bg-primary-dark/90 text-white text-[10px] font-semibold px-2 py-0.5 rounded-md">
-                <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6l4 2m6-2a10 10 0 11-20 0 10 10 0 0120 0z"/></svg>
-                Ends in {{ $endsIn }}
-            </span>
         </div>
 
         <div class="flex flex-col flex-1 justify-start">
