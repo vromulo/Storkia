@@ -9,7 +9,7 @@
 
     if (auth()->check()) {
         $cartItems = \App\Models\Cart::with(['product.sellerProfile'])
-            ->where('user_id', auth()->id())z
+            ->where('user_id', auth()->id())
             ->latest()
             ->get();
 
