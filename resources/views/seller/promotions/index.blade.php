@@ -96,7 +96,7 @@
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
                         <label class="block font-bold text-text-muted uppercase mb-1">Start Date &amp; Time <span class="text-danger">*</span></label>
-                        <input type="datetime-local" name="starts_at" value="{{ now()->format('Y-m-d\TH:i') }}" required class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface">
+                        <input type="datetime-local" name="starts_at" value="{{ now()->format('Y-m-d\TH:i') }}" min="{{ now()->subMinutes(5)->format('Y-m-d\TH:i') }}" required class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface">
                     </div>
                     <div>
                         <label class="block font-bold text-text-muted uppercase mb-1">End Date &amp; Time <span class="text-danger">*</span></label>
@@ -169,7 +169,7 @@
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
                         <label class="block font-bold text-text-muted uppercase mb-1">Starts At <span class="text-danger">*</span></label>
-                        <input type="datetime-local" name="starts_at" value="{{ now()->format('Y-m-d\TH:i') }}" required class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface">
+                        <input type="datetime-local" name="starts_at" value="{{ now()->format('Y-m-d\TH:i') }}" min="{{ now()->subMinutes(5)->format('Y-m-d\TH:i') }}" required class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface">
                     </div>
                     <div>
                         <label class="block font-bold text-text-muted uppercase mb-1">Ends At <span class="text-danger">*</span></label>

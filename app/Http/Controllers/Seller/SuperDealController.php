@@ -66,8 +66,8 @@ class SuperDealController extends Controller
             'deal_price'          => ['nullable', 'numeric', 'min:1'],
             'discount_percentage' => ['nullable', 'integer', 'min:1', 'max:99'],
             'flash_quantity'      => ['required_if:deal_type,super_deal', 'nullable', 'integer', 'min:1'],
-            'starts_at'           => ['required', 'date'],
-            'ends_at'             => ['required', 'date', 'after:starts_at'],
+            'starts_at'           => ['bail', 'required', 'date', $this->startNotInPast()],
+            'ends_at'             => ['bail', 'required', 'date', 'after:starts_at', $this->endNotInPast()],
         ], [
             'ends_at.after'                => 'End date and time must be strictly after the start date and time.',
             'discount_percentage.integer'  => 'Discount percentage must be a whole number from 1% to 99%.',
@@ -133,7 +133,7 @@ class SuperDealController extends Controller
             'seller_profile_id'   => $profile->id,
             'product_id'          => $product->id,
             'deal_type'           => $validated['deal_type'],
-            'title'               => $validated['title'] ?: ($validated['deal_type'] === 'super_deal' ? 'Super Deal Slot' : 'Scheduled Store Sale'),
+            'title'               => ($validated['title'] ?? null) ?: ($validated['deal_type'] === 'super_deal' ? 'Super Deal Slot' : 'Scheduled Store Sale'),
             'deal_price'          => $dealPrice,
             'discount_percentage' => $discountPct,
             'flash_quantity'      => $validated['deal_type'] === 'super_deal' ? (int) $validated['flash_quantity'] : null,
@@ -207,8 +207,8 @@ class SuperDealController extends Controller
             'discount_percentage'    => ['required_if:bundle_type,percentage_off', 'nullable', 'numeric', 'min:1', 'max:99'],
             'free_gift_product_id'   => ['required_if:bundle_type,buy_x_get_y', 'nullable', 'integer', 'exists:products,id'],
             'applicable_product_ids' => ['required', 'array', 'min:1'],
-            'starts_at'              => ['required', 'date'],
-            'ends_at'                => ['required', 'date', 'after:starts_at'],
+            'starts_at'              => ['bail', 'required', 'date', $this->startNotInPast()],
+            'ends_at'                => ['bail', 'required', 'date', 'after:starts_at', $this->endNotInPast()],
         ]);
 
         DB::table('bundle_deals')->insert([
@@ -227,6 +227,28 @@ class SuperDealController extends Controller
         ]);
 
         return back()->with('success', "Bundle Deal \"{$validated['title']}\" published!");
+    }
+
+    /**
+     * A promotion cannot start in the past. A few minutes of grace covers the time a seller
+     * spends on the form (the start field is pre-filled with the current minute).
+     */
+    protected function startNotInPast(): \Closure
+    {
+        return function (string $attribute, mixed $value, \Closure $fail): void {
+            if (Carbon::parse($value)->lt(now()->subMinutes(5))) {
+                $fail('Start date and time cannot be in the past. Choose the current time or later.');
+            }
+        };
+    }
+
+    protected function endNotInPast(): \Closure
+    {
+        return function (string $attribute, mixed $value, \Closure $fail): void {
+            if (Carbon::parse($value)->lte(now())) {
+                $fail('End date and time must be in the future.');
+            }
+        };
     }
 
     public function toggleVacationMode(Request $request)
