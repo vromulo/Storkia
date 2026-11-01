@@ -76,7 +76,7 @@
                     <span class="px-2.5 py-0.5 rounded-lg bg-primary-dark text-white font-mono text-xs font-extrabold tracking-wider" x-text="countdownText"></span>
                 </div>
 
-                <a href="#products-grid" class="text-xs font-semibold text-text-main hover:text-primary transition-colors inline-flex items-center gap-1">
+                <a href="{{ Route::has('deals.index') ? route('deals.index') : '#products-grid' }}" class="text-xs font-semibold text-text-main hover:text-primary transition-colors inline-flex items-center gap-1">
                     Limited-time offers
                     <svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7" />
@@ -148,7 +148,7 @@
                         Trends
                     </h2>
                 </div>
-                <a href="#products-grid" class="text-xs font-semibold text-text-main hover:text-primary transition-colors inline-flex items-center gap-1">
+                <a href="{{ Route::has('trends.index') ? route('trends.index') : '#products-grid' }}" class="text-xs font-semibold text-text-main hover:text-primary transition-colors inline-flex items-center gap-1">
                     Top Searches
                     <svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7" />
@@ -158,10 +158,31 @@
 
             <div class="grid grid-cols-3 gap-3 sm:gap-4 pt-4">
                 @php
-                    $trendProducts = isset($products) ? $products->skip(3)->take(3) : collect();
+                    // Shoppers' top searches first. Any free slots are filled from the same trending
+                    // ranking the Trends page uses, so this tile and that page always agree.
+                    $tileItems = app(\App\Services\SearchLogService::class)->topSearchedProducts(3)->map(fn ($hit) => (object) [
+                        'product' => $hit->product,
+                        'label'   => 'Searched “' . $hit->term . '”',
+                        'detail'  => number_format($hit->searchers) . ' ' . \Illuminate\Support\Str::plural('shopper', $hit->searchers),
+                    ]);
+
+                    if ($tileItems->count() < 3) {
+                        $trendingService = app(\App\Services\TrendingProductsService::class);
+
+                        $trendingService
+                            ->top(3 - $tileItems->count(), $tileItems->map(fn ($i) => $i->product->id)->all())
+                            ->each(function ($t) use ($tileItems, $trendingService) {
+                                $tileItems->push((object) [
+                                    'product' => $t->product,
+                                    'label'   => $trendingService->caption($t),
+                                    'detail'  => null,
+                                ]);
+                            });
+                    }
                 @endphp
 
-                @forelse($trendProducts as $trend)
+                @forelse($tileItems as $item)
+                    @php $trend = $item->product; @endphp
                     <div class="group/card relative flex flex-col">
                         <a href="{{ route('product.show', $trend->id) }}" class="block">
                             <div class="relative w-full aspect-square bg-surface-subtle rounded-xl overflow-hidden mb-2.5 border border-border-subtle/60 flex items-center justify-center transition-all duration-300 group-hover/card:shadow-xs">
@@ -181,15 +202,20 @@
                                     </span>
                                 </div>
 
-                                <div class="text-[11px] font-bold text-primary pt-0.5">
-                                    Hot search item
-                                </div>
+                                @if($item->label)
+                                    <div class="text-[11px] font-bold text-primary pt-0.5 line-clamp-1" title="{{ $item->label }}">
+                                        {{ $item->label }}
+                                    </div>
+                                @endif
+                                @if($item->detail)
+                                    <div class="text-[10px] text-text-muted">{{ $item->detail }}</div>
+                                @endif
                             </div>
                         </a>
                     </div>
                 @empty
                     <div class="col-span-3 text-center py-6 text-xs text-text-muted">
-                        Trending products loading...
+                        Nothing is trending yet. Check back soon.
                     </div>
                 @endforelse
             </div>

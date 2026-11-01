@@ -7,12 +7,14 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\Request;
 use App\Models\BuyerWishlist;
 use App\Models\Product;
+use App\Services\SearchLogService;
 use App\Services\SearchTypoCorrectionService;
 
 class SearchController extends Controller
 {
     public function __construct(
-        protected SearchTypoCorrectionService $typoCorrectionService
+        protected SearchTypoCorrectionService $typoCorrectionService,
+        protected SearchLogService $searchLog
     ) {}
 
     /**
@@ -101,6 +103,10 @@ class SearchController extends Controller
                 }
             }
         }
+
+        // Feeds "Top Searches". Logs the corrected spelling when typo-correction found results,
+        // so "sneekers" and "sneakers" count as one term. Never throws and skips junk/bots.
+        $this->searchLog->record($correctedQuery ?? $query, $products->count(), $request);
 
         // Use the hardcoded master list for the dropdowns
         $allCategoryData = $this->getAllCategories();

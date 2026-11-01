@@ -4,6 +4,8 @@ use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Buyer\AuthController;
 use App\Http\Controllers\Buyer\HomeController;
 use App\Http\Controllers\Buyer\CategoryController;
+use App\Http\Controllers\Buyer\DealController;
+use App\Http\Controllers\Buyer\TrendController;
 use App\Http\Controllers\Buyer\ProductController;
 use App\Http\Controllers\Buyer\SearchController;
 use App\Http\Controllers\Buyer\AccountManagementController;
@@ -23,6 +25,8 @@ Route::middleware('throttle:120,1')->group(function () {
     Route::view('/terms-and-conditions', 'buyer.terms-and-conditions')->name('terms');
     Route::view('/privacy-policy', 'buyer.privacy-policy')->name('privacy');
     Route::get('/shop', [HomeController::class, 'index'])->name('home');
+    Route::get('/super-deals', [DealController::class, 'index'])->name('deals.index');
+    Route::get('/trends', [TrendController::class, 'index'])->name('trends.index');
     Route::get('/sellers', [SellerController::class, 'index'])->name('sellers.index');
     Route::get('/sellers/{seller}', [SellerController::class, 'show'])->name('sellers.show');
     Route::get('/product/{product}', [ProductController::class, 'show'])->name('product.show');
