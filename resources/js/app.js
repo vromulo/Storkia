@@ -1,3 +1,4 @@
+import './session-guard';
 import variantManager from './seller/variant-manager';
 import imageUploader from './seller/image-uploader';
 import productTableRow from './seller/product-table-row';
@@ -9,6 +10,7 @@ import cartPageManager from './buyer/cart-manager';
 import categoryPageManager from './buyer/category-manager';
 import idCameraCapture from './buyer/id-camera-capture';
 import profileManager from './buyer/profile-manager';
+import deleteAccountManager from './buyer/delete-account-manager';
 import { flyToCart, setCartBadge, getCartBadgeCount } from './buyer/cart-fly';
 
 window.flyToCart = flyToCart;
@@ -27,6 +29,7 @@ document.addEventListener('alpine:init', () => {
     Alpine.data('categoryPageManager', categoryPageManager);
     Alpine.data('idCameraCapture', idCameraCapture);
     Alpine.data('profileManager', profileManager);
+    Alpine.data('deleteAccountManager', deleteAccountManager);
 });
 
 /**

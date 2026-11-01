@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Http\Controllers\Api\Concerns\IssuesApiTokens;
 use App\Http\Controllers\Controller;
 use App\Models\BuyerBanAppeal;
 use App\Models\RegistrationOtp;
@@ -15,6 +16,8 @@ use Illuminate\Support\Facades\Hash;
 
 class AuthController extends Controller
 {
+    use IssuesApiTokens;
+
     public function __construct(
         protected OtpService $otpService,
         protected BuyerAbandonmentService $abandonmentService
@@ -156,7 +159,7 @@ class AuthController extends Controller
             return $created;
         });
 
-        $token = $user->createToken('auth_token')->plainTextToken;
+        $token = $this->issueApiToken($user, 'buyer', 'auth_token');
 
         return response()->json([
             'status'       => 'success',
@@ -186,6 +189,17 @@ class AuthController extends Controller
             ], 401);
         }
 
+        // A deleted (archived) account can never sign in. Checked before the
+        // role check, same order as the web login in AuthService.
+        if ($user->isArchived()) {
+            return response()->json([
+                'status'  => 'error',
+                'success' => false,
+                'code'    => 'account_archived',
+                'message' => 'This account has been deleted. Contact Storkia support if you think this is a mistake.',
+            ], 403);
+        }
+
         if ($user->role !== 'Buyer') {
             return response()->json([
                 'status'  => 'error',
@@ -194,7 +208,7 @@ class AuthController extends Controller
             ], 403);
         }
 
-        $token = $user->createToken('auth_token')->plainTextToken;
+        $token = $this->issueApiToken($user, 'buyer', 'auth_token');
 
         return response()->json([
             'status'       => 'success',

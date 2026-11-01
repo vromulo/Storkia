@@ -18,7 +18,7 @@ use Illuminate\Support\Str;
 
 class StorkSchemaBootstrapService
 {
-    protected const SCHEMA_VERSION_CACHE_KEY = 'storkia_additive_schema_v5_ready';
+    protected const SCHEMA_VERSION_CACHE_KEY = 'storkia_additive_schema_v6_ready';
 
     public static function ensureTablesExist(): void
     {
@@ -60,6 +60,7 @@ class StorkSchemaBootstrapService
             self::createSellerPayoutRequestsTable();
             self::createSellerCommissionRemittancesTable();
             self::createBuyerWishlistsTable();
+            self::createSearchLogsTable();
             self::createSuperDealsTable();
             self::createBundleDealsTable();
             self::createLogisticsShippingRatesTable();
@@ -746,6 +747,30 @@ class StorkSchemaBootstrapService
 
             $table->unique(['buyer_id', 'product_id'], 'bw_buyer_product_unique');
         });
+    }
+
+    protected static function createSearchLogsTable(): void
+    {
+        if (Schema::hasTable('search_logs')) {
+            return;
+        }
+
+        // Search logging is a nice-to-have: if this table can't be created, the rest of the
+        // bootstrap (super deals, wishlists, ...) must still run.
+        try {
+            Schema::create('search_logs', function (Blueprint $table) {
+                $table->id();
+                $table->string('term', 80);
+                $table->string('searcher_key', 64);
+                $table->unsignedInteger('results_count')->default(0);
+                $table->timestamp('created_at')->useCurrent();
+
+                $table->index('term', 'sl_term_idx');
+                $table->index(['created_at', 'term'], 'sl_created_term_idx');
+            });
+        } catch (\Throwable $e) {
+            report($e);
+        }
     }
 
     protected static function createSuperDealsTable(): void

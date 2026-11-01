@@ -13,6 +13,7 @@
         $maskedEmail = substr($name, 0, 1) . str_repeat('*', max(strlen($name) - 2, 4)) . substr($name, -1) . '@' . $domain;
     }
     $passwordLastUpdated = $user->formattedPasswordLastUpdated();
+    $archiveReasons = \App\Models\User::ARCHIVE_REASONS;
 
     // Phone formatting & initial state
     $contact = $user->contact_no ?? '';
@@ -359,13 +360,17 @@
                 </button>
             @elseif ($verStatus === 'failed')
                 <a href="{{ route('user.identity-verification') }}"
-                   :class="(isDimmed('identity') || isAnySaving()) ? 'pointer-events-none cursor-not-allowed opacity-40' : 'cursor-pointer hover:opacity-75'"
+                   :class="(isDimmed('identity') || isSavingName || isSavingEmail || isSavingPassword || isSavingPhone) ? 'pointer-events-none cursor-not-allowed opacity-40' : 'cursor-pointer hover:opacity-75'"
+                   :aria-disabled="(isDimmed('identity') || isSavingName || isSavingEmail || isSavingPassword || isSavingPhone) ? 'true' : 'false'"
+                   :tabindex="(isDimmed('identity') || isSavingName || isSavingEmail || isSavingPassword || isSavingPhone) ? -1 : 0"
                    class="text-sm font-light underline text-text-main transition-opacity inline-block leading-none">
                     Re-verify
                 </a>
             @else
                 <a href="{{ route('user.identity-verification') }}"
-                   :class="(isDimmed('identity') || isAnySaving()) ? 'pointer-events-none cursor-not-allowed opacity-40' : 'cursor-pointer hover:opacity-75'"
+                   :class="(isDimmed('identity') || isSavingName || isSavingEmail || isSavingPassword || isSavingPhone) ? 'pointer-events-none cursor-not-allowed opacity-40' : 'cursor-pointer hover:opacity-75'"
+                   :aria-disabled="(isDimmed('identity') || isSavingName || isSavingEmail || isSavingPassword || isSavingPhone) ? 'true' : 'false'"
+                   :tabindex="(isDimmed('identity') || isSavingName || isSavingEmail || isSavingPassword || isSavingPhone) ? -1 : 0"
                    class="text-sm font-light underline text-text-main transition-opacity inline-block leading-none">
                     Start
                 </a>
@@ -500,21 +505,34 @@
     <hr class="border-border-subtle" />
 
     <!-- 6. Delete Account Row -->
-    <div class="flex items-start justify-between transition-all duration-200"
-         :class="(isEditing() || isSavingName || isSavingEmail || isSavingPassword || isSavingPhone) ? 'opacity-40 pointer-events-none cursor-not-allowed' : 'group cursor-pointer hover:opacity-80'">
-        <div>
-            <h3 class="text-base sm:text-lg font-semibold text-text-main leading-none">
-                Delete Account
-            </h3>
-            <p class="text-xs text-text-muted font-normal mt-2">
-                NOTE: Account will NOT BE RECOVERABLE once deleted.
-            </p>
-        </div>
-        <div class="text-text-muted shrink-0 pl-4 leading-none">
-            <svg class="w-5 h-5 text-neutral-400 group-hover:text-text-main transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
-            </svg>
-        </div>
+    <div x-data="deleteAccountManager({
+            eligibilityUrl: @js(route('user.account-management.delete.eligibility')),
+            deleteUrl: @js(route('user.account-management.delete')),
+            ordersUrl: @js(route('user.orders')),
+            csrfToken: @js(csrf_token()),
+            reasons: @js($archiveReasons)
+         })">
+        <button type="button"
+                @click="openModal()"
+                :disabled="isEditing() || isSavingName || isSavingEmail || isSavingPassword || isSavingPhone"
+                :class="(isEditing() || isSavingName || isSavingEmail || isSavingPassword || isSavingPhone) ? 'opacity-40 pointer-events-none cursor-not-allowed' : 'cursor-pointer hover:opacity-80'"
+                class="group w-full flex items-start justify-between text-left transition-all duration-200">
+            <span class="block">
+                <span class="block text-base sm:text-lg font-semibold text-text-main leading-none">
+                    Delete Account
+                </span>
+                <span class="block text-xs text-text-muted font-normal mt-2">
+                    NOTE: Account will NOT BE RECOVERABLE once deleted.
+                </span>
+            </span>
+            <span class="text-text-muted shrink-0 pl-4 leading-none">
+                <svg class="w-5 h-5 text-neutral-400 group-hover:text-text-main transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+                </svg>
+            </span>
+        </button>
+
+        <x-buyer.delete-account-modal />
     </div>
 
     <!-- Reusable Email OTP Modal -->

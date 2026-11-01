@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api\Courier;
 
+use App\Http\Controllers\Api\Concerns\IssuesApiTokens;
 use App\Http\Controllers\Controller;
 use App\Models\Courier;
 use Illuminate\Http\Request;
@@ -9,6 +10,8 @@ use Illuminate\Support\Facades\Hash;
 
 class AuthApiController extends Controller
 {
+    use IssuesApiTokens;
+
     public function login(Request $request)
     {
         $request->validate([
@@ -25,14 +28,16 @@ class AuthApiController extends Controller
             ], 401);
         }
 
-        if ($courier->status === 'suspended') {
+        $allowedStatuses = (array) config('security.allowed_statuses.courier', ['active', 'on_delivery', 'off_duty']);
+
+        if (! in_array($courier->status, $allowedStatuses, true)) {
             return response()->json([
                 'status' => 'error',
                 'message' => 'Your account has been suspended.',
             ], 403);
         }
 
-        $token = $courier->createToken('courier_auth_token')->plainTextToken;
+        $token = $this->issueApiToken($courier, 'courier', 'courier_auth_token');
 
         return response()->json([
             'status' => 'success',

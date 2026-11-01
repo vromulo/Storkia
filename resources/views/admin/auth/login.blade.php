@@ -108,22 +108,10 @@
                         @enderror
                     </div>
 
-                    <!-- Remember Me & Forgot Password -->
-                    <div class="flex items-center justify-between mt-4">
-                        <div class="flex items-center">
-                            <input id="remember_me" name="remember" type="checkbox" 
-                                class="h-4 w-4 rounded border-border-subtle text-primary focus:ring-primary/50 bg-surface-subtle cursor-pointer transition-colors">
-                            <label for="remember_me" class="ml-2 block text-sm text-text-muted cursor-pointer hover:text-text-main transition-colors">
-                                Remember me
-                            </label>
-                        </div>
-
-                        <div class="text-sm">
-                            <a href="#" class="font-bold text-primary hover:text-primary-dark transition-colors cursor-pointer">
-                                Forgot your password?
-                            </a>
-                        </div>
-                    </div>
+                    <!-- Account recovery note (no remember-me for administrators) -->
+                    <p class="mt-4 text-xs text-text-muted text-center leading-relaxed">
+                        Lost access to your administrator account? Contact the platform owner to have your password reset.
+                    </p>
 
                     <!-- Submit Button -->
                     <div class="pt-2">

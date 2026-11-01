@@ -6,6 +6,7 @@ use App\Models\BuyerProfile;
 use Database\Factories\UserFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Attributes\Hidden;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
@@ -29,6 +30,19 @@ class User extends Authenticatable
     /** @use HasFactory<UserFactory> */
     use HasApiTokens, HasFactory, Notifiable;
 
+    /**
+     * Reasons offered on the buyer's "Delete Account" form (key => label).
+     * users.archive_reason stores the key, so the wording can change later.
+     */
+    public const ARCHIVE_REASONS = [
+        'another_account' => 'I have another account',
+        'privacy'         => "I'm concerned about my privacy",
+        'not_using'       => 'I no longer use Storkia',
+        'notifications'   => 'I receive too many emails or notifications',
+        'bad_experience'  => 'I had a bad experience',
+        'other'           => 'Other',
+    ];
+
     protected function casts(): array
     {
         return [
@@ -36,7 +50,36 @@ class User extends Authenticatable
             'password' => 'hashed',
             'birthday' => 'date',
             'password_changed_at' => 'datetime',
+            'archived_at' => 'datetime',
         ];
+    }
+
+    /**
+     * An archived account is one the owner deleted. The row is kept (orders,
+     * reviews and wallet history still point at it) but the person can no
+     * longer sign in until an admin restores it.
+     */
+    public function isArchived(): bool
+    {
+        return $this->archived_at !== null;
+    }
+
+    public function scopeArchived(Builder $query): Builder
+    {
+        return $query->whereNotNull('archived_at');
+    }
+
+    public function scopeNotArchived(Builder $query): Builder
+    {
+        return $query->whereNull('archived_at');
+    }
+
+    /** Human-readable version of users.archive_reason. */
+    public function getArchiveReasonLabelAttribute(): ?string
+    {
+        $key = $this->archive_reason;
+
+        return $key === null ? null : (self::ARCHIVE_REASONS[$key] ?? $key);
     }
 
     public function setEmailAttribute(string $value): void

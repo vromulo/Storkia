@@ -20,19 +20,37 @@ use App\Http\Controllers\Api\VoucherController;
 use App\Http\Controllers\Api\ReviewController;
 use App\Http\Controllers\Api\NotificationController;
 
-Route::prefix('v1')->group(function () {
-    Route::post('/send-otp', [AuthController::class, 'sendOtp']);
-    Route::post('/verify-otp', [AuthController::class, 'verifyOtp']);
-    Route::post('/register', [AuthController::class, 'register']);
-    Route::post('/login', [AuthController::class, 'login']);
+/*
+|--------------------------------------------------------------------------
+| API middleware used below
+|--------------------------------------------------------------------------
+| throttle:api-auth  login / OTP / register limits (AppServiceProvider)
+| api.actor:<type>   the token must belong to a buyer, rider or courier, so a
+|                    rider token can never be used on buyer routes
+| account.active     rejects tokens of suspended / banned accounts
+|--------------------------------------------------------------------------
+*/
 
-    Route::middleware('auth:sanctum')->group(function () {
+Route::prefix('v1')->group(function () {
+    Route::middleware('throttle:api-auth')->group(function () {
+        Route::post('/send-otp', [AuthController::class, 'sendOtp']);
+        Route::post('/verify-otp', [AuthController::class, 'verifyOtp']);
+        Route::post('/register', [AuthController::class, 'register']);
+        Route::post('/login', [AuthController::class, 'login']);
+    });
+
+    // Buyer token required, but still allowed while the account is suspended:
+    // a banned buyer must be able to read the sanction and submit an appeal.
+    Route::middleware(['auth:sanctum', 'api.actor:buyer'])->group(function () {
         Route::post('/logout', [AuthController::class, 'logout']);
         Route::get('/user', [AuthController::class, 'me']);
 
         Route::get('/account/sanction', [AuthController::class, 'sanctionStatus']);
         Route::post('/account/sanction/appeal', [AuthController::class, 'submitSanctionAppeal']);
+    });
 
+    // Buyer token required AND the account must not be suspended or banned.
+    Route::middleware(['auth:sanctum', 'api.actor:buyer', 'account.active'])->group(function () {
         Route::get('/products', [ProductController::class, 'index']);
         Route::get('/products/{product}', [ProductController::class, 'show']);
 
@@ -107,29 +125,35 @@ Route::prefix('v1')->group(function () {
 });
 
 Route::prefix('v1/rider')->group(function () {
-    Route::post('/login', [RiderAuthApiController::class, 'login']);
+    Route::post('/login', [RiderAuthApiController::class, 'login'])->middleware('throttle:api-auth');
 
-    Route::middleware('auth:sanctum')->group(function () {
+    Route::middleware(['auth:sanctum', 'api.actor:rider'])->group(function () {
         Route::post('/logout', [RiderAuthApiController::class, 'logout']);
-        Route::get('/user', function (Request $request) {
-            return response()->json([
-                'status' => 'success',
-                'data' => $request->user(),
-            ]);
+
+        Route::middleware('account.active')->group(function () {
+            Route::get('/user', function (Request $request) {
+                return response()->json([
+                    'status' => 'success',
+                    'data' => $request->user(),
+                ]);
+            });
         });
     });
 });
 
 Route::prefix('v1/courier')->group(function () {
-    Route::post('/login', [CourierAuthApiController::class, 'login']);
+    Route::post('/login', [CourierAuthApiController::class, 'login'])->middleware('throttle:api-auth');
 
-    Route::middleware('auth:sanctum')->group(function () {
+    Route::middleware(['auth:sanctum', 'api.actor:courier'])->group(function () {
         Route::post('/logout', [CourierAuthApiController::class, 'logout']);
-        Route::get('/user', function (Request $request) {
-            return response()->json([
-                'status' => 'success',
-                'data' => $request->user(),
-            ]);
+
+        Route::middleware('account.active')->group(function () {
+            Route::get('/user', function (Request $request) {
+                return response()->json([
+                    'status' => 'success',
+                    'data' => $request->user(),
+                ]);
+            });
         });
     });
 });

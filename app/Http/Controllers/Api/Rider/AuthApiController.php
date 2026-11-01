@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api\Rider;
 
+use App\Http\Controllers\Api\Concerns\IssuesApiTokens;
 use App\Http\Controllers\Controller;
 use App\Models\Rider;
 use Illuminate\Http\Request;
@@ -9,6 +10,8 @@ use Illuminate\Support\Facades\Hash;
 
 class AuthApiController extends Controller
 {
+    use IssuesApiTokens;
+
     public function login(Request $request)
     {
         $request->validate([
@@ -25,14 +28,16 @@ class AuthApiController extends Controller
             ], 401);
         }
 
-        if ($rider->status !== 'approved') {
+        $allowedStatuses = (array) config('security.allowed_statuses.rider', ['approved']);
+
+        if (! in_array($rider->status, $allowedStatuses, true)) {
             return response()->json([
                 'status' => 'error',
                 'message' => 'Your account is pending approval or has been restricted.',
             ], 403);
         }
 
-        $token = $rider->createToken('rider_auth_token')->plainTextToken;
+        $token = $this->issueApiToken($rider, 'rider', 'rider_auth_token');
 
         return response()->json([
             'status' => 'success',

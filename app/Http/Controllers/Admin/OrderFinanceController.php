@@ -21,6 +21,7 @@ use App\Models\StorkVoucher;
 use App\Models\User;
 use App\Models\WalletTransaction;
 use App\Notifications\OrderLifecycleNotification;
+use App\Services\AccountArchiveService;
 use App\Services\BuyerAbandonmentService;
 use App\Services\InventoryStockService;
 use App\Services\OrderCompletionService;
@@ -39,7 +40,8 @@ class OrderFinanceController extends Controller
         protected InventoryStockService $inventoryStockService,
         protected RoleWalletService $roleWalletService,
         protected BuyerAbandonmentService $buyerAbandonmentService,
-        protected VoucherService $voucherService
+        protected VoucherService $voucherService,
+        protected AccountArchiveService $accountArchiveService
     ) {}
 
     public function commissions(Request $request)
@@ -340,16 +342,19 @@ class OrderFinanceController extends Controller
         $roleTab = $request->query('role', 'Buyer');
         $search = trim((string) $request->query('search', ''));
 
+        // Accounts their owners deleted are counted under "Archived" only.
         $counts = [
-            'Buyer'     => User::where('role', 'Buyer')->count(),
-            'Seller'    => User::where('role', 'Seller')->count(),
-            'Logistics' => User::where('role', 'Logistics')->count(),
+            'Buyer'     => User::notArchived()->where('role', 'Buyer')->count(),
+            'Seller'    => User::notArchived()->where('role', 'Seller')->count(),
+            'Logistics' => User::notArchived()->where('role', 'Logistics')->count(),
             'Courier'   => Courier::count(),
             'Rider'     => Rider::count(),
             'Appeals'   => BuyerBanAppeal::where('status', 'pending')->count(),
+            'Archived'  => User::archived()->count(),
         ];
 
         $users = collect();
+        $archivedUsers = collect();
         $couriers = collect();
         $riders = collect();
         $appeals = BuyerBanAppeal::with(['buyer', 'sanction'])
@@ -360,7 +365,9 @@ class OrderFinanceController extends Controller
         $sanctionsMap = BuyerAccountSanction::all()->keyBy('buyer_id');
 
         if (in_array($roleTab, ['Buyer', 'Seller', 'Logistics'], true)) {
-            $uQuery = User::with(['sellerProfile', 'logisticsProfile', 'identityVerification'])
+            // Archived (deleted) accounts have their own tab, so they are left out of the role directories.
+            $uQuery = User::notArchived()
+                ->with(['sellerProfile', 'logisticsProfile', 'identityVerification'])
                 ->where('role', $roleTab);
 
             if ($search !== '') {
@@ -373,6 +380,19 @@ class OrderFinanceController extends Controller
             }
 
             $users = $uQuery->orderBy('created_at', 'asc')->orderBy('id', 'asc')->paginate(12)->withQueryString();
+        } elseif ($roleTab === 'Archived') {
+            $archivedQuery = User::archived()->with(['sellerProfile', 'logisticsProfile']);
+
+            if ($search !== '') {
+                $archivedQuery->where(function ($q) use ($search) {
+                    $q->where('first_name', 'like', "%{$search}%")
+                      ->orWhere('last_name', 'like', "%{$search}%")
+                      ->orWhere('email', 'like', "%{$search}%")
+                      ->orWhere('contact_no', 'like', "%{$search}%");
+                });
+            }
+
+            $archivedUsers = $archivedQuery->orderByDesc('archived_at')->orderByDesc('id')->paginate(12)->withQueryString();
         } elseif ($roleTab === 'Courier') {
             $cQuery = Courier::with(['logisticsProfile', 'currentHubAssignment.hub']);
             if ($search !== '') {
@@ -402,6 +422,7 @@ class OrderFinanceController extends Controller
             'search',
             'counts',
             'users',
+            'archivedUsers',
             'couriers',
             'riders',
             'appeals',
@@ -422,6 +443,14 @@ class OrderFinanceController extends Controller
 
         if ($validated['entity_type'] === 'user') {
             $targetUser = User::findOrFail($validated['entity_id']);
+
+            // A deleted account is handled from the Archived Accounts tab, not by suspending or reactivating it.
+            if ($targetUser->isArchived()) {
+                return back()->withErrors([
+                    'account' => "{$targetUser->full_name} deleted this account. Restore it from the Archived Accounts tab first.",
+                ]);
+            }
+
             $sanction = $this->buyerAbandonmentService->getOrCreateSanction((int) $targetUser->id);
 
             if ($validated['action'] === 'suspend_temp') {
@@ -472,6 +501,29 @@ class OrderFinanceController extends Controller
         ]);
 
         return back()->with('success', "Rider {$rider->full_name} status updated to {$newStatus}.");
+    }
+
+    /**
+     * Bring back an account its owner deleted (Account Management > Delete
+     * Account). Only the archive stamp is cleared: the password, orders and
+     * any ban or suspension stay exactly as they were.
+     */
+    public function restoreArchivedAccount(Request $request, User $user)
+    {
+        $validated = $request->validate([
+            'remarks' => ['nullable', 'string', 'max:300'],
+        ]);
+
+        if (! $user->isArchived()) {
+            return back()->withErrors(['account' => "{$user->full_name} is not archived."]);
+        }
+
+        $this->accountArchiveService->restore($user, $validated['remarks'] ?? null);
+
+        return back()->with(
+            'success',
+            "Account {$user->full_name} ({$user->role}) restored. They can sign in again with their existing password."
+        );
     }
 
     public function resolveBuyerAppeal(Request $request, BuyerBanAppeal $appeal)

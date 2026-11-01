@@ -12,6 +12,7 @@ use App\Http\Controllers\Buyer\AccountManagementController;
 use App\Http\Controllers\Buyer\AddressController;
 use App\Http\Controllers\Buyer\CartController;
 use App\Http\Controllers\Buyer\CheckoutController;
+use App\Http\Controllers\Buyer\DeleteAccountController;
 use App\Http\Controllers\Buyer\OrderController;
 use App\Http\Controllers\Buyer\ReviewController;
 use App\Http\Controllers\Buyer\SellerController;
@@ -81,6 +82,8 @@ Route::middleware('throttle:120,1')->group(function () {
                 Route::post('/account-management/password/request-otp', [AccountManagementController::class, 'requestPasswordOtp'])->middleware('throttle:10,1')->name('account-management.request-password-otp');
                 Route::post('/account-management/password/verify-otp', [AccountManagementController::class, 'verifyPasswordOtp'])->middleware('throttle:15,1')->name('account-management.verify-password-otp');
                 Route::patch('/account-management/password', [AccountManagementController::class, 'updatePassword'])->name('account-management.update-password');
+                Route::get('/account-management/delete/eligibility', [DeleteAccountController::class, 'eligibility'])->middleware('throttle:30,1')->name('account-management.delete.eligibility');
+                Route::post('/account-management/delete', [DeleteAccountController::class, 'destroy'])->middleware('throttle:10,1')->name('account-management.delete');
 
                 Route::get('/addresses', [AddressController::class, 'index'])->name('addresses');
                 Route::post('/addresses', [AddressController::class, 'store'])->name('addresses.store');

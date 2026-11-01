@@ -40,6 +40,7 @@ Route::prefix('admin')->name('admin.')->middleware('throttle:120,1')->group(func
 
         Route::get('/accounts', [OrderFinanceController::class, 'accountsIndex'])->name('accounts.index');
         Route::post('/accounts/toggle-status', [OrderFinanceController::class, 'toggleAccountStatus'])->name('accounts.toggle-status');
+        Route::post('/accounts/archived/{user}/restore', [OrderFinanceController::class, 'restoreArchivedAccount'])->name('accounts.restore');
         Route::post('/accounts/appeals/{appeal}/resolve', [OrderFinanceController::class, 'resolveBuyerAppeal'])->name('accounts.resolve-appeal');
 
         Route::get('/audit-logs', [PlatformSettingsController::class, 'auditLogs'])->name('audit-logs.index');
