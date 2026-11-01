@@ -254,9 +254,9 @@
         </div>
     @endif
 
-    {{-- STEP 3: Password & Terms Agreement --}}
+    {{-- STEP 3: Password & Legal Agreement (Terms + Privacy Policy) --}}
     @if ($currentStep === 3)
-        <div class="space-y-5" x-data="{ showPass: false, showConfirm: false, termsModalOpen: false }">
+        <div class="space-y-5" x-data="{ showPass: false, showConfirm: false, legalModalOpen: false, legalModalType: 'terms' }">
             {{-- Password --}}
             <div>
                 <label class="block text-xs uppercase tracking-wider font-bold text-text-muted mb-1.5">
@@ -329,7 +329,7 @@
                 </span>
             </div>
 
-            <!-- Terms & Conditions Checkbox -->
+            <!-- Terms & Conditions + Privacy Policy Checkbox -->
             <div class="pt-3 border-t border-border-subtle/70">
                 <label class="flex items-start gap-2.5 cursor-pointer select-none">
                     <input type="checkbox"
@@ -338,10 +338,18 @@
                     <span class="text-xs text-text-muted leading-relaxed">
                         I have read and agree to the
                         <button type="button"
-                                @click.stop="termsModalOpen = true"
+                                @click.stop="legalModalType = 'terms'; legalModalOpen = true"
                                 class="font-bold text-primary hover:text-primary-dark underline cursor-pointer">
-                            Terms &amp; Conditions
+                            Storkia Terms &amp; Conditions
                         </button>
+                        and
+                        <button type="button"
+                                @click.stop="legalModalType = 'privacy'; legalModalOpen = true"
+                                class="font-bold text-primary hover:text-primary-dark underline cursor-pointer">
+                            Privacy Policy
+                        </button>
+                        (including the 7-day cancellation quota, 3-Strike COD Abandonment policy, and RA 10173 data protection notice).
+                    </span>
                 </label>
                 @error('accept_terms')
                     <p class="text-danger text-xs mt-1.5 font-medium">{{ $message }}</p>
@@ -368,46 +376,61 @@
                 </button>
             </div>
 
-            <!-- Inline Terms & Conditions Modal -->
+            <!-- Unified Inline Terms & Privacy Modal -->
             <template x-teleport="body">
-                <div x-show="termsModalOpen"
+                <div x-show="legalModalOpen"
                      x-cloak
-                     @keydown.escape.window="termsModalOpen = false"
+                     @keydown.escape.window="legalModalOpen = false"
                      class="fixed inset-0 z-[220] flex items-center justify-center p-4 bg-black/65 backdrop-blur-xs">
-                    <div @click.away="termsModalOpen = false"
+                    <div @click.away="legalModalOpen = false"
                          class="bg-surface rounded-3xl max-w-4xl w-full max-h-[88vh] flex flex-col shadow-2xl border border-border-subtle overflow-hidden">
-                        <div class="px-6 py-4 border-b border-border-subtle flex items-center justify-between bg-surface shrink-0">
-                            <div>
-                                <h3 class="text-base sm:text-lg font-bold text-primary-dark">Storkia Terms &amp; Conditions</h3>
-                                <p class="text-xs text-text-muted">Review the Buyer &amp; Platform Agreement below</p>
+                        <div class="px-6 py-4 border-b border-border-subtle flex flex-wrap items-center justify-between gap-3 bg-surface shrink-0">
+                            <div class="flex items-center gap-2">
+                                <button type="button"
+                                        @click="legalModalType = 'terms'"
+                                        :class="legalModalType === 'terms' ? 'bg-primary-dark text-white font-bold' : 'bg-surface-subtle text-text-muted hover:text-text-main font-semibold'"
+                                        class="px-4 py-2 rounded-xl text-xs transition-colors cursor-pointer">
+                                    Terms &amp; Conditions
+                                </button>
+                                <button type="button"
+                                        @click="legalModalType = 'privacy'"
+                                        :class="legalModalType === 'privacy' ? 'bg-primary-dark text-white font-bold' : 'bg-surface-subtle text-text-muted hover:text-text-main font-semibold'"
+                                        class="px-4 py-2 rounded-xl text-xs transition-colors cursor-pointer">
+                                    Privacy Policy
+                                </button>
                             </div>
                             <button type="button"
-                                    @click="termsModalOpen = false"
+                                    @click="legalModalOpen = false"
                                     class="p-1.5 rounded-xl text-text-muted hover:text-text-main hover:bg-surface-subtle cursor-pointer">
                                 &times;
                             </button>
                         </div>
 
                         <div class="p-6 overflow-y-auto flex-1 custom-scrollbar bg-surface-subtle/40">
-                            <x-ui.terms-content default-tab="buyer" :compact="true" />
+                            <div x-show="legalModalType === 'terms'">
+                                <x-ui.terms-content default-tab="buyer" :compact="true" />
+                            </div>
+                            <div x-show="legalModalType === 'privacy'" x-cloak>
+                                <x-ui.privacy-content default-tab="buyer" :compact="true" />
+                            </div>
                         </div>
 
                         <div class="px-6 py-4 border-t border-border-subtle bg-surface flex items-center justify-between gap-3 shrink-0">
-                            <a href="{{ route('terms', ['role' => 'buyer']) }}"
+                            <a :href="legalModalType === 'terms' ? '{{ route('terms', ['role' => 'buyer']) }}' : '{{ route('privacy', ['section' => 'buyer']) }}'"
                                target="_blank"
                                class="text-xs font-bold text-primary hover:underline">
-                                Open in New Tab &nearr;
+                                Open Full Page in New Tab &nearr;
                             </a>
                             <div class="flex items-center gap-2.5">
                                 <button type="button"
-                                        @click="termsModalOpen = false"
+                                        @click="legalModalOpen = false"
                                         class="px-4 py-2 rounded-xl bg-surface-subtle text-text-muted text-xs font-bold cursor-pointer">
                                     Close
                                 </button>
                                 <button type="button"
-                                        @click="$wire.set('accept_terms', true); termsModalOpen = false"
+                                        @click="$wire.set('accept_terms', true); legalModalOpen = false"
                                         class="px-5 py-2.5 rounded-xl bg-primary-dark hover:bg-text-main text-white text-xs font-bold shadow-xs cursor-pointer">
-                                    I Understand &amp; Accept Terms
+                                    I Agree to Terms &amp; Privacy Policy
                                 </button>
                             </div>
                         </div>

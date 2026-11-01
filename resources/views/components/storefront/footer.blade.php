@@ -34,7 +34,7 @@
     ];
 
     $legal = [
-        ['label' => 'Privacy Policy',        'href' => '#'],
+        ['label' => 'Privacy Policy',        'href' => route('privacy')],
         ['label' => 'Terms & Conditions',    'href' => route('terms')],
         ['label' => 'Cookie Policy',         'href' => '#'],
     ];

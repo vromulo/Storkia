@@ -600,9 +600,9 @@
             </div>
         @endif
 
-        {{-- STEP 7: Review, Terms & Submit --}}
+        {{-- STEP 7: Review, Terms + Privacy Policy & Submit --}}
         @if ($currentStep === 7)
-            <div class="space-y-6 text-xs" x-data="{ termsModalOpen: false }">
+            <div class="space-y-6 text-xs" x-data="{ legalModalOpen: false, legalModalType: 'terms' }">
                 <div class="space-y-5">
                     <div class="border-b border-border-subtle/70 pb-3">
                         <div class="flex justify-between items-center mb-2">
@@ -648,19 +648,27 @@
                     </div>
                 </div>
 
-                <!-- Logistics Terms & Conditions Agreement Checkbox -->
+                <!-- Logistics Terms & Conditions + Privacy Policy Agreement Checkbox -->
                 <div class="p-3.5 rounded-2xl bg-surface-subtle/70 border border-border-subtle">
                     <label class="flex items-start gap-2.5 cursor-pointer select-none">
                         <input type="checkbox"
                                wire:model.live="accept_terms"
                                class="mt-0.5 w-4 h-4 rounded border-border-subtle text-primary-dark focus:ring-primary-dark cursor-pointer">
                         <span class="text-xs text-text-muted leading-relaxed">
-                            I agree to the
+                            I have read and agree to the
                             <button type="button"
-                                    @click.stop="termsModalOpen = true"
+                                    @click.stop="legalModalType = 'terms'; legalModalOpen = true"
                                     class="font-bold text-primary hover:text-primary-dark underline cursor-pointer">
-                                Terms &amp; Conditions
+                                Storkia Logistics Hub &amp; Fleet Terms &amp; Conditions
                             </button>
+                            and
+                            <button type="button"
+                                    @click.stop="legalModalType = 'privacy'; legalModalOpen = true"
+                                    class="font-bold text-primary hover:text-primary-dark underline cursor-pointer">
+                                Privacy Policy
+                            </button>
+                            (including the 90% Hub / 10% Rider shipping split, mandatory 2-step QR/Reference verification, 2-hour dispatch SLA, COD remittance audit rules, and RA 10173 fleet document protection).
+                        </span>
                     </label>
                     @error('accept_terms')
                         <p class="text-danger text-xs mt-1.5 font-medium">{{ $message }}</p>
@@ -680,46 +688,61 @@
                     </button>
                 </div>
 
-                <!-- Inline Logistics Terms Modal -->
+                <!-- Unified Inline Logistics Terms & Privacy Modal -->
                 <template x-teleport="body">
-                    <div x-show="termsModalOpen"
+                    <div x-show="legalModalOpen"
                          x-cloak
-                         @keydown.escape.window="termsModalOpen = false"
+                         @keydown.escape.window="legalModalOpen = false"
                          class="fixed inset-0 z-[220] flex items-center justify-center p-4 bg-black/65 backdrop-blur-xs">
-                        <div @click.away="termsModalOpen = false"
+                        <div @click.away="legalModalOpen = false"
                              class="bg-surface rounded-3xl max-w-4xl w-full max-h-[88vh] flex flex-col shadow-2xl border border-border-subtle overflow-hidden">
-                            <div class="px-6 py-4 border-b border-border-subtle flex items-center justify-between bg-surface shrink-0">
-                                <div>
-                                    <h3 class="text-base sm:text-lg font-bold text-primary-dark">Storkia Logistics Hub &amp; Fleet Terms &amp; Conditions</h3>
-                                    <p class="text-xs text-text-muted">Review the Sorting Hub, Courier &amp; Rider Operational Agreement</p>
+                            <div class="px-6 py-4 border-b border-border-subtle flex flex-wrap items-center justify-between gap-3 bg-surface shrink-0">
+                                <div class="flex items-center gap-2">
+                                    <button type="button"
+                                            @click="legalModalType = 'terms'"
+                                            :class="legalModalType === 'terms' ? 'bg-primary-dark text-white font-bold' : 'bg-surface-subtle text-text-muted hover:text-text-main font-semibold'"
+                                            class="px-4 py-2 rounded-xl text-xs transition-colors cursor-pointer">
+                                        Logistics Terms &amp; Conditions
+                                    </button>
+                                    <button type="button"
+                                            @click="legalModalType = 'privacy'"
+                                            :class="legalModalType === 'privacy' ? 'bg-primary-dark text-white font-bold' : 'bg-surface-subtle text-text-muted hover:text-text-main font-semibold'"
+                                            class="px-4 py-2 rounded-xl text-xs transition-colors cursor-pointer">
+                                        Logistics Privacy Policy
+                                    </button>
                                 </div>
                                 <button type="button"
-                                        @click="termsModalOpen = false"
+                                        @click="legalModalOpen = false"
                                         class="p-1.5 rounded-xl text-text-muted hover:text-text-main hover:bg-surface-subtle cursor-pointer">
                                     &times;
                                 </button>
                             </div>
 
                             <div class="p-6 overflow-y-auto flex-1 custom-scrollbar bg-surface-subtle/40">
-                                <x-ui.terms-content default-tab="logistics" :compact="true" />
+                                <div x-show="legalModalType === 'terms'">
+                                    <x-ui.terms-content default-tab="logistics" :compact="true" />
+                                </div>
+                                <div x-show="legalModalType === 'privacy'" x-cloak>
+                                    <x-ui.privacy-content default-tab="logistics" :compact="true" />
+                                </div>
                             </div>
 
                             <div class="px-6 py-4 border-t border-border-subtle bg-surface flex items-center justify-between gap-3 shrink-0">
-                                <a href="{{ route('terms', ['role' => 'logistics']) }}"
+                                <a :href="legalModalType === 'terms' ? '{{ route('terms', ['role' => 'logistics']) }}' : '{{ route('privacy', ['section' => 'logistics']) }}'"
                                    target="_blank"
                                    class="text-xs font-bold text-primary hover:underline">
-                                    Open in New Tab &nearr;
+                                    Open Full Page in New Tab &nearr;
                                 </a>
                                 <div class="flex items-center gap-2.5">
                                     <button type="button"
-                                            @click="termsModalOpen = false"
+                                            @click="legalModalOpen = false"
                                             class="px-4 py-2 rounded-xl bg-surface-subtle text-text-muted text-xs font-bold cursor-pointer">
                                         Close
                                     </button>
                                     <button type="button"
-                                            @click="$wire.set('accept_terms', true); termsModalOpen = false"
+                                            @click="$wire.set('accept_terms', true); legalModalOpen = false"
                                             class="px-5 py-2.5 rounded-xl bg-primary-dark hover:bg-text-main text-white text-xs font-bold shadow-xs cursor-pointer">
-                                        I Understand &amp; Accept Terms
+                                        I Agree to Terms &amp; Privacy Policy
                                     </button>
                                 </div>
                             </div>

@@ -1,4 +1,4 @@
-<div x-data="{ isReady: false }" 
+<div x-data="{ isReady: false, privacyModalOpen: false }" 
      x-init="setTimeout(() => isReady = true, 450)" 
      class="bg-surface min-h-[calc(100vh-220px)] py-12 md:py-16 relative flex flex-col justify-center">
 
@@ -60,11 +60,22 @@
                         </h3>
                         <p class="text-xs sm:text-sm text-text-muted leading-relaxed">
                             We aim to keep the data you share during this process private, safe, and secure. Learn more in our 
-                            <a href="#" class="text-text-main underline hover:text-primary transition-colors font-medium">Privacy Policy</a>.
+                            <button type="button"
+                                    @click="privacyModalOpen = true"
+                                    class="text-text-main underline hover:text-primary transition-colors font-medium cursor-pointer">
+                                Privacy Policy
+                            </button>.
                         </p>
-                        <div class="pt-2 border-t border-border-subtle/60">
-                            <a href="#" class="text-xs sm:text-sm font-semibold text-text-main hover:text-primary underline transition-colors inline-block">
+                        <div class="pt-2 border-t border-border-subtle/60 flex items-center justify-between gap-2">
+                            <button type="button"
+                                    @click="privacyModalOpen = true"
+                                    class="text-xs sm:text-sm font-semibold text-text-main hover:text-primary underline transition-colors inline-block cursor-pointer text-left">
                                 How identity verification works
+                            </button>
+                            <a href="{{ route('privacy', ['section' => 'buyer']) }}"
+                               target="_blank"
+                               class="text-[11px] font-bold text-primary hover:underline shrink-0">
+                                Full Page &nearr;
                             </a>
                         </div>
                     </div>
@@ -74,13 +85,14 @@
 
         {{-- 2. METHOD SELECTION --}}
         @elseif ($currentScreen === 'method')
-            <div wire:key="screen-method"class="max-w-2xl mx-auto space-y-6">
+            <div wire:key="screen-method" class="max-w-2xl mx-auto space-y-6">
                 <div class="space-y-1">
                     <h2 class="text-2xl sm:text-3xl font-bold text-text-main tracking-tight font-sans">
                         How would you like to add your government ID?
                     </h2>
                     <p class="text-sm text-text-muted">Choose your preferred capture method to continue</p>
                 </div>
+
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-4">
                     <!-- Upload Existing Photo Option -->
                     <button type="button" wire:click="selectMethod('upload')" class="p-6 rounded-2xl border-2 border-border-subtle hover:border-primary hover:bg-brand-light/10 text-left transition-all group cursor-pointer flex flex-col justify-between h-40">
@@ -128,22 +140,20 @@
                     </h2>
                     <p class="text-sm text-text-muted">Select one of the government-recognized identity cards</p>
                 </div>
+
                 <div class="space-y-3 pt-2">
                     @php
                         $idOptions = [
                             'drivers_license' => [
                                 'label' => "Driver's License",
-                                // Car icon (1.5 stroke width)
                                 'icon' => '<svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M9 17a2 2 0 11-4 0 2 2 0 014 0zM19 17a2 2 0 11-4 0 2 2 0 014 0z" /><path stroke-linecap="round" stroke-linejoin="round" d="M5 17h-2v-6l2-5h12l2 5v6h-2m-10 0h6m-10-8h14" /></svg>'
                             ],
                             'passport' => [
                                 'label' => 'Passport',
-                                // Globe icon (1.5 stroke width)
                                 'icon' => '<svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10" stroke-linecap="round" stroke-linejoin="round"/><path stroke-linecap="round" stroke-linejoin="round" d="M2 12h20M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z"/></svg>'
                             ],
                             'identity_card' => [
                                 'label' => 'Identity Card',
-                                // Card / ID badge icon (1.5 stroke width)
                                 'icon' => '<svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><rect x="3" y="4" width="18" height="16" rx="2" stroke-linecap="round" stroke-linejoin="round" /><path stroke-linecap="round" stroke-linejoin="round" d="M7 8h4m-4 4h8m-8 4h6" /></svg>'
                             ]
                         ];
@@ -170,7 +180,13 @@
 
                 <!-- Privacy & Handling Disclaimer -->
                 <p class="text-xs sm:text-sm text-text-muted leading-relaxed pt-2">
-                    Your ID will be handled according to our <a href="#" class="font-bold underline text-text-main hover:text-primary transition-colors">Privacy Policy</a> and won’t be shared with your Host or guests.
+                    Your ID will be handled according to our
+                    <button type="button"
+                            @click="privacyModalOpen = true"
+                            class="font-bold underline text-text-main hover:text-primary transition-colors cursor-pointer">
+                        Privacy Policy
+                    </button>
+                    and will never be shared with Sellers, Couriers, Riders, or other shoppers.
                 </p>
 
                 <hr class="border-border-subtle pt-2" />
@@ -192,6 +208,7 @@
                 };
                 $canContinue = $id_type === 'passport' ? (bool)$front_image : ((bool)$front_image && (bool)$back_image);
             @endphp
+
             <div wire:key="screen-upload" class="max-w-2xl mx-auto space-y-8">
                 <!-- Heading & Dynamic Subdescription -->
                 <div class="space-y-2">
@@ -475,4 +492,44 @@
         @endif
 
     </div>
+
+    <!-- Inline Privacy Policy & Identity Verification Data Handling Modal -->
+    <template x-teleport="body">
+        <div x-show="privacyModalOpen"
+             x-cloak
+             @keydown.escape.window="privacyModalOpen = false"
+             class="fixed inset-0 z-[220] flex items-center justify-center p-4 bg-black/65 backdrop-blur-xs">
+            <div @click.away="privacyModalOpen = false"
+                 class="bg-surface rounded-3xl max-w-4xl w-full max-h-[88vh] flex flex-col shadow-2xl border border-border-subtle overflow-hidden">
+                <div class="px-6 py-4 border-b border-border-subtle flex items-center justify-between bg-surface shrink-0">
+                    <div>
+                        <h3 class="text-base sm:text-lg font-bold text-primary-dark">Privacy Policy &amp; Identity Verification Notice</h3>
+                        <p class="text-xs text-text-muted">How your Government ID and personal data are protected under RA 10173</p>
+                    </div>
+                    <button type="button"
+                            @click="privacyModalOpen = false"
+                            class="p-1.5 rounded-xl text-text-muted hover:text-text-main hover:bg-surface-subtle cursor-pointer">
+                        &times;
+                    </button>
+                </div>
+
+                <div class="p-6 overflow-y-auto flex-1 custom-scrollbar bg-surface-subtle/40">
+                    <x-ui.privacy-content default-tab="buyer" :compact="true" />
+                </div>
+
+                <div class="px-6 py-4 border-t border-border-subtle bg-surface flex items-center justify-between gap-3 shrink-0">
+                    <a href="{{ route('privacy', ['section' => 'buyer']) }}"
+                       target="_blank"
+                       class="text-xs font-bold text-primary hover:underline">
+                        Open Full Privacy Policy Page &nearr;
+                    </a>
+                    <button type="button"
+                            @click="privacyModalOpen = false"
+                            class="px-5 py-2.5 rounded-xl bg-primary-dark hover:bg-text-main text-white text-xs font-bold shadow-xs cursor-pointer">
+                        Done Reading
+                    </button>
+                </div>
+            </div>
+        </div>
+    </template>
 </div>
