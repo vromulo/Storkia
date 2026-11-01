@@ -222,6 +222,11 @@
                                                 class="text-[11px] font-bold text-primary hover:underline">
                                                     {{ ($data['status'] ?? '') === 'failed' ? 'Try again' : 'View account' }}
                                                 </a>
+                                            @elseif(!empty($data['url']))
+                                                <a href="{{ route('user.notifications.open', $notif->id) }}"
+                                                class="text-[11px] font-bold text-primary hover:underline">
+                                                    {{ !empty($data['seller_order_id']) ? 'View order' : 'View details' }}
+                                                </a>
                                             @else
                                                 <span></span>
                                             @endif

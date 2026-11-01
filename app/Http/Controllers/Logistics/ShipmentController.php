@@ -14,6 +14,7 @@ use App\Models\ShipmentVerification;
 use App\Models\User;
 use App\Services\AddressService;
 use App\Services\BuyerAbandonmentService;
+use App\Services\BuyerOrderNotificationService;
 use App\Services\InventoryStockService;
 use App\Services\OrderCompletionService;
 use App\Services\ShipmentVerificationService;
@@ -30,7 +31,8 @@ class ShipmentController extends Controller
         protected ShipmentVerificationService $shipmentVerificationService,
         protected AddressService $addressService,
         protected BuyerAbandonmentService $buyerAbandonmentService,
-        protected VoucherService $voucherService
+        protected VoucherService $voucherService,
+        protected BuyerOrderNotificationService $buyerNotifications
     ) {}
 
     public function index(Request $request)
@@ -549,6 +551,8 @@ class ShipmentController extends Controller
             ]);
         });
 
+        $this->buyerNotifications->arrivedAtHub($shipment);
+
         return back()->with('success', "Shipment #{$shipment->tracking_number} physical receipt verified at sorting hub. You can now assign a last-mile Rider.");
     }
 
@@ -872,6 +876,10 @@ class ShipmentController extends Controller
                 abandonmentReason: $abandonmentReasonText,
                 failedAttemptsCount: $abandonmentAttempts
             );
+        }
+
+        if ($validated['resolution'] === 'schedule_redelivery') {
+            $this->buyerNotifications->redeliveryScheduled($shipment);
         }
 
         return back()->with('success', 'Failed delivery report resolved successfully.');

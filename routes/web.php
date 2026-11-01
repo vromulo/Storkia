@@ -133,6 +133,22 @@ Route::middleware('throttle:120,1')->group(function () {
                 auth()->user()->notifications()->findOrFail($id)->markAsRead();
                 return back();
             })->name('user.notifications.markRead');
+
+            // opening a notification marks it as read and
+            // takes the buyer to the order it is about.
+            Route::get('/user/notifications/{id}/open', function ($id) {
+                $notification = auth()->user()->notifications()->findOrFail($id);
+                $notification->markAsRead();
+
+                $target = parse_url((string) ($notification->data['url'] ?? ''));
+
+                // Only follow links that point back to this same site.
+                if ($target && (empty($target['host']) || $target['host'] === request()->getHost())) {
+                    return redirect(($target['path'] ?? '/') . (isset($target['query']) ? '?' . $target['query'] : ''));
+                }
+
+                return redirect()->route('user.orders');
+            })->name('user.notifications.open');
         });
     });
 });

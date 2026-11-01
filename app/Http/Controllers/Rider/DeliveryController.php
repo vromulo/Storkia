@@ -16,6 +16,7 @@ use App\Models\ShipmentVerification;
 use App\Models\WalletTransaction;
 use App\Notifications\OrderLifecycleNotification;
 use App\Services\BuyerAbandonmentService;
+use App\Services\BuyerOrderNotificationService;
 use App\Services\OrderCompletionService;
 use App\Services\RoleWalletService;
 use App\Services\ShipmentVerificationService;
@@ -35,7 +36,8 @@ class DeliveryController extends Controller
         protected OrderCompletionService $orderCompletionService,
         protected ShipmentVerificationService $shipmentVerificationService,
         protected RoleWalletService $roleWalletService,
-        protected BuyerAbandonmentService $buyerAbandonmentService
+        protected BuyerAbandonmentService $buyerAbandonmentService,
+        protected BuyerOrderNotificationService $buyerNotifications
     ) {}
 
     public function index(Request $request)
@@ -733,6 +735,10 @@ class DeliveryController extends Controller
                     shipmentId: $shipment->id
                 ));
             } catch (\Throwable $e) {
+            }
+
+            if ($targetShipment) {
+                $this->buyerNotifications->deliveryAttemptFailed($targetShipment, $finalAttemptNo, $validated['failure_reason']);
             }
         }
 

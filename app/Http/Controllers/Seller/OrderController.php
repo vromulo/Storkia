@@ -17,6 +17,7 @@ use App\Models\Shipment;
 use App\Models\ShipmentTracking;
 use App\Models\WalletTransaction;
 use App\Notifications\OrderLifecycleNotification;
+use App\Services\BuyerOrderNotificationService;
 use App\Services\FormalReportService;
 use App\Services\InventoryStockService;
 use App\Services\OrderCompletionService;
@@ -39,7 +40,8 @@ class OrderController extends Controller
         protected ShipmentVerificationService $shipmentVerificationService,
         protected VoucherService $voucherService,
         protected RoleWalletService $roleWalletService,
-        protected FormalReportService $formalReportService
+        protected FormalReportService $formalReportService,
+        protected BuyerOrderNotificationService $buyerNotifications
     ) {}
 
     public function index(Request $request)
@@ -434,6 +436,8 @@ class OrderController extends Controller
             $this->orderCompletionService->syncParentOrderStatus($locked->order);
         });
 
+        $this->buyerNotifications->accepted($sellerOrder);
+
         return back()->with('success', "Order #{$sellerOrder->seller_order_number} accepted.");
     }
 
@@ -486,6 +490,8 @@ class OrderController extends Controller
 
             $this->orderCompletionService->syncParentOrderStatus($locked->order);
         });
+
+        $this->buyerNotifications->rejected($sellerOrder, trim($validated['rejection_reason']));
 
         return back()->with('success', "Order #{$sellerOrder->seller_order_number} rejected and reserved stock restored.");
     }
@@ -695,6 +701,8 @@ class OrderController extends Controller
 
             return $newShipment;
         });
+
+        $this->buyerNotifications->readyForPickup($sellerOrder, $shipment, $handoverMethod);
 
         return back()->with('success', "Shipment #{$shipment->tracking_number} created via {$selectedHub->hub_name}!");
     }
