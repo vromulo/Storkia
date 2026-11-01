@@ -63,13 +63,13 @@ class SuperDealController extends Controller
             'deal_type'           => ['required', 'in:super_deal,store_sale'],
             'product_id'          => ['required', 'integer', 'exists:products,id'],
             'title'               => ['nullable', 'string', 'max:120'],
-            'deal_price'          => ['nullable', 'numeric', 'min:1'],
-            'discount_percentage' => ['nullable', 'integer', 'min:1', 'max:99'],
+            'discount_percentage' => ['required', 'integer', 'min:1', 'max:99'],
             'flash_quantity'      => ['required_if:deal_type,super_deal', 'nullable', 'integer', 'min:1'],
             'starts_at'           => ['bail', 'required', 'date', $this->startNotInPast()],
             'ends_at'             => ['bail', 'required', 'date', 'after:starts_at', $this->endNotInPast()],
         ], [
             'ends_at.after'                => 'End date and time must be strictly after the start date and time.',
+            'discount_percentage.required' => 'Please enter a discount percentage from 1% to 99%.',
             'discount_percentage.integer'  => 'Discount percentage must be a whole number from 1% to 99%.',
             'flash_quantity.required_if'   => 'Please enter the Super Deal slot quantity.',
         ]);
@@ -77,20 +77,9 @@ class SuperDealController extends Controller
         $product = Product::where('user_id', $user->id)->findOrFail($validated['product_id']);
         $originalPrice = (float) $product->price;
 
-        $dealPrice = ! empty($validated['deal_price']) ? round((float) $validated['deal_price'], 2) : null;
-        $discountPct = ! empty($validated['discount_percentage']) ? (int) $validated['discount_percentage'] : null;
-
-        if ($dealPrice === null && $discountPct === null) {
-            throw ValidationException::withMessages([
-                'deal_price' => 'Please enter either a fixed sale price (below ₱' . number_format($originalPrice, 2) . ') or a whole discount percentage (1%–99%).',
-            ]);
-        }
-
-        if ($dealPrice !== null && $dealPrice >= $originalPrice) {
-            throw ValidationException::withMessages([
-                'deal_price' => 'Fixed sale price must be strictly lower than the original product price (₱' . number_format($originalPrice, 2) . ').',
-            ]);
-        }
+        // The seller only enters a discount %; the resulting price is stored alongside it.
+        $discountPct = (int) $validated['discount_percentage'];
+        $dealPrice = round($originalPrice * (1 - ($discountPct / 100)), 2);
 
         if ($validated['deal_type'] === 'super_deal' && (int) $validated['flash_quantity'] > (int) $product->stock_quantity) {
             throw ValidationException::withMessages([
@@ -121,12 +110,6 @@ class SuperDealController extends Controller
                     'product_id' => "\"{$product->name}\" already has a scheduled Store Sale during that time period.",
                 ]);
             }
-        }
-
-        if ($dealPrice === null && $discountPct !== null) {
-            $dealPrice = round($originalPrice * (1 - ($discountPct / 100)), 2);
-        } elseif ($discountPct === null && $dealPrice !== null && $originalPrice > 0) {
-            $discountPct = max(1, (int) round((1 - ($dealPrice / $originalPrice)) * 100));
         }
 
         DB::table('super_deals')->insert([

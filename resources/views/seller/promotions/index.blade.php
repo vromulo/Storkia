@@ -78,14 +78,10 @@
                     </select>
                 </div>
 
-                <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
-                        <label class="block font-bold text-text-muted uppercase mb-1">Fixed Deal Price (₱)</label>
-                        <input type="number" step="0.01" min="1" name="deal_price" placeholder="e.g. 299.00" class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface font-bold text-primary">
-                    </div>
-                    <div>
-                        <label class="block font-bold text-text-muted uppercase mb-1">Or Discount % (1–99%)</label>
-                        <input type="number" min="1" max="99" name="discount_percentage" placeholder="e.g. 20" class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface font-bold">
+                        <label class="block font-bold text-text-muted uppercase mb-1">Discount % (1–99%) <span class="text-danger">*</span></label>
+                        <input type="number" min="1" max="99" step="1" name="discount_percentage" placeholder="e.g. 20" required class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface font-bold">
                     </div>
                     <div x-show="dealType === 'super_deal'">
                         <label class="block font-bold text-text-muted uppercase mb-1">Super Deal Qty <span class="text-danger">*</span></label>
