@@ -198,7 +198,8 @@
                         </label>
                         <div class="flex items-center gap-4 text-xs text-text-muted underline">
                             <a href="#" class="hover:text-text-main">General Address Tips</a>
-                            <a href="#" class="hover:text-text-main">Privacy & Cookie Policy</a>
+                            <a href="{{ route('privacy') }}" target="_blank" rel="noopener" class="hover:text-text-main">Privacy Policy</a>
+                            <a href="{{ route('cookies') }}" target="_blank" rel="noopener" class="hover:text-text-main">Cookie Policy</a>
                         </div>
                     </div>
 
