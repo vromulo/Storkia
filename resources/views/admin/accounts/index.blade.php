@@ -7,7 +7,7 @@
         <div>
             <h1 class="text-3xl font-bold text-primary-dark">User Account Management &amp; Ban Appeals</h1>
             <p class="text-sm text-text-muted mt-1">
-                Monitor all registered accounts by role (<strong>Buyer, Seller, Logistics, Courier, Rider</strong>), track 3-Strike COD abandonment records, suspend or reactivate accounts, and review Buyer reactivation appeals.
+                Monitor all registered accounts by role (<strong>Buyer, Seller, Logistics, Courier, Rider</strong>), track 3-Strike COD abandonment records, suspend or reactivate accounts, review Buyer reactivation appeals, and restore accounts that their owners deleted.
             </p>
         </div>
 
@@ -46,6 +46,7 @@
             'Courier'   => 'First-Mile Couriers (' . $counts['Courier'] . ')',
             'Rider'     => 'Last-Mile Riders (' . $counts['Rider'] . ')',
             'Appeals'   => 'Buyer 3-Strike Ban Appeals (' . $counts['Appeals'] . ' Pending)',
+            'Archived'  => 'Archived Accounts (' . $counts['Archived'] . ')',
         ] as $key => $label)
             <a href="{{ route('admin.accounts.index', ['role' => $key]) }}"
                class="px-4 py-2.5 rounded-2xl text-xs font-bold border transition-all {{ $roleTab === $key ? 'bg-primary-dark text-white border-primary-dark shadow-xs' : ($key === 'Appeals' && $counts['Appeals'] > 0 ? 'bg-amber-50 text-amber-900 border-amber-300' : 'bg-surface text-text-muted border-border-subtle hover:text-text-main') }}">
@@ -192,6 +193,75 @@
             </div>
             <div class="px-5 py-4 border-t border-border-subtle">
                 {{ $users->links() }}
+            </div>
+        </div>
+
+    @elseif($roleTab === 'Archived')
+        <div class="bg-surface rounded-3xl border border-border-subtle shadow-xs overflow-hidden">
+            <div class="p-5 border-b border-border-subtle bg-surface-subtle/50">
+                <h2 class="text-base font-bold text-primary-dark">Archived Accounts</h2>
+                <p class="text-xs text-text-muted">Accounts their owners deleted from Account Management. Nothing is removed: orders, reviews and wallet history are kept, and the owner can no longer sign in. Restoring an account lets the owner sign in again with their existing password.</p>
+            </div>
+
+            <div class="overflow-x-auto">
+                <table class="w-full text-left border-collapse text-xs">
+                    <thead>
+                        <tr class="border-b border-border-subtle bg-surface-subtle/50 text-text-muted uppercase text-[11px] font-bold">
+                            <th class="py-3.5 px-5">User / Identity</th>
+                            <th class="py-3.5 px-4">Role &amp; Profile</th>
+                            <th class="py-3.5 px-4">Reason for Leaving</th>
+                            <th class="py-3.5 px-4">Archived On</th>
+                            <th class="py-3.5 px-5 text-right">Admin Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-border-subtle">
+                        @forelse($archivedUsers as $au)
+                            <tr class="hover:bg-surface-subtle/30">
+                                <td class="py-4 px-5 align-top">
+                                    <div class="font-bold text-sm text-text-main">{{ $au->full_name }}</div>
+                                    <div class="font-mono text-text-muted">{{ $au->email }}</div>
+                                    <div class="text-[11px] text-text-muted">{{ $au->contact_no ?? 'No phone' }}</div>
+                                </td>
+                                <td class="py-4 px-4 align-top">
+                                    <span class="px-2.5 py-0.5 rounded-full bg-brand-light/50 text-primary-dark font-bold text-[10px] uppercase">{{ $au->role }}</span>
+                                    @if($au->sellerProfile)
+                                        <div class="font-semibold text-text-main mt-1">{{ $au->sellerProfile->business_name }}</div>
+                                    @elseif($au->logisticsProfile)
+                                        <div class="font-semibold text-text-main mt-1">{{ $au->logisticsProfile->business_name }}</div>
+                                    @endif
+                                </td>
+                                <td class="py-4 px-4 align-top">
+                                    <div class="font-semibold text-text-main">{{ $au->archive_reason_label ?? 'Not given' }}</div>
+                                    @if($au->archive_note)
+                                        <div class="text-[11px] text-text-muted italic mt-1 max-w-xs whitespace-normal break-words">"{{ $au->archive_note }}"</div>
+                                    @endif
+                                </td>
+                                <td class="py-4 px-4 align-top">
+                                    <div class="font-semibold text-text-main">{{ $au->archived_at?->format('M d, Y h:i A') }}</div>
+                                    <div class="text-[11px] text-text-muted">{{ $au->archived_at?->diffForHumans() }}</div>
+                                </td>
+                                <td class="py-4 px-5 align-top text-right">
+                                    <form action="{{ route('admin.accounts.restore', $au->id) }}" method="POST" class="inline-flex flex-wrap items-center justify-end gap-1.5">
+                                        @csrf
+                                        <input type="text" name="remarks" maxlength="300" placeholder="Remarks (optional)" class="p-2 rounded-xl border border-border-subtle bg-surface text-xs w-44">
+                                        <button type="submit" onclick="return confirm('Restore this account? The owner will be able to sign in again.')" class="px-3 py-1.5 rounded-xl bg-green-600 hover:bg-green-700 text-white font-bold text-[11px] cursor-pointer">
+                                            Restore Account
+                                        </button>
+                                    </form>
+                                </td>
+                            </tr>
+                        @empty
+                            <tr>
+                                <td colspan="5" class="p-12 text-center text-text-muted">
+                                    {{ $search !== '' ? 'No archived accounts match your search.' : 'No archived accounts yet. Accounts that owners delete will appear here.' }}
+                                </td>
+                            </tr>
+                        @endforelse
+                    </tbody>
+                </table>
+            </div>
+            <div class="px-5 py-4 border-t border-border-subtle">
+                {{ $archivedUsers->links() }}
             </div>
         </div>
 

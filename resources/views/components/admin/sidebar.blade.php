@@ -108,6 +108,10 @@
                    class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ $isAccountsActive && $currentAccountRole === 'Appeals' ? 'bg-primary/10 text-primary font-bold shadow-xs' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">
                     3-Strike Ban Appeals
                 </a>
+                <a href="{{ route('admin.accounts.index', ['role' => 'Archived']) }}"
+                   class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ $isAccountsActive && $currentAccountRole === 'Archived' ? 'bg-primary/10 text-primary font-bold shadow-xs' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">
+                    Archived Accounts
+                </a>
             </div>
         </div>
 

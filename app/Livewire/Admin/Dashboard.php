@@ -42,7 +42,8 @@ class Dashboard extends Component
         $dateRange = $this->getDateRange();
 
         // 1. Core Platform Volume (Users & Roles)
-        $usersQuery = User::query();
+        // Accounts their owners deleted (archived) are left out of the user totals.
+        $usersQuery = User::notArchived();
         if ($dateRange) {
             $usersQuery->whereBetween('created_at', $dateRange);
         }
