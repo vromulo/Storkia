@@ -56,9 +56,6 @@
                     Back to sign in
                 </a>
             </p>
-            <p class="text-xs text-text-muted/80 leading-relaxed">
-                Riders and couriers: please ask your logistics hub to reset your password.
-            </p>
         </div>
     </x-auth.recovery-panel>
 @endsection
