@@ -26,6 +26,7 @@ Route::middleware('throttle:120,1')->group(function () {
     Route::view('/', 'buyer.landing-page')->name('landing');
     Route::view('/terms-and-conditions', 'buyer.terms-and-conditions')->name('terms');
     Route::view('/privacy-policy', 'buyer.privacy-policy')->name('privacy');
+    Route::view('/cookie-policy', 'buyer.cookie-policy')->name('cookies');
     Route::get('/shop', [HomeController::class, 'index'])->name('home');
     Route::get('/super-deals', [DealController::class, 'index'])->name('deals.index');
     Route::get('/trends', [TrendController::class, 'index'])->name('trends.index');
