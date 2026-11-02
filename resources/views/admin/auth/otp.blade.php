@@ -65,6 +65,12 @@
             <!-- OTP Card -->
             <div class="relative z-20 bg-surface/80 backdrop-blur-xl py-8 px-6 shadow-2xl sm:rounded-3xl sm:px-10 border border-border-subtle hover:border-primary/30 transition-all duration-300">
                 
+                @if (session('status'))
+                    <div class="mb-6 p-3 bg-success/10 border-l-2 border-success rounded-r-lg text-left">
+                        <p class="text-xs font-bold text-success">{{ session('status') }}</p>
+                    </div>
+                @endif
+
                 <form class="space-y-6" action="{{ route('admin.otp.verify') }}" method="POST">
                     @csrf
 

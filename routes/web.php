@@ -2,6 +2,7 @@
 
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Buyer\AuthController;
+use App\Http\Controllers\Auth\PasswordResetController;
 use App\Http\Controllers\Buyer\HomeController;
 use App\Http\Controllers\Buyer\CategoryController;
 use App\Http\Controllers\Buyer\DealController;
@@ -41,6 +42,16 @@ Route::middleware('throttle:120,1')->group(function () {
         Route::get('/login', [AuthController::class, 'showLogin'])->name('login');
         Route::post('/login', [AuthController::class, 'login'])->name('login.post');
         Route::get('/register', [AuthController::class, 'showRegister'])->name('register');
+
+        // Password reset for buyer, seller and logistics (users table) accounts.
+        Route::get('/forgot-password', [PasswordResetController::class, 'showRequestForm'])->name('password.request');
+        Route::post('/forgot-password', [PasswordResetController::class, 'sendResetLink'])
+            ->middleware('throttle:5,1')
+            ->name('password.email');
+        Route::get('/reset-password/{token}', [PasswordResetController::class, 'showResetForm'])->name('password.reset');
+        Route::post('/reset-password', [PasswordResetController::class, 'reset'])
+            ->middleware('throttle:10,1')
+            ->name('password.update');
     });
 
     Route::get('/account/suspended', [AuthController::class, 'showSuspendedNotice'])->name('buyer.suspended');

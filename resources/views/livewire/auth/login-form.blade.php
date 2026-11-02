@@ -12,6 +12,12 @@
                 <p class="text-xs font-bold text-danger">{{ $errors->first('email') }}</p>
             </div>
         @endif
+
+        @if (session('status'))
+            <div class="mt-4 p-3 bg-success/10 border-l-2 border-success rounded-r-lg text-left">
+                <p class="text-xs font-bold text-success">{{ session('status') }}</p>
+            </div>
+        @endif
     </div>
 
     <form wire:submit="submit" class="space-y-6">
@@ -39,6 +45,9 @@
                 <label for="password" class="block text-xs uppercase tracking-wider font-bold text-text-muted">
                     Password
                 </label>
+                <a href="{{ route('password.request', ['portal' => strtolower($expectedRole)]) }}" class="text-xs font-semibold text-primary hover:text-primary-dark underline underline-offset-4 transition-colors cursor-pointer">
+                    Forgot password?
+                </a>
             </div>
             <div class="relative flex items-center border-b {{ $errors->has('password') ? 'border-danger' : 'border-border-subtle focus-within:border-text-main' }} transition-colors">
                 <input 

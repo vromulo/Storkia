@@ -4,6 +4,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="csrf-token" content="{{ csrf_token() }}">
+    <meta name="session-login-url" content="{{ route('logistics.login') }}">
+    @auth
+        <meta name="session-authenticated" content="1">
+    @endauth
     <title>{{ $title ?? 'Storkia - Logistics Hub' }}</title>
     <link rel="icon" type="image/webp" href="{{ asset('assets/pink-storkia-minimized.webp') }}">
     @vite(['resources/css/app.css', 'resources/js/app.js'])
