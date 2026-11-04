@@ -23,9 +23,12 @@
         $totalStock = (int) ($product->stock_quantity ?? 0);
     }
 
-    $firstPic = (!empty($product->pictures) && is_array($product->pictures))
-        ? asset('storage/' . $product->pictures[0])
-        : '';
+    $mainPictures = (!empty($product->pictures) && is_array($product->pictures))
+        ? array_slice(array_values(array_filter($product->pictures)), 0, 10)
+        : [];
+
+    $mainPictureUrls = array_map(fn ($p) => asset('storage/' . $p), $mainPictures);
+    $firstPic = $mainPictureUrls[0] ?? '';
 
     $seller = $seller
         ?? $product->user?->sellerProfile
@@ -70,14 +73,12 @@
 
     $fromCategory = request()->query('from_category');
     $breadcrumbItems = [];
-
     if (!empty($fromCategory)) {
         $breadcrumbItems[] = [
             'label' => $fromCategory,
             'url'   => url('/category/' . \Illuminate\Support\Str::slug($fromCategory)),
         ];
     }
-
     $breadcrumbItems[] = [
         'label' => $product->name,
         'url'   => null,
@@ -113,6 +114,9 @@
     totalStock: {{ (int) $totalStock }},
     activePrice: {{ (float) ($product->price ?? 0) }},
     activeStock: {{ (int) $totalStock }},
+    galleryImages: @js($mainPictureUrls),
+    activeGalleryIndex: 0,
+    isViewingVariantImage: false,
     mainImage: '{{ $firstPic }}',
     defaultImage: '{{ $firstPic }}',
     quantity: 1,
@@ -124,12 +128,11 @@
         }
         return this.activeStock;
     },
+
     get discountedPrice() {
         const price = this.activePrice;
         let result = price;
-
         if (this.dealType === 'super_deal' || this.dealType === 'store_sale') {
-            // A fixed deal price applies to every variant (never above that variant's own price).
             if (this.dealFixedPrice !== null) {
                 result = Math.min(price, this.dealFixedPrice);
             } else if (this.dealPercent > 0) {
@@ -140,13 +143,14 @@
         } else if (this.discount > 0) {
             result = price * (1 - (this.discount / 100));
         }
-
         return Math.round(result * 100) / 100;
     },
+
     get discountPercentShown() {
         if (this.activePrice <= 0 || this.discountedPrice >= this.activePrice) return 0;
         return Math.max(1, Math.round((1 - (this.discountedPrice / this.activePrice)) * 100));
     },
+
     startDealCountdown() {
         if (!this.dealEndsAtMs) return;
         const pad = (n) => String(n).padStart(2, '0');
@@ -156,25 +160,55 @@
             this.dealCountdown = (d > 0 ? d + 'd ' : '') + pad(Math.floor((diff % 86400) / 3600)) + ':' + pad(Math.floor((diff % 3600) / 60)) + ':' + pad(diff % 60);
             if (diff === 0) {
                 clearInterval(this.dealTimer);
-                // The deal just ended: reload so the price goes back to normal.
                 setTimeout(() => window.location.reload(), 2000);
             }
         };
         tick();
         this.dealTimer = setInterval(tick, 1000);
     },
+
     formatMoney(value) {
         return Number(value).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     },
-    setMainImage(img) {
-        this.mainImage = img;
+
+    setMainGalleryImage(index) {
+        if (!this.galleryImages.length || index < 0 || index >= this.galleryImages.length) return;
+        this.activeGalleryIndex = index;
+        this.mainImage = this.galleryImages[index];
+        this.isViewingVariantImage = false;
     },
+
+    prevGalleryImage() {
+        if (this.galleryImages.length <= 1) return;
+        const nextIdx = (this.activeGalleryIndex - 1 + this.galleryImages.length) % this.galleryImages.length;
+        this.setMainGalleryImage(nextIdx);
+    },
+
+    nextGalleryImage() {
+        if (this.galleryImages.length <= 1) return;
+        const nextIdx = (this.activeGalleryIndex + 1) % this.galleryImages.length;
+        this.setMainGalleryImage(nextIdx);
+    },
+
+    setVariantImage(imgUrl) {
+        if (!imgUrl) return;
+        this.mainImage = imgUrl;
+        this.isViewingVariantImage = true;
+    },
+
+    resetToCoverImage() {
+        this.activeGalleryIndex = 0;
+        this.mainImage = this.defaultImage;
+        this.isViewingVariantImage = false;
+    },
+
     triggerToast(msg, type = 'danger') {
         this.toastMessage = msg;
         this.toastType = type;
         this.showToast = true;
         setTimeout(() => this.showToast = false, 4000);
     },
+
     async toggleWishlist(isAuth) {
         if (!isAuth) {
             window.location.href = '{{ route('login') }}';
@@ -202,6 +236,7 @@
             this.isTogglingWishlist = false;
         }
     },
+
     validateAndSubmit(isAuth, isBuyNow = false) {
         if (this.isStoreOnVacation) {
             this.triggerToast('This store is currently on vacation and is temporarily not accepting orders.');
@@ -242,6 +277,43 @@
             this.addToCart();
         }
     },
+
+    async refreshNavbarCartDropdown(data = {}) {
+        if (data.dropdown_html) {
+            const wrapper = document.querySelector('[data-cart-dropdown-wrapper]');
+            if (wrapper) {
+                wrapper.innerHTML = data.dropdown_html;
+                if (window.Alpine) {
+                    window.Alpine.initTree(wrapper);
+                }
+                return;
+            }
+        }
+        try {
+            const pageRes = await fetch(window.location.href, {
+                headers: { 'X-Requested-With': 'XMLHttpRequest' },
+                credentials: 'same-origin'
+            });
+            if (pageRes.ok) {
+                const htmlText = await pageRes.text();
+                const parser = new DOMParser();
+                const doc = parser.parseFromString(htmlText, 'text/html');
+                const freshDropdown = doc.querySelector('[data-cart-dropdown-wrapper]') || doc.querySelector('[data-cart-icon]')?.parentElement;
+                const currentDropdown = document.querySelector('[data-cart-dropdown-wrapper]') || document.querySelector('[data-cart-icon]')?.parentElement;
+                if (freshDropdown && currentDropdown) {
+                    const freshPanel = freshDropdown.querySelector('[x-show=cartOpen]') || freshDropdown.lastElementChild;
+                    const currentPanel = currentDropdown.querySelector('[x-show=cartOpen]') || currentDropdown.lastElementChild;
+                    if (freshPanel && currentPanel && freshPanel !== currentDropdown.querySelector('[data-cart-icon]')) {
+                        currentPanel.replaceWith(freshPanel);
+                        if (window.Alpine) {
+                            window.Alpine.initTree(currentDropdown);
+                        }
+                    }
+                }
+            }
+        } catch (err) {}
+    },
+
     async addToCart() {
         if (this.isAddingToCart) return;
         this.isAddingToCart = true;
@@ -258,28 +330,24 @@
                 body: new FormData(form),
                 credentials: 'same-origin'
             });
-
-            // Session expired -> Laravel redirects to the login page
             if (response.redirected && /\/login/.test(response.url)) {
                 window.location.href = '{{ route('login') }}';
                 return;
             }
-
             const isJson = (response.headers.get('content-type') || '').includes('application/json');
             const data = isJson ? await response.json().catch(() => ({})) : {};
-
             if (!response.ok || data.success === false) {
                 const firstError = data.errors ? Object.values(data.errors)[0]?.[0] : null;
                 this.triggerToast(firstError || data.message || 'Unable to add this item to your cart right now.');
                 return;
             }
-
             const count = Number.isFinite(Number(data.cart_count))
                 ? Number(data.cart_count)
                 : window.getCartBadgeCount() + 1;
-
             await window.flyToCart({ source: button, imageUrl: this.mainImage });
             window.setCartBadge(count);
+            await this.refreshNavbarCartDropdown(data);
+            window.dispatchEvent(new CustomEvent('cart:updated', { detail: data }));
         } catch (e) {
             this.triggerToast('Unable to add this item to your cart right now.');
         } finally {
@@ -316,11 +384,11 @@
 
         <div class="bg-white rounded-3xl shadow-sm border border-border-subtle/80 overflow-hidden p-5 sm:p-8 lg:p-10">
             <div class="grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-10">
-
+                <!-- Left Column: Main Product Gallery (1 to 10 Main Pictures Only) -->
                 <div class="lg:col-span-5 flex flex-col">
                     <div class="aspect-square bg-surface rounded-2xl overflow-hidden border border-border-subtle/70 flex items-center justify-center group relative cursor-zoom-in shadow-2xs"
                          x-on:click="if(mainImage) imageModalOpen = true">
-                        @if(!empty($product->pictures) && is_array($product->pictures))
+                        @if(!empty($mainPictureUrls))
                             <img :src="mainImage"
                                  alt="{{ $product->name }}"
                                  class="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105">
@@ -340,6 +408,37 @@
                             </span>
                         @endif
 
+                        <!-- Lower-Right Variant Image Indicator / Gallery Counter Badge -->
+                        <div class="absolute bottom-3 right-3 z-10 flex items-center justify-end gap-2">
+                            <template x-if="isViewingVariantImage">
+                                <button type="button"
+                                        @click.stop="setMainGalleryImage(activeGalleryIndex)"
+                                        class="px-3 py-1.5 rounded-full bg-primary text-white text-[11px] font-bold shadow-md flex items-center gap-1.5 cursor-pointer hover:bg-primary-dark transition-colors">
+                                    <span x-text="'Variant: ' + (selectedSubName ? (selectedMainName + ' / ' + selectedSubName) : selectedMainName)"></span>
+                                    <span class="underline ml-1 text-[10px] opacity-90">(Back to Gallery)</span>
+                                </button>
+                            </template>
+                            <template x-if="!isViewingVariantImage && galleryImages.length > 0">
+                                <span class="px-3 py-1 rounded-full bg-black/70 text-white text-[11px] font-bold backdrop-blur-xs pointer-events-none shadow-xs"
+                                      x-text="(activeGalleryIndex + 1) + ' / ' + galleryImages.length"></span>
+                            </template>
+                        </div>
+
+                        @if(count($mainPictureUrls) > 1)
+                            <button type="button"
+                                    @click.stop="prevGalleryImage()"
+                                    aria-label="Previous image"
+                                    class="absolute left-2.5 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-white/85 hover:bg-white text-text-main shadow-md border border-border-subtle flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer">
+                                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/></svg>
+                            </button>
+                            <button type="button"
+                                    @click.stop="nextGalleryImage()"
+                                    aria-label="Next image"
+                                    class="absolute right-2.5 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-white/85 hover:bg-white text-text-main shadow-md border border-border-subtle flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer">
+                                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
+                            </button>
+                        @endif
+
                         <button type="button"
                                 @click.stop="toggleWishlist({{ auth()->check() ? 'true' : 'false' }})"
                                 :disabled="isTogglingWishlist"
@@ -353,21 +452,26 @@
                         </button>
                     </div>
 
-                    @if(!empty($product->pictures) && count($product->pictures) > 1)
+                    @if(count($mainPictureUrls) > 0)
                         <div class="flex gap-2.5 overflow-x-auto pt-4 pb-1 [&::-webkit-scrollbar]:hidden">
-                            @foreach($product->pictures as $pic)
-                                @php $picUrl = asset('storage/' . $pic); @endphp
+                            @foreach($mainPictureUrls as $picIdx => $picUrl)
                                 <button type="button"
-                                        x-on:click="setMainImage('{{ $picUrl }}')"
-                                        class="w-16 h-16 sm:w-20 sm:h-20 rounded-xl overflow-hidden border-2 flex-shrink-0 transition-all cursor-pointer focus:outline-none"
-                                        :class="mainImage === '{{ $picUrl }}' ? 'border-primary ring-2 ring-primary/20 opacity-100 scale-[1.02]' : 'border-border-subtle opacity-70 hover:opacity-100 hover:border-primary/50'">
-                                    <img src="{{ $picUrl }}" alt="Thumbnail" class="w-full h-full object-cover bg-white">
+                                        x-on:click="setMainGalleryImage({{ $picIdx }})"
+                                        class="relative w-16 h-16 sm:w-20 sm:h-20 rounded-xl overflow-hidden border-2 flex-shrink-0 transition-all cursor-pointer focus:outline-none"
+                                        :class="(!isViewingVariantImage && activeGalleryIndex === {{ $picIdx }}) ? 'border-primary ring-2 ring-primary/20 opacity-100 scale-[1.02]' : 'border-border-subtle opacity-70 hover:opacity-100 hover:border-primary/50'">
+                                    <img src="{{ $picUrl }}" alt="Product Image {{ $picIdx + 1 }}" class="w-full h-full object-cover bg-white">
+                                    @if($picIdx === 0)
+                                        <span class="absolute bottom-0 inset-x-0 bg-primary/90 text-white text-[9px] font-extrabold uppercase text-center py-0.5 pointer-events-none">
+                                            Cover
+                                        </span>
+                                    @endif
                                 </button>
                             @endforeach
                         </div>
                     @endif
                 </div>
 
+                <!-- Right Column: Product Details & Variant Selection -->
                 <div class="lg:col-span-7 flex flex-col justify-between">
                     <div>
                         <div class="flex items-start justify-between gap-3 mb-3">
@@ -482,6 +586,7 @@
                                                 $itemStock = $hasSubs
                                                     ? collect($item['subs'])->reject(fn($s) => !empty($s['is_archived']) || ($s['status'] ?? 'Approved') === 'Disapproved')->sum('stock')
                                                     : (int) ($item['stock'] ?? 0);
+                                                $variantImageUrl = (!empty($item['image'])) ? asset('storage/' . $item['image']) : '';
                                             @endphp
                                             <button type="button"
                                                 @if($itemStock <= 0 && !$hasSubs) disabled @endif
@@ -494,7 +599,7 @@
                                                         hasSubVariants = false;
                                                         activePrice = basePrice;
                                                         activeStock = totalStock;
-                                                        mainImage = defaultImage;
+                                                        resetToCoverImage();
                                                     } else {
                                                         selectedMain = {{ $vIndex }};
                                                         selectedSub = null;
@@ -503,8 +608,10 @@
                                                         hasSubVariants = {{ $hasSubs ? 'true' : 'false' }};
                                                         activePrice = {{ (float) ($item['price'] ?? $product->price) }};
                                                         activeStock = {{ (int) $itemStock }};
-                                                        @if(isset($item['image']) && $item['image'])
-                                                            mainImage = '{{ asset('storage/' . $item['image']) }}';
+                                                        @if($variantImageUrl !== '')
+                                                            setVariantImage('{{ $variantImageUrl }}');
+                                                        @else
+                                                            setMainGalleryImage(activeGalleryIndex);
                                                         @endif
                                                     }
                                                     quantity = 1;
@@ -512,8 +619,11 @@
                                                 :class="selectedMain === {{ $vIndex }}
                                                     ? 'border-primary text-primary bg-primary/10 ring-2 ring-primary/20 font-bold'
                                                     : '{{ $itemStock <= 0 && !$hasSubs ? 'border-border-subtle text-gray-300 bg-gray-50 line-through cursor-not-allowed' : 'border-border-subtle text-text-main hover:border-primary/50 hover:text-primary bg-surface font-medium cursor-pointer' }}'"
-                                                class="px-4 py-2.5 border rounded-xl focus:outline-none transition-all text-sm">
-                                                {{ $item['name'] ?? 'Unnamed' }}
+                                                class="px-3.5 py-2 border rounded-xl focus:outline-none transition-all text-sm inline-flex items-center gap-2">
+                                                @if($variantImageUrl !== '')
+                                                    <img src="{{ $variantImageUrl }}" alt="{{ $item['name'] ?? 'Variant' }}" class="w-6 h-6 rounded-md object-cover border border-border-subtle shrink-0 pointer-events-none">
+                                                @endif
+                                                <span>{{ $item['name'] ?? 'Unnamed' }}</span>
                                             </button>
                                         @endforeach
                                     </div>
@@ -522,7 +632,8 @@
                                 @foreach($product->variants['items'] as $vIndex => $item)
                                     @if(isset($item['subs']) && is_array($item['subs']) && count($item['subs']) > 0)
                                         @php
-                                            $parentStock = collect($item['subs'])->sum('stock');
+                                            $parentStock = collect($item['subs'])->reject(fn($s) => !empty($s['is_archived']) || ($s['status'] ?? 'Approved') === 'Disapproved')->sum('stock');
+                                            $parentVariantImageUrl = (!empty($item['image'])) ? asset('storage/' . $item['image']) : '';
                                         @endphp
                                         <div x-show="selectedMain === {{ $vIndex }}" style="display: none;" x-cloak>
                                             <h3 class="text-xs font-bold uppercase tracking-wider text-text-muted mb-2.5">
@@ -545,6 +656,9 @@
                                                                 selectedSubName = '';
                                                                 activePrice = {{ (float) ($item['price'] ?? $product->price) }};
                                                                 activeStock = {{ (int) $parentStock }};
+                                                                @if($parentVariantImageUrl !== '')
+                                                                    setVariantImage('{{ $parentVariantImageUrl }}');
+                                                                @endif
                                                             } else {
                                                                 selectedSub = {{ $sIndex }};
                                                                 selectedSubName = '{{ addslashes($sub['name'] ?? '') }}';
@@ -599,7 +713,6 @@
                                 <input type="hidden" name="quantity" x-bind:value="quantity">
                                 <input type="hidden" name="variant" x-bind:value="selectedMainName">
                                 <input type="hidden" name="sub_variant" x-bind:value="selectedSubName">
-
                                 <button type="button"
                                         x-ref="addToCartBtn"
                                         :disabled="isStoreOnVacation || activeStock <= 0 || isAddingToCart"
@@ -616,7 +729,6 @@
                                 <input type="hidden" name="quantity" x-bind:value="quantity">
                                 <input type="hidden" name="variant" x-bind:value="selectedMainName">
                                 <input type="hidden" name="sub_variant" x-bind:value="selectedSubName">
-
                                 <button type="button"
                                         :disabled="isStoreOnVacation || activeStock <= 0"
                                         @click="validateAndSubmit(true, true)"
@@ -632,6 +744,7 @@
                                     class="w-full sm:w-1/2 bg-primary/10 text-primary border border-primary/30 hover:bg-primary hover:text-white font-bold py-3.5 px-6 rounded-2xl transition-all duration-300 flex items-center justify-center gap-2.5 cursor-pointer shadow-2xs disabled:opacity-50">
                                 <span>Add To Cart</span>
                             </button>
+
                             <button type="button"
                                     :disabled="isStoreOnVacation || activeStock <= 0"
                                     @click="validateAndSubmit(false, true)"
@@ -641,13 +754,11 @@
                         @endauth
                     </div>
                 </div>
-
             </div>
         </div>
 
         <div class="bg-white rounded-3xl shadow-sm border border-border-subtle/80 p-6 sm:p-8">
             <div class="flex flex-col lg:flex-row items-center lg:items-start gap-6 sm:gap-8">
-
                 <a href="{{ $shopUrl }}" class="relative w-20 h-20 sm:w-24 sm:h-24 rounded-full p-1 bg-gradient-to-br from-primary via-secondary to-primary/40 shadow-md flex-shrink-0 group">
                     <div class="w-full h-full bg-white rounded-full p-0.5 overflow-hidden flex items-center justify-center">
                         @if($seller && $seller->logo_path)
@@ -696,7 +807,6 @@
                                         </form>
                                     @endif
 
-                                    <!-- Direct Product-Context Chat Draft Link -->
                                     <a href="{{ route('user.messages.buyer-messages', ['contact' => $sellerUserId, 'product_id' => $product->id]) }}"
                                        class="inline-flex items-center gap-2 px-5 py-2.5 rounded-2xl text-xs sm:text-sm font-bold bg-primary/10 hover:bg-primary text-primary hover:text-white border border-primary/30 transition-all duration-300 shadow-2xs">
                                         <span>Chat Now (Ask About Product)</span>
@@ -759,7 +869,6 @@
                         </div>
                     </div>
                 </div>
-
             </div>
         </div>
 
@@ -880,12 +989,61 @@
         @endif
     </div>
 
+    <!-- Full-Screen Product Image Lightbox Modal with Visible Close Button & Lower-Right Counter -->
     <div x-show="imageModalOpen"
-         style="display: none;"
-         class="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-md p-4 sm:p-8"
-         x-on:keydown.escape.window="imageModalOpen = false">
-        <div x-on:click.away="imageModalOpen = false" class="relative w-full h-full flex items-center justify-center cursor-default">
-            <img :src="mainImage" class="max-w-full max-h-full object-contain rounded-2xl shadow-2xl" x-on:click.stop>
+         x-cloak
+         x-transition.opacity
+         class="fixed inset-0 z-[150] flex items-center justify-center bg-black/80 backdrop-blur-md p-4 sm:p-8"
+         x-on:keydown.escape.window="imageModalOpen = false"
+         @click="imageModalOpen = false">
+
+        <button type="button"
+                @click.stop="imageModalOpen = false"
+                aria-label="Close image preview"
+                class="fixed top-5 right-5 z-[160] w-11 h-11 rounded-full bg-white/95 hover:bg-white text-gray-900 shadow-2xl border border-gray-200 flex items-center justify-center transition-transform active:scale-95 cursor-pointer">
+            <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+        </button>
+
+        <div class="relative max-w-5xl max-h-[88vh] flex items-center justify-center" @click.stop>
+            @if(count($mainPictureUrls) > 1)
+                <button type="button"
+                        x-show="!isViewingVariantImage"
+                        @click.stop="prevGalleryImage()"
+                        aria-label="Previous image"
+                        class="absolute left-3 top-1/2 -translate-y-1/2 w-10 h-10 rounded-full bg-white/90 hover:bg-white text-gray-900 shadow-lg flex items-center justify-center cursor-pointer">
+                    <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/></svg>
+                </button>
+            @endif
+
+            <img :src="mainImage"
+                 alt="{{ $product->name }}"
+                 class="max-w-full max-h-[85vh] object-contain rounded-2xl shadow-2xl bg-white">
+
+            @if(count($mainPictureUrls) > 1)
+                <button type="button"
+                        x-show="!isViewingVariantImage"
+                        @click.stop="nextGalleryImage()"
+                        aria-label="Next image"
+                        class="absolute right-3 top-1/2 -translate-y-1/2 w-10 h-10 rounded-full bg-white/90 hover:bg-white text-gray-900 shadow-lg flex items-center justify-center cursor-pointer">
+                    <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
+                </button>
+            @endif
+
+            <div class="absolute bottom-3 right-3">
+                <template x-if="isViewingVariantImage">
+                    <button type="button"
+                            @click.stop="setMainGalleryImage(activeGalleryIndex)"
+                            class="px-3.5 py-1.5 rounded-full bg-primary text-white text-xs font-bold shadow-lg cursor-pointer hover:bg-primary-dark">
+                        <span x-text="'Variant: ' + (selectedSubName ? (selectedMainName + ' / ' + selectedSubName) : selectedMainName) + ' (Back to Gallery)'"></span>
+                    </button>
+                </template>
+                <template x-if="!isViewingVariantImage && galleryImages.length > 0">
+                    <span class="px-3 py-1 rounded-full bg-black/75 text-white text-xs font-bold shadow-md"
+                          x-text="(activeGalleryIndex + 1) + ' / ' + galleryImages.length"></span>
+                </template>
+            </div>
         </div>
     </div>
 
@@ -898,6 +1056,5 @@
             <p class="text-text-muted text-xs font-medium leading-relaxed" x-text="toastMessage"></p>
         </div>
     </div>
-
 </div>
 @endsection

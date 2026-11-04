@@ -1,29 +1,34 @@
 @extends('layouts.app', ['title' => 'Order Confirmed - Storkia'])
 
 @section('content')
+@php
+    $hasGcashOrders = $order->sellerOrders->contains(fn ($so) => $so->effective_payment_method === 'GCASH');
+    $hasCodOrders = $order->sellerOrders->contains(fn ($so) => $so->effective_payment_method === 'COD');
+    $step3Label = ($hasGcashOrders && $hasCodOrders)
+        ? 'GCash & COD'
+        : ($hasGcashOrders ? 'GCash Escrow' : 'Cash on Delivery');
+@endphp
+
 <div class="min-h-screen bg-surface-subtle/40 pb-16 pt-6">
     <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 space-y-6">
 
         <nav aria-label="Checkout Stepper" class="w-full bg-surface border border-border-subtle rounded-2xl p-4 sm:p-5 shadow-xs select-none">
             <div class="flex items-center justify-between max-w-3xl mx-auto">
                 <div class="flex items-center gap-2 text-primary font-bold">
-                    <span class="w-7 h-7 rounded-full bg-primary/15 text-primary text-xs font-bold flex items-center justify-center">✓</span>
+                    <span class="w-7 h-7 rounded-full bg-primary/15 text-primary text-xs font-bold flex items-center justify-center">&check;</span>
                     <span class="text-sm font-sans tracking-tight">Cart</span>
                 </div>
                 <div class="flex-1 h-[2px] bg-primary mx-3 sm:mx-6 rounded-full"></div>
-
                 <div class="flex items-center gap-2 text-primary font-bold">
-                    <span class="w-7 h-7 rounded-full bg-primary/15 text-primary text-xs font-bold flex items-center justify-center">✓</span>
+                    <span class="w-7 h-7 rounded-full bg-primary/15 text-primary text-xs font-bold flex items-center justify-center">&check;</span>
                     <span class="text-sm font-sans tracking-tight hidden sm:inline">Place Order</span>
                 </div>
                 <div class="flex-1 h-[2px] bg-primary mx-3 sm:mx-6 rounded-full"></div>
-
                 <div class="flex items-center gap-2 text-primary font-bold">
-                    <span class="w-7 h-7 rounded-full bg-primary/15 text-primary text-xs font-bold flex items-center justify-center">✓</span>
-                    <span class="text-sm font-sans tracking-tight hidden sm:inline">Cash on Delivery</span>
+                    <span class="w-7 h-7 rounded-full bg-primary/15 text-primary text-xs font-bold flex items-center justify-center">&check;</span>
+                    <span class="text-sm font-sans tracking-tight hidden sm:inline">{{ $step3Label }}</span>
                 </div>
                 <div class="flex-1 h-[2px] bg-primary mx-3 sm:mx-6 rounded-full"></div>
-
                 <div class="flex items-center gap-2 text-primary font-bold">
                     <span class="w-7 h-7 rounded-full bg-primary text-surface text-xs font-bold flex items-center justify-center shadow-xs">4</span>
                     <span class="text-sm font-sans tracking-tight hidden sm:inline">Order Complete</span>
@@ -39,12 +44,15 @@
             </div>
             <h1 class="text-2xl sm:text-3xl font-serif font-bold text-primary-dark">Thank You! Your Order Has Been Placed</h1>
             <p class="text-sm text-text-muted max-w-xl mx-auto">
-                Parent Order Reference: <strong class="text-text-main font-mono">{{ $order->order_number }}</strong>.
-                Please prepare <strong class="text-primary">₱{{ number_format((float) $order->total_amount, 2) }}</strong> in cash upon delivery.
+                Parent Order Reference: <strong class="text-text-main font-mono">{{ $order->order_number }}</strong> &bull;
+                Order Total: <strong class="text-primary">₱{{ number_format((float) $order->total_amount, 2) }}</strong>.
+                @if($hasGcashOrders)
+                    Your uploaded GCash payment receipt has been submitted to Storkia Admin Escrow.
+                @endif
             </p>
             <div class="flex flex-wrap items-center justify-center gap-3 pt-2">
                 <a href="{{ route('user.orders') }}" class="px-6 py-3 rounded-xl bg-primary hover:bg-primary-dark text-surface text-xs sm:text-sm font-bold shadow-xs transition-colors">
-                    View & Track My Orders
+                    View &amp; Track My Orders
                 </a>
                 <a href="{{ route('home') }}" class="px-6 py-3 rounded-xl border border-border-subtle bg-surface-subtle hover:bg-brand-light/30 text-text-main text-xs sm:text-sm font-bold transition-colors">
                     Continue Shopping
@@ -58,14 +66,20 @@
             </h2>
 
             @foreach($order->sellerOrders as $sellerOrder)
+                @php
+                    $payMethod = $sellerOrder->effective_payment_method;
+                @endphp
                 <div class="bg-surface rounded-2xl border border-border-subtle p-5 sm:p-6 shadow-xs space-y-4">
                     <div class="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-border-subtle">
-                        <div>
+                        <div class="flex items-center gap-2">
                             <span class="text-xs font-mono font-bold text-primary-dark bg-brand-light/40 px-2.5 py-1 rounded-lg">
                                 {{ $sellerOrder->seller_order_number }}
                             </span>
-                            <span class="ml-2 font-bold text-sm text-text-main">
+                            <span class="font-bold text-sm text-text-main">
                                 {{ $sellerOrder->sellerProfile->business_name ?? 'Seller Store' }}
+                            </span>
+                            <span class="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase {{ $payMethod === 'GCASH' ? 'bg-blue-100 text-blue-800 border border-blue-200' : 'bg-surface-subtle text-text-main border border-border-subtle' }}">
+                                {{ $payMethod === 'GCASH' ? 'GCash Escrow' : 'COD' }}
                             </span>
                         </div>
                         <span class="px-3 py-1 rounded-full text-xs font-bold bg-yellow-100 text-yellow-800 border border-yellow-200">
@@ -92,17 +106,16 @@
 
                     <div class="pt-3 border-t border-border-subtle flex flex-wrap items-center justify-between gap-2 text-xs">
                         <span class="text-text-muted">
-                            Seller Acceptance Deadline: <strong>{{ $sellerOrder->acceptance_deadline_at?->format('M d, Y h:i A') }}</strong>
+                            Seller Acceptance Deadline: <strong>{{ $sellerOrder->acceptance_deadline_at?->timezone('Asia/Manila')->format('M d, Y h:i A') }} (PH Time)</strong>
                         </span>
                         <div class="font-bold text-sm text-primary-dark">
                             Subtotal: ₱{{ number_format((float) $sellerOrder->subtotal_amount, 2) }} + Shipping: ₱{{ number_format((float) $sellerOrder->shipping_fee, 2) }} =
-                            <span class="text-primary">₱{{ number_format((float) $sellerOrder->total_amount, 2) }} (COD)</span>
+                            <span class="text-primary">₱{{ number_format((float) $sellerOrder->total_amount, 2) }} ({{ $payMethod }})</span>
                         </div>
                     </div>
                 </div>
             @endforeach
         </div>
-
     </div>
 </div>
 @endsection

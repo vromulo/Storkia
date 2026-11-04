@@ -37,10 +37,15 @@ class VoucherService
 
         /** @var StorkVoucher|null $voucher */
         $voucher = StorkVoucher::whereRaw('UPPER(TRIM(code)) = ?', [$code])->first();
-
         if (! $voucher) {
             throw ValidationException::withMessages([
                 'code' => "Voucher code \"{$code}\" is invalid or does not exist.",
+            ]);
+        }
+
+        if ($voucher->visibility === 'reward_only' && (int) $voucher->created_by !== $buyerId) {
+            throw ValidationException::withMessages([
+                'code' => "Voucher \"{$voucher->code}\" is a personal reward voucher assigned to another buyer.",
             ]);
         }
 
@@ -93,6 +98,18 @@ class VoucherService
             throw ValidationException::withMessages([
                 'voucher' => "Voucher \"{$voucher->code}\" has not started yet (Starts {$voucher->starts_at->format('M d, Y h:i A')}).",
             ]);
+        }
+
+        if ($voucher->visibility === 'reward_only' && (int) $voucher->created_by !== $buyerId) {
+            $hasClaim = BuyerVoucherClaim::where('voucher_id', $voucher->id)
+                ->where('buyer_id', $buyerId)
+                ->exists();
+
+            if (! $hasClaim) {
+                throw ValidationException::withMessages([
+                    'voucher' => "Voucher \"{$voucher->code}\" is not assigned to your reward wallet.",
+                ]);
+            }
         }
 
         if ((int) $voucher->used_count >= (int) $voucher->total_usage_limit) {
@@ -213,7 +230,6 @@ class VoucherService
     public function consumeVoucher(StorkVoucher $voucher, int $buyerId, int $sellerOrderId): void
     {
         $locked = StorkVoucher::where('id', $voucher->id)->lockForUpdate()->firstOrFail();
-
         $this->assertVoucherActiveAndAvailable($locked, $buyerId);
 
         $locked->increment('used_count');
@@ -285,9 +301,13 @@ class VoucherService
         return StorkVoucher::with('sellerProfile')
             ->where('status', 'active')
             ->where('ends_at', '>=', now())
+            ->whereColumn('used_count', '<', 'total_usage_limit')
             ->where(function ($q) use ($buyerId) {
                 $q->where('visibility', 'claimable')
-                  ->orWhereHas('claims', fn ($cq) => $cq->where('buyer_id', $buyerId));
+                  ->orWhereHas('claims', function ($cq) use ($buyerId) {
+                      $cq->where('buyer_id', $buyerId)
+                         ->whereRaw('buyer_voucher_claims.times_used < stork_vouchers.per_buyer_limit');
+                  });
             })
             ->orderBy('scope')
             ->orderBy('min_spend')

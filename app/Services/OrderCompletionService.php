@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Models\CommissionRecord;
 use App\Models\Order;
 use App\Models\OrderStatusHistory;
 use App\Models\SellerOrder;
@@ -17,8 +18,16 @@ class OrderCompletionService
     public function __construct(
         protected RoleWalletService $roleWalletService,
         protected InventoryStockService $inventoryStockService,
-        protected VoucherService $voucherService
-    ) {}
+        protected VoucherService $voucherService,
+        protected ?BuyerRewardService $buyerRewardService = null
+    ) {
+        $this->buyerRewardService = $buyerRewardService ?? app(BuyerRewardService::class);
+    }
+
+    public function recordDeliveredPendingWalletCredits(SellerOrder $sellerOrder): CommissionRecord
+    {
+        return $this->roleWalletService->recordPendingEscrowOnDelivery($sellerOrder);
+    }
 
     public function runLifecycleMaintenance(?int $buyerId = null, ?int $sellerId = null, ?int $logisticsProfileId = null): void
     {
@@ -189,8 +198,9 @@ class OrderCompletionService
                     $locked->update([
                         'status'           => 'cancelled',
                         'payment_status'   => 'cancelled',
+                        'rejected_at'      => now(),
                         'cancelled_at'     => now(),
-                        'rejection_reason' => 'Automatically cancelled because the Seller did not respond within the 24-hour acceptance deadline.',
+                        'rejection_reason' => 'Automatically rejected/cancelled by platform timer because the Seller failed to respond within the 24-hour acceptance deadline.',
                     ]);
 
                     $locked->payment?->update([
@@ -204,6 +214,9 @@ class OrderCompletionService
                     $this->inventoryStockService->restoreStockForSellerOrder($locked);
                     $this->voucherService->restoreVouchersForSellerOrder($locked);
 
+                    $rewardTx = $this->buyerRewardService?->awardSellerTimeoutCompensation($locked);
+                    $coinsAwarded = $rewardTx ? (int) $rewardTx->coins_delta : BuyerRewardService::SLA_TIMEOUT_COMPENSATION_COINS;
+
                     OrderStatusHistory::create([
                         'order_id'        => $locked->order_id,
                         'seller_order_id' => $locked->id,
@@ -211,7 +224,7 @@ class OrderCompletionService
                         'to_status'       => 'cancelled',
                         'actor_type'      => 'System',
                         'actor_id'        => null,
-                        'remarks'         => 'Order automatically cancelled after the 24-hour seller acceptance deadline expired without response.'
+                        'remarks'         => "Order automatically rejected/cancelled after the 24-hour seller acceptance deadline expired without response. Buyer compensated with +{$coinsAwarded} Storkia Coins."
                             . ($wasPrepaidGcash ? ' Buyer GCash payment flagged for full refund.' : ''),
                     ]);
 
@@ -223,10 +236,10 @@ class OrderCompletionService
                         $notifications[] = [
                             'recipient'    => $locked->buyer,
                             'notification' => new OrderLifecycleNotification(
-                                title: 'Order Auto-Cancelled (Seller 24h Timeout)',
-                                message: "Order #{$locked->seller_order_number} was automatically cancelled because the seller did not respond within 24 hours. Any applied vouchers have been restored to your wallet.",
+                                title: "Order Auto-Cancelled & +{$coinsAwarded} Storkia Coins Credited",
+                                message: "Order #{$locked->seller_order_number} was automatically cancelled because the seller did not respond within 24 hours. You received +{$coinsAwarded} Storkia Coins in My Points/Coins as compensation, and any applied vouchers were restored!",
                                 type: 'warning',
-                                url: route('user.orders.show', $locked->id),
+                                url: route('user.points'),
                                 orderId: $locked->order_id,
                                 sellerOrderId: $locked->id
                             ),
@@ -237,7 +250,7 @@ class OrderCompletionService
                         $notifications[] = [
                             'recipient'    => $locked->seller,
                             'notification' => new OrderLifecycleNotification(
-                                title: 'Order Expired (24-Hour Acceptance Missed)',
+                                title: 'Order Auto-Rejected (24-Hour Acceptance Missed)',
                                 message: "Order #{$locked->seller_order_number} was automatically cancelled because the 24-hour acceptance window expired.",
                                 type: 'danger',
                                 url: route('seller.orders.show', $locked->id),
@@ -318,6 +331,7 @@ class OrderCompletionService
 
             if ($locked->status === 'completed' || $locked->completed_at !== null) {
                 $this->roleWalletService->releaseCompletedOrderEarnings($locked);
+
                 return $locked;
             }
 
@@ -499,6 +513,7 @@ class OrderCompletionService
                 'status'         => 'cancelled',
                 'payment_status' => 'cancelled',
             ]);
+
             return;
         }
 
@@ -520,6 +535,7 @@ class OrderCompletionService
                 'payment_status' => $overallPaymentStatus,
                 'completed_at'   => $lockedOrder->completed_at ?? now(),
             ]);
+
             return;
         }
 

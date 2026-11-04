@@ -3,11 +3,15 @@
 @section('content')
 @php
     $isOnVacation = (bool) ($profile->is_on_vacation ?? false);
+    $deals = $deals ?? collect();
+    $bundles = $bundles ?? collect();
 @endphp
 
 <div x-data="{
-    dealType: 'super_deal',
-    bundleType: 'percentage_off'
+    dealType: @js(old('deal_type', 'super_deal')),
+    bundleType: @js(old('bundle_type', 'percentage_off')),
+    isSubmittingDeal: false,
+    isSubmittingBundle: false
 }" class="max-w-7xl mx-auto space-y-8 select-none">
 
     <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
@@ -44,8 +48,6 @@
     @endif
 
     <div class="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
-
-        <!-- Left: Create Super Deal or Scheduled Store Sale -->
         <div class="lg:col-span-6 bg-surface rounded-3xl border border-border-subtle p-6 shadow-xs space-y-4">
             <div class="border-b border-border-subtle pb-3">
                 <h2 class="text-base font-bold text-primary-dark">1. Create Super Deal Slot or Scheduled Store Sale</h2>
@@ -54,8 +56,12 @@
                 </p>
             </div>
 
-            <form action="{{ route('seller.promotions.deals.store') }}" method="POST" class="space-y-4 text-xs">
+            <form action="{{ route('seller.promotions.deals.store') }}"
+                  method="POST"
+                  @submit="isSubmittingDeal = true"
+                  class="space-y-4 text-xs">
                 @csrf
+
                 <div class="grid grid-cols-2 gap-3">
                     <label class="p-3 rounded-xl border cursor-pointer font-bold flex items-center gap-2"
                            :class="dealType === 'super_deal' ? 'border-primary bg-primary/5 text-primary-dark' : 'border-border-subtle'">
@@ -73,54 +79,80 @@
                     <label class="block font-bold text-text-muted uppercase mb-1">Select Product <span class="text-danger">*</span></label>
                     <select name="product_id" required class="w-full p-3 rounded-xl border border-border-subtle bg-surface font-semibold">
                         @foreach($products as $prod)
-                            <option value="{{ $prod->id }}">{{ $prod->name }} — Orig: ₱{{ number_format((float) $prod->price, 2) }} (Stock: {{ $prod->stock_quantity }})</option>
+                            <option value="{{ $prod->id }}" {{ (int) old('product_id') === (int) $prod->id ? 'selected' : '' }}>
+                                {{ $prod->name }} — Orig: ₱{{ number_format((float) $prod->price, 2) }} (Stock: {{ $prod->stock_quantity }})
+                            </option>
                         @endforeach
                     </select>
+                    @error('product_id')
+                        <p class="text-danger text-[11px] font-bold mt-1">{{ $message }}</p>
+                    @enderror
                 </div>
 
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
                         <label class="block font-bold text-text-muted uppercase mb-1">Discount % (1–99%) <span class="text-danger">*</span></label>
-                        <input type="number" min="1" max="99" step="1" name="discount_percentage" placeholder="e.g. 20" required class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface font-bold">
+                        <input type="number" min="1" max="99" step="1" name="discount_percentage" value="{{ old('discount_percentage', 20) }}" placeholder="e.g. 20" required class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface font-bold">
+                        @error('discount_percentage')
+                            <p class="text-danger text-[11px] font-bold mt-1">{{ $message }}</p>
+                        @enderror
                     </div>
                     <div x-show="dealType === 'super_deal'">
                         <label class="block font-bold text-text-muted uppercase mb-1">Super Deal Qty <span class="text-danger">*</span></label>
-                        <input type="number" min="1" name="flash_quantity" :required="dealType === 'super_deal'" value="3" class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface font-bold">
+                        <input type="number" min="1" name="flash_quantity" :required="dealType === 'super_deal'" value="{{ old('flash_quantity', 3) }}" class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface font-bold">
+                        @error('flash_quantity')
+                            <p class="text-danger text-[11px] font-bold mt-1">{{ $message }}</p>
+                        @enderror
                     </div>
                 </div>
 
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
                         <label class="block font-bold text-text-muted uppercase mb-1">Start Date &amp; Time <span class="text-danger">*</span></label>
-                        <input type="datetime-local" name="starts_at" value="{{ now()->format('Y-m-d\TH:i') }}" min="{{ now()->subMinutes(5)->format('Y-m-d\TH:i') }}" required class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface">
+                        <input type="datetime-local" name="starts_at" value="{{ old('starts_at', now()->format('Y-m-d\TH:i')) }}" min="{{ now()->subMinutes(5)->format('Y-m-d\TH:i') }}" required class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface">
+                        @error('starts_at')
+                            <p class="text-danger text-[11px] font-bold mt-1">{{ $message }}</p>
+                        @enderror
                     </div>
                     <div>
                         <label class="block font-bold text-text-muted uppercase mb-1">End Date &amp; Time <span class="text-danger">*</span></label>
-                        <input type="datetime-local" name="ends_at" value="{{ now()->addHours(4)->format('Y-m-d\TH:i') }}" required class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface">
+                        <input type="datetime-local" name="ends_at" value="{{ old('ends_at', now()->addHours(4)->format('Y-m-d\TH:i')) }}" required class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface">
+                        @error('ends_at')
+                            <p class="text-danger text-[11px] font-bold mt-1">{{ $message }}</p>
+                        @enderror
                     </div>
                 </div>
 
                 <div class="flex justify-end">
-                    <button type="submit" class="px-5 py-2.5 rounded-xl bg-primary hover:bg-primary-dark text-white font-bold shadow-xs cursor-pointer">
-                        Publish Promotion
+                    <button type="submit"
+                            :disabled="isSubmittingDeal || {{ $products->isEmpty() ? 'true' : 'false' }}"
+                            class="px-5 py-2.5 rounded-xl bg-primary hover:bg-primary-dark text-white font-bold shadow-xs cursor-pointer disabled:opacity-50">
+                        <span x-show="!isSubmittingDeal">Publish Promotion</span>
+                        <span x-show="isSubmittingDeal" x-cloak>Publishing...</span>
                     </button>
                 </div>
             </form>
         </div>
 
-        <!-- Right: Create Bundle Deal (Buy N Get % Off or Buy X Get Y Free) -->
         <div class="lg:col-span-6 bg-surface rounded-3xl border border-border-subtle p-6 shadow-xs space-y-4">
             <div class="border-b border-border-subtle pb-3">
                 <h2 class="text-base font-bold text-primary-dark">2. Create Bundle Deal (Multi-Item % Off or Buy X Get Y Free)</h2>
-                <p class="text-xs text-text-muted">Seller-funded bundle promotions applied automatically when qualifying items are in the cart/checkout.</p>
+                <p class="text-xs text-text-muted">Seller-funded bundle promotions discoverable on the Buyer Bundle Deals page and applied automatically at checkout.</p>
             </div>
 
-            <form action="{{ route('seller.promotions.bundles.store') }}" method="POST" class="space-y-4 text-xs">
+            <form action="{{ route('seller.promotions.bundles.store') }}"
+                  method="POST"
+                  @submit="isSubmittingBundle = true"
+                  class="space-y-4 text-xs">
                 @csrf
+
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
                         <label class="block font-bold text-text-muted uppercase mb-1">Bundle Title <span class="text-danger">*</span></label>
-                        <input type="text" name="title" required maxlength="120" placeholder="e.g. Buy 3 Get 15% Off Bundle" class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface font-bold">
+                        <input type="text" name="title" value="{{ old('title') }}" required minlength="3" maxlength="120" placeholder="e.g. Buy 3 Get 15% Off Bundle" class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface font-bold">
+                        @error('title')
+                            <p class="text-danger text-[11px] font-bold mt-1">{{ $message }}</p>
+                        @enderror
                     </div>
                     <div>
                         <label class="block font-bold text-text-muted uppercase mb-1">Bundle Mechanic <span class="text-danger">*</span></label>
@@ -134,17 +166,20 @@
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
                         <label class="block font-bold text-text-muted uppercase mb-1">Required Quantity (X) <span class="text-danger">*</span></label>
-                        <input type="number" name="required_quantity" value="3" min="2" max="20" required class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface font-bold">
+                        <input type="number" name="required_quantity" value="{{ old('required_quantity', 3) }}" min="2" max="20" required class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface font-bold">
+                        @error('required_quantity')
+                            <p class="text-danger text-[11px] font-bold mt-1">{{ $message }}</p>
+                        @enderror
                     </div>
                     <div x-show="bundleType === 'percentage_off'">
                         <label class="block font-bold text-text-muted uppercase mb-1">Bundle Discount % <span class="text-danger">*</span></label>
-                        <input type="number" step="0.1" min="1" max="99" name="discount_percentage" value="15" class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface font-bold text-primary">
+                        <input type="number" step="0.1" min="1" max="99" name="discount_percentage" value="{{ old('discount_percentage', 15) }}" class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface font-bold text-primary">
                     </div>
                     <div x-show="bundleType === 'buy_x_get_y'" x-cloak>
                         <label class="block font-bold text-text-muted uppercase mb-1">Free Gift Product (Y) <span class="text-danger">*</span></label>
                         <select name="free_gift_product_id" class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface font-semibold">
                             @foreach($products as $prod)
-                                <option value="{{ $prod->id }}">{{ $prod->name }} (₱{{ number_format((float) $prod->price, 2) }} -> ₱0.00)</option>
+                                <option value="{{ $prod->id }}">{{ $prod->name }} (₱{{ number_format((float) $prod->price, 2) }} &rarr; ₱0.00)</option>
                             @endforeach
                         </select>
                     </div>
@@ -160,6 +195,9 @@
                             </label>
                         @endforeach
                     </div>
+                    @error('applicable_product_ids')
+                        <p class="text-danger text-[11px] font-bold mt-1">{{ $message }}</p>
+                    @enderror
                 </div>
 
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -174,16 +212,17 @@
                 </div>
 
                 <div class="flex justify-end">
-                    <button type="submit" class="px-5 py-2.5 rounded-xl bg-primary-dark hover:bg-text-main text-white font-bold cursor-pointer">
-                        Publish Bundle Deal
+                    <button type="submit"
+                            :disabled="isSubmittingBundle || {{ $products->isEmpty() ? 'true' : 'false' }}"
+                            class="px-5 py-2.5 rounded-xl bg-primary-dark hover:bg-text-main text-white font-bold cursor-pointer disabled:opacity-50">
+                        <span x-show="!isSubmittingBundle">Publish Bundle Deal</span>
+                        <span x-show="isSubmittingBundle" x-cloak>Publishing...</span>
                     </button>
                 </div>
             </form>
         </div>
-
     </div>
 
-    <!-- Active & Upcoming Super Deals / Store Sales Table -->
     <div class="bg-surface rounded-3xl border border-border-subtle shadow-xs overflow-hidden">
         <div class="p-5 border-b border-border-subtle bg-surface-subtle/50">
             <h2 class="text-base font-bold text-primary-dark">Scheduled &amp; Running Super Deals / Store Sales (FIFO)</h2>
@@ -264,5 +303,89 @@
         @endif
     </div>
 
+    <div class="bg-surface rounded-3xl border border-border-subtle shadow-xs overflow-hidden">
+        <div class="p-5 border-b border-border-subtle bg-surface-subtle/50 flex items-center justify-between">
+            <div>
+                <h2 class="text-base font-bold text-primary-dark">Scheduled &amp; Running Bundle Deals (FIFO)</h2>
+                <p class="text-xs text-text-muted">Active bundles appear on the Buyer Bundle Deals page and apply automatically at checkout.</p>
+            </div>
+        </div>
+
+        @if($bundles->isEmpty())
+            <div class="p-10 text-center text-xs text-text-muted">No Bundle Deals created yet.</div>
+        @else
+            <div class="overflow-x-auto">
+                <table class="w-full text-left border-collapse text-xs">
+                    <thead>
+                        <tr class="border-b border-border-subtle bg-surface-subtle/40 text-text-muted uppercase text-[11px] font-bold">
+                            <th class="py-3 px-5">Bundle Title &amp; Mechanic</th>
+                            <th class="py-3 px-4">Qualifying Products</th>
+                            <th class="py-3 px-4">Discount / Free Gift</th>
+                            <th class="py-3 px-4">Schedule</th>
+                            <th class="py-3 px-4">Status</th>
+                            <th class="py-3 px-5 text-right">Action</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-border-subtle">
+                        @foreach($bundles as $b)
+                            @php
+                                $bStarts = \Carbon\Carbon::parse($b->starts_at);
+                                $bEnds = \Carbon\Carbon::parse($b->ends_at);
+                                $bState = $b->status === 'ended' || now()->gt($bEnds)
+                                    ? 'Ended'
+                                    : (now()->lt($bStarts) ? 'Upcoming' : 'Ongoing');
+                                $appIds = is_string($b->applicable_product_ids)
+                                    ? (json_decode($b->applicable_product_ids, true) ?: [])
+                                    : (array) $b->applicable_product_ids;
+                                $qualifyingNames = collect($appIds)
+                                    ->map(fn ($pid) => $productsById->get((int) $pid)?->name ?? ('Product #' . $pid))
+                                    ->values();
+                                $freeGiftProd = $b->free_gift_product_id ? $productsById->get((int) $b->free_gift_product_id) : null;
+                            @endphp
+                            <tr class="hover:bg-surface-subtle/30">
+                                <td class="py-3.5 px-5">
+                                    <span class="px-2 py-0.5 rounded text-[10px] font-extrabold uppercase {{ $b->bundle_type === 'percentage_off' ? 'bg-primary text-white' : 'bg-purple-100 text-purple-800' }}">
+                                        {{ $b->bundle_type === 'percentage_off' ? 'Buy ' . $b->required_quantity . ' Get % Off' : 'Buy ' . $b->required_quantity . ' Get Free Gift' }}
+                                    </span>
+                                    <div class="font-bold text-text-main mt-1">{{ $b->title }}</div>
+                                </td>
+                                <td class="py-3.5 px-4 max-w-xs">
+                                    <div class="text-text-main font-medium line-clamp-2">{{ $qualifyingNames->implode(', ') }}</div>
+                                    <div class="text-[11px] text-text-muted">Min Qty: {{ $b->required_quantity }} item(s)</div>
+                                </td>
+                                <td class="py-3.5 px-4">
+                                    @if($b->bundle_type === 'percentage_off')
+                                        <span class="font-bold text-primary text-sm">{{ number_format((float) $b->discount_percentage, 1) }}% OFF</span>
+                                    @else
+                                        <div class="font-bold text-purple-800">Free Gift: {{ $freeGiftProd->name ?? ('Product #' . $b->free_gift_product_id) }}</div>
+                                        <div class="text-[11px] text-text-muted">100% Off Gift Item</div>
+                                    @endif
+                                </td>
+                                <td class="py-3.5 px-4 text-text-muted">
+                                    <div>Start: {{ $bStarts->format('M d, Y h:i A') }}</div>
+                                    <div>End: {{ $bEnds->format('M d, Y h:i A') }}</div>
+                                </td>
+                                <td class="py-3.5 px-4">
+                                    <span class="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase {{ $bState === 'Ongoing' ? 'bg-green-100 text-green-700' : ($bState === 'Upcoming' ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-500') }}">
+                                        {{ $bState }}
+                                    </span>
+                                </td>
+                                <td class="py-3.5 px-5 text-right">
+                                    @if($bState !== 'Ended')
+                                        <form action="{{ route('seller.promotions.bundles.end', $b->id) }}" method="POST" class="inline">
+                                            @csrf
+                                            <button type="submit" class="px-3 py-1.5 rounded-lg bg-red-50 text-danger font-bold cursor-pointer">
+                                                End Now
+                                            </button>
+                                        </form>
+                                    @endif
+                                </td>
+                            </tr>
+                        @endforeach
+                    </tbody>
+                </table>
+            </div>
+        @endif
+    </div>
 </div>
 @endsection

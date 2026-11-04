@@ -22,11 +22,14 @@ class ReapplyLogisticsApplication extends Component
     public string $street = '';
     public string $house_details = '';
     public string $business_name = '';
+
     public $valid_id;
     public $business_permit;
+
     public array $provinces = [];
     public array $municipalities = [];
     public array $barangays = [];
+
     public ?LogisticsApplication $latestApp = null;
     public bool $isSubmitted = false;
 
@@ -34,15 +37,17 @@ class ReapplyLogisticsApplication extends Component
     {
         $user = Auth::user();
         $this->latestApp = LogisticsApplication::where('user_id', $user->id)->latest('version')->firstOrFail();
+
         abort_unless($this->latestApp->status === 'rejected', 403);
 
-        $this->contact_no = ltrim($this->latestApp->contact_no, '+63');
-        $this->province = $this->latestApp->province;
-        $this->municipality = $this->latestApp->municipality;
-        $this->barangay = $this->latestApp->barangay;
-        $this->street = $this->latestApp->street ?? '';
-        $this->house_details = $this->latestApp->house_details ?? '';
-        $this->business_name = $this->latestApp->business_name;
+        $this->contact_no = ltrim((string) $this->latestApp->contact_no, '+63');
+        $this->province = (string) $this->latestApp->province;
+        $this->municipality = (string) $this->latestApp->municipality;
+        $this->barangay = (string) $this->latestApp->barangay;
+        $this->street = (string) ($this->latestApp->street ?? '');
+        $this->house_details = (string) ($this->latestApp->house_details ?? '');
+        $this->business_name = (string) $this->latestApp->business_name;
+
         $this->provinces = $addressService->getProvinces();
     }
 
@@ -83,8 +88,13 @@ class ReapplyLogisticsApplication extends Component
     public function reapply()
     {
         $this->validate([
-            'contact_no' => ['required', 'regex:/^9\d{2}\s?\d{3}\s?\d{4}$/'],
-            'business_name' => ['required', 'string'],
+            'contact_no'      => ['required', 'regex:/^9\d{2}\s?\d{3}\s?\d{4}$/'],
+            'province'        => ['required', 'string'],
+            'municipality'    => ['required', 'string'],
+            'barangay'        => ['required', 'string'],
+            'business_name'   => ['required', 'string', 'max:150'],
+            'valid_id'        => ['nullable', 'file', 'mimes:jpg,jpeg,png,pdf', 'max:5120'],
+            'business_permit' => ['nullable', 'file', 'mimes:jpg,jpeg,png,pdf', 'max:5120'],
         ]);
 
         $user = Auth::user();
@@ -108,7 +118,7 @@ class ReapplyLogisticsApplication extends Component
             'barangay'      => $this->barangay,
             'street'        => $this->street,
             'house_details' => $this->house_details,
-            'business_name' => $this->business_name,
+            'business_name' => trim($this->business_name),
             'id_path'       => $idPath,
             'permit_path'   => $permitPath,
             'status'        => 'pending',

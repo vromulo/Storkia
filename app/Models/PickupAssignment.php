@@ -18,6 +18,14 @@ class PickupAssignment extends Model
         'accepted_at',
         'picked_up_at',
         'handed_over_at',
+        'declined_at',
+        'decline_reason',
+        'seal_number',
+        'is_delayed',
+        'delay_reason',
+        'estimated_arrival_at',
+        'has_discrepancy',
+        'discrepancy_notes',
         'hub_verified_by',
         'hub_verified_at',
         'notes',
@@ -26,11 +34,15 @@ class PickupAssignment extends Model
     protected function casts(): array
     {
         return [
-            'assigned_at'     => 'datetime',
-            'accepted_at'     => 'datetime',
-            'picked_up_at'    => 'datetime',
-            'handed_over_at'  => 'datetime',
-            'hub_verified_at' => 'datetime',
+            'assigned_at'          => 'datetime',
+            'accepted_at'          => 'datetime',
+            'picked_up_at'         => 'datetime',
+            'handed_over_at'       => 'datetime',
+            'declined_at'          => 'datetime',
+            'estimated_arrival_at' => 'datetime',
+            'hub_verified_at'      => 'datetime',
+            'is_delayed'           => 'boolean',
+            'has_discrepancy'      => 'boolean',
         ];
     }
 

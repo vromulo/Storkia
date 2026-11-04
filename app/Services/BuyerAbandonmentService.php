@@ -60,6 +60,7 @@ class BuyerAbandonmentService
             );
 
             $isCodOrder = $sellerOrder->effective_payment_method === 'COD';
+
             $lockedSanction = BuyerAccountSanction::where('buyer_id', $sellerOrder->buyer_id)
                 ->lockForUpdate()
                 ->first();
@@ -96,7 +97,6 @@ class BuyerAbandonmentService
             ];
 
             if ($currentBanLevel >= 1) {
-                // Repeat abandonment after already having been banned & reinstated -> Immediate Permanent Ban (2nd Ban)
                 $lockedSanction->update([
                     'cod_abandonment_strikes'        => $newStrikes,
                     'ban_level'                      => 2,
@@ -108,7 +108,6 @@ class BuyerAbandonmentService
                     'strike_history'                 => $history,
                 ]);
             } elseif ($newStrikes >= BuyerAccountSanction::MAX_STRIKES_BEFORE_BAN) {
-                // 3rd Strike -> 1st Ban: 7-Day Temporary Ban Countdown + Mandatory Admin Appeal Required
                 $lockedSanction->update([
                     'cod_abandonment_strikes'        => $newStrikes,
                     'ban_level'                      => 1,
@@ -121,7 +120,6 @@ class BuyerAbandonmentService
                     'strike_history'                 => $history,
                 ]);
             } else {
-                // Strike 1 or Strike 2 Warning
                 $lockedSanction->update([
                     'cod_abandonment_strikes'        => $newStrikes,
                     'last_abandoned_seller_order_id' => $sellerOrder->id,
@@ -195,7 +193,7 @@ class BuyerAbandonmentService
                         title: "Buyer COD Abandonment Alert ({$strikeBadge})",
                         message: "{$buyerName} abandoned COD Order #{$sellerOrder->seller_order_number} (Shipment #{$shipment->tracking_number}). Reason: {$abandonmentReason}.",
                         type: 'danger',
-                        url: route('admin.orders.disputes'),
+                        url: route('admin.complaints.index'),
                         orderId: $sellerOrder->order_id,
                         sellerOrderId: $sellerOrder->id,
                         shipmentId: $shipment->id
@@ -227,7 +225,7 @@ class BuyerAbandonmentService
         }
 
         if ($sanction->isTemporarilyBannedCountdownActive()) {
-            $remaining = $sanction->temp_ban_ends_at?->diffForHumans( null, true );
+            $remaining = $sanction->temp_ban_ends_at?->diffForHumans(null, true);
             throw ValidationException::withMessages([
                 'appeal' => "Your 7-day temporary suspension countdown is still active ({$remaining} remaining). You may submit your reactivation appeal once the 7-day countdown finishes.",
             ]);
@@ -283,7 +281,6 @@ class BuyerAbandonmentService
                     'reviewed_at'          => now(),
                 ]);
 
-                // Reactivate buyer on probation (ban_level remains 1 so any future abandonment triggers immediate Permanent Ban)
                 $sanction?->update([
                     'account_status'  => 'active',
                     'appeal_required' => false,

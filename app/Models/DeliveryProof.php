@@ -15,14 +15,23 @@ class DeliveryProof extends Model
         'rider_id',
         'photo_path',
         'recipient_name',
+        'recipient_relation',
+        'cod_collected_amount',
         'notes',
+        'latitude',
+        'longitude',
+        'location_accuracy',
         'captured_at',
     ];
 
     protected function casts(): array
     {
         return [
-            'captured_at' => 'datetime',
+            'cod_collected_amount' => 'decimal:2',
+            'latitude'             => 'decimal:7',
+            'longitude'            => 'decimal:7',
+            'location_accuracy'    => 'decimal:2',
+            'captured_at'          => 'datetime',
         ];
     }
 
@@ -49,5 +58,10 @@ class DeliveryProof extends Model
     public function rider(): BelongsTo
     {
         return $this->belongsTo(Rider::class, 'rider_id');
+    }
+
+    public function getPhotoUrlAttribute(): ?string
+    {
+        return $this->photo_path ? asset('storage/' . ltrim($this->photo_path, '/')) : null;
     }
 }

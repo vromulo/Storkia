@@ -13,6 +13,7 @@ use App\Http\Controllers\Logistics\EmployeeManagementController;
 use App\Http\Controllers\Logistics\ZonesAndExceptionsController;
 
 Route::middleware('throttle:120,1')->group(function () {
+
     Route::middleware(['guest', 'throttle:30,1'])->group(function () {
         Route::get('/logistics/login', [AuthController::class, 'showLogin'])->name('logistics.login');
         Route::post('/logistics/login', [AuthController::class, 'login'])->name('logistics.login.post');
@@ -39,15 +40,17 @@ Route::middleware('throttle:120,1')->group(function () {
             Route::get('/couriers', [CourierController::class, 'index'])->name('couriers.index');
             Route::get('/couriers/create', [CourierController::class, 'create'])->name('couriers.create');
             Route::post('/couriers', [CourierController::class, 'store'])->name('couriers.store');
+            Route::patch('/couriers/{courier}/profile', [CourierController::class, 'updateProfile'])->name('couriers.update-profile');
             Route::patch('/couriers/{courier}/status', [CourierController::class, 'updateStatus'])->name('couriers.update-status');
             Route::get('/couriers/{courier}/documents/{type}', [CourierController::class, 'document'])->name('couriers.document');
 
+            Route::get('/riders', [RiderApplicationController::class, 'index'])->name('riders.index');
             Route::get('/riders/active', [ShipmentController::class, 'ridersIndex'])->name('riders.active');
             Route::post('/riders/{rider}/suspend', [ZonesAndExceptionsController::class, 'suspendRiderWithReason'])->name('riders.suspend');
-
             Route::get('/rider-applications', [RiderApplicationController::class, 'index'])->name('rider-applications.index');
             Route::get('/riders/create', [RiderApplicationController::class, 'create'])->name('riders.create');
             Route::post('/riders', [RiderApplicationController::class, 'store'])->name('riders.store');
+            Route::patch('/riders/{rider}/profile', [RiderApplicationController::class, 'updateProfile'])->name('riders.update-profile');
             Route::patch('/rider-applications/{rider}/approve', [RiderApplicationController::class, 'approve'])->name('rider-applications.approve');
             Route::patch('/rider-applications/{rider}/reject', [RiderApplicationController::class, 'reject'])->name('rider-applications.reject');
             Route::get('/rider-applications/{rider}/document/{type}', [RiderApplicationController::class, 'document'])->name('rider-applications.document');
@@ -67,6 +70,8 @@ Route::middleware('throttle:120,1')->group(function () {
             Route::get('/reports/formal-pdf', [ZonesAndExceptionsController::class, 'formalPdfReport'])->name('reports.formal-pdf');
             Route::post('/finance/remittances/{remittance}/verify', [FinanceController::class, 'verifyRemittance'])->name('finance.verify-remittance');
             Route::post('/finance/settlements/settle', [FinanceController::class, 'settleSeller'])->name('finance.settle-seller');
+            Route::post('/finance/withdrawals', [FinanceController::class, 'requestWithdrawal'])->name('finance.withdrawals.store');
+            Route::get('/ratings', [FinanceController::class, 'ratingsIndex'])->name('ratings.index');
 
             Route::get('/hub-settings', [HubSettingsController::class, 'index'])->name('hub-settings');
             Route::post('/hub-settings/photo', [HubSettingsController::class, 'updatePhoto'])->name('hub-settings.update-photo');

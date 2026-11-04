@@ -55,7 +55,6 @@ class CartController extends Controller
         ]);
 
         $userId = (int) auth()->id();
-
         /** @var Product $product */
         $product = Product::with(['approval', 'user.sellerProfile'])->findOrFail($validated['product_id']);
 
@@ -69,7 +68,6 @@ class CartController extends Controller
             ]);
         }
 
-        // Enforce Store Vacation Mode Guard (SEL-PROF-009 / BUY-SRCH-011)
         $this->superDealPricingService->assertStoreNotOnVacation($product->user?->sellerProfile);
 
         $resolved = $this->inventoryStockService->resolveProductSelection(
@@ -92,7 +90,6 @@ class CartController extends Controller
             ]);
         }
 
-        // Enforce Per-Buyer Purchase Limit (BUY-PDP-005)
         $perBuyerLimit = Schema::hasColumn('products', 'per_buyer_limit')
             ? (int) ($product->per_buyer_limit ?? 0)
             : 0;
@@ -124,7 +121,7 @@ class CartController extends Controller
             } catch (\Throwable $e) {
             }
         } else {
-            Cart::create([
+            $cart = Cart::create([
                 'user_id'     => $userId,
                 'product_id'  => $product->id,
                 'quantity'    => $newQuantity,
@@ -133,13 +130,15 @@ class CartController extends Controller
             ]);
         }
 
-        $cartCount = Cart::where('user_id', $userId)->count();
+        $dropdownPayload = $this->buildDropdownPayload($userId);
 
-        if ($request->wantsJson()) {
+        if ($request->wantsJson() || $request->ajax()) {
             return response()->json([
-                'success'    => true,
-                'message'    => 'Product added to your cart.',
-                'cart_count' => $cartCount,
+                'success'      => true,
+                'message'      => 'Product added to your cart.',
+                'cart_count'   => $dropdownPayload['cart_count'],
+                'cart_items'   => $dropdownPayload['items'],
+                'total_amount' => $dropdownPayload['total_amount'],
             ]);
         }
 
@@ -154,11 +153,10 @@ class CartController extends Controller
             return response()->json(['error' => 'Unauthorized action.'], 403);
         }
 
-        $validated = $request->validate([
-            'quantity' => ['required', 'integer', 'min:1', 'max:99999'],
-        ], [
-            'quantity.min' => 'Quantity must be at least 1.',
-        ]);
+        $rawQty = (int) $request->input('quantity', 1);
+        if ($rawQty < 1) {
+            $rawQty = 1;
+        }
 
         $product = $cart->product;
         if (! $product || $product->trashed()) {
@@ -171,51 +169,144 @@ class CartController extends Controller
             $cart->sub_variant
         );
 
-        $requestedQty = (int) $validated['quantity'];
-        if ($requestedQty > (int) $resolved['available_stock']) {
-            return response()->json([
-                'error'   => "Only {$resolved['available_stock']} available.",
-                'message' => "Only {$resolved['available_stock']} available.",
-            ], 422);
-        }
-
+        $maxAvailable = max(1, (int) $resolved['available_stock']);
         $perBuyerLimit = Schema::hasColumn('products', 'per_buyer_limit')
             ? (int) ($product->per_buyer_limit ?? 0)
             : 0;
 
-        if ($perBuyerLimit > 0 && $requestedQty > $perBuyerLimit) {
-            return response()->json([
-                'error'   => "Maximum {$perBuyerLimit} unit(s) allowed per buyer.",
-                'message' => "Maximum {$perBuyerLimit} unit(s) allowed per buyer.",
-            ], 422);
-        }
+        $effectiveMax = $perBuyerLimit > 0 ? min($maxAvailable, $perBuyerLimit) : $maxAvailable;
+        $clampedQuantity = min($rawQty, $effectiveMax);
+        $wasClamped = $rawQty > $effectiveMax;
 
-        $cart->update(['quantity' => $requestedQty]);
+        $cart->update(['quantity' => $clampedQuantity]);
 
         try {
             broadcast(new CartQuantityUpdated($cart->id, $cart->user_id, $cart->quantity));
         } catch (\Throwable $e) {
         }
 
+        $dropdownPayload = $this->buildDropdownPayload((int) $cart->user_id);
+
         return response()->json([
-            'success'  => true,
-            'message'  => 'Cart quantity updated successfully.',
-            'id'       => $cart->id,
-            'user_id'  => $cart->user_id,
-            'quantity' => $cart->quantity,
+            'success'      => true,
+            'clamped'      => $wasClamped,
+            'max_stock'    => $effectiveMax,
+            'message'      => $wasClamped
+                ? "Maximum available quantity is {$effectiveMax}."
+                : 'Cart quantity updated successfully.',
+            'id'           => (int) $cart->id,
+            'user_id'      => (int) $cart->user_id,
+            'quantity'     => (int) $cart->quantity,
+            'cart_count'   => $dropdownPayload['cart_count'],
+            'cart_items'   => $dropdownPayload['items'],
+            'total_amount' => $dropdownPayload['total_amount'],
         ]);
     }
 
-    public function destroy($id)
+    public function destroy(Request $request, $id)
     {
         $cart = Cart::findOrFail($id);
+        $userId = (int) auth()->id();
 
-        if ((int) $cart->user_id !== (int) auth()->id()) {
+        if ((int) $cart->user_id !== $userId) {
             abort(403, 'Unauthorized action.');
         }
 
+        $deletedId = (int) $cart->id;
         $cart->delete();
 
+        $dropdownPayload = $this->buildDropdownPayload($userId);
+
+        if ($request->wantsJson() || $request->ajax()) {
+            return response()->json([
+                'success'      => true,
+                'deleted_id'   => $deletedId,
+                'message'      => 'Item removed from your cart.',
+                'cart_count'   => $dropdownPayload['cart_count'],
+                'cart_items'   => $dropdownPayload['items'],
+                'total_amount' => $dropdownPayload['total_amount'],
+            ]);
+        }
+
         return redirect()->route('cart.index')->with('success', 'Item removed from your cart.');
+    }
+
+    protected function buildDropdownPayload(int $userId): array
+    {
+        $cartItems = Cart::with('product')
+            ->where('user_id', $userId)
+            ->latest()
+            ->get();
+
+        $items = [];
+        $totalAmount = 0.0;
+
+        foreach ($cartItems as $item) {
+            $product = $item->product;
+            if (! $product) {
+                continue;
+            }
+
+            $basePrice = (float) ($product->price ?? 0);
+            $variantStock = (int) ($product->stock_quantity ?? 0);
+            $variantImage = (! empty($product->pictures) && is_array($product->pictures))
+                ? asset('storage/' . $product->pictures[0])
+                : null;
+
+            if ($item->variant && isset($product->variants['items']) && is_array($product->variants['items'])) {
+                foreach ($product->variants['items'] as $v) {
+                    if (($v['name'] ?? '') === $item->variant) {
+                        if (! $item->sub_variant) {
+                            $basePrice = (float) ($v['price'] ?? $basePrice);
+                            $variantStock = (int) ($v['stock'] ?? $variantStock);
+                            $variantImage = (! empty($v['image'])) ? asset('storage/' . $v['image']) : $variantImage;
+                        } elseif (isset($v['subs']) && is_array($v['subs'])) {
+                            foreach ($v['subs'] as $sub) {
+                                if (($sub['name'] ?? '') === $item->sub_variant) {
+                                    $basePrice = (float) ($sub['price'] ?? $v['price'] ?? $basePrice);
+                                    $variantStock = (int) ($sub['stock'] ?? $variantStock);
+                                    $variantImage = (! empty($sub['image']))
+                                        ? asset('storage/' . $sub['image'])
+                                        : ((! empty($v['image'])) ? asset('storage/' . $v['image']) : $variantImage);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            $displayPricing = $this->superDealPricingService->resolveDisplayPricing($product, $basePrice);
+            $itemPrice = (float) ($displayPricing['unit_price'] ?? $basePrice);
+            $safeQuantity = min((int) $item->quantity, max(1, $variantStock));
+            if ($variantStock <= 0) {
+                $safeQuantity = 0;
+            }
+
+            $variantLabel = implode(' / ', array_filter([$item->variant, $item->sub_variant]));
+
+            $items[] = [
+                'id'           => (int) $item->id,
+                'user_id'      => (int) $item->user_id,
+                'product_id'   => (int) $product->id,
+                'name'         => (string) $product->name,
+                'url'          => route('product.show', $product->id),
+                'destroy_url'  => route('cart.destroy', $item->id),
+                'variantLabel' => $variantLabel !== '' ? $variantLabel : null,
+                'quantity'     => $safeQuantity,
+                'price'        => round($itemPrice, 2),
+                'maxStock'     => $variantStock,
+                'image'        => $variantImage,
+                'basePrice'    => round($basePrice, 2),
+                'isSyncing'    => false,
+            ];
+
+            $totalAmount += ($itemPrice * $safeQuantity);
+        }
+
+        return [
+            'cart_count'   => $cartItems->count(),
+            'items'        => $items,
+            'total_amount' => round($totalAmount, 2),
+        ];
     }
 }

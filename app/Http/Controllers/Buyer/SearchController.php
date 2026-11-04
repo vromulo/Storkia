@@ -3,12 +3,13 @@
 namespace App\Http\Controllers\Buyer;
 
 use App\Http\Controllers\Controller;
-use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Http\Request;
 use App\Models\BuyerWishlist;
 use App\Models\Product;
 use App\Services\SearchLogService;
 use App\Services\SearchTypoCorrectionService;
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Schema;
 
 class SearchController extends Controller
 {
@@ -17,11 +18,7 @@ class SearchController extends Controller
         protected SearchLogService $searchLog
     ) {}
 
-    /**
-     * Master list of all categories and subcategories, ensuring filters 
-     * aren't limited only to products currently existing in the database.
-     */
-    private function getAllCategories()
+    private function getAllCategories(): array
     {
         return [
             'Pet' => ['Dog Food & Treats', 'Cat Litter & Accessories', 'Aquariums & Fish Supplies', 'Bird Feeders & Food', 'Pet Grooming Products', 'Pet Health & Wellness'],
@@ -40,12 +37,21 @@ class SearchController extends Controller
     }
 
     /**
-     * Single place that decides which products the search can see, so the exact
-     * search and the typo-correction vocabulary always agree.
+     * Single place that decides which products the search can see:
+     * Approved, in-stock, and active products only.
      */
     protected function baseProductsQuery(): Builder
     {
-        return Product::query();
+        $query = Product::query()
+            ->with(['approval', 'user.sellerProfile'])
+            ->where('stock_quantity', '>', 0)
+            ->whereHas('approval', fn ($q) => $q->where('status', 'Approved'));
+
+        if (Schema::hasColumn('products', 'publish_status')) {
+            $query->whereNotIn('publish_status', ['draft', 'inactive']);
+        }
+
+        return $query;
     }
 
     protected function runSearch(?string $query, ?string $category, ?string $subcategory)
@@ -53,9 +59,9 @@ class SearchController extends Controller
         $productsQuery = $this->baseProductsQuery();
 
         if ($query) {
-            $words = array_filter(explode(' ', $query), fn($w) => strlen($w) > 2);
+            $words = array_filter(explode(' ', $query), fn ($w) => strlen($w) > 2);
 
-            $productsQuery->where(function($qBuilder) use ($query, $words) {
+            $productsQuery->where(function ($qBuilder) use ($query, $words) {
                 $qBuilder->where('name', 'LIKE', "%{$query}%")
                          ->orWhere('category', 'LIKE', "%{$query}%");
 
@@ -73,8 +79,6 @@ class SearchController extends Controller
             $productsQuery->where('subcategory', $subcategory);
         }
 
-        // Infinite scroll: the whole result set is sent once and revealed in
-        // batches on the page (same approach as the category and home pages).
         return $productsQuery->latest()->latest('id')->get();
     }
 
@@ -87,16 +91,11 @@ class SearchController extends Controller
 
         $products = $this->runSearch($query, $category, $subcategory);
 
-        // BUY-SRCH-004: typo tolerance. Only kicks in when the search found
-        // nothing, and only shows corrected results if they actually exist.
         $correctedQuery = null;
-
         if ($query && $products->isEmpty() && ! $forceExact) {
             $correction = $this->typoCorrectionService->correct($query, $this->baseProductsQuery());
-
             if ($correction) {
                 $correctedProducts = $this->runSearch($correction['query'], $category, $subcategory);
-
                 if ($correctedProducts->isNotEmpty()) {
                     $products = $correctedProducts;
                     $correctedQuery = $correction['query'];
@@ -104,16 +103,12 @@ class SearchController extends Controller
             }
         }
 
-        // Feeds "Top Searches". Logs the corrected spelling when typo-correction found results,
-        // so "sneekers" and "sneakers" count as one term. Never throws and skips junk/bots.
         $this->searchLog->record($correctedQuery ?? $query, $products->count(), $request);
 
-        // Use the hardcoded master list for the dropdowns
         $allCategoryData = $this->getAllCategories();
         $categories = array_keys($allCategoryData);
         $subcategories = ($category && isset($allCategoryData[$category])) ? $allCategoryData[$category] : [];
 
-        // BUY-SRCH-007: price metadata for the same Alpine filter the category page uses.
         $productMetadata = $products->map(function ($p) {
             $basePrice = (float) ($p->price ?? 0);
             $discount = (float) ($p->discount ?? 0);
@@ -133,8 +128,6 @@ class SearchController extends Controller
         $maxPrice = (int) ceil($maxBase > 0 ? $maxBase : 5000);
         $maxPrice = max($maxPrice, $minPrice);
 
-        // Cards render for every result at once now, so hand them the wishlist
-        // state up front instead of letting each card look it up on its own.
         $wishlistedProductIds = auth()->check()
             ? BuyerWishlist::where('buyer_id', auth()->id())->pluck('product_id')->map(fn ($id) => (int) $id)->all()
             : [];
@@ -156,40 +149,37 @@ class SearchController extends Controller
 
     public function suggestions(Request $request)
     {
-        $query = $request->input('q');
-        
-        if (!$query || strlen($query) < 2) {
+        $query = trim((string) $request->input('q', ''));
+
+        if ($query === '' || strlen($query) < 2) {
             return response()->json([]);
         }
 
-        $words = array_filter(explode(' ', $query), fn($w) => strlen($w) > 2);
+        $words = array_filter(explode(' ', $query), fn ($w) => strlen($w) > 2);
 
-        $productsQuery = Product::query();
-        $productsQuery->where(function($qBuilder) use ($query, $words) {
+        $productsQuery = $this->baseProductsQuery();
+        $productsQuery->where(function ($qBuilder) use ($query, $words) {
             $qBuilder->where('name', 'LIKE', "%{$query}%");
             foreach ($words as $word) {
                 $qBuilder->orWhere('name', 'LIKE', "%{$word}%");
             }
         });
 
-        // Try to get a valid matching product name to suggest, otherwise default to the search query text
         $topMatch = $productsQuery->select('name')->first();
         $suggestedName = $topMatch ? $topMatch->name : $query;
 
         $suggestions = [];
         $categories = array_keys($this->getAllCategories());
 
-        // 1. Add "All Categories" suggestion at the top
         $suggestions[] = [
-            'name' => $suggestedName,
-            'category' => ''
+            'name'     => $suggestedName,
+            'category' => '',
         ];
 
-        // 2. Loop through every existing category instead of querying DB limitations
         foreach ($categories as $cat) {
             $suggestions[] = [
-                'name' => $suggestedName,
-                'category' => $cat
+                'name'     => $suggestedName,
+                'category' => $cat,
             ];
         }
 

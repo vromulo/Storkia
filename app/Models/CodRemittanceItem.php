@@ -11,6 +11,7 @@ class CodRemittanceItem extends Model
         'cod_remittance_id',
         'cod_collection_id',
         'seller_order_id',
+        'amount',
         'collected_amount',
         'rider_commission_amount',
     ];
@@ -18,6 +19,7 @@ class CodRemittanceItem extends Model
     protected function casts(): array
     {
         return [
+            'amount'                  => 'decimal:2',
             'collected_amount'        => 'decimal:2',
             'rider_commission_amount' => 'decimal:2',
         ];
@@ -29,6 +31,11 @@ class CodRemittanceItem extends Model
     }
 
     public function collection(): BelongsTo
+    {
+        return $this->belongsTo(CodCollection::class, 'cod_collection_id');
+    }
+
+    public function codCollection(): BelongsTo
     {
         return $this->belongsTo(CodCollection::class, 'cod_collection_id');
     }

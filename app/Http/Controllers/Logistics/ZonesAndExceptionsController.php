@@ -15,10 +15,10 @@ use App\Services\AuditLoggerService;
 use App\Services\FormalReportService;
 use App\Services\OperationalSlaGuardService;
 use App\Services\OrderCompletionService;
+use App\Services\StorkSchemaBootstrapService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
-use Illuminate\Validation\ValidationException;
 
 class ZonesAndExceptionsController extends Controller
 {
@@ -30,8 +30,10 @@ class ZonesAndExceptionsController extends Controller
 
     public function index(Request $request)
     {
+        StorkSchemaBootstrapService::ensureTablesExist();
+
         $user = $request->user();
-        $profile = $user->logisticsProfile;
+        $profile = $user?->logisticsProfile;
         if (! $profile) {
             abort(403);
         }
@@ -53,11 +55,20 @@ class ZonesAndExceptionsController extends Controller
             ->limit(30)
             ->get();
 
-        // Short COD Remittance Discrepancies (LOG-COD-002 & RID-EARN-005)
+        $hasRemittedAmountColumn = Schema::hasColumn('cod_collections', 'remitted_amount');
+
         $shortRemittances = CodCollection::with(['rider', 'sellerOrder', 'shipment'])
             ->where('logistics_profile_id', $profile->id)
-            ->whereNotNull('remitted_amount')
-            ->whereRaw('remitted_amount < expected_amount')
+            ->where(function ($q) use ($hasRemittedAmountColumn) {
+                if ($hasRemittedAmountColumn) {
+                    $q->where(function ($sq) {
+                        $sq->whereNotNull('remitted_amount')
+                           ->whereColumn('remitted_amount', '<', 'expected_amount');
+                    })->orWhereColumn('collected_amount', '<', 'expected_amount');
+                } else {
+                    $q->whereColumn('collected_amount', '<', 'expected_amount');
+                }
+            })
             ->orderBy('created_at', 'asc')
             ->get();
 
@@ -80,7 +91,7 @@ class ZonesAndExceptionsController extends Controller
     public function storeOrUpdateZoneRate(Request $request)
     {
         $user = $request->user();
-        $profile = $user->logisticsProfile;
+        $profile = $user?->logisticsProfile;
         if (! $profile) {
             abort(403);
         }
@@ -165,7 +176,7 @@ class ZonesAndExceptionsController extends Controller
     public function overrideShipmentStatus(Request $request, Shipment $shipment)
     {
         $user = $request->user();
-        $profile = $user->logisticsProfile;
+        $profile = $user?->logisticsProfile;
 
         if (! $profile || (int) $shipment->logistics_profile_id !== (int) $profile->id) {
             abort(403);
@@ -308,7 +319,7 @@ class ZonesAndExceptionsController extends Controller
     public function suspendRiderWithReason(Request $request, Rider $rider)
     {
         $user = $request->user();
-        $profile = $user->logisticsProfile;
+        $profile = $user?->logisticsProfile;
 
         if (! $profile || (int) $rider->logistics_profile_id !== (int) $profile->id) {
             abort(403, 'Cannot manage another company\'s rider.');
@@ -337,13 +348,25 @@ class ZonesAndExceptionsController extends Controller
 
     public function formalPdfReport(Request $request)
     {
-        $profile = $request->user()->logisticsProfile;
+        $user = $request->user();
+        $profile = $user?->logisticsProfile;
+        if (! $profile) {
+            abort(403);
+        }
+
+        $ownerUser = $profile->user ?: $user;
+        $verifierName = trim((string) ($ownerUser?->full_name ?: $user?->full_name ?: $profile->business_name));
+
         $report = $this->formalReportService->buildRoleReportPayload(
             role: 'Logistics',
             entityId: (int) $profile->id,
             entityName: $profile->business_name,
             request: $request
         );
+
+        $report['verifier_name'] = $verifierName;
+        $report['account_holder_name'] = $verifierName;
+        $report['business_name'] = $profile->business_name;
 
         return view('reports.formal-pdf-report', compact('report'));
     }

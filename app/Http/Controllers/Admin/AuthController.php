@@ -3,151 +3,183 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
-use App\Mail\AdminOtpMail;
+use App\Mail\OtpMail;
+use App\Mail\RegistrationOtpMail;
 use App\Models\Admin;
-use App\Services\SessionRevocationService;
-use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
-use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Validation\ValidationException;
 
 class AuthController extends Controller
 {
-    public function __construct(protected SessionRevocationService $revocation)
+    public function showLogin()
     {
+        return view()->first(['admin.auth.login', 'admin.login']);
     }
 
     public function showLoginForm()
     {
-        return view('admin.auth.login');
+        return $this->showLogin();
     }
 
     public function login(Request $request)
     {
-        $request->validate([
-            'email' => ['required', 'email'],
-            'password' => ['required'],
+        $credentials = $request->validate([
+            'email'    => ['required', 'email'],
+            'password' => ['required', 'string'],
         ]);
 
-        $normalizedEmail = strtolower(trim((string) $request->input('email')));
+        $normalizedEmail = strtolower(trim($credentials['email']));
 
+        /** @var Admin|null $admin */
         $admin = Admin::whereRaw('LOWER(TRIM(email)) = ?', [$normalizedEmail])->first();
 
-        if (! $admin || ! Hash::check($request->password, $admin->password)) {
+        if (! $admin || ! Hash::check($credentials['password'], $admin->password)) {
             throw ValidationException::withMessages([
-                'email' => 'These credentials do not match our administrative records.',
+                'email' => 'The provided administrator credentials do not match our records.',
             ]);
         }
 
-        // A code was emailed moments ago and is still valid: do not mail
-        // another one, just take the admin back to the verification form.
-        if ($this->hasPendingOtp($admin) && RateLimiter::tooManyAttempts($this->sendKey($admin), 1)) {
-            $this->startPreAuth($request, $admin);
-
-            return redirect()->route('admin.otp.form')
-                ->with('status', 'A verification code was sent a moment ago. Please check your email.');
-        }
-
-        $this->issueOtp($admin);
-        $this->startPreAuth($request, $admin);
-
-        return redirect()->route('admin.otp.form');
-    }
-
-    public function showOtpForm(Request $request)
-    {
-        if (! $request->session()->has('admin_auth_id')) {
-            return redirect()->route('admin.login');
-        }
-
-        if (! $this->pendingAdmin($request)) {
-            return $this->restartLogin($request, 'Your verification session has expired. Please sign in again.');
-        }
-
-        return view('admin.auth.otp');
-    }
-
-    public function verifyOtp(Request $request)
-    {
-        $request->validate([
-            'code' => ['required', 'numeric', 'digits:6'],
-        ]);
-
-        $admin = $this->pendingAdmin($request);
-
-        if (! $admin) {
-            return $this->restartLogin($request, 'Your verification session has expired. Please sign in again.');
-        }
-
-        $verifyKey = $this->verifyKey($admin);
-        $maxAttempts = (int) config('security.admin_otp.max_attempts', 5);
-
-        if (RateLimiter::tooManyAttempts($verifyKey, $maxAttempts)) {
-            return $this->abandonOtp($request, $admin);
-        }
-
-        if (! $this->hasPendingOtp($admin) || ! Hash::check((string) $request->input('code'), $admin->otp_code)) {
-            RateLimiter::hit($verifyKey, $this->windowSeconds());
-
-            // Too many wrong guesses: this code is burned, start over.
-            if (RateLimiter::tooManyAttempts($verifyKey, $maxAttempts)) {
-                return $this->abandonOtp($request, $admin);
-            }
-
-            throw ValidationException::withMessages([
-                'code' => 'The provided verification code is invalid or has expired.',
-            ]);
-        }
+        $otpCode = str_pad((string) random_int(0, 999999), 6, '0', STR_PAD_LEFT);
 
         $admin->update([
-            'otp_code' => null,
-            'otp_expires_at' => null,
+            'otp_code'       => Hash::make($otpCode),
+            'otp_expires_at' => now()->addMinutes(10),
         ]);
 
-        RateLimiter::clear($verifyKey);
-        RateLimiter::clear($this->sendKey($admin));
+        $request->session()->put([
+            'admin_2fa_id'       => $admin->id,
+            'admin_2fa_remember' => $request->boolean('remember'),
+        ]);
 
-        // "Remember me" is no longer offered on the admin login. Rotating the
-        // remember token here also ends any older remember-me cookie, which
-        // would otherwise skip this OTP step.
-        $this->revocation->revokeActor($admin);
+        try {
+            if (class_exists(OtpMail::class)) {
+                Mail::to($admin->email)->send(new OtpMail($otpCode, $admin->name ?? 'Admin'));
+            } else {
+                Mail::to($admin->email)->send(new RegistrationOtpMail($otpCode, 10));
+            }
+        } catch (\Throwable $e) {
+            Log::error('Admin 2FA Mail Error: ' . $e->getMessage());
+        }
 
-        Auth::guard('admin')->login($admin);
-        $this->forgetPreAuth($request);
+        if (
+            view()->exists('admin.auth.otp')
+            || view()->exists('admin.auth.verify-2fa')
+            || view()->exists('admin.verify-2fa')
+        ) {
+            return redirect()->route('admin.verify-2fa');
+        }
+
+        Auth::guard('admin')->login($admin, $request->boolean('remember'));
         $request->session()->regenerate();
 
         return redirect()->route('admin.dashboard');
     }
 
-    public function resendOtp(Request $request)
+    public function showVerify2fa(Request $request)
     {
-        if (! $request->session()->has('admin_auth_id')) {
+        $adminId = $request->session()->get('admin_2fa_id');
+        if (! $adminId) {
             return redirect()->route('admin.login');
         }
 
-        $admin = $this->pendingAdmin($request);
-
+        $admin = Admin::find($adminId);
         if (! $admin) {
-            return $this->restartLogin($request, 'Your verification session has expired. Please sign in again.');
+            $request->session()->forget(['admin_2fa_id', 'admin_2fa_remember']);
+            return redirect()->route('admin.login');
         }
 
-        $sendKey = $this->sendKey($admin);
+        return view()->first(
+            ['admin.auth.otp', 'admin.auth.verify-2fa', 'admin.verify-2fa'],
+            compact('admin')
+        );
+    }
 
-        if (RateLimiter::tooManyAttempts($sendKey, 1)) {
-            $seconds = RateLimiter::availableIn($sendKey);
+    public function verify2fa(Request $request)
+    {
+        $adminId = $request->session()->get('admin_2fa_id');
+        if (! $adminId) {
+            return redirect()->route('admin.login');
+        }
 
-            return back()->withErrors([
-                'code' => "Please wait {$seconds} seconds before requesting another code.",
+        /** @var Admin|null $admin */
+        $admin = Admin::find($adminId);
+        if (! $admin) {
+            return redirect()->route('admin.login');
+        }
+
+        $rawCode = preg_replace('/\D/', '', (string) ($request->input('otp') ?? $request->input('code') ?? $request->input('otp_code') ?? ''));
+
+        if (strlen($rawCode) !== 6) {
+            throw ValidationException::withMessages([
+                'otp'  => 'Please enter a valid 6-digit verification code.',
+                'code' => 'Please enter a valid 6-digit verification code.',
             ]);
         }
 
-        $this->issueOtp($admin);
-        $this->startPreAuth($request, $admin);
+        if (! $admin->otp_expires_at || now()->gt($admin->otp_expires_at)) {
+            throw ValidationException::withMessages([
+                'otp'  => 'This verification code has expired. Please request a new code.',
+                'code' => 'This verification code has expired. Please request a new code.',
+            ]);
+        }
 
-        return back()->with('status', 'A new verification code has been sent.');
+        $matches = Hash::check($rawCode, (string) $admin->otp_code) || hash_equals((string) $admin->otp_code, $rawCode);
+        if (! $matches) {
+            throw ValidationException::withMessages([
+                'otp'  => 'Invalid verification code.',
+                'code' => 'Invalid verification code.',
+            ]);
+        }
+
+        $remember = (bool) $request->session()->pull('admin_2fa_remember', false);
+        $request->session()->forget('admin_2fa_id');
+
+        $admin->update([
+            'otp_code'       => null,
+            'otp_expires_at' => null,
+        ]);
+
+        Auth::guard('admin')->login($admin, $remember);
+        $request->session()->regenerate();
+
+        return redirect()->route('admin.dashboard');
+    }
+
+    public function resend2fa(Request $request)
+    {
+        $adminId = $request->session()->get('admin_2fa_id');
+        if (! $adminId) {
+            return redirect()->route('admin.login');
+        }
+
+        $admin = Admin::find($adminId);
+        if (! $admin) {
+            return redirect()->route('admin.login');
+        }
+
+        $otpCode = str_pad((string) random_int(0, 999999), 6, '0', STR_PAD_LEFT);
+        $admin->update([
+            'otp_code'       => Hash::make($otpCode),
+            'otp_expires_at' => now()->addMinutes(10),
+        ]);
+
+        try {
+            if (class_exists(OtpMail::class)) {
+                Mail::to($admin->email)->send(new OtpMail($otpCode, $admin->name ?? 'Admin'));
+            } else {
+                Mail::to($admin->email)->send(new RegistrationOtpMail($otpCode, 10));
+            }
+        } catch (\Throwable $e) {
+            Log::error('Admin Resend 2FA Mail Error: ' . $e->getMessage());
+        }
+
+        return back()
+            ->with('status', 'A new 6-digit verification code has been sent to your email.')
+            ->with('success', 'A new 6-digit verification code has been sent to your email.');
     }
 
     public function logout(Request $request)
@@ -157,101 +189,5 @@ class AuthController extends Controller
         $request->session()->regenerateToken();
 
         return redirect()->route('admin.login');
-    }
-
-    /**
-     * Generates a fresh code, stores only its hash, starts the resend
-     * cooldown, resets the wrong-guess counter and emails the code.
-     */
-    protected function issueOtp(Admin $admin): void
-    {
-        $otp = (string) random_int(100000, 999999);
-
-        $admin->update([
-            'otp_code' => Hash::make($otp),
-            'otp_expires_at' => now()->addMinutes($this->windowMinutes()),
-        ]);
-
-        RateLimiter::clear($this->verifyKey($admin));
-        RateLimiter::hit($this->sendKey($admin), (int) config('security.admin_otp.resend_cooldown_seconds', 60));
-
-        Mail::to($admin->email)->send(new AdminOtpMail($otp));
-    }
-
-    protected function hasPendingOtp(Admin $admin): bool
-    {
-        return ! empty($admin->otp_code)
-            && $admin->otp_expires_at !== null
-            && $admin->otp_expires_at->isFuture();
-    }
-
-    /**
-     * Burns the current code and sends the admin back to the password step.
-     */
-    protected function abandonOtp(Request $request, Admin $admin): RedirectResponse
-    {
-        $admin->update([
-            'otp_code' => null,
-            'otp_expires_at' => null,
-        ]);
-
-        RateLimiter::clear($this->verifyKey($admin));
-        RateLimiter::clear($this->sendKey($admin));
-
-        return $this->restartLogin($request, 'Too many incorrect verification codes. Please sign in again.');
-    }
-
-    protected function restartLogin(Request $request, string $message): RedirectResponse
-    {
-        $this->forgetPreAuth($request);
-
-        return redirect()->route('admin.login')->withErrors(['email' => $message]);
-    }
-
-    /**
-     * The admin who passed the password step in this session, or null when
-     * there is none, it has expired, or the admin no longer exists.
-     */
-    protected function pendingAdmin(Request $request): ?Admin
-    {
-        $adminId = $request->session()->get('admin_auth_id');
-        $startedAt = (int) $request->session()->get('admin_auth_at', 0);
-
-        if (! $adminId || $startedAt <= 0 || (time() - $startedAt) > $this->windowSeconds()) {
-            return null;
-        }
-
-        return Admin::find($adminId);
-    }
-
-    protected function startPreAuth(Request $request, Admin $admin): void
-    {
-        $request->session()->put('admin_auth_id', $admin->id);
-        $request->session()->put('admin_auth_at', time());
-    }
-
-    protected function forgetPreAuth(Request $request): void
-    {
-        $request->session()->forget(['admin_auth_id', 'admin_auth_at', 'admin_auth_remember']);
-    }
-
-    protected function windowMinutes(): int
-    {
-        return max(1, (int) config('security.admin_otp.pre_auth_minutes', 10));
-    }
-
-    protected function windowSeconds(): int
-    {
-        return $this->windowMinutes() * 60;
-    }
-
-    protected function sendKey(Admin $admin): string
-    {
-        return 'admin-otp-send:'.$admin->id;
-    }
-
-    protected function verifyKey(Admin $admin): string
-    {
-        return 'admin-otp-verify:'.$admin->id;
     }
 }

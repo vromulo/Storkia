@@ -23,6 +23,8 @@ use Laravel\Sanctum\HasApiTokens;
     'password',
     'password_changed_at',
     'role',
+    'is_online',
+    'last_seen_at',
 ])]
 #[Hidden(['password', 'remember_token'])]
 class User extends Authenticatable
@@ -30,10 +32,6 @@ class User extends Authenticatable
     /** @use HasFactory<UserFactory> */
     use HasApiTokens, HasFactory, Notifiable;
 
-    /**
-     * Reasons offered on the buyer's "Delete Account" form (key => label).
-     * users.archive_reason stores the key, so the wording can change later.
-     */
     public const ARCHIVE_REASONS = [
         'another_account' => 'I have another account',
         'privacy'         => "I'm concerned about my privacy",
@@ -46,19 +44,16 @@ class User extends Authenticatable
     protected function casts(): array
     {
         return [
-            'email_verified_at' => 'datetime',
-            'password' => 'hashed',
-            'birthday' => 'date',
+            'email_verified_at'   => 'datetime',
+            'password'            => 'hashed',
+            'birthday'            => 'date',
             'password_changed_at' => 'datetime',
-            'archived_at' => 'datetime',
+            'archived_at'         => 'datetime',
+            'is_online'           => 'boolean',
+            'last_seen_at'        => 'datetime',
         ];
     }
 
-    /**
-     * An archived account is one the owner deleted. The row is kept (orders,
-     * reviews and wallet history still point at it) but the person can no
-     * longer sign in until an admin restores it.
-     */
     public function isArchived(): bool
     {
         return $this->archived_at !== null;
@@ -74,7 +69,6 @@ class User extends Authenticatable
         return $query->whereNull('archived_at');
     }
 
-    /** Human-readable version of users.archive_reason. */
     public function getArchiveReasonLabelAttribute(): ?string
     {
         $key = $this->archive_reason;

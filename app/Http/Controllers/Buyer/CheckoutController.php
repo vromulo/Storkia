@@ -28,7 +28,6 @@ use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use Intervention\Image\Drivers\Gd\Driver;
-use Intervention\Image\Encoders\WebpEncoder;
 use Intervention\Image\ImageManager;
 
 class CheckoutController extends Controller
@@ -40,6 +39,36 @@ class CheckoutController extends Controller
         protected BuyerCancellationGuardService $cancellationGuardService,
         protected SuperDealPricingService $superDealPricingService
     ) {}
+
+    protected function resolveStoreOrPlatformGcashAccount(SellerProfile $sellerProfile): ?object
+    {
+        $sellerProfile->loadMissing('gcashAccount');
+        $sellerGcash = $sellerProfile->gcashAccount;
+
+        if ($sellerGcash && method_exists($sellerGcash, 'isCompliantForCheckout') && $sellerGcash->isCompliantForCheckout()) {
+            return $sellerGcash;
+        }
+
+        if (Schema::hasTable('platform_gcash_settings')) {
+            $platGcash = DB::table('platform_gcash_settings')
+                ->where('is_active', true)
+                ->orderByDesc('id')
+                ->first();
+
+            if ($platGcash && ! empty($platGcash->account_name) && ! empty($platGcash->gcash_number)) {
+                return (object) [
+                    'account_name'   => $platGcash->account_name,
+                    'gcash_number'   => $platGcash->gcash_number,
+                    'qr_image_path'  => $platGcash->qr_image_path,
+                    'qr_image_url'   => ! empty($platGcash->qr_image_path) ? asset('storage/' . $platGcash->qr_image_path) : null,
+                    'is_active'      => (bool) $platGcash->is_active,
+                    'instructions'   => $platGcash->instructions ?? null,
+                ];
+            }
+        }
+
+        return null;
+    }
 
     protected function assertPerBuyerLimitNotExceeded(int $buyerId, Product $product, int $checkoutQuantity): void
     {
@@ -119,7 +148,6 @@ class CheckoutController extends Controller
 
         $addresses = $user->addresses()->orderByDesc('is_default')->latest('id')->get();
         $selectedAddressId = $request->query('address_id');
-
         $selectedAddress = $selectedAddressId
             ? $addresses->firstWhere('id', (int) $selectedAddressId)
             : ($addresses->firstWhere('is_default', true) ?? $addresses->first());
@@ -152,50 +180,50 @@ class CheckoutController extends Controller
         $idempotencyKey = (string) Str::uuid();
 
         return view('buyer.checkout', [
-            'mode'                     => $mode,
-            'addresses'                => $addresses,
-            'selectedAddress'          => $selectedAddress,
-            'isAddressServiceable'     => $checkoutSummary['is_address_serviceable'],
-            'sellerPackages'           => $checkoutSummary['seller_packages'],
-            'overallSubtotal'          => $checkoutSummary['overall_subtotal'],
-            'overallShipping'          => $checkoutSummary['overall_shipping'],
-            'overallStoreDiscount'     => $checkoutSummary['overall_store_discount'],
-            'overallPlatformDiscount'  => $checkoutSummary['overall_platform_discount'],
-            'overallShippingDiscount'  => $checkoutSummary['overall_shipping_discount'],
-            'overallTotal'             => $checkoutSummary['overall_total'],
-            'appliedPlatformVoucher'   => $checkoutSummary['applied_platform_voucher'],
-            'appliedShippingVoucher'   => $checkoutSummary['applied_shipping_voucher'],
-            'voucherNotices'           => $checkoutSummary['voucher_notices'],
-            'priceSignature'           => $checkoutSummary['price_signature'],
-            'availableVouchers'        => $availableVouchers,
-            'totalItemsCount'          => $checkoutSummary['total_items_count'],
-            'selectedCartIds'          => $checkoutSummary['cart_ids'],
-            'idempotencyKey'           => $idempotencyKey,
+            'mode'                    => $mode,
+            'addresses'               => $addresses,
+            'selectedAddress'         => $selectedAddress,
+            'isAddressServiceable'    => $checkoutSummary['is_address_serviceable'],
+            'sellerPackages'          => $checkoutSummary['seller_packages'],
+            'overallSubtotal'         => $checkoutSummary['overall_subtotal'],
+            'overallShipping'         => $checkoutSummary['overall_shipping'],
+            'overallStoreDiscount'    => $checkoutSummary['overall_store_discount'],
+            'overallPlatformDiscount' => $checkoutSummary['overall_platform_discount'],
+            'overallShippingDiscount' => $checkoutSummary['overall_shipping_discount'],
+            'overallTotal'            => $checkoutSummary['overall_total'],
+            'appliedPlatformVoucher'  => $checkoutSummary['applied_platform_voucher'],
+            'appliedShippingVoucher'  => $checkoutSummary['applied_shipping_voucher'],
+            'voucherNotices'          => $checkoutSummary['voucher_notices'],
+            'priceSignature'          => $checkoutSummary['price_signature'],
+            'availableVouchers'       => $availableVouchers,
+            'totalItemsCount'         => $checkoutSummary['total_items_count'],
+            'selectedCartIds'         => $checkoutSummary['cart_ids'],
+            'idempotencyKey'          => $idempotencyKey,
         ]);
     }
 
     public function store(Request $request)
     {
         $validated = $request->validate([
-            'user_address_id'         => ['required', 'integer', 'exists:user_addresses,id'],
-            'mode'                    => ['required', 'in:cart,buy_now'],
-            'cart_ids'                => ['nullable', 'array'],
-            'cart_ids.*'              => ['integer'],
-            'idempotency_key'         => ['required', 'string', 'max:64'],
-            'price_signature'         => ['nullable', 'string'],
-            'seller_notes'            => ['nullable', 'array'],
-            'seller_notes.*'          => ['nullable', 'string', 'max:200'],
-            'store_voucher_codes'     => ['nullable', 'array'],
-            'store_voucher_codes.*'   => ['nullable', 'string', 'max:25'],
-            'platform_voucher_code'   => ['nullable', 'string', 'max:25'],
-            'shipping_voucher_code'   => ['nullable', 'string', 'max:25'],
-            'payment_methods'         => ['required', 'array'],
-            'payment_methods.*'       => ['required', 'in:COD,GCASH'],
-            'gcash_sender_number'     => ['nullable', 'array'],
-            'gcash_paid_at'           => ['nullable', 'array'],
-            'gcash_reference_number'  => ['nullable', 'array'],
-            'gcash_reference_code'    => ['nullable', 'array'],
-            'gcash_screenshot'        => ['nullable', 'array'],
+            'user_address_id'        => ['required', 'integer', 'exists:user_addresses,id'],
+            'mode'                   => ['required', 'in:cart,buy_now'],
+            'cart_ids'               => ['nullable', 'array'],
+            'cart_ids.*'             => ['integer'],
+            'idempotency_key'        => ['required', 'string', 'max:64'],
+            'price_signature'        => ['nullable', 'string'],
+            'seller_notes'           => ['nullable', 'array'],
+            'seller_notes.*'         => ['nullable', 'string', 'max:200'],
+            'store_voucher_codes'    => ['nullable', 'array'],
+            'store_voucher_codes.*'  => ['nullable', 'string', 'max:25'],
+            'platform_voucher_code'  => ['nullable', 'string', 'max:25'],
+            'shipping_voucher_code'  => ['nullable', 'string', 'max:25'],
+            'payment_methods'        => ['required', 'array'],
+            'payment_methods.*'      => ['required', 'in:COD,GCASH'],
+            'gcash_sender_number'    => ['nullable', 'array'],
+            'gcash_paid_at'          => ['nullable', 'array'],
+            'gcash_reference_number' => ['nullable', 'array'],
+            'gcash_reference_code'   => ['nullable', 'array'],
+            'gcash_screenshot'       => ['nullable', 'array'],
         ], [
             'user_address_id.required' => 'Please select a delivery address.',
             'payment_methods.required' => 'Please select a payment method for each store package.',
@@ -321,10 +349,10 @@ class CheckoutController extends Controller
                 }
 
                 if ($chosenMethod === 'GCASH') {
-                    $gcashAcc = $sellerProfile->gcashAccount;
+                    $gcashAcc = $this->resolveStoreOrPlatformGcashAccount($sellerProfile);
                     $blockedForArrears = (bool) ($sellerProfile->gcash_blocked_for_arrears ?? false);
 
-                    if ($blockedForArrears || ! $gcashAcc || ! $gcashAcc->isCompliantForCheckout()) {
+                    if ($blockedForArrears || ! $gcashAcc) {
                         throw ValidationException::withMessages([
                             'payment_methods' => "Online Payment (GCash) is currently unavailable for {$sellerProfile->business_name}. Please select Cash on Delivery (COD).",
                         ]);
@@ -345,31 +373,23 @@ class CheckoutController extends Controller
 
                     $paidAtRaw = trim((string) ($request->input("gcash_paid_at.{$spId}") ?? ''));
                     if ($paidAtRaw === '') {
-                        throw ValidationException::withMessages([
-                            "gcash_paid_at.{$spId}" => "Please enter the GCash payment date and time for {$sellerProfile->business_name}.",
-                        ]);
-                    }
-
-                    try {
-                        $paidAt = Carbon::parse($paidAtRaw);
-                    } catch (\Throwable $e) {
-                        throw ValidationException::withMessages([
-                            "gcash_paid_at.{$spId}" => "Invalid GCash payment date and time for {$sellerProfile->business_name}.",
-                        ]);
+                        $paidAt = now();
+                    } else {
+                        try {
+                            $paidAt = Carbon::parse($paidAtRaw);
+                        } catch (\Throwable $e) {
+                            throw ValidationException::withMessages([
+                                "gcash_paid_at.{$spId}" => "Invalid GCash payment date and time for {$sellerProfile->business_name}.",
+                            ]);
+                        }
                     }
 
                     $refNumber = strtoupper(trim((string) ($request->input("gcash_reference_number.{$spId}") ?? '')));
-                    $refCode = strtoupper(trim((string) ($request->input("gcash_reference_code.{$spId}") ?? '')));
+                    $refCode = strtoupper(trim((string) ($request->input("gcash_reference_code.{$spId}") ?? $refNumber)));
 
                     if (strlen($refNumber) < 4 || strlen($refNumber) > 80) {
                         throw ValidationException::withMessages([
-                            "gcash_reference_number.{$spId}" => "Please enter a valid GCash Reference Number (4–80 characters) for {$sellerProfile->business_name}.",
-                        ]);
-                    }
-
-                    if (strlen($refCode) < 2 || strlen($refCode) > 80) {
-                        throw ValidationException::withMessages([
-                            "gcash_reference_code.{$spId}" => "Please enter the GCash Reference Code for {$sellerProfile->business_name}.",
+                            "gcash_reference_number.{$spId}" => "Please enter a valid GCash Reference Number (4-80 characters) for {$sellerProfile->business_name}.",
                         ]);
                     }
 
@@ -399,7 +419,7 @@ class CheckoutController extends Controller
                         'sender_gcash_number' => $rawSender,
                         'paid_at'             => $paidAt,
                         'reference_number'    => $refNumber,
-                        'reference_code'      => $refCode,
+                        'reference_code'      => $refCode ?: $refNumber,
                         'screenshot_file'     => $file,
                     ];
                 }
@@ -413,7 +433,6 @@ class CheckoutController extends Controller
                     $line['quantity']
                 );
 
-                // Increment sold_quantity on Super Deal slot if applicable (SEL-FLASH-003)
                 if (! empty($line['super_deal_id']) && Schema::hasTable('super_deals')) {
                     DB::table('super_deals')
                         ->where('id', (int) $line['super_deal_id'])
@@ -653,14 +672,14 @@ class CheckoutController extends Controller
         $filename = uniqid('gcash_') . '_' . time() . '.webp';
         $path = $folder . '/' . $filename;
 
-        $manager = ImageManager::usingDriver(Driver::class);
-        $image = $manager->decode($file->getRealPath());
-        $image->scaleDown(width: 1200, height: 1200);
-        $encoded = $image->encode(new WebpEncoder(quality: 85));
-
-        Storage::disk('public')->put($path, $encoded->toString());
-
-        return $path;
+        try {
+            $manager = new ImageManager(new Driver());
+            $encoded = $manager->read($file->getRealPath())->scaleDown(1200, 1200)->toWebp(85);
+            Storage::disk('public')->put($path, (string) $encoded);
+            return $path;
+        } catch (\Throwable $e) {
+            return $file->store($folder, 'public');
+        }
     }
 
     protected function buildLineSignatureKey(int $productId, ?string $variantName, ?string $subVariantName, string $pricingLabel = 'Regular'): string
@@ -693,6 +712,7 @@ class CheckoutController extends Controller
             );
 
             $qty = max(1, (int) ($buyNow['quantity'] ?? 1));
+
             $this->assertPerBuyerLimitNotExceeded((int) $user->id, $product, $qty);
 
             if ($resolved['available_stock'] < $qty) {
@@ -769,6 +789,7 @@ class CheckoutController extends Controller
             );
 
             $qty = max(1, (int) $cartItem->quantity);
+
             $this->assertPerBuyerLimitNotExceeded((int) $user->id, $product, $qty);
 
             if ($resolved['available_stock'] < $qty) {
@@ -861,6 +882,7 @@ class CheckoutController extends Controller
 
         $buyerProvince = $selectedAddress->province ?? '';
         $buyerMunicipality = $selectedAddress->municipality ?? '';
+
         $isAddressServiceable = $selectedAddress
             ? $this->shippingCalculatorService->isAddressServiceable($buyerProvince, $buyerMunicipality)
             : false;
@@ -874,7 +896,6 @@ class CheckoutController extends Controller
         foreach ($grouped as $sellerProfileId => $package) {
             /** @var SellerProfile $sellerProfile */
             $sellerProfile = $package['seller_profile'];
-            $sellerProfile->loadMissing('gcashAccount');
 
             $shipping = $this->shippingCalculatorService->calculateForSellerOrder(
                 sellerProvince: $sellerProfile->province ?? '',
@@ -884,7 +905,6 @@ class CheckoutController extends Controller
                 totalWeightKg: $package['total_weight']
             );
 
-            // Apply Bundle Deal Discount automatically if qualifying items are present (SEL-FLASH-007 / 008)
             $bundleResult = $this->superDealPricingService->calculateStoreBundleDiscount(
                 sellerProfileId: (int) $sellerProfile->id,
                 packageLines: $package['items']
@@ -930,27 +950,27 @@ class CheckoutController extends Controller
             $overallShipping = round($overallShipping + $shipping['shipping_fee'], 2);
             $overallStoreDiscount = round($overallStoreDiscount + $combinedSellerFundedDiscount, 2);
 
-            $gcashAccount = $sellerProfile->gcashAccount;
+            $resolvedGcashAccount = $this->resolveStoreOrPlatformGcashAccount($sellerProfile);
             $blockedForArrears = (bool) ($sellerProfile->gcash_blocked_for_arrears ?? false);
-            $gcashEnabled = ! $blockedForArrears && $gcashAccount !== null && $gcashAccount->isCompliantForCheckout();
+            $gcashEnabled = ! $blockedForArrears && $resolvedGcashAccount !== null;
 
             $sellerPackages[] = [
-                'seller_profile'     => $sellerProfile,
-                'gcash_enabled'      => $gcashEnabled,
-                'gcash_account'      => $gcashEnabled ? $gcashAccount : null,
-                'items'              => $package['items'],
-                'subtotal'           => $package['subtotal'],
-                'bundle_discount'    => $bundleDiscount,
-                'bundle_title'       => $bundleResult['bundle_title'],
-                'store_voucher'      => $appliedStoreVoucher,
-                'store_discount'     => $storeDiscount,
-                'platform_discount'  => 0.0,
-                'shipping_discount'  => 0.0,
-                'net_subtotal'       => max(0.0, round($package['subtotal'] - $combinedSellerFundedDiscount, 2)),
-                'total_weight'       => $package['total_weight'],
-                'shipping'           => $shipping,
-                'net_shipping_fee'   => $shipping['shipping_fee'],
-                'total'              => round(max(0.0, $package['subtotal'] - $combinedSellerFundedDiscount) + $shipping['shipping_fee'], 2),
+                'seller_profile'    => $sellerProfile,
+                'gcash_enabled'     => $gcashEnabled,
+                'gcash_account'     => $gcashEnabled ? $resolvedGcashAccount : null,
+                'items'             => $package['items'],
+                'subtotal'          => $package['subtotal'],
+                'bundle_discount'   => $bundleDiscount,
+                'bundle_title'      => $bundleResult['bundle_title'],
+                'store_voucher'     => $appliedStoreVoucher,
+                'store_discount'    => $storeDiscount,
+                'platform_discount' => 0.0,
+                'shipping_discount' => 0.0,
+                'net_subtotal'      => max(0.0, round($package['subtotal'] - $combinedSellerFundedDiscount, 2)),
+                'total_weight'      => $package['total_weight'],
+                'shipping'          => $shipping,
+                'net_shipping_fee'  => $shipping['shipping_fee'],
+                'total'             => round(max(0.0, $package['subtotal'] - $combinedSellerFundedDiscount) + $shipping['shipping_fee'], 2),
             ];
         }
 

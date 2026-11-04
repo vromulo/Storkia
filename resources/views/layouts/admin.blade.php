@@ -1,76 +1,186 @@
 <!DOCTYPE html>
 <html lang="{{ str_replace('_', '-', app()->getLocale()) }}">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <meta name="csrf-token" content="{{ csrf_token() }}">
-        <meta name="session-login-url" content="{{ route('admin.login') }}">
-        @auth('admin')
-            <meta name="session-authenticated" content="1">
-        @endauth
-        <title>{{ $title ?? 'Storkia - Admin' }}</title>
-        <link rel="icon" type="image/webp" href="{{ asset('assets/pink-storkia-minimized.webp') }}">
-        
-        <!-- Google Fonts: DM Serif Display & Plus Jakarta Sans -->
-        <link rel="preconnect" href="https://fonts.googleapis.com">
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-        <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0,1&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
-        
-        @vite(['resources/css/app.css', 'resources/css/layouts/admin.css', 'resources/js/app.js'])
-        @livewireStyles
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="csrf-token" content="{{ csrf_token() }}">
+    <meta name="session-login-url" content="{{ route('admin.login') }}">
+    @auth('admin')
+        <meta name="session-authenticated" content="1">
+    @endauth
+    <title>{{ $title ?? 'Storkia - Admin Portal' }}</title>
+    <link rel="icon" type="image/webp" href="{{ asset('assets/pink-storkia-minimized.webp') }}">
 
-    </head>
-    <body class="m-0 p-0 h-screen w-screen font-sans antialiased text-text-main overflow-hidden bg-gradient-to-b from-surface via-surface to-brand-light/30 relative">
-        <x-ui.preloader />
-        
-        <!-- Mobile Restricted View -->
-        <div class="mobile-view absolute inset-0 bg-surface/80 backdrop-blur-md z-40"></div>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0,1&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
 
-        <div class="mobile-view flex-col items-center justify-center h-screen w-screen px-4 sm:px-6 py-8 z-50 relative overflow-y-auto">
-            <div class="bg-surface/95 backdrop-blur-xl rounded-3xl shadow-2xl shadow-black/10 border border-border-subtle w-full max-w-md p-6 sm:p-8 text-center flex flex-col items-center">
-    
-                <div class="w-20 h-20 bg-brand-light/40 text-primary rounded-full flex items-center justify-center mb-5 shadow-inner">
-                    <svg class="w-10 h-10" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                    </svg>
-                </div>
-    
-                <h2 class="text-2xl sm:text-3xl font-extrabold text-primary mb-4 tracking-tight">Desktop Only</h2>
-    
-                <div class="bg-brand-light/20 border border-border-subtle rounded-2xl p-5 mb-8 w-full shadow-sm">
-                    <p class="text-text-main text-sm sm:text-base leading-relaxed font-medium">
-                        You are accessing an <span class="font-bold text-primary">Administrative Account</span>.
-                        <br><br>
-                        <span class="text-text-muted">Please log in from a computer to access this dashboard interface.</span>
-                    </p>
-                </div>
-    
-                <form method="POST" action="{{ route('admin.logout') }}" class="w-full">
-                    @csrf
-                    <button type="submit" class="w-full flex items-center justify-center px-6 py-4 bg-red-500 text-white text-lg font-bold rounded-2xl shadow-md hover:bg-red-600 transition-all duration-200 cursor-pointer active:scale-95">
-                        <svg class="w-6 h-6 mr-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
-                        </svg>
-                        Logout
-                    </button>
-                </form>
+    @vite(['resources/css/app.css', 'resources/js/app.js'])
+    @livewireStyles
+
+    <style>
+        [x-cloak] { display: none !important; }
+        .mobile-view { display: flex; }
+        .desktop-view { display: none; }
+        @media (min-width: 1024px) {
+            .mobile-view { display: none !important; }
+            .desktop-view { display: flex !important; }
+        }
+    </style>
+</head>
+<body class="m-0 p-0 h-screen w-screen font-sans antialiased text-text-main overflow-hidden bg-gradient-to-b from-surface via-surface to-brand-light/30 relative">
+    <x-ui.preloader />
+
+    <div class="mobile-view fixed inset-0 bg-surface/80 backdrop-blur-md z-40"></div>
+    <div class="mobile-view flex-col items-center justify-center h-screen w-screen px-4 sm:px-6 py-8 z-50 relative overflow-y-auto">
+        <div class="bg-surface/95 backdrop-blur-xl rounded-3xl shadow-2xl shadow-black/10 border border-border-subtle w-full max-w-md p-6 sm:p-8 text-center flex flex-col items-center">
+            <div class="w-20 h-20 bg-brand-light/40 text-primary rounded-full flex items-center justify-center mb-5 shadow-inner">
+                <svg class="w-10 h-10" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                </svg>
             </div>
+
+            <h2 class="text-2xl sm:text-3xl font-extrabold text-primary mb-4 tracking-tight">Desktop Only</h2>
+
+            <div class="bg-brand-light/20 border border-border-subtle rounded-2xl p-5 mb-8 w-full shadow-sm">
+                <p class="text-text-main text-sm sm:text-base leading-relaxed font-medium">
+                    You are accessing an <span class="font-bold text-primary">Administrative Account</span>.
+                    <br><br>
+                    <span class="text-text-muted">Please log in from a computer to access this dashboard interface.</span>
+                </p>
+            </div>
+
+            <form method="POST" action="{{ route('admin.logout') }}" class="w-full">
+                @csrf
+                <button type="submit" class="w-full flex items-center justify-center px-6 py-4 bg-red-500 text-white text-lg font-bold rounded-2xl shadow-md hover:bg-red-600 transition-all duration-200 cursor-pointer active:scale-95">
+                    <svg class="w-6 h-6 mr-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+                    </svg>
+                    Logout
+                </button>
+            </form>
         </div>
- 
-        <div x-data="{ sidebarOpen: localStorage.getItem('adminSidebarOpen') !== 'false' }"
-            x-init="$watch('sidebarOpen', val => localStorage.setItem('adminSidebarOpen', val))"
-            class="desktop-view h-screen w-full relative">
-    
-            <!-- Sidebar Component -->
-            @include('components.admin.sidebar')
-    
-            <main class="flex-1 h-screen overflow-y-auto custom-scrollbar relative">
+    </div>
+
+    <div x-data="{ sidebarOpen: localStorage.getItem('adminSidebarOpen') !== 'false' }"
+         x-init="$watch('sidebarOpen', val => localStorage.setItem('adminSidebarOpen', val))"
+         class="desktop-view h-screen w-full relative">
+
+        @include('components.admin.sidebar')
+
+        <div class="flex-1 flex flex-col h-screen overflow-hidden min-w-0">
+            <header class="h-20 bg-surface/90 backdrop-blur-md border-b border-border-subtle px-8 flex items-center justify-between shrink-0 z-30">
+                <div class="flex items-center gap-3">
+                    <span class="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                    <h2 class="text-sm font-bold text-primary-dark tracking-tight">Storkia Executive Administration Portal</h2>
+                </div>
+
+                <div class="flex items-center gap-4">
+                    @php
+                        $adminUser = auth('admin')->user();
+                        $unreadNotifications = $adminUser ? $adminUser->unreadNotifications : collect();
+                        $unreadCount = $unreadNotifications->count();
+                        $recentNotifications = $adminUser ? $adminUser->notifications()->take(8)->get() : collect();
+                    @endphp
+
+                    <div x-data="{ notifOpen: false }" @click.away="notifOpen = false" class="relative">
+                        <button type="button"
+                                @click="notifOpen = !notifOpen"
+                                class="p-2.5 rounded-xl bg-surface-subtle hover:bg-brand-light/30 text-text-muted hover:text-primary transition-colors relative cursor-pointer focus:outline-none">
+                            <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+                            </svg>
+                            @if($unreadCount > 0)
+                                <span class="absolute top-1.5 right-1.5 w-4 h-4 rounded-full bg-red-500 text-white text-[10px] font-extrabold flex items-center justify-center border-2 border-white">
+                                    {{ $unreadCount > 9 ? '9+' : $unreadCount }}
+                                </span>
+                            @endif
+                        </button>
+
+                        <div x-show="notifOpen"
+                             x-cloak
+                             x-transition:enter="transition ease-out duration-150"
+                             x-transition:enter-start="opacity-0 scale-95 -translate-y-1"
+                             x-transition:enter-end="opacity-100 scale-100 translate-y-0"
+                             x-transition:leave="transition ease-in duration-100"
+                             x-transition:leave-start="opacity-100 scale-100 translate-y-0"
+                             x-transition:leave-end="opacity-0 scale-95 -translate-y-1"
+                             class="absolute right-0 mt-3 w-80 sm:w-96 bg-surface border border-border-subtle rounded-2xl shadow-2xl z-50 overflow-hidden">
+                            <div class="p-4 border-b border-border-subtle flex items-center justify-between bg-surface-subtle">
+                                <span class="font-bold text-sm text-primary-dark">Admin Notifications</span>
+                                @if($unreadCount > 0)
+                                    <form method="POST" action="{{ route('admin.notifications.markAllRead') }}" class="m-0">
+                                        @csrf @method('PATCH')
+                                        <button type="submit" class="text-xs font-bold text-primary hover:underline cursor-pointer">
+                                            Mark all as read
+                                        </button>
+                                    </form>
+                                @endif
+                            </div>
+
+                            <div class="max-h-80 overflow-y-auto divide-y divide-border-subtle/60 custom-scrollbar">
+                                @forelse($recentNotifications as $notif)
+                                    @php
+                                        $data = $notif->data;
+                                        $isUnread = is_null($notif->read_at);
+                                    @endphp
+                                    <div class="p-4 transition-colors {{ $isUnread ? 'bg-brand-light/10' : 'bg-surface' }}">
+                                        <div class="flex items-start justify-between gap-2">
+                                            <h4 class="text-xs font-bold {{ ($data['type'] ?? '') === 'danger' ? 'text-danger' : (($data['type'] ?? '') === 'warning' ? 'text-yellow-600' : 'text-primary') }}">
+                                                {{ $data['title'] ?? 'System Notice' }}
+                                            </h4>
+                                            <span class="text-[10px] text-text-muted shrink-0">{{ $notif->created_at->diffForHumans() }}</span>
+                                        </div>
+                                        <p class="text-xs text-text-main mt-1 leading-relaxed">{{ $data['message'] ?? '' }}</p>
+                                        <div class="mt-2 flex items-center justify-between">
+                                            @if(!empty($data['url']))
+                                                <a href="{{ route('admin.notifications.open', $notif->id) }}" class="text-[11px] font-bold text-primary hover:underline">
+                                                    Open &rarr;
+                                                </a>
+                                            @else
+                                                <span></span>
+                                            @endif
+                                            @if($isUnread)
+                                                <form method="POST" action="{{ route('admin.notifications.markRead', $notif->id) }}" class="m-0">
+                                                    @csrf @method('PATCH')
+                                                    <button type="submit" class="text-[10px] font-bold text-text-muted hover:text-primary cursor-pointer">
+                                                        Dismiss
+                                                    </button>
+                                                </form>
+                                            @endif
+                                        </div>
+                                    </div>
+                                @empty
+                                    <div class="p-8 text-center text-text-muted text-xs">
+                                        No administrative notifications at this time.
+                                    </div>
+                                @endforelse
+                            </div>
+                        </div>
+                    </div>
+
+                    <a href="{{ route('admin.settings.index') }}" class="flex items-center gap-3 pl-3 border-l border-border-subtle group cursor-pointer">
+                        <div class="w-9 h-9 rounded-full bg-gradient-to-br from-primary-dark to-primary text-white font-bold text-xs flex items-center justify-center shadow-xs shrink-0">
+                            {{ strtoupper(substr($adminUser->name ?? 'A', 0, 1)) }}
+                        </div>
+                        <div class="text-left hidden sm:block">
+                            <span class="text-xs font-bold text-text-main group-hover:text-primary transition-colors block leading-tight">
+                                {{ $adminUser->name ?? 'Administrator' }}
+                            </span>
+                            <span class="text-[10px] text-text-muted block">System Admin</span>
+                        </div>
+                    </a>
+                </div>
+            </header>
+
+            <main class="flex-1 overflow-y-auto custom-scrollbar relative p-6 lg:p-10">
                 @yield('content')
                 {{ $slot ?? '' }}
             </main>
         </div>
-    
-        @livewireScripts
+    </div>
 
-    </body>
+    <x-ui.toast-notification />
+    @livewireScripts
+</body>
 </html>

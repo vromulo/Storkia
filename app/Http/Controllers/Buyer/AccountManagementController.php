@@ -4,457 +4,576 @@ namespace App\Http\Controllers\Buyer;
 
 use App\Http\Controllers\Controller;
 use App\Mail\RegistrationOtpMail;
+use App\Models\BuyerProfile;
 use App\Models\EmailChangeRequest;
-use App\Models\RegistrationOtp;
 use App\Models\User;
+use App\Services\AccountArchiveService;
+use App\Services\AuditLoggerService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
-use Illuminate\Support\Str;
+use Illuminate\Support\Facades\Schema;
+use Illuminate\Validation\Rule;
+use Illuminate\Validation\Rules\Password;
+use Illuminate\Validation\ValidationException;
 
 class AccountManagementController extends Controller
 {
-    public function index()
+    public const OTP_TTL_MINUTES = 10;
+    public const OTP_COOLDOWN_SECONDS = 60;
+    public const OTP_MAX_ATTEMPTS = 5;
+
+    public function __construct(
+        protected AccountArchiveService $accountArchiveService
+    ) {}
+
+    /**
+     * Display the Buyer Account Management & Security page (GET /user/account-management).
+     */
+    public function index(Request $request)
     {
-        $user = auth()->user();
-        return view('buyer.option.account.account-management', compact('user'));
+        /** @var User $user */
+        $user = $request->user();
+
+        if (Schema::hasTable('buyer_profiles')) {
+            BuyerProfile::firstOrCreate(
+                ['user_id' => $user->id],
+                [
+                    'username'            => BuyerProfile::generateUniqueUsername($user->email),
+                    'avatar_path'         => null,
+                    'username_changed_at' => null,
+                ]
+            );
+        }
+
+        $initialFullName = trim(($user->first_name ?? '') . ' ' . ($user->last_name ?? ''))
+            ?: 'Buyer-' . str_pad((string) $user->id, 6, '0', STR_PAD_LEFT);
+
+        $rawEmail = (string) ($user->email ?? '');
+        $maskedEmail = $this->maskEmail($rawEmail);
+
+        $passwordLastUpdated = method_exists($user, 'formattedPasswordLastUpdated')
+            ? $user->formattedPasswordLastUpdated()
+            : ($user->password_changed_at ? 'Updated ' . $user->password_changed_at->diffForHumans() : 'Never updated');
+
+        $phoneData = $this->formatPhoneData((string) ($user->contact_no ?? ''));
+
+        $deleteBlockers = $this->accountArchiveService->blockers($user);
+        $archiveReasons = defined(User::class . '::ARCHIVE_REASONS')
+            ? User::ARCHIVE_REASONS
+            : [
+                'privacy'        => 'Privacy or security concerns',
+                'not_using'      => 'I no longer use Storkia',
+                'second_account' => 'I have another Storkia account',
+                'other'          => 'Other reason',
+            ];
+
+        return view()->first(
+            [
+                'buyer.option.account.account-management',
+                'buyer.account.account-management',
+                'buyer.account-management',
+            ],
+            [
+                'user'                => $user,
+                'initialFullName'     => $initialFullName,
+                'rawEmail'            => $rawEmail,
+                'maskedEmail'         => $maskedEmail,
+                'passwordLastUpdated' => $passwordLastUpdated,
+                'cleanContact'        => $phoneData['phone_raw'],
+                'formattedPhone'      => $phoneData['formatted_phone'],
+                'maskedContact'       => $phoneData['masked_phone'],
+                'hasPhone'            => $phoneData['has_phone'],
+                'deleteBlockers'      => $deleteBlockers,
+                'archiveReasons'      => $archiveReasons,
+            ]
+        );
     }
 
+    /**
+     * Alias for index() in case any route or caller invokes show().
+     */
+    public function show(Request $request)
+    {
+        return $this->index($request);
+    }
+
+    /**
+     * Update Buyer's First Name and Last Name (PATCH /user/account-management/name).
+     */
     public function updateName(Request $request)
     {
-        $validated = $request->validate([
-            'first_name' => ['required', 'string', 'max:50', 'regex:/^[A-Za-z\s]+$/'],
-            'last_name'  => ['required', 'string', 'max:50', 'regex:/^[A-Za-z\s]+$/'],
-        ], [
-            'first_name.regex' => 'First name must contain only letters and spaces.',
-            'last_name.regex'  => 'Last name must contain only letters and spaces.',
+        /** @var User $user */
+        $user = $request->user();
+
+        $request->merge([
+            'first_name' => trim((string) $request->input('first_name', '')),
+            'last_name'  => trim((string) $request->input('last_name', '')),
         ]);
 
-        /** @var \App\Models\User $user */
-        $user = auth()->user();
+        $validated = $request->validate([
+            'first_name' => ['required', 'string', 'min:2', 'max:50', 'regex:/^[\p{L}\s\'\-\.]+$/u'],
+            'last_name'  => ['required', 'string', 'min:2', 'max:50', 'regex:/^[\p{L}\s\'\-\.]+$/u'],
+        ], [
+            'first_name.regex' => 'First name may only contain letters, spaces, hyphens, apostrophes, and periods.',
+            'last_name.regex'  => 'Last name may only contain letters, spaces, hyphens, apostrophes, and periods.',
+        ]);
 
-        $firstName = ucwords(strtolower(trim($validated['first_name'])));
-        $lastName  = ucwords(strtolower(trim($validated['last_name'])));
+        $oldName = $user->full_name;
 
         $user->update([
-            'first_name' => $firstName,
-            'last_name'  => $lastName,
+            'first_name' => $validated['first_name'],
+            'last_name'  => $validated['last_name'],
         ]);
+
+        AuditLoggerService::log(
+            action: 'buyer_name_updated',
+            targetType: 'User',
+            targetId: (int) $user->id,
+            targetReference: $user->email,
+            oldValues: ['name' => $oldName],
+            newValues: ['name' => $user->full_name],
+            reason: 'Buyer updated full name in Account Management'
+        );
+
+        $fullName = trim($user->first_name . ' ' . $user->last_name);
 
         if ($request->wantsJson() || $request->ajax()) {
             return response()->json([
                 'success'    => true,
-                'message'    => 'Name updated successfully.',
-                'first_name' => $firstName,
-                'last_name'  => $lastName,
-                'full_name'  => trim("{$firstName} {$lastName}"),
+                'message'    => 'Your name has been updated.',
+                'first_name' => $user->first_name,
+                'last_name'  => $user->last_name,
+                'full_name'  => $fullName,
             ]);
         }
 
-        return redirect()
-            ->route('user.account-management')
-            ->with('success', 'Name updated successfully.');
+        return back()->with('success', 'Your name has been updated.');
     }
 
-    public function requestEmailOtp(Request $request)
+    /**
+     * Update Buyer's Phone Number (PATCH /user/account-management/phone).
+     */
+    public function updatePhone(Request $request)
     {
-        /** @var \App\Models\User $user */
-        $user = auth()->user();
+        /** @var User $user */
+        $user = $request->user();
 
-        // 1. Sanitize input before running Laravel validation rules
-        $cleanEmail = strtolower(trim((string) $request->input('email')));
-        $request->merge(['email' => $cleanEmail]);
+        $rawInput = (string) ($request->input('contact_no') ?? $request->input('phone') ?? '');
+        $digits = preg_replace('/\D/', '', $rawInput);
 
-        $validated = $request->validate([
-            'email' => [
-                'required',
-                'email:rfc,dns',
-                'max:255',
-            ],
-        ], [
-            'email.required' => 'Please enter your email address.',
-            'email.email'    => 'Please enter a valid email address.',
+        if (str_starts_with($digits, '63') && strlen($digits) >= 12) {
+            $digits = substr($digits, 2);
+        }
+        $clean10 = ltrim($digits, '0');
+
+        if (! preg_match('/^9\d{9}$/', $clean10)) {
+            throw ValidationException::withMessages([
+                'phone'      => 'Please enter a valid 10-digit Philippine mobile number starting with 9 (e.g., 917 123 4567).',
+                'contact_no' => 'Please enter a valid 10-digit Philippine mobile number starting with 9 (e.g., 917 123 4567).',
+            ]);
+        }
+
+        $normalized09 = '0' . $clean10;
+        $normalized63 = '+63' . $clean10;
+
+        $exists = User::where('id', '!=', $user->id)
+            ->whereIn('contact_no', [$normalized09, $clean10, $normalized63, '63' . $clean10])
+            ->exists();
+
+        if ($exists) {
+            throw ValidationException::withMessages([
+                'phone'      => 'This mobile number is already registered to another account.',
+                'contact_no' => 'This mobile number is already registered to another account.',
+            ]);
+        }
+
+        $user->update([
+            'contact_no' => $normalized09,
         ]);
 
-        $newEmail = $validated['email'];
+        $phoneData = $this->formatPhoneData($normalized09);
 
-        // 2. Prevent changing to the exact current email address
-        if ($newEmail === strtolower(trim($user->email))) {
+        if ($request->wantsJson() || $request->ajax()) {
             return response()->json([
-                'success' => false,
-                'message' => 'This is already your current email address.',
-                'errors'  => [
-                    'email' => ['This is already your current email address.'],
-                ],
-            ], 422);
+                'success'         => true,
+                'message'         => 'Phone number updated successfully.',
+                'phone_raw'       => $phoneData['phone_raw'],
+                'formatted_phone' => $phoneData['formatted_phone'],
+                'masked_phone'    => $phoneData['masked_phone'],
+                'has_phone'       => true,
+            ]);
         }
 
-        // 3. Strict case-insensitive uniqueness check excluding the current user
-        if (User::whereRaw('LOWER(TRIM(email)) = ?', [$newEmail])->where('id', '!=', $user->id)->exists()) {
-            return response()->json([
-                'success' => false,
-                'message' => 'This email address is already in use.',
-                'errors'  => [
-                    'email' => ['This email address is already in use.'],
-                ],
-            ], 422);
+        return back()->with('success', 'Phone number updated successfully.');
+    }
+
+    /**
+     * Request a 6-digit OTP to change the Buyer's Email Address (POST /user/account-management/email/request-otp).
+     */
+    public function requestEmailOtp(Request $request)
+    {
+        /** @var User $user */
+        $user = $request->user();
+
+        $normalizedEmail = strtolower(trim((string) $request->input('email', '')));
+        $request->merge(['email' => $normalizedEmail]);
+
+        $request->validate([
+            'email' => [
+                'required',
+                'string',
+                'email',
+                'max:100',
+                Rule::unique('users', 'email')->ignore($user->id),
+            ],
+        ], [
+            'email.unique' => 'This email address is already registered to another account.',
+        ]);
+
+        if (strtolower((string) $user->email) === $normalizedEmail) {
+            throw ValidationException::withMessages([
+                'email' => 'Please enter a different email address from your current one.',
+            ]);
         }
 
-        // 4. Rate-limiting resend cooldown check
-        $existing = EmailChangeRequest::where('user_id', $user->id)
-            ->where('new_email', $newEmail)
-            ->first();
-
-        if ($existing && $existing->secondsUntilResend() > 0) {
-            return response()->json([
-                'success'  => false,
-                'message'  => "Please wait {$existing->secondsUntilResend()}s before requesting a new code.",
-                'cooldown' => $existing->secondsUntilResend(),
-            ], 429);
+        $existing = EmailChangeRequest::where('user_id', $user->id)->first();
+        if ($existing && $existing->last_sent_at) {
+            $elapsed = now()->diffInSeconds($existing->last_sent_at, true);
+            if ($elapsed < self::OTP_COOLDOWN_SECONDS) {
+                $remaining = max(1, (int) ceil(self::OTP_COOLDOWN_SECONDS - $elapsed));
+                return response()->json([
+                    'success'      => false,
+                    'message'      => "Please wait {$remaining}s before requesting another code.",
+                    'cooldown'     => $remaining,
+                    'masked_email' => $this->maskEmail($normalizedEmail),
+                ], 429);
+            }
         }
 
-        // 5. Generate and dispatch verification OTP
-        $code = EmailChangeRequest::generateCode();
+        $code = str_pad((string) random_int(0, 999999), 6, '0', STR_PAD_LEFT);
 
         try {
-            Mail::to($newEmail)->send(new RegistrationOtpMail($code, EmailChangeRequest::CODE_TTL_MINUTES));
+            Mail::to($normalizedEmail)->send(new RegistrationOtpMail($code, self::OTP_TTL_MINUTES));
         } catch (\Throwable $e) {
-            return response()->json([
-                'success' => false,
-                'message' => 'We could not send the verification email right now. Please try again shortly.',
-            ], 500);
+            Log::error('Buyer Email Change OTP Mail Error: ' . $e->getMessage());
+            throw ValidationException::withMessages([
+                'email' => 'Unable to send verification email right now. Please try again shortly.',
+            ]);
         }
 
         EmailChangeRequest::updateOrCreate(
             ['user_id' => $user->id],
             [
-                'new_email'       => $newEmail,
+                'new_email'       => $normalizedEmail,
                 'code_hash'       => Hash::make($code),
                 'attempts'        => 0,
                 'last_sent_at'    => now(),
-                'code_expires_at' => now()->addMinutes(EmailChangeRequest::CODE_TTL_MINUTES),
+                'code_expires_at' => now()->addMinutes(self::OTP_TTL_MINUTES),
             ]
         );
 
-        // Build masked string for UI preview (e.g. l***3@gmail.com)
-        $maskedEmail = $newEmail;
-        if (str_contains($newEmail, '@')) {
-            [$name, $domain] = explode('@', $newEmail, 2);
-            $maskedEmail = substr($name, 0, 1) . str_repeat('*', max(strlen($name) - 2, 3)) . substr($name, -1) . '@' . $domain;
-        }
-
         return response()->json([
             'success'      => true,
-            'message'      => 'Verification code sent.',
-            'masked_email' => $maskedEmail,
-            'cooldown'     => EmailChangeRequest::RESEND_COOLDOWN_SECONDS,
+            'message'      => 'A 6-digit verification code has been sent to your new email.',
+            'masked_email' => $this->maskEmail($normalizedEmail),
+            'cooldown'     => self::OTP_COOLDOWN_SECONDS,
         ]);
     }
 
+    /**
+     * Verify the 6-digit Email OTP and update the Buyer's Email (POST /user/account-management/email/verify-otp).
+     */
     public function verifyEmailOtp(Request $request)
     {
-        $request->validate([
-            'code' => ['required', 'digits:6'],
-        ]);
+        /** @var User $user */
+        $user = $request->user();
 
-        /** @var \App\Models\User $user */
-        $user = auth()->user();
+        $code = preg_replace('/\D/', '', (string) ($request->input('code') ?? $request->input('otp') ?? ''));
 
-        $changeRequest = EmailChangeRequest::where('user_id', $user->id)->first();
+        if (strlen($code) !== 6) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Please enter a valid 6-digit verification code.',
+            ], 422);
+        }
 
-        if (! $changeRequest) {
+        $record = EmailChangeRequest::where('user_id', $user->id)->first();
+        if (! $record) {
             return response()->json([
                 'success' => false,
                 'message' => 'No active email change request found. Please request a new code.',
             ], 422);
         }
 
-        if ($changeRequest->isExpired()) {
+        if ($record->code_expires_at && now()->gt($record->code_expires_at)) {
             return response()->json([
                 'success' => false,
-                'message' => 'The verification code has expired. Please request a new one.',
+                'message' => 'This verification code has expired. Please request a new one.',
             ], 422);
         }
 
-        if ($changeRequest->attempts >= EmailChangeRequest::MAX_ATTEMPTS) {
+        if ((int) $record->attempts >= self::OTP_MAX_ATTEMPTS) {
             return response()->json([
                 'success' => false,
-                'message' => 'Too many invalid attempts. Please request a new code.',
+                'message' => 'Too many invalid attempts. Please request a new verification code.',
             ], 422);
         }
 
-        if (! Hash::check($request->code, $changeRequest->code_hash)) {
-            $changeRequest->increment('attempts');
-            $remaining = max(0, EmailChangeRequest::MAX_ATTEMPTS - $changeRequest->attempts);
+        if (! Hash::check($code, $record->code_hash)) {
+            $record->increment('attempts');
+            $remaining = max(0, self::OTP_MAX_ATTEMPTS - (int) $record->attempts);
             return response()->json([
                 'success' => false,
-                'message' => "Invalid code. {$remaining} attempt(s) remaining.",
+                'message' => "Incorrect verification code. {$remaining} attempt(s) remaining.",
             ], 422);
         }
 
-        $targetEmail = strtolower(trim($changeRequest->new_email));
-
-        // Final uniqueness check before applying
-        if (User::whereRaw('LOWER(TRIM(email)) = ?', [$targetEmail])->where('id', '!=', $user->id)->exists()) {
+        $newEmail = strtolower(trim($record->new_email));
+        if (User::where('id', '!=', $user->id)->whereRaw('LOWER(TRIM(email)) = ?', [$newEmail])->exists()) {
+            $record->delete();
             return response()->json([
                 'success' => false,
-                'message' => 'This email address is already in use.',
+                'message' => 'This email address was recently claimed by another account.',
             ], 422);
         }
 
-        // Apply new email (User model mutator will trim and lowercase)
-        $user->update(['email' => $targetEmail]);
-        $updatedEmail = $user->email;
-        $changeRequest->delete();
+        $oldEmail = $user->email;
 
-        // Format masked email for UI
-        $maskedEmail = $updatedEmail;
-        if (str_contains($updatedEmail, '@')) {
-            [$name, $domain] = explode('@', $updatedEmail, 2);
-            $maskedEmail = substr($name, 0, 1) . str_repeat('*', max(strlen($name) - 2, 4)) . substr($name, -1) . '@' . $domain;
-        }
+        $user->update([
+            'email'             => $newEmail,
+            'email_verified_at' => now(),
+        ]);
+
+        $record->delete();
+
+        AuditLoggerService::log(
+            action: 'buyer_email_updated',
+            targetType: 'User',
+            targetId: (int) $user->id,
+            targetReference: $newEmail,
+            oldValues: ['email' => $oldEmail],
+            newValues: ['email' => $newEmail],
+            reason: 'Buyer verified OTP and updated email address'
+        );
 
         return response()->json([
             'success'      => true,
-            'message'      => 'Email updated successfully.',
-            'email'        => $updatedEmail,
-            'masked_email' => $maskedEmail,
+            'message'      => 'Your email address has been updated.',
+            'email'        => $newEmail,
+            'masked_email' => $this->maskEmail($newEmail),
         ]);
     }
 
     /**
-     * Send OTP to the user's current email before allowing password change
+     * Request a 6-digit OTP to authorize a Password Change (POST /user/account-management/password/request-otp).
      */
     public function requestPasswordOtp(Request $request)
     {
-        /** @var \App\Models\User $user */
-        $user = auth()->user();
+        /** @var User $user */
+        $user = $request->user();
 
-        $sessionKey = "pwd_otp_{$user->id}";
-        $existing = session()->get($sessionKey);
+        $lastSent = (int) $request->session()->get('buyer_pwd_otp_last_sent_at', 0);
+        $elapsed = time() - $lastSent;
 
-        if ($existing && !empty($existing['last_sent_at'])) {
-            $lastSentAt = \Carbon\Carbon::parse($existing['last_sent_at']);
-            $unlockAt = $lastSentAt->copy()->addSeconds(60);
-
-            if (now()->lt($unlockAt)) {
-                $diff = (int) now()->diffInSeconds($unlockAt);
-                return response()->json([
-                    'success'  => false,
-                    'message'  => "Please wait {$diff}s before requesting a new code.",
-                    'cooldown' => $diff,
-                ], 429);
-            }
+        if ($lastSent > 0 && $elapsed < self::OTP_COOLDOWN_SECONDS) {
+            $remaining = max(1, self::OTP_COOLDOWN_SECONDS - $elapsed);
+            return response()->json([
+                'success'      => false,
+                'message'      => "Please wait {$remaining}s before requesting another code.",
+                'cooldown'     => $remaining,
+                'masked_email' => $this->maskEmail((string) $user->email),
+            ], 429);
         }
 
-        $code = (string) random_int(100000, 999999);
+        $code = str_pad((string) random_int(0, 999999), 6, '0', STR_PAD_LEFT);
 
         try {
-            Mail::to($user->email)->send(new RegistrationOtpMail($code, 10));
+            Mail::to($user->email)->send(new RegistrationOtpMail($code, self::OTP_TTL_MINUTES));
         } catch (\Throwable $e) {
+            Log::error('Buyer Password OTP Mail Error: ' . $e->getMessage());
             return response()->json([
                 'success' => false,
-                'message' => 'We could not send the verification email right now. Please try again.',
+                'message' => 'Unable to send verification code right now. Please try again shortly.',
             ], 500);
         }
 
-        session()->put($sessionKey, [
-            'code_hash'    => Hash::make($code),
-            'attempts'     => 0,
-            'last_sent_at' => now()->toDateTimeString(),
-            'expires_at'   => now()->addMinutes(10)->toDateTimeString(),
+        $request->session()->put([
+            'buyer_pwd_otp_hash'        => Hash::make($code),
+            'buyer_pwd_otp_expires_at'  => now()->addMinutes(self::OTP_TTL_MINUTES)->timestamp,
+            'buyer_pwd_otp_attempts'    => 0,
+            'buyer_pwd_otp_last_sent_at'=> time(),
+            'buyer_pwd_otp_verified'    => false,
         ]);
-
-        $maskedEmail = $user->email;
-        if (str_contains($user->email, '@')) {
-            [$name, $domain] = explode('@', $user->email, 2);
-            $maskedEmail = substr($name, 0, 1) . str_repeat('*', max(strlen($name) - 2, 3)) . substr($name, -1) . '@' . $domain;
-        }
 
         return response()->json([
             'success'      => true,
-            'message'      => 'Verification code sent.',
-            'masked_email' => $maskedEmail,
-            'cooldown'     => 60,
+            'message'      => 'Verification code sent to your email address.',
+            'masked_email' => $this->maskEmail((string) $user->email),
+            'cooldown'     => self::OTP_COOLDOWN_SECONDS,
         ]);
-    }
-
-    public function updatePhone(Request $request)
-    {
-        /** @var \App\Models\User $user */
-        $user = auth()->user();
-
-        // Normalize input digits
-        $cleanContact = preg_replace('/\D/', '', (string) $request->input('contact_no'));
-        if (str_starts_with($cleanContact, '63')) {
-            $cleanContact = substr($cleanContact, 2);
-        }
-        $cleanContact = ltrim($cleanContact, '0');
-
-        $request->merge(['clean_contact' => $cleanContact]);
-
-        $request->validate([
-            'clean_contact' => ['required', 'regex:/^9\d{9}$/'],
-        ], [
-            'clean_contact.required' => 'Please enter your phone number.',
-            'clean_contact.regex'    => 'Please enter a valid 10-digit mobile number starting with 9 (e.g., 912 345 6789).',
-        ]);
-
-        $formattedNumber = '+63' . $cleanContact;
-
-        // Check if phone number is already registered to another user
-        if (User::where('contact_no', $formattedNumber)->where('id', '!=', $user->id)->exists()) {
-            if ($request->wantsJson() || $request->ajax()) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'This phone number is already registered to another account.',
-                    'errors'  => [
-                        'contact_no' => ['This phone number is already registered to another account.']
-                    ]
-                ], 422);
-            }
-
-            return back()->withErrors(['contact_no' => 'This phone number is already registered to another account.']);
-        }
-
-        $user->update([
-            'contact_no' => $formattedNumber,
-        ]);
-
-        // Raw-digit masking: 63912****789
-        $cleanForMask = preg_replace('/\D/', '', $formattedNumber);
-        $maskedPhone = substr($cleanForMask, 0, 5) . '****' . substr($cleanForMask, -3);
-
-        if ($request->wantsJson() || $request->ajax()) {
-            return response()->json([
-                'success'      => true,
-                'message'      => 'Phone number updated successfully.',
-                'phone'        => $formattedNumber,
-                'masked_phone' => $maskedPhone,
-                'raw_phone'    => $cleanContact,
-            ]);
-        }
-
-        return redirect()
-            ->route('user.account-management')
-            ->with('success', 'Phone number updated successfully.');
     }
 
     /**
-     * Verify the 6-digit OTP code to unlock password form
+     * Verify the 6-digit Password OTP (POST /user/account-management/password/verify-otp).
      */
     public function verifyPasswordOtp(Request $request)
     {
-        $request->validate([
-            'code' => ['required', 'digits:6'],
-        ]);
+        $code = preg_replace('/\D/', '', (string) ($request->input('code') ?? $request->input('otp') ?? ''));
 
-        /** @var \App\Models\User $user */
-        $user = auth()->user();
-        $sessionKey = "pwd_otp_{$user->id}";
-        $data = session()->get($sessionKey);
-
-        if (! $data) {
+        if (strlen($code) !== 6) {
             return response()->json([
                 'success' => false,
-                'message' => 'No active verification code found. Please request a new code.',
+                'message' => 'Please enter a valid 6-digit verification code.',
             ], 422);
         }
 
-        if (now()->isAfter($data['expires_at'])) {
-            session()->forget($sessionKey);
+        $hash = $request->session()->get('buyer_pwd_otp_hash');
+        $expiresAt = (int) $request->session()->get('buyer_pwd_otp_expires_at', 0);
+        $attempts = (int) $request->session()->get('buyer_pwd_otp_attempts', 0);
+
+        if (! $hash || time() > $expiresAt) {
             return response()->json([
                 'success' => false,
-                'message' => 'The verification code has expired. Please request a new one.',
+                'message' => 'Verification code has expired. Please request a new one.',
             ], 422);
         }
 
-        if ($data['attempts'] >= 5) {
-            session()->forget($sessionKey);
+        if ($attempts >= self::OTP_MAX_ATTEMPTS) {
             return response()->json([
                 'success' => false,
                 'message' => 'Too many invalid attempts. Please request a new code.',
             ], 422);
         }
 
-        if (! Hash::check($request->code, $data['code_hash'])) {
-            $data['attempts']++;
-            session()->put($sessionKey, $data);
-            $remaining = max(0, 5 - $data['attempts']);
+        if (! Hash::check($code, $hash)) {
+            $attempts++;
+            $request->session()->put('buyer_pwd_otp_attempts', $attempts);
+            $remaining = max(0, self::OTP_MAX_ATTEMPTS - $attempts);
+
             return response()->json([
                 'success' => false,
-                'message' => "Invalid code. {$remaining} attempt(s) remaining.",
+                'message' => "Incorrect verification code. {$remaining} attempt(s) remaining.",
             ], 422);
         }
 
-        // Clean up OTP and issue temporary unlock token
-        session()->forget($sessionKey);
-        $token = Str::random(40);
-        session()->put("pwd_unlock_token_{$user->id}", [
-            'token'      => $token,
-            'expires_at' => now()->addMinutes(15),
-        ]);
+        $request->session()->put('buyer_pwd_otp_verified', true);
 
         return response()->json([
-            'success'      => true,
-            'unlock_token' => $token,
-            'message'      => 'Identity verified successfully.',
+            'success'  => true,
+            'verified' => true,
+            'message'  => 'Identity verified. You can now update your password.',
         ]);
     }
 
     /**
-     * Update Password via AJAX with full validation
+     * Update Buyer's Password (PATCH /user/account-management/password).
      */
     public function updatePassword(Request $request)
     {
-        /** @var \App\Models\User $user */
-        $user = auth()->user();
-
-        $tokenData = session()->get("pwd_unlock_token_{$user->id}");
-        if (! $tokenData || $tokenData['token'] !== $request->input('unlock_token') || now()->isAfter($tokenData['expires_at'])) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Verification expired. Please verify your identity again.',
-            ], 403);
-        }
+        /** @var User $user */
+        $user = $request->user();
 
         $validated = $request->validate([
             'password' => [
                 'required',
                 'string',
-                'min:8',
-                function ($attribute, $value, $fail) {
-                    if (!preg_match('/[A-Z]/', $value)) {
-                        $fail('Password must contain at least 1 uppercase letter.');
-                    }
-                    if (!preg_match('/[0-9]/', $value)) {
-                        $fail('Password must contain at least 1 number.');
-                    }
-                    if (!preg_match('/[\W_]/', $value)) {
-                        $fail('Password must contain at least 1 special character.');
-                    }
-                },
+                'confirmed',
+                Password::min(8)->mixedCase()->numbers()->symbols(),
             ],
-            'password_confirmation' => ['required', 'same:password'],
-        ], [
-            'password.required'              => 'Please enter a new password.',
-            'password.min'                   => 'Password must be at least 8 characters long.',
-            'password_confirmation.required' => 'Please confirm your password.',
-            'password_confirmation.same'     => 'The password confirmation does not match.',
         ]);
 
-        $user->update([
-            'password'            => Hash::make($validated['password']),
-            'password_changed_at' => now(),
+        $updates = [
+            'password' => Hash::make($validated['password']),
+        ];
+
+        if (Schema::hasColumn('users', 'password_changed_at')) {
+            $updates['password_changed_at'] = now();
+        }
+
+        $user->forceFill($updates)->save();
+
+        $request->session()->forget([
+            'buyer_pwd_otp_hash',
+            'buyer_pwd_otp_expires_at',
+            'buyer_pwd_otp_attempts',
+            'buyer_pwd_otp_last_sent_at',
+            'buyer_pwd_otp_verified',
         ]);
 
-        session()->forget("pwd_unlock_token_{$user->id}");
+        AuditLoggerService::log(
+            action: 'buyer_password_updated',
+            targetType: 'User',
+            targetId: (int) $user->id,
+            targetReference: $user->email,
+            reason: 'Buyer updated password in Account Management'
+        );
 
-        return response()->json([
-            'success'             => true,
-            'message'             => 'Password updated successfully.',
-            'password_changed_at' => $user->password_changed_at->toISOString(),
-            'formatted_time'      => $user->formattedPasswordLastUpdated(),
-        ]);
+        $passwordLastUpdated = method_exists($user, 'formattedPasswordLastUpdated')
+            ? $user->formattedPasswordLastUpdated()
+            : 'Updated just now';
+
+        if ($request->wantsJson() || $request->ajax()) {
+            return response()->json([
+                'success'               => true,
+                'message'               => 'Your password has been updated.',
+                'password_last_updated' => $passwordLastUpdated,
+            ]);
+        }
+
+        return back()->with('success', 'Your password has been updated.');
+    }
+
+    protected function maskEmail(string $rawEmail): string
+    {
+        if (! str_contains($rawEmail, '@')) {
+            return $rawEmail;
+        }
+
+        [$name, $domain] = explode('@', $rawEmail, 2);
+        if (strlen($name) <= 2) {
+            return substr($name, 0, 1) . '****@' . $domain;
+        }
+
+        return substr($name, 0, 1)
+            . str_repeat('*', max(strlen($name) - 2, 4))
+            . substr($name, -1)
+            . '@' . $domain;
+    }
+
+    protected function formatPhoneData(string $contact): array
+    {
+        $cleanContact = preg_replace('/\D/', '', $contact);
+        if (str_starts_with($cleanContact, '63')) {
+            $cleanContact = substr($cleanContact, 2);
+        }
+        $cleanContact = ltrim($cleanContact, '0');
+        $hasPhone = ! empty($cleanContact);
+
+        $maskedContact = 'Not provided';
+        $formattedPhone = '';
+
+        if ($hasPhone) {
+            $fullDigits = '63' . $cleanContact;
+            $maskedContact = strlen($fullDigits) >= 8
+                ? substr($fullDigits, 0, 5) . '****' . substr($fullDigits, -3)
+                : $fullDigits;
+
+            $formattedPhone = substr($cleanContact, 0, 3);
+            if (strlen($cleanContact) > 3) {
+                $formattedPhone .= ' ' . substr($cleanContact, 3, 3);
+            }
+            if (strlen($cleanContact) > 6) {
+                $formattedPhone .= ' ' . substr($cleanContact, 6, 4);
+            }
+        }
+
+        return [
+            'phone_raw'       => $cleanContact,
+            'formatted_phone' => $formattedPhone,
+            'masked_phone'    => $maskedContact,
+            'has_phone'       => $hasPhone,
+        ];
     }
 }

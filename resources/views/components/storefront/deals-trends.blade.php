@@ -1,8 +1,6 @@
 @php
     $activeSuperDeals = collect();
-
     $pricingService = app(\App\Services\SuperDealPricingService::class);
-
     if (\Illuminate\Support\Facades\Schema::hasTable('super_deals')) {
         $rawDeals = \Illuminate\Support\Facades\DB::table('super_deals')
             ->where('deal_type', 'super_deal')
@@ -12,7 +10,6 @@
             ->orderBy('ends_at', 'asc')
             ->limit(3)
             ->get();
-
         if ($rawDeals->isNotEmpty()) {
             foreach ($rawDeals as $rd) {
                 $prod = \App\Models\Product::find($rd->product_id);
@@ -20,9 +17,7 @@
                     $remQty = $rd->flash_quantity !== null
                         ? max(0, (int) $rd->flash_quantity - (int) $rd->sold_quantity)
                         : (int) $prod->stock_quantity;
-
                     if ($remQty > 0) {
-                        // Same calculation checkout uses, so the card, product page and cart all agree.
                         $prod->super_deal_price = $pricingService->superDealUnitPrice($rd, (float) $prod->price);
                         $prod->super_deal_left = $remQty;
                         $activeSuperDeals->push($prod);
@@ -31,172 +26,191 @@
             }
         }
     }
-
-    // Only real, active Super Deals are listed (no placeholder products with invented discounts).
     $dealProducts = $activeSuperDeals;
+
+    $activeBundlesCount = \Illuminate\Support\Facades\Schema::hasTable('bundle_deals')
+        ? \Illuminate\Support\Facades\DB::table('bundle_deals')
+            ->where('status', 'active')
+            ->where('starts_at', '<=', now())
+            ->where('ends_at', '>=', now())
+            ->count()
+        : 0;
 @endphp
 
-<section class="grid grid-cols-1 lg:grid-cols-12 gap-5 lg:gap-6 mb-10">
+<section class="space-y-5 mb-10">
+    <div class="grid grid-cols-1 lg:grid-cols-12 gap-5 lg:gap-6">
+        <!-- 1. LEFT CONTAINER: Super Deals -->
+        <div class="lg:col-span-6 bg-surface rounded-2xl border border-border-subtle p-5 sm:p-6 shadow-xs flex flex-col justify-between relative overflow-hidden group">
+            <div class="absolute -top-16 -right-16 w-52 h-52 bg-primary/5 rounded-full blur-3xl pointer-events-none"></div>
 
-    <!-- 1. LEFT CONTAINER: Super Deals -->
-    <div class="lg:col-span-6 bg-surface rounded-2xl border border-border-subtle p-5 sm:p-6 shadow-xs flex flex-col justify-between relative overflow-hidden group">
-        <div class="absolute -top-16 -right-16 w-52 h-52 bg-primary/5 rounded-full blur-3xl pointer-events-none"></div>
+            <div>
+                <div class="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-border-subtle/80">
+                    <div class="flex items-center gap-2.5">
+                        <svg class="w-5 h-5 text-primary fill-primary" viewBox="0 0 24 24">
+                            <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+                        </svg>
+                        <h2 class="text-lg sm:text-xl font-bold font-serif text-main uppercase tracking-tight">
+                            Super Deals
+                        </h2>
+                    </div>
 
-        <div>
-            <div class="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-border-subtle/80">
-                <div class="flex items-center gap-2.5">
-                    <svg class="w-5 h-5 text-primary fill-primary" viewBox="0 0 24 24">
-                        <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
-                    </svg>
-                    <h2 class="text-lg sm:text-xl font-bold font-serif text-main uppercase tracking-tight">
-                        Super Deals
-                    </h2>
+                    <div class="flex items-center gap-3">
+                        <a href="{{ route('bundles.index') }}" class="text-xs font-bold text-primary hover:underline">
+                            Bundle Deals ({{ $activeBundlesCount }})
+                        </a>
+                        <a href="{{ Route::has('deals.index') ? route('deals.index') : '#products-grid' }}" class="text-xs font-semibold text-text-main hover:text-primary transition-colors inline-flex items-center gap-1">
+                            Limited-time offers
+                            <svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7" />
+                            </svg>
+                        </a>
+                    </div>
                 </div>
 
-                <a href="{{ Route::has('deals.index') ? route('deals.index') : '#products-grid' }}" class="text-xs font-semibold text-text-main hover:text-primary transition-colors inline-flex items-center gap-1">
-                    Limited-time offers
-                    <svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7" />
-                    </svg>
-                </a>
-            </div>
+                <div class="grid grid-cols-3 gap-3 sm:gap-4 pt-4">
+                    @forelse($dealProducts as $deal)
+                        @php
+                            $discounted = (float) $deal->super_deal_price;
+                            $pctOff = $deal->price > 0
+                                ? max(1, round((1 - ($discounted / $deal->price)) * 100))
+                                : 0;
+                            $unitsLeft = (int) $deal->super_deal_left;
+                        @endphp
+                        <div class="group/card relative flex flex-col">
+                            <a href="{{ route('product.show', $deal->id) }}" class="block">
+                                <div class="relative w-full aspect-square bg-surface-subtle rounded-xl overflow-hidden mb-2.5 border border-border-subtle/60 flex items-center justify-center transition-all duration-300 group-hover/card:shadow-xs">
+                                    @if(!empty($deal->pictures) && is_array($deal->pictures))
+                                        <img src="{{ asset('storage/' . $deal->pictures[0]) }}" alt="{{ $deal->name }}" class="w-full h-full object-contain p-2 group-hover/card:scale-105 transition-transform duration-300">
+                                    @endif
+                                    <span class="absolute top-1.5 right-1.5 px-2 py-0.5 rounded-full bg-danger text-white text-[10px] font-extrabold">
+                                        -{{ number_format($pctOff, 0) }}%
+                                    </span>
+                                </div>
 
-            <div class="grid grid-cols-3 gap-3 sm:gap-4 pt-4">
-                @forelse($dealProducts as $deal)
+                                <div class="space-y-1">
+                                    <h3 class="text-xs font-normal text-text-main line-clamp-1 leading-snug group-hover/card:text-primary transition-colors" title="{{ $deal->name }}">
+                                        {{ $deal->name }}
+                                    </h3>
+
+                                    <div class="flex items-baseline gap-1.5 mt-1">
+                                        <span class="text-sm sm:text-base font-extrabold text-price">
+                                            ₱{{ number_format($discounted, 2) }}
+                                        </span>
+                                        <span class="text-[11px] text-text-muted line-through">
+                                            ₱{{ number_format($deal->price, 2) }}
+                                        </span>
+                                    </div>
+                                    <div class="text-[11px] font-bold text-primary pt-0.5">
+                                        {{ $unitsLeft }} left at Super Deal price
+                                    </div>
+                                </div>
+                            </a>
+                        </div>
+                    @empty
+                        <div class="col-span-3 text-center py-6 text-xs text-text-muted">
+                            Fresh Super Deals are loading soon.
+                        </div>
+                    @endforelse
+                </div>
+            </div>
+        </div>
+
+        <!-- 2. RIGHT CONTAINER: Trends -->
+        <div class="lg:col-span-6 bg-surface rounded-2xl border border-border-subtle p-5 sm:p-6 shadow-xs flex flex-col justify-between relative overflow-hidden group">
+            <div class="absolute -bottom-16 -right-16 w-52 h-52 bg-brand-light/20 rounded-full blur-3xl pointer-events-none"></div>
+
+            <div>
+                <div class="flex items-center justify-between pb-4 border-b border-border-subtle/80">
+                    <div class="flex items-center gap-2">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
+                        </svg>
+                        <h2 class="text-lg sm:text-xl font-bold font-serif text-main uppercase tracking-tight">
+                            Trends
+                        </h2>
+                    </div>
+
+                    <a href="{{ Route::has('trends.index') ? route('trends.index') : '#products-grid' }}" class="text-xs font-semibold text-text-main hover:text-primary transition-colors inline-flex items-center gap-1">
+                        Top Searches
+                        <svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7" />
+                        </svg>
+                    </a>
+                </div>
+
+                <div class="grid grid-cols-3 gap-3 sm:gap-4 pt-4">
                     @php
-                        $discounted = (float) $deal->super_deal_price;
-                        $pctOff = $deal->price > 0
-                            ? max(1, round((1 - ($discounted / $deal->price)) * 100))
-                            : 0;
-                        $unitsLeft = (int) $deal->super_deal_left;
+                        $tileItems = app(\App\Services\SearchLogService::class)->topSearchedProducts(3)->map(fn ($hit) => (object) [
+                            'product' => $hit->product,
+                            'label'   => 'Searched "' . $hit->term . '"',
+                            'detail'  => number_format($hit->searchers) . ' ' . \Illuminate\Support\Str::plural('shopper', $hit->searchers),
+                        ]);
+
+                        if ($tileItems->count() < 3) {
+                            $trendingService = app(\App\Services\TrendingProductsService::class);
+                            $trendingService
+                                ->top(3 - $tileItems->count(), $tileItems->map(fn ($i) => $i->product->id)->all())
+                                ->each(function ($t) use ($tileItems, $trendingService) {
+                                    $tileItems->push((object) [
+                                        'product' => $t->product,
+                                        'label'   => $trendingService->caption($t),
+                                        'detail'  => null,
+                                    ]);
+                                });
+                        }
                     @endphp
 
-                    <div class="group/card relative flex flex-col">
-                        <a href="{{ route('product.show', $deal->id) }}" class="block">
-                            <div class="relative w-full aspect-square bg-surface-subtle rounded-xl overflow-hidden mb-2.5 border border-border-subtle/60 flex items-center justify-center transition-all duration-300 group-hover/card:shadow-xs">
-                                @if(!empty($deal->pictures) && is_array($deal->pictures))
-                                    <img src="{{ asset('storage/' . $deal->pictures[0]) }}" alt="{{ $deal->name }}" class="w-full h-full object-contain p-2 group-hover/card:scale-105 transition-transform duration-300">
-                                @endif
-                                <span class="absolute top-1.5 right-1.5 px-2 py-0.5 rounded-full bg-danger text-white text-[10px] font-extrabold">
-                                    -{{ number_format($pctOff, 0) }}%
-                                </span>
-                            </div>
-
-                            <div class="space-y-1">
-                                <h3 class="text-xs font-normal text-text-main line-clamp-1 leading-snug group-hover/card:text-primary transition-colors" title="{{ $deal->name }}">
-                                    {{ $deal->name }}
-                                </h3>
-
-                                <div class="flex items-baseline gap-1.5 mt-1">
-                                    <span class="text-sm sm:text-base font-extrabold text-price">
-                                        ₱{{ number_format($discounted, 2) }}
-                                    </span>
-                                    <span class="text-[11px] text-text-muted line-through">
-                                        ₱{{ number_format($deal->price, 2) }}
-                                    </span>
+                    @forelse($tileItems as $item)
+                        @php $trend = $item->product; @endphp
+                        <div class="group/card relative flex flex-col">
+                            <a href="{{ route('product.show', $trend->id) }}" class="block">
+                                <div class="relative w-full aspect-square bg-surface-subtle rounded-xl overflow-hidden mb-2.5 border border-border-subtle/60 flex items-center justify-center transition-all duration-300 group-hover/card:shadow-xs">
+                                    @if(!empty($trend->pictures) && is_array($trend->pictures))
+                                        <img src="{{ asset('storage/' . $trend->pictures[0]) }}" alt="{{ $trend->name }}" class="w-full h-full object-contain p-2 group-hover/card:scale-105 transition-transform duration-300">
+                                    @endif
                                 </div>
 
-                                <div class="text-[11px] font-bold text-primary pt-0.5">
-                                    {{ $unitsLeft }} left at Super Deal price
-                                </div>
-                            </div>
-                        </a>
-                    </div>
-                @empty
-                    <div class="col-span-3 text-center py-6 text-xs text-text-muted">
-                        Fresh Super Deals are loading soon.
-                    </div>
-                @endforelse
-            </div>
-        </div>
-    </div>
+                                <div class="space-y-1">
+                                    <h3 class="text-xs font-normal text-text-main line-clamp-1 leading-snug group-hover/card:text-primary transition-colors" title="{{ $trend->name }}">
+                                        {{ $trend->name }}
+                                    </h3>
 
-    <!-- 2. RIGHT CONTAINER: Trends -->
-    <div class="lg:col-span-6 bg-surface rounded-2xl border border-border-subtle p-5 sm:p-6 shadow-xs flex flex-col justify-between relative overflow-hidden group">
-        <div class="absolute -bottom-16 -right-16 w-52 h-52 bg-brand-light/20 rounded-full blur-3xl pointer-events-none"></div>
-
-        <div>
-            <div class="flex items-center justify-between pb-4 border-b border-border-subtle/80">
-                <div class="flex items-center gap-2">
-                    <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
-                    </svg>
-                    <h2 class="text-lg sm:text-xl font-bold font-serif text-main uppercase tracking-tight">
-                        Trends
-                    </h2>
-                </div>
-                <a href="{{ Route::has('trends.index') ? route('trends.index') : '#products-grid' }}" class="text-xs font-semibold text-text-main hover:text-primary transition-colors inline-flex items-center gap-1">
-                    Top Searches
-                    <svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7" />
-                    </svg>
-                </a>
-            </div>
-
-            <div class="grid grid-cols-3 gap-3 sm:gap-4 pt-4">
-                @php
-                    // Shoppers' top searches first. Any free slots are filled from the same trending
-                    // ranking the Trends page uses, so this tile and that page always agree.
-                    $tileItems = app(\App\Services\SearchLogService::class)->topSearchedProducts(3)->map(fn ($hit) => (object) [
-                        'product' => $hit->product,
-                        'label'   => 'Searched “' . $hit->term . '”',
-                        'detail'  => number_format($hit->searchers) . ' ' . \Illuminate\Support\Str::plural('shopper', $hit->searchers),
-                    ]);
-
-                    if ($tileItems->count() < 3) {
-                        $trendingService = app(\App\Services\TrendingProductsService::class);
-
-                        $trendingService
-                            ->top(3 - $tileItems->count(), $tileItems->map(fn ($i) => $i->product->id)->all())
-                            ->each(function ($t) use ($tileItems, $trendingService) {
-                                $tileItems->push((object) [
-                                    'product' => $t->product,
-                                    'label'   => $trendingService->caption($t),
-                                    'detail'  => null,
-                                ]);
-                            });
-                    }
-                @endphp
-
-                @forelse($tileItems as $item)
-                    @php $trend = $item->product; @endphp
-                    <div class="group/card relative flex flex-col">
-                        <a href="{{ route('product.show', $trend->id) }}" class="block">
-                            <div class="relative w-full aspect-square bg-surface-subtle rounded-xl overflow-hidden mb-2.5 border border-border-subtle/60 flex items-center justify-center transition-all duration-300 group-hover/card:shadow-xs">
-                                @if(!empty($trend->pictures) && is_array($trend->pictures))
-                                    <img src="{{ asset('storage/' . $trend->pictures[0]) }}" alt="{{ $trend->name }}" class="w-full h-full object-contain p-2 group-hover/card:scale-105 transition-transform duration-300">
-                                @endif
-                            </div>
-
-                            <div class="space-y-1">
-                                <h3 class="text-xs font-normal text-text-main line-clamp-1 leading-snug group-hover/card:text-primary transition-colors" title="{{ $trend->name }}">
-                                    {{ $trend->name }}
-                                </h3>
-
-                                <div class="pt-0.5">
-                                    <span class="text-sm sm:text-base font-extrabold text-text-main">
-                                        ₱{{ number_format($trend->price, 0) }}
-                                    </span>
-                                </div>
-
-                                @if($item->label)
-                                    <div class="text-[11px] font-bold text-primary pt-0.5 line-clamp-1" title="{{ $item->label }}">
-                                        {{ $item->label }}
+                                    <div class="pt-0.5">
+                                        <span class="text-sm sm:text-base font-extrabold text-text-main">
+                                            ₱{{ number_format($trend->price, 0) }}
+                                        </span>
                                     </div>
-                                @endif
-                                @if($item->detail)
-                                    <div class="text-[10px] text-text-muted">{{ $item->detail }}</div>
-                                @endif
-                            </div>
-                        </a>
-                    </div>
-                @empty
-                    <div class="col-span-3 text-center py-6 text-xs text-text-muted">
-                        Nothing is trending yet. Check back soon.
-                    </div>
-                @endforelse
+                                    @if($item->label)
+                                        <div class="text-[11px] font-bold text-primary pt-0.5 line-clamp-1" title="{{ $item->label }}">
+                                            {{ $item->label }}
+                                        </div>
+                                    @endif
+                                    @if($item->detail)
+                                        <div class="text-[10px] text-text-muted">{{ $item->detail }}</div>
+                                    @endif
+                                </div>
+                            </a>
+                        </div>
+                    @empty
+                        <div class="col-span-3 text-center py-6 text-xs text-text-muted">
+                            Nothing is trending yet. Check back soon.
+                        </div>
+                    @endforelse
+                </div>
             </div>
         </div>
     </div>
 
+    <!-- Store Bundle Deals Callout Strip -->
+    <div class="p-4 sm:px-6 rounded-2xl bg-gradient-to-r from-primary-dark via-primary to-secondary text-white flex flex-wrap items-center justify-between gap-3 shadow-xs">
+        <div class="flex items-center gap-3">
+            <span class="px-2.5 py-0.5 rounded-full bg-white/20 text-[10px] font-extrabold uppercase tracking-wider">Bundle &amp; Save</span>
+            <p class="text-xs sm:text-sm font-bold">
+                Explore Multi-Item Store Bundle Deals — Pick your variants &amp; sizes to unlock Buy N Get % Off or Free Gift (₱0.00) rewards!
+            </p>
+        </div>
+        <a href="{{ route('bundles.index') }}" class="px-4 py-2 rounded-xl bg-white text-primary-dark hover:bg-brand-light text-xs font-extrabold shadow-2xs transition-colors shrink-0">
+            Browse Bundle Deals ({{ $activeBundlesCount }}) &rarr;
+        </a>
+    </div>
 </section>

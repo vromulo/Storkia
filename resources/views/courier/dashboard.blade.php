@@ -10,11 +10,10 @@
     <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
 </head>
 <body class="bg-surface-subtle/50 font-sans antialiased text-text-main min-h-screen pb-16 overflow-x-hidden">
-
     <header class="bg-surface border-b border-border-subtle sticky top-0 z-40">
-        <div class="max-w-6xl mx-auto px-4 sm:px-6 h-18 flex items-center justify-between">
+        <div class="max-w-6xl mx-auto px-4 sm:px-6 py-3 flex flex-wrap items-center justify-between gap-3">
             <div class="flex items-center gap-3">
-                <div class="w-10 h-10 rounded-2xl bg-primary text-surface font-serif font-bold text-lg flex items-center justify-center">
+                <div class="w-10 h-10 rounded-2xl bg-primary text-surface font-serif font-bold text-lg flex items-center justify-center shrink-0">
                     C
                 </div>
                 <div>
@@ -24,18 +23,24 @@
                     </p>
                 </div>
             </div>
-
-            <form action="{{ route('courier.logout') }}" method="POST" class="m-0">
-                @csrf
-                <button type="submit" class="px-4 py-2 rounded-xl bg-red-50 text-danger hover:bg-red-100 text-xs font-bold transition-colors cursor-pointer">
-                    Logout
-                </button>
-            </form>
+            <div class="flex flex-wrap items-center gap-2">
+                <a href="{{ route('courier.report') }}" class="px-3.5 py-2 rounded-xl bg-primary hover:bg-primary-dark text-white text-xs font-bold transition-colors">
+                    E-Wallet &amp; Withdrawals (&#8369;{{ number_format((float) ($courierWallet->available_balance ?? 0), 2) }})
+                </a>
+                <a href="{{ route('courier.ratings') }}" class="px-3.5 py-2 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 text-xs font-bold transition-colors">
+                    &#9733; My Ratings
+                </a>
+                <form action="{{ route('courier.logout') }}" method="POST" class="m-0">
+                    @csrf
+                    <button type="submit" class="px-4 py-2 rounded-xl bg-red-50 text-danger hover:bg-red-100 text-xs font-bold transition-colors cursor-pointer">
+                        Logout
+                    </button>
+                </form>
+            </div>
         </div>
     </header>
 
     <main class="max-w-6xl mx-auto px-4 sm:px-6 pt-6 space-y-6">
-
         @if(session('success'))
             <div class="p-4 rounded-2xl bg-green-50 border border-green-200 text-green-700 text-xs sm:text-sm font-bold">
                 {{ session('success') }}
@@ -50,7 +55,7 @@
             </div>
         @endif
 
-        <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             <div class="p-5 bg-surface rounded-2xl border border-border-subtle shadow-xs">
                 <span class="text-xs font-bold uppercase text-text-muted">Active First-Mile Pickups (FIFO)</span>
                 <p class="text-3xl font-serif font-bold text-primary-dark mt-1">{{ $counts['active'] }}</p>
@@ -63,6 +68,11 @@
                 <span class="text-xs font-bold uppercase text-text-muted">Vehicle Load Capacity</span>
                 <p class="text-3xl font-serif font-bold text-text-main mt-1">{{ number_format($courier->load_capacity) }} kg</p>
             </div>
+            <a href="{{ route('courier.report') }}" class="p-5 bg-surface rounded-2xl border border-border-subtle hover:border-primary/50 shadow-xs transition-all block">
+                <span class="text-xs font-bold uppercase text-text-muted">Courier E-Wallet</span>
+                <p class="text-3xl font-serif font-bold text-primary mt-1">&#8369;{{ number_format((float) ($courierWallet->available_balance ?? 0), 2) }}</p>
+                <span class="text-[11px] text-primary font-semibold">Open E-Wallet &amp; Withdraw &rarr;</span>
+            </a>
         </div>
 
         <div class="flex items-center gap-2">
@@ -89,6 +99,7 @@
                         $packages = $shipment->packages ?? collect();
                         $allVerified = $packages->every(fn($p) => $p->courier_verified_at !== null);
                     @endphp
+
                     <div x-data="{
                             verificationMethod: 'manual',
                             lookupInput: '',
@@ -132,6 +143,7 @@
                             }
                          }"
                          class="bg-surface rounded-3xl border border-border-subtle p-5 sm:p-6 shadow-xs space-y-4">
+
                         <div class="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-border-subtle">
                             <div class="flex items-center gap-2.5">
                                 <span class="font-mono font-bold text-sm text-primary-dark bg-brand-light/40 px-3 py-1 rounded-xl">
@@ -153,7 +165,6 @@
                                 <p class="text-text-muted">Contact: {{ $pickup['contact_no'] ?? '' }}</p>
                                 <p class="text-text-main leading-relaxed">{{ $pickup['full_address'] ?? '' }}</p>
                             </div>
-
                             <div class="p-4 rounded-2xl bg-surface-subtle border border-border-subtle space-y-1">
                                 <span class="text-[10px] font-bold uppercase tracking-wider text-primary-dark block">Step 2: Transport to Sorting Facility</span>
                                 <p class="text-sm font-bold text-text-main">{{ $hub['business_name'] ?? $courier->home_hub }}</p>
@@ -165,7 +176,7 @@
                         @if($packages->isNotEmpty())
                             <div class="p-4 rounded-2xl bg-brand-light/20 border border-border-subtle space-y-3 text-xs">
                                 <div class="flex flex-wrap items-center justify-between gap-2">
-                                    <span class="font-bold text-primary-dark uppercase text-[10px]">Package Identification & QR Verification Checklist</span>
+                                    <span class="font-bold text-primary-dark uppercase text-[10px]">Package Identification &amp; QR Verification Checklist</span>
                                     <div class="flex items-center gap-2">
                                         @if(in_array($assignment->status, ['assigned', 'accepted'], true) && ! $allVerified)
                                             <button type="button"
@@ -256,7 +267,7 @@
                                     <form action="{{ route('courier.pickups.accept', $assignment->id) }}" method="POST" class="m-0">
                                         @csrf
                                         <button type="submit" class="px-4 py-2.5 rounded-xl bg-surface-subtle hover:bg-brand-light/40 border border-border-subtle text-text-main font-bold cursor-pointer">
-                                            1. Accept & Travel to Seller
+                                            1. Accept &amp; Travel to Seller
                                         </button>
                                     </form>
                                 @endif
@@ -283,7 +294,7 @@
 
                                 @if($assignment->status === 'in_transit_to_hub')
                                     <span class="px-3 py-1.5 rounded-xl bg-blue-50 text-blue-800 border border-blue-200 font-bold">
-                                        Handed Over — Awaiting Hub Verification
+                                        Handed Over &bull; Awaiting Hub Verification
                                     </span>
                                 @endif
 
@@ -302,9 +313,7 @@
                 </div>
             </div>
         @endif
-
     </main>
-
     @livewireScripts
 </body>
 </html>

@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Seller;
 
 use App\Http\Controllers\Controller;
 use App\Models\Product;
+use App\Services\StorkSchemaBootstrapService;
 use App\Services\SuperDealPricingService;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
@@ -17,30 +18,81 @@ class SuperDealController extends Controller
         protected SuperDealPricingService $superDealPricingService
     ) {}
 
+    protected function resolveProductBasePrice(Product $product): float
+    {
+        $base = (float) ($product->price ?? 0);
+        if ($base > 0) {
+            return round($base, 2);
+        }
+
+        $raw = $product->raw_variants;
+        if (is_array($raw) && ! empty($raw['items']) && is_array($raw['items'])) {
+            $minVariantPrice = null;
+            foreach ($raw['items'] as $vItem) {
+                if (! empty($vItem['is_archived']) || ($vItem['status'] ?? 'Approved') === 'Disapproved') {
+                    continue;
+                }
+                if (isset($vItem['price']) && (float) $vItem['price'] > 0) {
+                    $vp = (float) $vItem['price'];
+                    $minVariantPrice = $minVariantPrice === null ? $vp : min($minVariantPrice, $vp);
+                }
+                if (! empty($vItem['subs']) && is_array($vItem['subs'])) {
+                    foreach ($vItem['subs'] as $sItem) {
+                        if (! empty($sItem['is_archived']) || ($sItem['status'] ?? 'Approved') === 'Disapproved') {
+                            continue;
+                        }
+                        if (isset($sItem['price']) && (float) $sItem['price'] > 0) {
+                            $sp = (float) $sItem['price'];
+                            $minVariantPrice = $minVariantPrice === null ? $sp : min($minVariantPrice, $sp);
+                        }
+                    }
+                }
+            }
+            if ($minVariantPrice !== null && $minVariantPrice > 0) {
+                return round($minVariantPrice, 2);
+            }
+        }
+
+        return 0.00;
+    }
+
     public function index(Request $request)
     {
+        StorkSchemaBootstrapService::ensureTablesExist();
+
         $user = $request->user();
-        $profile = $user->sellerProfile;
+        $profile = $user?->sellerProfile;
+
+        if (! $profile) {
+            abort(403, 'Your seller profile must be approved to manage store promotions.');
+        }
 
         $this->superDealPricingService->expireEndedPromotions();
 
-        $products = Product::where('user_id', $user->id)
+        $products = Product::with('approval')
+            ->where('user_id', $user->id)
             ->orderBy('created_at', 'asc')
             ->orderBy('id', 'asc')
             ->get();
 
         $deals = Schema::hasTable('super_deals')
-            ? DB::table('super_deals')
-                ->where('seller_profile_id', $profile->id)
-                ->orderBy('starts_at', 'asc')
-                ->get()
+            ? collect(
+                DB::table('super_deals')
+                    ->where('seller_profile_id', (int) $profile->id)
+                    ->orderBy('starts_at', 'asc')
+                    ->orderBy('id', 'asc')
+                    ->get()
+            )
             : collect();
 
         $bundles = Schema::hasTable('bundle_deals')
-            ? DB::table('bundle_deals')
-                ->where('seller_profile_id', $profile->id)
-                ->orderBy('starts_at', 'asc')
-                ->get()
+            ? collect(
+                DB::table('bundle_deals')
+                    ->where('seller_profile_id', (int) $profile->id)
+                    ->orderBy('starts_at', 'asc')
+                    ->orderBy('id', 'asc')
+                    ->get()
+            )
             : collect();
 
         $productsById = $products->keyBy('id');
@@ -56,8 +108,13 @@ class SuperDealController extends Controller
 
     public function storeSuperDealOrSale(Request $request)
     {
+        StorkSchemaBootstrapService::ensureTablesExist();
+
         $user = $request->user();
-        $profile = $user->sellerProfile;
+        $profile = $user?->sellerProfile;
+        if (! $profile) {
+            abort(403);
+        }
 
         $validated = $request->validate([
             'deal_type'           => ['required', 'in:super_deal,store_sale'],
@@ -75,9 +132,8 @@ class SuperDealController extends Controller
         ]);
 
         $product = Product::where('user_id', $user->id)->findOrFail($validated['product_id']);
-        $originalPrice = (float) $product->price;
+        $originalPrice = $this->resolveProductBasePrice($product);
 
-        // The seller only enters a discount %; the resulting price is stored alongside it.
         $discountPct = (int) $validated['discount_percentage'];
         $dealPrice = round($originalPrice * (1 - ($discountPct / 100)), 2);
 
@@ -90,7 +146,6 @@ class SuperDealController extends Controller
         $startsAt = Carbon::parse($validated['starts_at']);
         $endsAt = Carbon::parse($validated['ends_at']);
 
-        // Prevent overlapping store sales on the same product (SEL-DISC-007 / Assumption A28)
         if ($validated['deal_type'] === 'store_sale') {
             $overlapping = DB::table('super_deals')
                 ->where('product_id', $product->id)
@@ -136,7 +191,11 @@ class SuperDealController extends Controller
 
     public function updateRunningSale(Request $request, int $id)
     {
-        $profile = $request->user()->sellerProfile;
+        $profile = $request->user()?->sellerProfile;
+        if (! $profile) {
+            abort(403);
+        }
+
         $deal = DB::table('super_deals')
             ->where('id', $id)
             ->where('seller_profile_id', $profile->id)
@@ -151,7 +210,8 @@ class SuperDealController extends Controller
         ]);
 
         $product = Product::findOrFail($deal->product_id);
-        $newPrice = round((float) $product->price * (1 - ((int) $validated['discount_percentage'] / 100)), 2);
+        $basePrice = $this->resolveProductBasePrice($product);
+        $newPrice = round($basePrice * (1 - ((int) $validated['discount_percentage'] / 100)), 2);
 
         DB::table('super_deals')->where('id', $id)->update([
             'discount_percentage' => (int) $validated['discount_percentage'],
@@ -164,7 +224,10 @@ class SuperDealController extends Controller
 
     public function endPromotionNow(Request $request, int $id)
     {
-        $profile = $request->user()->sellerProfile;
+        $profile = $request->user()?->sellerProfile;
+        if (! $profile) {
+            abort(403);
+        }
 
         DB::table('super_deals')
             ->where('id', $id)
@@ -180,19 +243,54 @@ class SuperDealController extends Controller
 
     public function storeBundleDeal(Request $request)
     {
+        StorkSchemaBootstrapService::ensureTablesExist();
+
         $user = $request->user();
-        $profile = $user->sellerProfile;
+        $profile = $user?->sellerProfile;
+        if (! $profile) {
+            abort(403);
+        }
 
         $validated = $request->validate([
-            'title'                  => ['required', 'string', 'min:3', 'max:120'],
-            'bundle_type'            => ['required', 'in:percentage_off,buy_x_get_y'],
-            'required_quantity'      => ['required', 'integer', 'min:2', 'max:20'],
-            'discount_percentage'    => ['required_if:bundle_type,percentage_off', 'nullable', 'numeric', 'min:1', 'max:99'],
-            'free_gift_product_id'   => ['required_if:bundle_type,buy_x_get_y', 'nullable', 'integer', 'exists:products,id'],
-            'applicable_product_ids' => ['required', 'array', 'min:1'],
-            'starts_at'              => ['bail', 'required', 'date', $this->startNotInPast()],
-            'ends_at'                => ['bail', 'required', 'date', 'after:starts_at', $this->endNotInPast()],
+            'title'                    => ['required', 'string', 'min:3', 'max:120'],
+            'bundle_type'              => ['required', 'in:percentage_off,buy_x_get_y'],
+            'required_quantity'        => ['required', 'integer', 'min:2', 'max:20'],
+            'discount_percentage'      => ['required_if:bundle_type,percentage_off', 'nullable', 'numeric', 'min:1', 'max:99'],
+            'free_gift_product_id'     => ['required_if:bundle_type,buy_x_get_y', 'nullable', 'integer', 'exists:products,id'],
+            'applicable_product_ids'   => ['required', 'array', 'min:1'],
+            'applicable_product_ids.*' => ['required', 'integer'],
+            'starts_at'                => ['bail', 'required', 'date', $this->startNotInPast()],
+            'ends_at'                  => ['bail', 'required', 'date', 'after:starts_at', $this->endNotInPast()],
+        ], [
+            'title.required'                  => 'Please enter a Bundle Deal title.',
+            'applicable_product_ids.required' => 'Please select at least one qualifying product for the bundle.',
+            'applicable_product_ids.min'      => 'Please select at least one qualifying product for the bundle.',
+            'ends_at.after'                   => 'End date and time must be strictly after the start date and time.',
         ]);
+
+        $ownedProductIds = Product::where('user_id', $user->id)
+            ->whereIn('id', array_map('intval', $validated['applicable_product_ids']))
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->values()
+            ->all();
+
+        if (empty($ownedProductIds)) {
+            throw ValidationException::withMessages([
+                'applicable_product_ids' => 'You can only include your own store products in a Bundle Deal.',
+            ]);
+        }
+
+        $freeGiftId = null;
+        if ($validated['bundle_type'] === 'buy_x_get_y') {
+            $freeGift = Product::where('user_id', $user->id)->find($validated['free_gift_product_id']);
+            if (! $freeGift) {
+                throw ValidationException::withMessages([
+                    'free_gift_product_id' => 'The selected Free Gift product must belong to your store.',
+                ]);
+            }
+            $freeGiftId = (int) $freeGift->id;
+        }
 
         DB::table('bundle_deals')->insert([
             'seller_profile_id'      => $profile->id,
@@ -200,8 +298,8 @@ class SuperDealController extends Controller
             'bundle_type'            => $validated['bundle_type'],
             'required_quantity'      => (int) $validated['required_quantity'],
             'discount_percentage'    => $validated['bundle_type'] === 'percentage_off' ? (float) $validated['discount_percentage'] : null,
-            'free_gift_product_id'   => $validated['bundle_type'] === 'buy_x_get_y' ? (int) $validated['free_gift_product_id'] : null,
-            'applicable_product_ids' => json_encode(array_values(array_map('intval', $validated['applicable_product_ids']))),
+            'free_gift_product_id'   => $freeGiftId,
+            'applicable_product_ids' => json_encode($ownedProductIds),
             'starts_at'              => Carbon::parse($validated['starts_at']),
             'ends_at'                => Carbon::parse($validated['ends_at']),
             'status'                 => 'active',
@@ -212,10 +310,25 @@ class SuperDealController extends Controller
         return back()->with('success', "Bundle Deal \"{$validated['title']}\" published!");
     }
 
-    /**
-     * A promotion cannot start in the past. A few minutes of grace covers the time a seller
-     * spends on the form (the start field is pre-filled with the current minute).
-     */
+    public function endBundleDealNow(Request $request, int $id)
+    {
+        $profile = $request->user()?->sellerProfile;
+        if (! $profile) {
+            abort(403);
+        }
+
+        DB::table('bundle_deals')
+            ->where('id', $id)
+            ->where('seller_profile_id', $profile->id)
+            ->update([
+                'status'     => 'ended',
+                'ends_at'    => now(),
+                'updated_at' => now(),
+            ]);
+
+        return back()->with('success', 'Bundle Deal ended immediately.');
+    }
+
     protected function startNotInPast(): \Closure
     {
         return function (string $attribute, mixed $value, \Closure $fail): void {
@@ -236,7 +349,10 @@ class SuperDealController extends Controller
 
     public function toggleVacationMode(Request $request)
     {
-        $profile = $request->user()->sellerProfile;
+        $profile = $request->user()?->sellerProfile;
+        if (! $profile) {
+            abort(403);
+        }
 
         if (! Schema::hasColumn('seller_profiles', 'is_on_vacation')) {
             return back()->withErrors(['vacation' => 'Vacation mode column is not ready yet.']);

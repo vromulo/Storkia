@@ -13,16 +13,27 @@ use App\Models\ShipmentPackage;
 use App\Models\StorkVoucher;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 
 class StorkSchemaBootstrapService
 {
-    protected const SCHEMA_VERSION_CACHE_KEY = 'storkia_additive_schema_v6_ready';
+    protected const SCHEMA_VERSION_CACHE_KEY = 'storkia_additive_schema_v10_ready';
 
     public static function ensureTablesExist(): void
     {
-        if (Cache::get(self::SCHEMA_VERSION_CACHE_KEY) === true) {
+        if (
+            Cache::get(self::SCHEMA_VERSION_CACHE_KEY) === true
+            && Schema::hasTable('super_deals')
+            && Schema::hasTable('bundle_deals')
+            && Schema::hasTable('withdrawal_requests')
+            && Schema::hasTable('platform_gcash_settings')
+            && Schema::hasColumn('cod_collections', 'remitted_amount')
+            && Schema::hasColumn('couriers', 'avatar_path')
+            && Schema::hasColumn('riders', 'avatar_path')
+            && Schema::hasColumn('seller_order_extras', 'seller_return_decision_reason')
+        ) {
             return;
         }
 
@@ -36,15 +47,15 @@ class StorkSchemaBootstrapService
             self::createRiderBarangayCoveragesTable();
             self::createShipmentPackagesTable();
             self::createShipmentVerificationsTable();
-
             self::createSellerGcashAccountsTable();
+            self::createPlatformGcashSettingsTable();
             self::createOrderPaymentSubmissionsTable();
+            self::upgradeOrderPaymentSubmissionsColumns();
             self::createStorkVouchersTable();
             self::createBuyerVoucherClaimsTable();
             self::createSellerOrderExtrasTable();
             self::upgradeSellerOrderExtrasRefundColumns();
             self::createBuyerCancellationLogsTable();
-
             self::createRoleWalletsTable();
             self::upgradeRoleWalletsColumns();
             self::createWalletTransactionsTable();
@@ -55,9 +66,9 @@ class StorkSchemaBootstrapService
             self::upgradeOrderItemReviewsColumns();
             self::createOrderServiceRatingsTable();
             self::createSellerStoreFollowsTable();
-
             self::createPlatformAuditLogsTable();
             self::createSellerPayoutRequestsTable();
+            self::createWithdrawalRequestsTables();
             self::createSellerCommissionRemittancesTable();
             self::createBuyerWishlistsTable();
             self::createSearchLogsTable();
@@ -65,14 +76,17 @@ class StorkSchemaBootstrapService
             self::createBundleDealsTable();
             self::createLogisticsShippingRatesTable();
             self::createPlatformAnnouncementsTable();
+            self::upgradePlatformAnnouncementsAndReadsTables();
             self::createHeroBannersTable();
             self::upgradeOperationalProfilesAndProductsColumns();
-
+            self::upgradeCodCollectionsAndDeliveryProofsColumns();
+            self::upgradeCommissionRecordsNullableColumns();
             self::backfillMainHubsAndPackages();
             self::seedDefaultVouchers();
 
             Cache::put(self::SCHEMA_VERSION_CACHE_KEY, true, now()->addHours(12));
         } catch (\Throwable $e) {
+            report($e);
         }
     }
 
@@ -250,6 +264,24 @@ class StorkSchemaBootstrapService
         });
     }
 
+    protected static function createPlatformGcashSettingsTable(): void
+    {
+        if (Schema::hasTable('platform_gcash_settings')) {
+            return;
+        }
+
+        Schema::create('platform_gcash_settings', function (Blueprint $table) {
+            $table->id();
+            $table->string('account_name', 120);
+            $table->string('gcash_number', 25);
+            $table->string('qr_image_path')->nullable();
+            $table->boolean('is_active')->default(false)->index();
+            $table->text('instructions')->nullable();
+            $table->unsignedBigInteger('updated_by_admin_id')->nullable();
+            $table->timestamps();
+        });
+    }
+
     protected static function createOrderPaymentSubmissionsTable(): void
     {
         if (Schema::hasTable('order_payment_submissions')) {
@@ -279,10 +311,34 @@ class StorkSchemaBootstrapService
             $table->boolean('switched_to_cod')->default(false)->index();
             $table->timestamp('switched_to_cod_at')->nullable();
             $table->timestamp('seller_verified_at')->nullable();
+            $table->unsignedBigInteger('verified_by_admin_id')->nullable();
+            $table->timestamp('admin_verified_at')->nullable();
+            $table->text('admin_remarks')->nullable();
+            $table->string('refund_status', 35)->nullable()->index();
+            $table->string('refund_reference', 80)->nullable();
+            $table->timestamp('refunded_at')->nullable();
             $table->timestamps();
 
             $table->index(['seller_profile_id', 'status']);
             $table->index(['buyer_id', 'status']);
+        });
+    }
+
+    protected static function upgradeOrderPaymentSubmissionsColumns(): void
+    {
+        if (! Schema::hasTable('order_payment_submissions')) {
+            return;
+        }
+
+        Schema::table('order_payment_submissions', function (Blueprint $table) {
+            if (! Schema::hasColumn('order_payment_submissions', 'verified_by_admin_id')) {
+                $table->unsignedBigInteger('verified_by_admin_id')->nullable()->after('seller_verified_at');
+                $table->timestamp('admin_verified_at')->nullable()->after('verified_by_admin_id');
+                $table->text('admin_remarks')->nullable()->after('admin_verified_at');
+                $table->string('refund_status', 35)->nullable()->index()->after('admin_remarks');
+                $table->string('refund_reference', 80)->nullable()->after('refund_status');
+                $table->timestamp('refunded_at')->nullable()->after('refund_reference');
+            }
         });
     }
 
@@ -369,6 +425,7 @@ class StorkSchemaBootstrapService
             $table->string('dispute_reason_category', 120)->nullable();
             $table->string('seller_return_decision', 30)->nullable();
             $table->text('seller_return_Decision_reason')->nullable();
+            $table->text('seller_return_decision_reason')->nullable();
             $table->timestamp('seller_return_responded_at')->nullable();
             $table->boolean('is_escalated_to_admin')->default(false);
             $table->timestamp('escalated_at')->nullable();
@@ -396,6 +453,9 @@ class StorkSchemaBootstrapService
                 $table->decimal('refund_amount', 12, 2)->default(0.00);
                 $table->string('refund_status', 30)->nullable()->index();
                 $table->timestamp('refund_released_at')->nullable();
+            }
+            if (! Schema::hasColumn('seller_order_extras', 'seller_return_decision_reason')) {
+                $table->text('seller_return_decision_reason')->nullable()->after('seller_return_decision');
             }
         });
     }
@@ -710,6 +770,84 @@ class StorkSchemaBootstrapService
         });
     }
 
+    protected static function createWithdrawalRequestsTables(): void
+    {
+        if (! Schema::hasTable('withdrawal_requests')) {
+            Schema::create('withdrawal_requests', function (Blueprint $table) {
+                $table->id();
+                $table->string('withdrawal_reference', 50)->unique();
+                $table->string('requester_type', 30)->index();
+                $table->unsignedBigInteger('requester_id')->index();
+                $table->string('requester_name', 150)->nullable();
+                $table->foreignId('role_wallet_id')->constrained('role_wallets')->cascadeOnDelete();
+                $table->decimal('requested_amount', 14, 2);
+                $table->string('payout_method', 35)->default('GCASH');
+                $table->string('account_name', 120);
+                $table->string('account_number', 50);
+                $table->string('status', 25)->default('pending')->index();
+                $table->string('idempotency_key', 64)->nullable()->unique();
+                $table->unsignedBigInteger('reviewed_by_admin_id')->nullable();
+                $table->text('rejection_reason')->nullable();
+                $table->text('admin_remarks')->nullable();
+                $table->string('payout_proof_reference', 100)->nullable();
+                $table->timestamp('approved_at')->nullable();
+                $table->timestamp('rejected_at')->nullable();
+                $table->timestamp('paid_at')->nullable();
+                $table->timestamps();
+
+                $table->index(['requester_type', 'requester_id', 'status'], 'wr_req_type_id_status_idx');
+            });
+        }
+
+        if (! Schema::hasTable('withdrawal_request_histories')) {
+            Schema::create('withdrawal_request_histories', function (Blueprint $table) {
+                $table->id();
+                $table->foreignId('withdrawal_request_id')->constrained('withdrawal_requests')->cascadeOnDelete();
+                $table->string('from_status', 25)->nullable();
+                $table->string('to_status', 25);
+                $table->string('actor_type', 30);
+                $table->unsignedBigInteger('actor_id')->nullable();
+                $table->string('actor_name', 150)->nullable();
+                $table->text('remarks')->nullable();
+                $table->timestamps();
+            });
+        }
+
+        if (Schema::hasTable('seller_payout_requests') && Schema::hasTable('withdrawal_requests')) {
+            $legacyPayouts = DB::table('seller_payout_requests')->get();
+            foreach ($legacyPayouts as $lp) {
+                $exists = DB::table('withdrawal_requests')
+                    ->where('withdrawal_reference', $lp->payout_reference)
+                    ->exists();
+
+                if (! $exists) {
+                    $sp = SellerProfile::find($lp->seller_profile_id);
+                    DB::table('withdrawal_requests')->insert([
+                        'withdrawal_reference' => $lp->payout_reference,
+                        'requester_type'       => 'Seller',
+                        'requester_id'         => $lp->seller_profile_id,
+                        'requester_name'       => $sp?->business_name ?? "Seller #{$lp->seller_profile_id}",
+                        'role_wallet_id'       => $lp->role_wallet_id,
+                        'requested_amount'     => $lp->requested_amount,
+                        'payout_method'        => 'GCASH',
+                        'account_name'         => $lp->account_name,
+                        'account_number'       => $lp->account_number,
+                        'status'               => $lp->status,
+                        'idempotency_key'      => $lp->idempotency_key,
+                        'reviewed_by_admin_id' => $lp->processed_by_admin_id,
+                        'admin_remarks'        => $lp->admin_remarks,
+                        'approved_at'          => $lp->status === 'completed' ? $lp->processed_at : null,
+                        'paid_at'              => $lp->status === 'completed' ? $lp->processed_at : null,
+                        'rejected_at'          => $lp->status === 'rejected' ? $lp->processed_at : null,
+                        'rejection_reason'     => $lp->status === 'rejected' ? $lp->admin_remarks : null,
+                        'created_at'           => $lp->created_at,
+                        'updated_at'           => $lp->updated_at,
+                    ]);
+                }
+            }
+        }
+    }
+
     protected static function createSellerCommissionRemittancesTable(): void
     {
         if (Schema::hasTable('seller_commission_remittances')) {
@@ -755,8 +893,6 @@ class StorkSchemaBootstrapService
             return;
         }
 
-        // Search logging is a nice-to-have: if this table can't be created, the rest of the
-        // bootstrap (super deals, wishlists, ...) must still run.
         try {
             Schema::create('search_logs', function (Blueprint $table) {
                 $table->id();
@@ -851,10 +987,36 @@ class StorkSchemaBootstrapService
             $table->string('title', 150);
             $table->text('body');
             $table->string('category', 40)->default('announcement');
+            $table->string('target_audience', 30)->default('all')->index();
+            $table->string('attachment_path')->nullable();
             $table->boolean('is_active')->default(true)->index();
             $table->unsignedBigInteger('created_by_admin_id')->nullable();
             $table->timestamps();
         });
+    }
+
+    protected static function upgradePlatformAnnouncementsAndReadsTables(): void
+    {
+        if (Schema::hasTable('platform_announcements')) {
+            Schema::table('platform_announcements', function (Blueprint $table) {
+                if (! Schema::hasColumn('platform_announcements', 'target_audience')) {
+                    $table->string('target_audience', 30)->default('all')->index()->after('category');
+                    $table->string('attachment_path')->nullable()->after('target_audience');
+                }
+            });
+        }
+
+        if (! Schema::hasTable('buyer_announcement_reads')) {
+            Schema::create('buyer_announcement_reads', function (Blueprint $table) {
+                $table->id();
+                $table->foreignId('announcement_id')->constrained('platform_announcements')->cascadeOnDelete();
+                $table->foreignId('user_id')->constrained('users')->cascadeOnDelete();
+                $table->timestamp('read_at')->useCurrent();
+                $table->timestamps();
+
+                $table->unique(['announcement_id', 'user_id'], 'bar_ann_user_unique');
+            });
+        }
     }
 
     protected static function createHeroBannersTable(): void
@@ -917,6 +1079,9 @@ class StorkSchemaBootstrapService
                     $table->timestamp('last_seen_at')->nullable();
                     $table->unsignedSmallInteger('sla_strikes')->default(0);
                 }
+                if (! Schema::hasColumn('couriers', 'avatar_path')) {
+                    $table->string('avatar_path')->nullable()->after('contact_no');
+                }
             });
         }
 
@@ -926,6 +1091,9 @@ class StorkSchemaBootstrapService
                     $table->boolean('is_online')->default(true)->index();
                     $table->timestamp('last_seen_at')->nullable();
                     $table->unsignedSmallInteger('sla_strikes')->default(0);
+                }
+                if (! Schema::hasColumn('riders', 'avatar_path')) {
+                    $table->string('avatar_path')->nullable()->after('contact_no');
                 }
             });
         }
@@ -937,6 +1105,58 @@ class StorkSchemaBootstrapService
                     $table->string('attachment_path')->nullable();
                 }
             });
+        }
+    }
+
+    protected static function upgradeCodCollectionsAndDeliveryProofsColumns(): void
+    {
+        if (Schema::hasTable('cod_collections')) {
+            Schema::table('cod_collections', function (Blueprint $table) {
+                if (! Schema::hasColumn('cod_collections', 'remitted_amount')) {
+                    $table->decimal('remitted_amount', 12, 2)->nullable()->after('collected_amount');
+                }
+                if (! Schema::hasColumn('cod_collections', 'remittance_reference')) {
+                    $table->string('remittance_reference', 100)->nullable()->after('status');
+                }
+                if (! Schema::hasColumn('cod_collections', 'notes')) {
+                    $table->text('notes')->nullable()->after('remittance_reference');
+                }
+            });
+
+            DB::table('cod_collections')
+                ->whereIn('status', ['remitted', 'verified'])
+                ->whereNull('remitted_amount')
+                ->update([
+                    'remitted_amount' => DB::raw('collected_amount'),
+                ]);
+        }
+
+        if (Schema::hasTable('delivery_proofs')) {
+            Schema::table('delivery_proofs', function (Blueprint $table) {
+                if (! Schema::hasColumn('delivery_proofs', 'recipient_relation')) {
+                    $table->string('recipient_relation', 80)->nullable()->after('recipient_name');
+                }
+                if (! Schema::hasColumn('delivery_proofs', 'cod_collected_amount')) {
+                    $table->decimal('cod_collected_amount', 12, 2)->default(0.00)->after('recipient_relation');
+                }
+            });
+        }
+    }
+
+    protected static function upgradeCommissionRecordsNullableColumns(): void
+    {
+        if (! Schema::hasTable('commission_records')) {
+            return;
+        }
+
+        try {
+            Schema::table('commission_records', function (Blueprint $table) {
+                $table->unsignedBigInteger('shipment_id')->nullable()->change();
+                $table->unsignedBigInteger('cod_collection_id')->nullable()->change();
+                $table->unsignedBigInteger('logistics_profile_id')->nullable()->change();
+                $table->unsignedBigInteger('rider_id')->nullable()->change();
+            });
+        } catch (\Throwable $e) {
         }
     }
 

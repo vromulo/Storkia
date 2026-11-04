@@ -1,38 +1,123 @@
-export default function imageUploader() {
+export default function imageUploader(maxImages = 10) {
     return {
         isDragging: false,
-        errorMessage: '',
+        maxImages: maxImages,
+        files: [],
         previews: [],
-        handleDrop(e) {
+        errorMessage: '',
+        draggingIndex: null,
+
+        handleSelect(event) {
+            const selectedFiles = Array.from(event.target.files || []);
+            this.appendFiles(selectedFiles);
+        },
+
+        handleDrop(event) {
             this.isDragging = false;
-            const files = e.dataTransfer ? e.dataTransfer.files : null;
-            if (files) this.processFiles(files);
+            const droppedFiles = Array.from(event.dataTransfer?.files || []);
+            this.appendFiles(droppedFiles);
         },
-        handleSelect(e) {
-            this.processFiles(e.target.files);
-        },
-        processFiles(files) {
+
+        appendFiles(incomingFiles) {
             this.errorMessage = '';
-            const dt = new DataTransfer();
-            let hasInvalid = false;
-            for (let i = 0; i < files.length; i++) {
-                const file = files[i];
-                if (file.type && file.type.startsWith('image/')) {
-                    dt.items.add(file);
-                } else {
-                    hasInvalid = true;
+            if (!incomingFiles.length) {
+                this.syncInputFiles();
+                return;
+            }
+
+            const allowedTypes = ['image/jpeg', 'image/png', 'image/jpg', 'image/webp'];
+            const maxFileSize = 5 * 1024 * 1024;
+
+            for (const file of incomingFiles) {
+                if (this.files.length >= this.maxImages) {
+                    this.errorMessage = `Maximum of ${this.maxImages} main product pictures allowed. Remove an image if you wish to replace it.`;
+                    break;
                 }
+
+                if (!allowedTypes.includes(file.type)) {
+                    this.errorMessage = `"${file.name}" was skipped. Only JPG, PNG, and WEBP images are allowed.`;
+                    continue;
+                }
+
+                if (file.size > maxFileSize) {
+                    this.errorMessage = `"${file.name}" exceeds the 5MB per-image limit.`;
+                    continue;
+                }
+
+                const isDuplicate = this.files.some(
+                    existing => existing.name === file.name && existing.size === file.size && existing.lastModified === file.lastModified
+                );
+                if (isDuplicate) {
+                    continue;
+                }
+
+                this.files.push(file);
+                const objectUrl = URL.createObjectURL(file);
+                this.previews.push(objectUrl);
             }
-            if (hasInvalid) {
-                this.errorMessage = 'Only image files (PNG, JPG, WEBP, GIF, SVG) are allowed. PDFs and documents were rejected.';
+
+            this.syncInputFiles();
+        },
+
+        removeImage(index) {
+            if (index < 0 || index >= this.files.length) return;
+            this.errorMessage = '';
+
+            const removedPreview = this.previews[index];
+            if (removedPreview && removedPreview.startsWith('blob:')) {
+                URL.revokeObjectURL(removedPreview);
             }
-            this.$refs.mainFileInput.files = dt.files;
-            this.previews = [];
-            for (let i = 0; i < dt.files.length; i++) {
-                let reader = new FileReader();
-                reader.onload = (e) => this.previews.push(e.target.result);
-                reader.readAsDataURL(dt.files[i]);
+
+            this.files.splice(index, 1);
+            this.previews.splice(index, 1);
+            this.syncInputFiles();
+        },
+
+        promoteToCover(index) {
+            if (index <= 0 || index >= this.files.length) return;
+            const [file] = this.files.splice(index, 1);
+            const [preview] = this.previews.splice(index, 1);
+            this.files.unshift(file);
+            this.previews.unshift(preview);
+            this.syncInputFiles();
+        },
+
+        moveImage(fromIndex, toIndex) {
+            if (
+                fromIndex === toIndex ||
+                fromIndex < 0 ||
+                toIndex < 0 ||
+                fromIndex >= this.files.length ||
+                toIndex >= this.files.length
+            ) {
+                return;
             }
+
+            const [movedFile] = this.files.splice(fromIndex, 1);
+            const [movedPreview] = this.previews.splice(fromIndex, 1);
+            this.files.splice(toIndex, 0, movedFile);
+            this.previews.splice(toIndex, 0, movedPreview);
+            this.syncInputFiles();
+        },
+
+        onThumbnailDragStart(index) {
+            this.draggingIndex = index;
+        },
+
+        onThumbnailDrop(targetIndex) {
+            if (this.draggingIndex === null) return;
+            this.moveImage(this.draggingIndex, targetIndex);
+            this.draggingIndex = null;
+        },
+
+        syncInputFiles() {
+            const input = this.$refs.mainFileInput;
+            if (!input || typeof DataTransfer === 'undefined') return;
+
+            const dt = new DataTransfer();
+            this.files.forEach(file => dt.items.add(file));
+            input.files = dt.files;
+            input.dispatchEvent(new Event('input', { bubbles: true }));
         }
     };
 }

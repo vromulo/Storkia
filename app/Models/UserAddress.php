@@ -22,10 +22,14 @@ class UserAddress extends Model
         'postcode',
         'street_address',
         'building_details',
+        'latitude',
+        'longitude',
         'is_default',
     ];
 
     protected $casts = [
+        'latitude'   => 'decimal:7',
+        'longitude'  => 'decimal:7',
         'is_default' => 'boolean',
     ];
 

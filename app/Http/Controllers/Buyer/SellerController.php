@@ -72,11 +72,11 @@ class SellerController extends Controller
         if ($seller->user_id && class_exists(Message::class) && Schema::hasTable('messages')) {
             try {
                 $inboundBuyers = Message::where('receiver_id', $seller->user_id)
-                    ->distinct('sender_id')
-                    ->pluck('sender_id');
+                    ->distinct('user_id')
+                    ->pluck('user_id');
 
                 if ($inboundBuyers->isNotEmpty()) {
-                    $repliedBuyers = Message::where('sender_id', $seller->user_id)
+                    $repliedBuyers = Message::where('user_id', $seller->user_id)
                         ->whereIn('receiver_id', $inboundBuyers)
                         ->distinct('receiver_id')
                         ->count('receiver_id');
@@ -106,9 +106,10 @@ class SellerController extends Controller
     public function index()
     {
         $sellers = SellerProfile::latest()->get();
-        $masterCategories = $this->getMasterCategories();
 
+        $masterCategories = $this->getMasterCategories();
         $mainCategories = collect(array_keys($masterCategories))->sort()->values();
+
         $activeLines = $sellers->pluck('line_of_business')->filter();
         $mainCategories = $mainCategories->merge($activeLines)->unique()->sort()->values();
 
@@ -242,7 +243,6 @@ class SellerController extends Controller
             if (! $record) {
                 $code = 'FLW' . $seller->id . 'U' . $user->id;
                 $code = strtoupper(substr(preg_replace('/[^A-Z0-9]/', '', $code), 0, 12));
-
                 if (strlen($code) < 4) {
                     $code = str_pad($code, 4, 'X');
                 }
@@ -305,7 +305,7 @@ class SellerController extends Controller
 
         $message = $followRecord->is_following
             ? ($rewardIssuedCode
-                ? "You are now following {$seller->business_name}! A 1-time Follower Voucher ({$rewardIssuedCode} — ₱30 OFF, Min. ₱150) was automatically added to your Voucher Wallet!"
+                ? "You are now following {$seller->business_name}! A 1-time Follower Voucher ({$rewardIssuedCode} ₱30 OFF, Min. ₱150) was automatically added to your Voucher Wallet!"
                 : "You are now following {$seller->business_name}.")
             : "You unfollowed {$seller->business_name}.";
 

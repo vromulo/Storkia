@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
+use Illuminate\Support\Facades\Storage;
 use Laravel\Sanctum\HasApiTokens;
 
 class Courier extends Authenticatable
@@ -20,6 +21,7 @@ class Courier extends Authenticatable
         'email',
         'email_verified_at',
         'contact_no',
+        'avatar_path',
         'license_no',
         'license_type',
         'dl_codes',
@@ -36,6 +38,12 @@ class Courier extends Authenticatable
         'is_online',
         'last_seen_at',
         'sla_strikes',
+        'current_latitude',
+        'current_longitude',
+        'location_accuracy',
+        'location_updated_at',
+        'vehicle_verification_status',
+        'last_checklist_passed_at',
     ];
 
     protected $hidden = [
@@ -46,15 +54,20 @@ class Courier extends Authenticatable
     protected function casts(): array
     {
         return [
-            'birthday'            => 'date',
-            'license_expiry_date' => 'date',
-            'email_verified_at'   => 'datetime',
-            'dl_codes'            => 'array',
-            'load_capacity'       => 'integer',
-            'password'            => 'hashed',
-            'is_online'           => 'boolean',
-            'last_seen_at'        => 'datetime',
-            'sla_strikes'         => 'integer',
+            'birthday'                 => 'date',
+            'license_expiry_date'      => 'date',
+            'email_verified_at'        => 'datetime',
+            'dl_codes'                 => 'array',
+            'load_capacity'            => 'integer',
+            'password'                 => 'hashed',
+            'is_online'                => 'boolean',
+            'last_seen_at'             => 'datetime',
+            'sla_strikes'              => 'integer',
+            'current_latitude'         => 'decimal:7',
+            'current_longitude'        => 'decimal:7',
+            'location_accuracy'        => 'decimal:2',
+            'location_updated_at'      => 'datetime',
+            'last_checklist_passed_at' => 'datetime',
         ];
     }
 
@@ -78,6 +91,16 @@ class Courier extends Authenticatable
     public function pickupAssignments()
     {
         return $this->hasMany(PickupAssignment::class, 'courier_id')->latest('id');
+    }
+
+    public function locations()
+    {
+        return $this->hasMany(CourierLocation::class, 'courier_id')->latest('recorded_at');
+    }
+
+    public function latestLocation()
+    {
+        return $this->hasOne(CourierLocation::class, 'courier_id')->latestOfMany('recorded_at');
     }
 
     public function activeShipments()
@@ -113,5 +136,14 @@ class Courier extends Authenticatable
     public function getFormattedDlCodesAttribute(): string
     {
         return is_array($this->dl_codes) ? implode(', ', $this->dl_codes) : (string) $this->dl_codes;
+    }
+
+    public function getAvatarUrlAttribute(): ?string
+    {
+        if ($this->avatar_path && Storage::disk('public')->exists($this->avatar_path)) {
+            return asset('storage/' . ltrim($this->avatar_path, '/'));
+        }
+
+        return null;
     }
 }

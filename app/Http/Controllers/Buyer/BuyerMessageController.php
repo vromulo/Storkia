@@ -7,243 +7,234 @@ use App\Http\Controllers\Controller;
 use App\Models\Message;
 use App\Models\Product;
 use App\Models\User;
+use Carbon\Carbon;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Validation\ValidationException;
+use Intervention\Image\Drivers\Gd\Driver;
+use Intervention\Image\ImageManager;
 
 class BuyerMessageController extends Controller
 {
-    private function touchUserOnlineStatus(?User $user): void
-    {
-        if (! $user || ! Schema::hasColumn('users', 'last_seen_at')) {
-            return;
-        }
-
-        $user->forceFill([
-            'is_online'    => true,
-            'last_seen_at' => now(),
-        ])->saveQuietly();
-    }
-
-    private function formatContactPayload(User $contact, int $userId): User
-    {
-        $contact->loadMissing('sellerProfile');
-
-        $latestMessage = Message::where(function ($q) use ($userId, $contact) {
-            $q->where('user_id', $userId)->where('receiver_id', $contact->id);
-        })->orWhere(function ($q) use ($userId, $contact) {
-            $q->where('user_id', $contact->id)->where('receiver_id', $userId);
-        })->latest()->first();
-
-        $contact->latest_message_at = $latestMessage ? $latestMessage->created_at : null;
-        $contact->latest_message_preview = $latestMessage
-            ? ($latestMessage->message ?: ($latestMessage->attachment_path ? '[Photo Attachment]' : '[Product Inquiry]'))
-            : 'Tap to start chatting';
-
-        $contact->unread_count = Message::where('user_id', $contact->id)
-            ->where('receiver_id', $userId)
-            ->where('is_read', false)
-            ->count();
-
-        $contact->display_name = $contact->sellerProfile?->business_name
-            ?: trim($contact->first_name . ' ' . $contact->last_name);
-
-        $contact->logo_url = $contact->sellerProfile?->logo_path
-            ? asset('storage/' . $contact->sellerProfile->logo_path)
-            : null;
-
-        $isRecentlyActive = $contact->last_seen_at && $contact->last_seen_at->gt(now()->subMinutes(5));
-        $contact->online_status = ($contact->is_online || $isRecentlyActive) ? 'online' : 'offline';
-        $contact->last_seen_label = $contact->last_seen_at
-            ? 'Active ' . $contact->last_seen_at->diffForHumans()
-            : 'Offline';
-        $contact->is_on_vacation = (bool) ($contact->sellerProfile?->is_on_vacation ?? false);
-
-        return $contact;
-    }
-
-    private function getContactsList($userId, $requestedContactId = null)
-    {
-        $contactIds = Message::where('user_id', $userId)->pluck('receiver_id')
-            ->merge(Message::where('receiver_id', $userId)->pluck('user_id'))
-            ->unique();
-
-        $contacts = User::with('sellerProfile')
-            ->whereIn('id', $contactIds)
-            ->where('role', 'Seller')
-            ->get()
-            ->map(fn (User $c) => $this->formatContactPayload($c, (int) $userId))
-            ->sortByDesc('latest_message_at')
-            ->values();
-
-        if ($requestedContactId) {
-            $contactId = (int) $requestedContactId;
-            if (! $contacts->contains('id', $contactId)) {
-                $newContact = User::with('sellerProfile')->find($contactId);
-                if ($newContact && $newContact->role === 'Seller') {
-                    $formatted = $this->formatContactPayload($newContact, (int) $userId);
-                    $formatted->latest_message_at = now();
-                    $contacts->prepend($formatted);
-                }
-            }
-        }
-
-        return $contacts;
-    }
-
     public function index(Request $request)
     {
-        $user = $request->user();
-        $this->touchUserOnlineStatus($user);
+        $userId = Auth::id();
 
-        $requestedContactId = $request->input('contact');
-        $requestedProductId = $request->input('product_id');
+        if (Schema::hasColumn('users', 'last_seen_at')) {
+            Auth::user()?->update(['is_online' => true, 'last_seen_at' => now()]);
+        }
 
-        $draftProduct = null;
-        if ($requestedProductId) {
-            $product = Product::with('user.sellerProfile')->find($requestedProductId);
-            if ($product) {
-                if (! $requestedContactId && $product->user_id) {
-                    $requestedContactId = $product->user_id;
+        $initialContactId = $request->query('contact');
+        $inquiredProductId = $request->query('product_id');
+
+        if ($initialContactId && $inquiredProductId) {
+            $prod = Product::find($inquiredProductId);
+            if ($prod) {
+                $alreadyInquiredRecently = Message::where('user_id', $userId)
+                    ->where('receiver_id', $initialContactId)
+                    ->where('product_id', $prod->id)
+                    ->where('created_at', '>=', now()->subMinutes(10))
+                    ->exists();
+
+                if (! $alreadyInquiredRecently) {
+                    Message::create([
+                        'user_id'     => $userId,
+                        'receiver_id' => (int) $initialContactId,
+                        'role'        => 'Buyer',
+                        'product_id'  => $prod->id,
+                        'message'     => "Hi! Is \"{$prod->name}\" still available?",
+                        'is_read'     => false,
+                    ]);
                 }
-
-                $firstPic = (! empty($product->pictures) && is_array($product->pictures))
-                    ? asset('storage/' . $product->pictures[0])
-                    : null;
-
-                $basePrice = (float) ($product->price ?? 0);
-                $discount = (float) ($product->discount ?? 0);
-                $effectivePrice = $discount > 0
-                    ? round($basePrice - ($basePrice * ($discount / 100)), 2)
-                    : round($basePrice, 2);
-
-                $draftProduct = [
-                    'id'              => $product->id,
-                    'name'            => $product->name,
-                    'price'           => $basePrice,
-                    'effective_price' => $effectivePrice,
-                    'discount'        => $discount,
-                    'stock_quantity'  => (int) ($product->stock_quantity ?? 0),
-                    'image_url'       => $firstPic,
-                    'url'             => route('product.show', $product->id),
-                ];
             }
         }
 
-        $contacts = $this->getContactsList($user->id, $requestedContactId);
+        $contacts = $this->getContactsData($userId, $initialContactId);
 
-        return view('buyer.messages.buyer-messages', compact(
-            'contacts',
-            'draftProduct',
-            'requestedContactId'
-        ));
+        return view('buyer.messages.buyer-messages', compact('contacts', 'initialContactId'));
     }
 
     public function fetchContacts(Request $request)
     {
-        $this->touchUserOnlineStatus($request->user());
-        $contacts = $this->getContactsList(auth()->id());
+        $userId = Auth::id();
+        $contacts = $this->getContactsData($userId, $request->query('contact'));
 
         return response()->json($contacts);
     }
 
+    private function getContactsData($userId, $includeContactId = null)
+    {
+        $sentTo = Message::where('user_id', $userId)->pluck('receiver_id');
+        $receivedFrom = Message::where('receiver_id', $userId)->pluck('user_id');
+
+        $contactIds = $sentTo->merge($receivedFrom)->unique()->filter();
+        if ($includeContactId && ! $contactIds->contains((int) $includeContactId)) {
+            $contactIds->push((int) $includeContactId);
+        }
+
+        $contacts = User::with('sellerProfile')->whereIn('id', $contactIds)->get();
+
+        foreach ($contacts as $contact) {
+            $contact->store_name = $contact->sellerProfile?->business_name
+                ?? trim($contact->first_name . ' ' . $contact->last_name);
+            $contact->store_logo = $contact->sellerProfile?->logo_path
+                ? asset('storage/' . $contact->sellerProfile->logo_path)
+                : null;
+
+            $contact->last_message = Message::where(function ($q) use ($userId, $contact) {
+                $q->where('user_id', $userId)->where('receiver_id', $contact->id);
+            })->orWhere(function ($q) use ($userId, $contact) {
+                $q->where('user_id', $contact->id)->where('receiver_id', $userId);
+            })->latest()->first();
+
+            $contact->unread_count = Message::where('user_id', $contact->id)
+                ->where('receiver_id', $userId)
+                ->where('is_read', false)
+                ->count();
+
+            $lastSeen = $contact->last_seen_at ? Carbon::parse($contact->last_seen_at) : null;
+            $isOnline = (bool) ($contact->is_online ?? false)
+                && $lastSeen
+                && $lastSeen->gt(now()->subMinutes(5));
+
+            $contact->online_status_label = $isOnline
+                ? 'Online now'
+                : ($lastSeen ? 'Active ' . $lastSeen->diffForHumans() : 'Merchant');
+            $contact->is_currently_online = $isOnline;
+        }
+
+        return $contacts->sortByDesc(function ($contact) {
+            return $contact->last_message ? $contact->last_message->created_at : 0;
+        })->values();
+    }
+
     public function fetchMessages($contactId)
     {
-        $userId = auth()->id();
-        $this->touchUserOnlineStatus(auth()->user());
+        $userId = Auth::id();
 
         Message::where('user_id', $contactId)
             ->where('receiver_id', $userId)
             ->where('is_read', false)
             ->update(['is_read' => true]);
 
-        $messages = Message::with('product')
-            ->where(function ($query) use ($userId, $contactId) {
-                $query->where('user_id', $userId)->where('receiver_id', $contactId);
-            })
-            ->orWhere(function ($query) use ($userId, $contactId) {
-                $query->where('user_id', $contactId)->where('receiver_id', $userId);
-            })
-            ->orderBy('created_at', 'asc')
-            ->get();
+        $messages = Message::where(function ($q) use ($userId, $contactId) {
+            $q->where('user_id', $userId)->where('receiver_id', $contactId);
+        })->orWhere(function ($q) use ($userId, $contactId) {
+            $q->where('user_id', $contactId)->where('receiver_id', $userId);
+        })->orderBy('created_at', 'asc')->get()->map(function ($msg) {
+            $productCard = null;
+            if (! empty($msg->product_id)) {
+                $prod = Product::withTrashed()->find($msg->product_id);
+                if ($prod) {
+                    $firstPic = (! empty($prod->pictures) && is_array($prod->pictures))
+                        ? asset('storage/' . $prod->pictures[0])
+                        : null;
+                    $rawPrice = round((float) ($prod->price ?? 0), 2);
+                    $stockCount = (int) ($prod->stock_quantity ?? 0);
+                    $productCard = [
+                        'id'              => $prod->id,
+                        'name'            => $prod->name,
+                        'price'           => $rawPrice,
+                        'formatted_price' => number_format($rawPrice, 2),
+                        'stock'           => $stockCount,
+                        'stock_quantity'  => $stockCount,
+                        'image'           => $firstPic,
+                        'url'             => route('product.show', $prod->id),
+                    ];
+                }
+            }
+
+            return [
+                'id'             => $msg->id,
+                'user_id'        => $msg->user_id,
+                'receiver_id'    => $msg->receiver_id,
+                'role'           => $msg->role,
+                'message'        => $msg->message,
+                'product_id'     => $msg->product_id ?? null,
+                'product_card'   => $productCard,
+                'attachment_url' => ! empty($msg->attachment_path) ? asset('storage/' . $msg->attachment_path) : null,
+                'is_read'        => (bool) $msg->is_read,
+                'created_at'     => $msg->created_at,
+            ];
+        });
 
         return response()->json($messages);
-    }
-
-    public function store(Request $request)
-    {
-        $this->touchUserOnlineStatus($request->user());
-
-        $rawMessage = trim((string) $request->input('message', ''));
-        $request->merge(['message' => $rawMessage]);
-
-        $validated = $request->validate([
-            'receiver_id' => ['required', 'integer', 'exists:users,id'],
-            'message'     => ['nullable', 'string', 'max:1000'],
-            'product_id'  => ['nullable', 'integer', 'exists:products,id'],
-            'attachment'  => ['nullable', 'file', 'mimetypes:image/jpeg,image/png', 'mimes:jpg,jpeg,png', 'max:5120'],
-        ], [
-            'message.max'          => 'Chat message cannot exceed 1,000 characters.',
-            'attachment.mimetypes' => 'Only valid JPG and PNG image files are allowed.',
-            'attachment.mimes'     => 'Only JPG and PNG image files are allowed.',
-            'attachment.max'       => 'Attachment image size cannot exceed 5 MB.',
-        ]);
-
-        if ($rawMessage === '' && ! $request->hasFile('attachment') && empty($validated['product_id'])) {
-            return response()->json([
-                'message' => 'Please enter a message (1 to 1,000 characters) or attach a valid JPG/PNG photo.',
-            ], 422);
-        }
-
-        try {
-            $attachmentPath = null;
-            if ($request->hasFile('attachment')) {
-                $file = $request->file('attachment');
-                $realMime = $file->getMimeType();
-                if (! in_array($realMime, ['image/jpeg', 'image/png'], true)) {
-                    return response()->json([
-                        'message' => 'Invalid image content. Only authentic JPG and PNG images up to 5 MB are allowed.',
-                    ], 422);
-                }
-                $attachmentPath = $file->store('chat_attachments', 'public');
-            }
-
-            $payloadData = [
-                'user_id'     => auth()->id(),
-                'receiver_id' => (int) $validated['receiver_id'],
-                'role'        => 'Buyer',
-                'message'     => $rawMessage !== '' ? $rawMessage : ($attachmentPath ? 'Sent a photo' : 'Product inquiry'),
-                'is_read'     => false,
-            ];
-
-            if (Schema::hasColumn('messages', 'product_id')) {
-                $payloadData['product_id'] = $validated['product_id'] ?? null;
-                $payloadData['attachment_path'] = $attachmentPath;
-            }
-
-            $message = Message::create($payloadData);
-            $message->load('product');
-
-            try {
-                broadcast(new MessageSent($message))->toOthers();
-            } catch (\Throwable $e) {
-                Log::error('Broadcast failed: ' . $e->getMessage());
-            }
-
-            return response()->json($message);
-        } catch (\Throwable $e) {
-            Log::error('Message Store Error: ' . $e->getMessage());
-            return response()->json(['error' => 'Database error: ' . $e->getMessage()], 500);
-        }
     }
 
     public function markAsRead($contactId)
     {
         Message::where('user_id', $contactId)
-            ->where('receiver_id', auth()->id())
+            ->where('receiver_id', Auth::id())
             ->where('is_read', false)
             ->update(['is_read' => true]);
 
-        return response()->json(['success' => true]);
+        return response()->json(['status' => 'success', 'success' => true]);
+    }
+
+    public function store(Request $request)
+    {
+        $request->validate([
+            'receiver_id' => ['required', 'exists:users,id'],
+            'message'     => ['nullable', 'string', 'max:2000'],
+            'product_id'  => ['nullable', 'integer', 'exists:products,id'],
+            'attachment'  => ['nullable', 'file', 'mimetypes:image/jpeg,image/png,image/webp', 'mimes:jpg,jpeg,png,webp', 'max:5120'],
+        ], [
+            'attachment.mimetypes' => 'Chat image attachment must be a valid JPG, PNG, or WEBP image (max 5 MB).',
+            'attachment.max'       => 'Chat image attachment must not exceed 5 MB.',
+        ]);
+
+        if (empty(trim((string) $request->input('message', ''))) && ! $request->hasFile('attachment') && ! $request->filled('product_id')) {
+            throw ValidationException::withMessages([
+                'message' => 'Please enter a message or attach an image (JPG, PNG, or WEBP).',
+            ]);
+        }
+
+        $attachmentPath = null;
+        if ($request->hasFile('attachment')) {
+            $file = $request->file('attachment');
+            $filename = 'chat_attachments/chat_' . Auth::id() . '_' . uniqid('', true) . '.webp';
+            try {
+                $manager = new ImageManager(new Driver());
+                $encoded = $manager->read($file->getRealPath())->scaleDown(1600, 1600)->toWebp(82);
+                Storage::disk('public')->put($filename, (string) $encoded);
+                $attachmentPath = $filename;
+            } catch (\Throwable $e) {
+                $attachmentPath = $file->store('chat_attachments', 'public');
+            }
+        }
+
+        $payload = [
+            'user_id'     => Auth::id(),
+            'receiver_id' => $request->receiver_id,
+            'role'        => Auth::user()?->role ?? 'Buyer',
+            'message'     => trim((string) ($request->message ?? '')) ?: ($attachmentPath ? '[Sent a photo]' : '[Product Inquiry]'),
+            'is_read'     => false,
+        ];
+
+        if (Schema::hasColumn('messages', 'product_id')) {
+            $payload['product_id'] = $request->input('product_id');
+            $payload['attachment_path'] = $attachmentPath;
+        }
+
+        $message = Message::create($payload);
+
+        try {
+            broadcast(new MessageSent($message))->toOthers();
+        } catch (\Throwable $e) {
+        }
+
+        return response()->json([
+            'id'             => $message->id,
+            'user_id'        => $message->user_id,
+            'receiver_id'    => $message->receiver_id,
+            'role'           => $message->role,
+            'message'        => $message->message,
+            'product_id'     => $message->product_id ?? null,
+            'attachment_url' => $attachmentPath ? asset('storage/' . $attachmentPath) : null,
+            'is_read'        => (bool) $message->is_read,
+            'created_at'     => $message->created_at,
+        ]);
     }
 }

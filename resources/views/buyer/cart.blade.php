@@ -14,9 +14,9 @@
             ->get();
 
         $groupedCart = $cartItems->groupBy(function($item) {
-            return $item->product->sellerProfile->business_name 
-                ?? $item->product->user->first_name 
-                ?? 'Storkia Direct';
+            return $item->product->sellerProfile->business_name
+                 ?? $item->product->user->first_name
+                 ?? 'Storkia Direct';
         });
 
         foreach ($cartItems as $item) {
@@ -25,8 +25,8 @@
 
             $basePrice = (float) ($product->price ?? 0);
             $stock = (int) ($product->stock_quantity ?? 0);
-            $image = (!empty($product->pictures) && is_array($product->pictures)) 
-                ? asset('storage/' . $product->pictures[0]) 
+            $image = (!empty($product->pictures) && is_array($product->pictures))
+                ? asset('storage/' . $product->pictures[0])
                 : null;
 
             if ($item->variant && isset($product->variants['items'])) {
@@ -51,17 +51,17 @@
                 }
             }
 
-            // Same pricing rules as checkout (Super Deal -> Store Sale -> product discount -> regular).
             $pricing = $cartPricingService->resolveDisplayPricing($product, $basePrice);
             $discountPercent = (float) $pricing['percent_off'];
             $effectivePrice = (float) $pricing['unit_price'];
 
-            $storeName = $item->product->sellerProfile->business_name 
-                ?? $item->product->user->first_name 
-                ?? 'Storkia Direct';
+            $storeName = $item->product->sellerProfile->business_name
+                 ?? $item->product->user->first_name
+                 ?? 'Storkia Direct';
 
             $initialAlpineData[] = [
-                'id'              => $item->id,
+                'id'              => (int) $item->id,
+                'user_id'         => (int) $item->user_id,
                 'store'           => $storeName,
                 'title'           => $product->name,
                 'variant'         => implode(' / ', array_filter([$item->variant, $item->sub_variant])),
@@ -78,31 +78,198 @@
     }
 @endphp
 
-<div 
-    x-data="cartPageManager(@js($initialAlpineData))" 
+<script>
+    window.storkiaCartPageManager = function (initialItems) {
+        return {
+            items: Array.isArray(initialItems) ? initialItems : [],
+            syncTimers: {},
+            get isAllSelected() {
+                return this.items.length > 0 && this.items.every(i => i.selected);
+            },
+            get selectedItems() {
+                return this.items.filter(i => i.selected);
+            },
+            get selectedCount() {
+                return this.selectedItems.length;
+            },
+            get retailTotal() {
+                return this.selectedItems.reduce((sum, i) => {
+                    let q = parseInt(i.quantity) || 0;
+                    return sum + (Number(i.originalPrice || 0) * q);
+                }, 0);
+            },
+            get estimatedTotal() {
+                return this.selectedItems.reduce((sum, i) => {
+                    let q = parseInt(i.quantity) || 0;
+                    return sum + (Number(i.discountedPrice || 0) * q);
+                }, 0);
+            },
+            get savingsTotal() {
+                return Math.max(0, this.retailTotal - this.estimatedTotal);
+            },
+            toggleSelectAll(checked) {
+                this.items.forEach(i => { i.selected = Boolean(checked); });
+            },
+            isStoreSelected(storeName) {
+                const storeItems = this.items.filter(i => i.store === storeName);
+                return storeItems.length > 0 && storeItems.every(i => i.selected);
+            },
+            toggleStore(storeName, checked) {
+                this.items.forEach(i => {
+                    if (i.store === storeName) {
+                        i.selected = Boolean(checked);
+                    }
+                });
+            },
+            broadcastLocalSync(item) {
+                if (!item) return;
+                window.dispatchEvent(new CustomEvent('cart-updated', {
+                    detail: {
+                        id: Number(item.id),
+                        user_id: Number(item.user_id || {{ (int) auth()->id() }}),
+                        quantity: Number(item.quantity),
+                        source: 'cart-page'
+                    }
+                }));
+            },
+            queueDatabaseSync(index, delay = 180) {
+                const item = this.items[index];
+                if (!item) return;
+                const cartId = item.id;
+                if (this.syncTimers[cartId]) {
+                    clearTimeout(this.syncTimers[cartId]);
+                }
+                this.syncTimers[cartId] = setTimeout(() => {
+                    this.syncDatabase(index);
+                }, delay);
+            },
+            async syncDatabase(index) {
+                const item = this.items[index];
+                if (!item) return;
+                let parsedQty = parseInt(item.quantity, 10);
+                if (isNaN(parsedQty) || parsedQty < 1) parsedQty = 1;
+                const maxLimit = Math.max(1, parseInt(item.maxStock) || 1);
+                if (parsedQty > maxLimit) parsedQty = maxLimit;
+
+                item.quantity = parsedQty;
+                item.isSyncing = true;
+                this.broadcastLocalSync(item);
+
+                try {
+                    const updateUrl = `{{ route('cart.update', ':id') }}`.replace(':id', item.id);
+                    const token = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '{{ csrf_token() }}';
+                    const response = await fetch(updateUrl, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Accept': 'application/json',
+                            'X-Requested-With': 'XMLHttpRequest',
+                            'X-CSRF-TOKEN': token
+                        },
+                        body: JSON.stringify({
+                            _method: 'PATCH',
+                            quantity: parsedQty
+                        })
+                    });
+                    const data = await response.json();
+                    if (response.ok && data.success) {
+                        if (this.items[index] && Number(this.items[index].quantity) !== Number(data.quantity)) {
+                            this.items[index].quantity = Number(data.quantity);
+                        }
+                        window.dispatchEvent(new CustomEvent('cart-updated', {
+                            detail: {
+                                id: Number(data.id),
+                                user_id: Number(data.user_id || {{ (int) auth()->id() }}),
+                                quantity: Number(data.quantity),
+                                source: 'server'
+                            }
+                        }));
+                    }
+                } catch (err) {
+                    console.error('Cart sync error:', err);
+                } finally {
+                    if (this.items[index]) {
+                        this.items[index].isSyncing = false;
+                    }
+                }
+            },
+            onQuantityInput(index, event) {
+                const item = this.items[index];
+                if (!item) return;
+                const rawVal = String(event.target.value || '').replace(/[^0-9]/g, '');
+                if (rawVal === '') {
+                    return;
+                }
+                let val = parseInt(rawVal, 10);
+                const limit = Math.max(1, parseInt(item.maxStock) || 1);
+                if (val < 1) val = 1;
+                if (val > limit) val = limit;
+                item.quantity = val;
+                event.target.value = val;
+                this.broadcastLocalSync(item);
+                this.queueDatabaseSync(index, 220);
+            },
+            onQuantityBlur(index, event) {
+                const item = this.items[index];
+                if (!item) return;
+                let val = parseInt(event.target.value, 10);
+                const limit = Math.max(1, parseInt(item.maxStock) || 1);
+                if (isNaN(val) || val < 1) val = 1;
+                if (val > limit) val = limit;
+                item.quantity = val;
+                event.target.value = val;
+                this.broadcastLocalSync(item);
+                this.queueDatabaseSync(index, 20);
+            },
+            increment(index) {
+                const item = this.items[index];
+                if (!item) return;
+                const limit = Math.max(1, parseInt(item.maxStock) || 1);
+                const current = parseInt(item.quantity) || 1;
+                if (current < limit) {
+                    item.quantity = current + 1;
+                    this.broadcastLocalSync(item);
+                    this.queueDatabaseSync(index, 80);
+                }
+            },
+            decrement(index) {
+                const item = this.items[index];
+                if (!item) return;
+                const current = parseInt(item.quantity) || 1;
+                if (current > 1) {
+                    item.quantity = current - 1;
+                    this.broadcastLocalSync(item);
+                    this.queueDatabaseSync(index, 80);
+                }
+            }
+        };
+    };
+</script>
+
+<div
+    x-data="storkiaCartPageManager(@js($initialAlpineData))"
     @if(auth()->check())
     x-init="
         if (typeof window.Echo !== 'undefined') {
             window.Echo.private('cart.{{ auth()->id() }}')
                 .listen('.CartQuantityUpdated', (e) => {
-                    let item = items.find(i => i.id === e.cart_id);
-                    if (item && item.quantity !== e.quantity) {
-                        item.quantity = e.quantity;
+                    let item = items.find(i => Number(i.id) === Number(e.cart_id));
+                    if (item && Number(item.quantity) !== Number(e.quantity)) {
+                        item.quantity = Number(e.quantity);
                     }
                 });
         }
     "
     @endif
     @cart-updated.window="
-        let item = items.find(i => i.id === $event.detail.id);
-        if (item && item.quantity !== $event.detail.quantity) {
-            item.quantity = $event.detail.quantity;
+        let item = items.find(i => Number(i.id) === Number($event.detail?.id));
+        if (item && Number(item.quantity) !== Number($event.detail?.quantity)) {
+            item.quantity = Number($event.detail.quantity);
         }
     "
     class="min-h-screen bg-surface-subtle/40 pb-16 lg:pb-20 pt-4"
 >
     <div class="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 space-y-6">
-
         <nav aria-label="Checkout Stepper" class="w-full bg-surface border border-border-subtle rounded-2xl p-4 sm:p-5 shadow-xs select-none">
             <div class="flex items-center justify-between max-w-3xl mx-auto">
                 <div class="flex items-center gap-2 text-primary font-bold">
@@ -110,19 +277,16 @@
                     <span class="text-sm font-sans tracking-tight">Cart</span>
                 </div>
                 <div class="flex-1 h-[2px] bg-primary/20 mx-3 sm:mx-6 rounded-full"></div>
-
                 <div class="flex items-center gap-2 text-text-muted font-medium">
                     <span class="w-7 h-7 rounded-full bg-surface-subtle border border-border-subtle text-text-muted text-xs font-bold flex items-center justify-center">2</span>
                     <span class="text-sm font-sans tracking-tight hidden sm:inline">Place Order</span>
                 </div>
                 <div class="flex-1 h-[2px] bg-border-subtle mx-3 sm:mx-6 rounded-full"></div>
-
                 <div class="flex items-center gap-2 text-text-muted font-medium">
                     <span class="w-7 h-7 rounded-full bg-surface-subtle border border-border-subtle text-text-muted text-xs font-bold flex items-center justify-center">3</span>
                     <span class="text-sm font-sans tracking-tight hidden sm:inline">Pay</span>
                 </div>
                 <div class="flex-1 h-[2px] bg-border-subtle mx-3 sm:mx-6 rounded-full"></div>
-
                 <div class="flex items-center gap-2 text-text-muted font-medium">
                     <span class="w-7 h-7 rounded-full bg-surface-subtle border border-border-subtle text-text-muted text-xs font-bold flex items-center justify-center">4</span>
                     <span class="text-sm font-sans tracking-tight hidden sm:inline">Order Complete</span>
@@ -145,13 +309,11 @@
             </div>
         @else
             <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-                
                 <div class="lg:col-span-8 space-y-4">
-                    
                     <div class="bg-surface rounded-2xl border border-border-subtle p-4 sm:p-5 flex items-center justify-between shadow-xs">
                         <label class="flex items-center gap-3.5 cursor-pointer select-none">
-                            <input 
-                                type="checkbox" 
+                            <input
+                                type="checkbox"
                                 :checked="isAllSelected"
                                 @change="toggleSelectAll($event.target.checked)"
                                 class="w-5 h-5 rounded-md text-primary focus:ring-primary/30 border-border-subtle cursor-pointer"
@@ -168,10 +330,10 @@
                     @foreach ($groupedCart as $storeName => $itemsInStore)
                         <div class="bg-surface rounded-2xl border border-border-subtle shadow-xs overflow-hidden">
                             <div class="p-4 sm:px-6 bg-surface-subtle/50 border-b border-border-subtle flex items-center gap-3.5 select-none">
-                                <input 
-                                    type="checkbox" 
+                                <input
+                                    type="checkbox"
                                     :checked="isStoreSelected('{{ addslashes($storeName) }}')"
-                                    @change="toggleStore('{{ addslashes($storeName) }}',$event.target.checked)"
+                                    @change="toggleStore('{{ addslashes($storeName) }}', $event.target.checked)"
                                     class="w-5 h-5 rounded-md text-primary focus:ring-primary/30 border-border-subtle cursor-pointer"
                                 >
                                 <div class="flex items-center gap-2">
@@ -190,10 +352,9 @@
                                         $alpineIndex = $cartItems->search(fn($ci) => $ci->id === $cartItem->id);
                                     @endphp
                                     <div class="p-4 sm:p-6 flex items-start gap-4 hover:bg-surface-subtle/20 transition-colors">
-                                        
                                         <div class="pt-2 sm:pt-4">
-                                            <input 
-                                                type="checkbox" 
+                                            <input
+                                                type="checkbox"
                                                 x-model="items[{{ $alpineIndex }}].selected"
                                                 class="w-5 h-5 rounded-md text-primary focus:ring-primary/30 border-border-subtle cursor-pointer"
                                             >
@@ -201,9 +362,9 @@
 
                                         <a href="{{ route('product.show', $cartItem->product->id) }}" class="w-20 h-20 sm:w-28 sm:h-28 rounded-xl bg-surface-subtle border border-border-subtle overflow-hidden shrink-0 flex items-center justify-center p-1.5 group">
                                             @if($initialAlpineData[$alpineIndex]['image'])
-                                                <img 
-                                                    src="{{ $initialAlpineData[$alpineIndex]['image'] }}" 
-                                                    alt="{{ $cartItem->product->name }}" 
+                                                <img
+                                                    src="{{ $initialAlpineData[$alpineIndex]['image'] }}"
+                                                    alt="{{ $cartItem->product->name }}"
                                                     class="w-full h-full object-contain group-hover:scale-105 transition-transform"
                                                 >
                                             @else
@@ -218,7 +379,6 @@
                                                 <a href="{{ route('product.show', $cartItem->product->id) }}" class="text-sm sm:text-base font-semibold text-text-main line-clamp-2 hover:text-primary transition-colors leading-snug">
                                                     {{ $cartItem->product->name }}
                                                 </a>
-
                                                 @if(!empty($initialAlpineData[$alpineIndex]['variant']))
                                                     <div class="inline-flex items-center gap-1 mt-1.5 px-2.5 py-1 rounded-md bg-surface-subtle text-xs text-text-muted font-medium border border-border-subtle">
                                                         <span>{{ $initialAlpineData[$alpineIndex]['variant'] }}</span>
@@ -228,7 +388,7 @@
 
                                             <div class="mt-4 flex flex-wrap items-end justify-between gap-3">
                                                 <div class="flex items-baseline gap-2 font-sans">
-                                                    <span 
+                                                    <span
                                                         class="text-base sm:text-lg font-semibold tracking-tight"
                                                         :class="items[{{ $alpineIndex }}].discountPercent > 0 ? 'text-price' : 'text-text-main'"
                                                     >
@@ -247,27 +407,38 @@
                                                     </template>
                                                 </div>
 
-                                                <div class="flex items-center gap-4">
-                                                    <div class="flex items-center border border-border-subtle rounded-lg bg-surface h-8 overflow-hidden w-24">
-                                                        <button 
-                                                            type="button" 
+                                                <div class="flex items-center gap-3">
+                                                    <span class="text-[11px] text-text-muted hidden sm:inline"
+                                                          x-text="'Stock: ' + items[{{ $alpineIndex }}].maxStock"></span>
+
+                                                    <div class="flex items-center border border-border-subtle focus-within:border-primary rounded-lg bg-surface h-8 overflow-hidden w-28 shadow-2xs"
+                                                         :class="{'opacity-70': items[{{ $alpineIndex }}].isSyncing}">
+                                                        <button
+                                                            type="button"
                                                             @click="decrement({{ $alpineIndex }})"
-                                                            :disabled="items[{{ $alpineIndex }}].isSyncing"
-                                                            class="w-7 h-full flex items-center justify-center text-text-main hover:bg-surface-subtle border-r border-border-subtle transition-colors cursor-pointer"
+                                                            :disabled="items[{{ $alpineIndex }}].quantity <= 1"
+                                                            :class="{'opacity-40 cursor-not-allowed': items[{{ $alpineIndex }}].quantity <= 1}"
+                                                            class="w-8 h-full flex items-center justify-center text-text-main hover:text-primary hover:bg-surface-subtle border-r border-border-subtle transition-colors cursor-pointer shrink-0"
                                                         >
                                                             <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M20 12H4" /></svg>
                                                         </button>
-                                                        <input 
-                                                            type="number" 
-                                                            readonly 
-                                                            x-model="items[{{ $alpineIndex }}].quantity" 
-                                                            class="w-full text-center text-xs font-bold text-text-main outline-none bg-transparent select-none p-0 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+
+                                                        <input
+                                                            type="number"
+                                                            min="1"
+                                                            :max="items[{{ $alpineIndex }}].maxStock"
+                                                            :value="items[{{ $alpineIndex }}].quantity"
+                                                            @input="onQuantityInput({{ $alpineIndex }}, $event)"
+                                                            @change="onQuantityBlur({{ $alpineIndex }}, $event)"
+                                                            class="w-full h-full text-center text-xs font-bold text-text-main outline-none bg-transparent p-0 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                                                         >
-                                                        <button 
-                                                            type="button" 
+
+                                                        <button
+                                                            type="button"
                                                             @click="increment({{ $alpineIndex }})"
-                                                            :disabled="items[{{ $alpineIndex }}].isSyncing"
-                                                            class="w-7 h-full flex items-center justify-center text-text-main hover:bg-surface-subtle border-l border-border-subtle transition-colors cursor-pointer"
+                                                            :disabled="items[{{ $alpineIndex }}].quantity >= items[{{ $alpineIndex }}].maxStock"
+                                                            :class="{'opacity-40 cursor-not-allowed': items[{{ $alpineIndex }}].quantity >= items[{{ $alpineIndex }}].maxStock}"
+                                                            class="w-8 h-full flex items-center justify-center text-text-main hover:text-primary hover:bg-surface-subtle border-l border-border-subtle transition-colors cursor-pointer shrink-0"
                                                         >
                                                             <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" /></svg>
                                                         </button>
@@ -292,10 +463,10 @@
                     @endforeach
                 </div>
 
-                <div class="lg:col-span-4" 
+                <div class="lg:col-span-4"
                      x-data="{ mobileSummaryOpen: false }"
                      @resize.window.debounce.100ms="if (window.innerWidth >= 1024) mobileSummaryOpen = false">
-                    
+
                     <div class="hidden lg:block bg-surface rounded-2xl border border-border-subtle p-6 shadow-xs sticky top-24 select-none space-y-6">
                         <div>
                             <h3 class="text-xl font-serif font-bold text-primary-dark">Order Summary</h3>
@@ -306,7 +477,8 @@
                             <div class="text-xs font-bold text-text-muted uppercase tracking-wider mb-2.5">
                                 Selected Items (<span x-text="selectedCount"></span>)
                             </div>
-                            <div class="flex items-center gap-2 overflow-x-auto pt-2.5 pb-2 pr-2 min-h-[56px] [scrollbar-width:thin] [&::-webkit-scrollbar]:h-1.5 [&::-webkit-scrollbar-button]:hidden [&::-webkit-scrollbar-button]:w-0 [&::-webkit-scrollbar-button]:h-0 [&::-webkit-scrollbar-button]:[display:none]">
+
+                            <div class="flex items-center gap-2 overflow-x-auto pt-2.5 pb-2 pr-2 min-h-[56px] [scrollbar-width:thin] [&::-webkit-scrollbar]:h-1.5">
                                 <template x-for="item in selectedItems" :key="item.id">
                                     <div class="relative w-12 h-12 rounded-xl bg-surface-subtle border border-border-subtle shrink-0 flex items-center justify-center p-1 group">
                                         <template x-if="item.image">
@@ -317,7 +489,7 @@
                                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
                                             </svg>
                                         </template>
-                                        <button 
+                                        <button
                                             type="button"
                                             @click.stop="item.selected = false"
                                             title="Remove from selection"
@@ -352,50 +524,26 @@
 
                             <div class="flex items-center justify-between pt-3 border-t border-border-subtle text-base font-bold text-text-main">
                                 <span>Estimated Price:</span>
-                                <span 
+                                <span
                                     class="text-2xl font-extrabold font-serif"
                                     :class="savingsTotal > 0 ? 'text-price' : 'text-text-main'"
                                 >
-                                    ₱<span 
-                                        x-data="{
-                                            displayValue: estimatedTotal,
-                                            animate(target) {
-                                                let start = this.displayValue;
-                                                let end = target;
-                                                let duration = 400;
-                                                let startTime = null;
-                                                let step = (timestamp) => {
-                                                    if (!startTime) startTime = timestamp;
-                                                    let progress = Math.min((timestamp - startTime) / duration, 1);
-                                                    let ease = 1 - Math.pow(1 - progress, 3);
-                                                    this.displayValue = start + (end - start) * ease;
-                                                    if (progress < 1) {
-                                                        window.requestAnimationFrame(step);
-                                                    } else {
-                                                        this.displayValue = end;
-                                                    }
-                                                };
-                                                window.requestAnimationFrame(step);
-                                            }
-                                        }"
-                                        x-init="$watch('estimatedTotal', value => animate(value))"
-                                        x-text="displayValue.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})"
-                                    ></span>
+                                    ₱<span x-text="estimatedTotal.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})"></span>
                                 </span>
                             </div>
                         </div>
 
-                       <div class="pt-0">
+                        <div class="pt-0">
                             <form action="{{ route('checkout.index') }}" method="GET">
                                 <input type="hidden" name="mode" value="cart">
                                 <template x-for="item in selectedItems" :key="'desk_' + item.id">
                                     <input type="hidden" name="cart_ids[]" :value="item.id">
                                 </template>
-                                <button 
+                                <button
                                     type="submit"
                                     :disabled="selectedCount === 0"
-                                    :class="selectedCount === 0 
-                                        ? 'bg-surface-subtle text-text-muted cursor-not-allowed border border-border-subtle' 
+                                    :class="selectedCount === 0
+                                        ? 'bg-surface-subtle text-text-muted cursor-not-allowed border border-border-subtle'
                                         : 'bg-text-main hover:bg-dark-grey text-surface cursor-pointer shadow-xs active:scale-[0.99]'"
                                     class="w-full py-3.5 px-6 font-bold text-sm rounded-xl transition-all flex items-center justify-center gap-2"
                                 >
@@ -409,43 +557,9 @@
                         </div>
                     </div>
 
-                    <div class="lg:hidden fixed inset-x-0 bottom-0 z-40 bg-surface border-t border-border-subtle px-4 py-2 sm:px-5 sm:py-2.5 shadow-[0_-4px_25px_rgba(0,0,0,0.12)] select-none">                        
+                    <div class="lg:hidden fixed inset-x-0 bottom-0 z-40 bg-surface border-t border-border-subtle px-4 py-2 sm:px-5 sm:py-2.5 shadow-[0_-4px_25px_rgba(0,0,0,0.12)] select-none">
                         <div x-show="mobileSummaryOpen" x-collapse x-cloak class="mb-3">
                             <div class="space-y-4 pb-3 border-b border-border-subtle/70">
-                                
-                                <div>
-                                    <div class="text-xs font-bold text-text-muted uppercase tracking-wider mb-2">
-                                        Selected Items (<span x-text="selectedCount"></span>)
-                                    </div>
-                                    <div class="flex items-center gap-2 overflow-x-auto pt-2.5 pb-1 pr-2 min-h-[52px] [scrollbar-width:thin] [&::-webkit-scrollbar]:h-1.5 [&::-webkit-scrollbar-button]:hidden [&::-webkit-scrollbar-button]:w-0 [&::-webkit-scrollbar-button]:h-0 [&::-webkit-scrollbar-button]:[display:none]">
-                                        <template x-for="item in selectedItems" :key="item.id">
-                                            <div class="relative w-11 h-11 rounded-xl bg-surface-subtle border border-border-subtle shrink-0 flex items-center justify-center p-1 group">
-                                                <template x-if="item.image">
-                                                    <img :src="item.image" :alt="item.title" class="w-full h-full object-contain rounded-lg">
-                                                </template>
-                                                <template x-if="!item.image">
-                                                    <svg class="w-4 h-4 text-text-muted/40" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                                                </svg>
-                                                </template>
-                                                <button 
-                                                    type="button"
-                                                    @click.stop="item.selected = false"
-                                                    title="Remove from selection"
-                                                    class="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-text-main hover:bg-price text-surface flex items-center justify-center transition-colors shadow-xs cursor-pointer z-10"
-                                                >
-                                                    <svg class="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3">
-                                                        <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
-                                                    </svg>
-                                                </button>
-                                            </div>
-                                        </template>
-                                        <template x-if="selectedCount === 0">
-                                            <span class="text-xs text-text-muted italic">No items selected</span>
-                                        </template>
-                                    </div>
-                                </div>
-
                                 <div class="space-y-1.5 text-xs sm:text-sm">
                                     <div class="flex items-center justify-between text-text-muted">
                                         <span>Retail Price:</span>
@@ -453,7 +567,6 @@
                                             ₱<span x-text="retailTotal.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})"></span>
                                         </span>
                                     </div>
-
                                     <div class="flex items-center justify-between text-text-muted">
                                         <span>Promotions / Savings:</span>
                                         <span class="font-bold text-price">
@@ -461,7 +574,6 @@
                                         </span>
                                     </div>
                                 </div>
-
                             </div>
                         </div>
 
@@ -469,56 +581,31 @@
                             <div>
                                 <div class="flex items-center gap-1.5 sm:gap-2">
                                     <span class="text-xs font-semibold text-text-muted">Total:</span>
-                                    <span 
+                                    <span
                                         class="text-lg sm:text-xl font-extrabold font-serif"
                                         :class="savingsTotal > 0 ? 'text-price' : 'text-text-main'"
                                     >
-                                        ₱<span 
-                                            x-data="{
-                                                displayValue: estimatedTotal,
-                                                animate(target) {
-                                                    let start = this.displayValue;
-                                                    let end = target;
-                                                    let duration = 400;
-                                                    let startTime = null;
-                                                    let step = (timestamp) => {
-                                                        if (!startTime) startTime = timestamp;
-                                                        let progress = Math.min((timestamp - startTime) / duration, 1);
-                                                        let ease = 1 - Math.pow(1 - progress, 3);
-                                                        this.displayValue = start + (end - start) * ease;
-                                                        if (progress < 1) {
-                                                            window.requestAnimationFrame(step);
-                                                        } else {
-                                                            this.displayValue = end;
-                                                        }
-                                                    };
-                                                    window.requestAnimationFrame(step);
-                                                }
-                                            }"
-                                            x-init="$watch('estimatedTotal', value => animate(value))"
-                                            x-text="displayValue.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})"
-                                        ></span>
+                                        ₱<span x-text="estimatedTotal.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})"></span>
                                     </span>
 
-                                    <button 
-                                        type="button" 
+                                    <button
+                                        type="button"
                                         @click="mobileSummaryOpen = !mobileSummaryOpen"
                                         class="p-1 text-text-muted hover:text-primary transition-colors cursor-pointer rounded-full hover:bg-surface-subtle"
                                         aria-label="Toggle Summary Details"
                                     >
-                                        <svg 
+                                        <svg
                                             class="w-4 h-4 sm:w-5 sm:h-5 transition-transform duration-300"
-                                            :class="mobileSummaryOpen ? 'rotate-180' : ''" 
-                                            fill="none" 
-                                            viewBox="0 0 24 24" 
-                                            stroke="currentColor" 
+                                            :class="mobileSummaryOpen ? 'rotate-180' : ''"
+                                            fill="none"
+                                            viewBox="0 0 24 24"
+                                            stroke="currentColor"
                                             stroke-width="2.5"
                                         >
                                             <path stroke-linecap="round" stroke-linejoin="round" d="M5 15l7-7 7 7" />
                                         </svg>
                                     </button>
                                 </div>
-
                                 <template x-if="savingsTotal > 0">
                                     <span class="text-[11px] sm:text-xs text-price font-bold block leading-tight mt-0.5">
                                         Saved: ₱<span x-text="savingsTotal.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})"></span>
@@ -532,11 +619,11 @@
                                     <template x-for="item in selectedItems" :key="'mob_' + item.id">
                                         <input type="hidden" name="cart_ids[]" :value="item.id">
                                     </template>
-                                    <button 
+                                    <button
                                         type="submit"
                                         :disabled="selectedCount === 0"
-                                        :class="selectedCount === 0 
-                                            ? 'bg-surface-subtle text-text-muted cursor-not-allowed border border-border-subtle' 
+                                        :class="selectedCount === 0
+                                            ? 'bg-surface-subtle text-text-muted cursor-not-allowed border border-border-subtle'
                                             : 'bg-text-main hover:bg-dark-grey text-surface cursor-pointer shadow-xs active:scale-[0.98]'"
                                         class="py-2.5 px-6 font-bold text-xs sm:text-sm rounded-xl transition-all flex items-center justify-center gap-1.5"
                                     >
@@ -545,15 +632,11 @@
                                     </button>
                                 </form>
                             </div>
-
                         </div>
-
                     </div>
                 </div>
-
             </div>
         @endif
-
     </div>
 </div>
 @endsection

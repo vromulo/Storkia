@@ -17,6 +17,15 @@
         'review'     => (clone $baseOrderQuery)->whereIn('status', ['delivered'])->count(),
         'returns'    => (clone $baseOrderQuery)->whereIn('status', ['disputed', 'rejected', 'cancelled', 'returned_to_seller'])->count(),
     ];
+
+    $claimedCouponsCount = \Illuminate\Support\Facades\Schema::hasTable('buyer_voucher_claims')
+        ? \App\Models\BuyerVoucherClaim::where('buyer_id', $user->id)
+            ->whereHas('voucher', fn ($q) => $q->where('status', 'active')->where('ends_at', '>=', now()))
+            ->count()
+        : 0;
+
+    $rewardWallet = app(\App\Services\BuyerRewardService::class)->getOrCreateWallet((int) $user->id);
+    $buyerCoinsBalance = (int) ($rewardWallet->coins_balance ?? 0);
 @endphp
 
 <div x-data="{ 
@@ -74,7 +83,7 @@
             <a href="{{ route('user.coupons') }}" class="py-2 px-1 rounded-xl hover:bg-surface-subtle transition-colors group flex flex-col items-center">
                 <div class="h-8 flex items-center justify-center mb-1.5">
                     <span class="text-lg sm:text-xl font-bold text-text-main group-hover:text-primary transition-colors font-sans leading-none">
-                        4
+                        {{ $claimedCouponsCount }}
                     </span>
                 </div>
                 <span class="text-[11px] sm:text-xs font-normal text-text-main group-hover:text-primary transition-colors truncate w-full">
@@ -83,13 +92,16 @@
             </a>
 
             <a href="{{ route('user.points') }}" class="py-2 px-1 rounded-xl hover:bg-surface-subtle transition-colors group flex flex-col items-center">
-                <div class="h-8 flex items-center justify-center mb-1.5">
-                    <div class="w-6 h-6 rounded-full border-2 border-text-main group-hover:border-primary flex items-center justify-center font-bold text-xs text-text-main group-hover:text-primary transition-colors leading-none">
+                <div class="h-8 flex items-center justify-center gap-1 mb-1.5">
+                    <div class="w-5 h-5 rounded-full border-2 border-primary flex items-center justify-center font-bold text-[10px] text-primary transition-colors leading-none">
                         S
                     </div>
+                    <span class="text-base sm:text-lg font-bold text-text-main group-hover:text-primary transition-colors leading-none">
+                        {{ number_format($buyerCoinsBalance) }}
+                    </span>
                 </div>
                 <span class="text-[11px] sm:text-xs font-normal text-text-main group-hover:text-primary transition-colors truncate w-full">
-                    Points
+                    Points / Coins
                 </span>
             </a>
 
@@ -142,7 +154,6 @@
             </div>
             
             <div class="grid grid-cols-5 gap-1 sm:gap-2 text-center">
-                
                 <a href="{{ route('user.orders', ['status' => 'unpaid']) }}" class="py-2 px-1 rounded-xl hover:bg-surface-subtle transition-colors group flex flex-col items-center relative">
                     <div class="w-8 h-8 flex items-center justify-center text-text-main group-hover:text-primary transition-colors mb-1.5 relative">
                         <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
@@ -333,12 +344,12 @@
                 <div class="mt-1 space-y-0.5">
                     <a href="{{ route('user.coupons') }}" 
                        class="flex items-center justify-between px-3 py-2.5 rounded-xl font-medium text-text-main hover:bg-surface-subtle transition-colors">
-                        <span>My Coupons</span>
+                        <span>My Coupons ({{ $claimedCouponsCount }})</span>
                         <svg class="w-3.5 h-3.5 text-text-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
                     </a>
                     <a href="{{ route('user.points') }}" 
                        class="flex items-center justify-between px-3 py-2.5 rounded-xl font-medium text-text-main hover:bg-surface-subtle transition-colors">
-                        <span>My Points / Coins</span>
+                        <span>My Points / Coins ({{ number_format($buyerCoinsBalance) }})</span>
                         <svg class="w-3.5 h-3.5 text-text-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
                     </a>
                 </div>

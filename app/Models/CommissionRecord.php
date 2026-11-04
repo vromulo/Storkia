@@ -52,6 +52,16 @@ class CommissionRecord extends Model
         ];
     }
 
+    public function getSellerNetAmountAttribute(): float
+    {
+        return round((float) ($this->attributes['seller_net_earning'] ?? $this->attributes['seller_net_amount'] ?? 0), 2);
+    }
+
+    public function getLogisticsOperationalAmountAttribute(): float
+    {
+        return round((float) ($this->attributes['logistics_operational_revenue'] ?? $this->attributes['logistics_operational_amount'] ?? 0), 2);
+    }
+
     public function sellerOrder(): BelongsTo
     {
         return $this->belongsTo(SellerOrder::class, 'seller_order_id');

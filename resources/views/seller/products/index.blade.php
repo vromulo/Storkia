@@ -16,6 +16,9 @@
                 discountPercent: Number(data.discountPercent || 0),
                 totalStockCount: Number(data.totalStock || 0),
                 defaultImage: data.defaultImage || '',
+                galleryImages: Array.isArray(data.galleryImages) ? data.galleryImages : [],
+                activeGalleryIndex: 0,
+                isViewingVariantImage: false,
                 menuOpen: false,
                 viewModal: false,
                 editModal: false,
@@ -24,6 +27,21 @@
                 activeImage: data.defaultImage || '',
                 selectedMain: null,
                 selectedSub: null,
+                selectGalleryPic(idx, url) {
+                    this.activeGalleryIndex = idx;
+                    this.activeImage = url;
+                    this.isViewingVariantImage = false;
+                },
+                selectVariantPic(url) {
+                    if (!url) return;
+                    this.activeImage = url;
+                    this.isViewingVariantImage = true;
+                },
+                resetGalleryPic() {
+                    this.activeGalleryIndex = 0;
+                    this.activeImage = this.defaultImage;
+                    this.isViewingVariantImage = false;
+                },
                 get editDiscountedPrice() {
                     return (this.basePrice - (this.basePrice * (this.discountPercent / 100))).toFixed(2);
                 }
@@ -64,9 +82,18 @@
                 initialNewSubs[String(k)] = [];
             });
 
+            let initialPictures = (config && Array.isArray(config.existingPictures))
+                ? config.existingPictures.slice(0, 10)
+                : [];
+
             return {
                 confirmModal: { open: false, message: '', onConfirm: () => {} },
                 alertModal: { open: false, message: '' },
+                existingPictures: initialPictures,
+                newPictureFiles: [],
+                newPicturePreviews: [],
+                pictureError: '',
+                maxMainPictures: 10,
                 existingVariants: normalizedExisting,
                 newVariants: [],
                 newExistingSubs: initialNewSubs,
@@ -76,6 +103,90 @@
                 isFormValid: true,
                 touched: {},
                 fieldErrors: {},
+
+                get totalMainPicturesCount() {
+                    return this.existingPictures.length + this.newPictureFiles.length;
+                },
+
+                promoteExistingToCover(idx) {
+                    if (idx <= 0 || idx >= this.existingPictures.length) return;
+                    const [pic] = this.existingPictures.splice(idx, 1);
+                    this.existingPictures.unshift(pic);
+                },
+
+                moveExistingPicture(fromIdx, toIdx) {
+                    if (
+                        fromIdx === toIdx ||
+                        fromIdx < 0 ||
+                        toIdx < 0 ||
+                        fromIdx >= this.existingPictures.length ||
+                        toIdx >= this.existingPictures.length
+                    ) {
+                        return;
+                    }
+                    const [pic] = this.existingPictures.splice(fromIdx, 1);
+                    this.existingPictures.splice(toIdx, 0, pic);
+                },
+
+                removeExistingPicture(idx) {
+                    this.pictureError = '';
+                    if (this.totalMainPicturesCount <= 1) {
+                        this.pictureError = 'A product must keep at least 1 main picture (maximum 10). Upload another picture first before removing this one.';
+                        return;
+                    }
+                    this.existingPictures.splice(idx, 1);
+                },
+
+                handleEditNewPictures(event) {
+                    this.pictureError = '';
+                    const incoming = Array.from(event.target.files || []);
+                    if (!incoming.length) return;
+
+                    const allowedTypes = ['image/jpeg', 'image/png', 'image/jpg', 'image/webp'];
+                    const maxSize = 5 * 1024 * 1024;
+
+                    for (const file of incoming) {
+                        if (this.totalMainPicturesCount >= this.maxMainPictures) {
+                            this.pictureError = 'Maximum of 10 main product pictures reached.';
+                            break;
+                        }
+                        if (!allowedTypes.includes(file.type)) {
+                            this.pictureError = `"${file.name}" was skipped. Only JPG, PNG, and WEBP images are allowed.`;
+                            continue;
+                        }
+                        if (file.size > maxSize) {
+                            this.pictureError = `"${file.name}" exceeds the 5MB limit.`;
+                            continue;
+                        }
+                        this.newPictureFiles.push(file);
+                        this.newPicturePreviews.push(URL.createObjectURL(file));
+                    }
+
+                    this.syncEditPicturesInput();
+                },
+
+                removeEditNewPicture(idx) {
+                    this.pictureError = '';
+                    if (this.totalMainPicturesCount <= 1) {
+                        this.pictureError = 'A product must have at least 1 main picture.';
+                        return;
+                    }
+                    const prev = this.newPicturePreviews[idx];
+                    if (prev && prev.startsWith('blob:')) {
+                        URL.revokeObjectURL(prev);
+                    }
+                    this.newPictureFiles.splice(idx, 1);
+                    this.newPicturePreviews.splice(idx, 1);
+                    this.syncEditPicturesInput();
+                },
+
+                syncEditPicturesInput() {
+                    const input = this.$refs.editMainPicturesInput;
+                    if (!input || typeof DataTransfer === 'undefined') return;
+                    const dt = new DataTransfer();
+                    this.newPictureFiles.forEach(f => dt.items.add(f));
+                    input.files = dt.files;
+                },
 
                 initForm(formElement) {
                     if(formElement) {
@@ -269,6 +380,7 @@
                     return count > 1;
                 },
                 hasValidationErrors() {
+                    if (this.totalMainPicturesCount < 1 || this.totalMainPicturesCount > 10) return true;
                     if (this.duplicateVariants.length > 0) return true;
                     for (let vKey of Object.keys(this.existingVariants)) {
                         let v = this.existingVariants[vKey];
@@ -349,13 +461,11 @@
                 removeCategoryAction: ''
              }"
              class="max-w-7xl mx-auto">
-
             <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
                 <div>
                     <h1 class="text-3xl font-bold text-primary-dark">Product Categories</h1>
                     <p class="text-sm text-text-muted mt-1">Select a category below to view and manage your products or add another category to expand your catalog.</p>
                 </div>
-
                 @if(count($availableCategoriesToAdd) > 0)
                     <button type="button" @click="addCategoryModal = true; selectedNewCategory = ''; dropdownOpen = false"
                             class="px-5 py-2.5 bg-primary text-white rounded-xl shadow-md hover:bg-primary-dark transition-colors font-bold text-sm flex items-center self-start sm:self-auto cursor-pointer">
@@ -385,11 +495,9 @@
                                 Primary Category
                             </span>
                         </div>
-
                         <h2 class="text-xl font-extrabold text-primary-dark group-hover:text-primary transition-colors mb-2">
                             {{ $primaryCategory }}
                         </h2>
-
                         <div class="flex flex-wrap gap-1.5 mb-6">
                             @foreach(array_slice($primarySubs, 0, 3) as $subItem)
                                 <span class="text-[11px] px-2.5 py-0.5 bg-surface rounded-lg text-text-muted border border-border-subtle font-medium">
@@ -403,7 +511,6 @@
                             @endif
                         </div>
                     </div>
-
                     <div class="pt-4 border-t border-border-subtle flex items-center justify-between">
                         <span class="text-xs font-bold px-3 py-1 rounded-full {{ $primaryCount > 0 ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-text-muted' }}">
                             {{ $primaryCount }} {{ Str::plural('Product', $primaryCount) }}
@@ -446,11 +553,9 @@
                                     @endif
                                 </div>
                             </div>
-
                             <h2 class="text-xl font-extrabold text-primary-dark group-hover:text-primary transition-colors mb-2">
                                 {{ $catName }}
                             </h2>
-
                             <div class="flex flex-wrap gap-1.5 mb-6">
                                 @foreach(array_slice($catSubs, 0, 3) as $subItem)
                                     <span class="text-[11px] px-2.5 py-0.5 bg-surface rounded-lg text-text-muted border border-border-subtle font-medium">
@@ -464,7 +569,6 @@
                                 @endif
                             </div>
                         </div>
-
                         <div class="pt-4 border-t border-border-subtle flex items-center justify-between">
                             <span class="text-xs font-bold px-3 py-1 rounded-full {{ $catCount > 0 ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-text-muted' }}">
                                 {{ $catCount }} {{ Str::plural('Product', $catCount) }}
@@ -488,17 +592,14 @@
                                 <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
                             </button>
                         </div>
-
                         <p class="text-xs text-text-muted mb-6">
                             Choose an additional category to list products under. Categories already in your profile are excluded from the choices.
                         </p>
-
                         <form action="{{ route('seller.products.categories.store') }}" method="POST" class="space-y-6">
                             @csrf
                             <div class="relative" @click.away="dropdownOpen = false">
                                 <label class="block text-sm font-bold text-gray-700 mb-1.5">Select Main Category <span class="text-red-500">*</span></label>
                                 <input type="hidden" name="category" :value="selectedNewCategory" required>
-
                                 <button type="button" @click="dropdownOpen = !dropdownOpen"
                                         class="w-full p-3.5 rounded-2xl border border-border-subtle focus:border-primary outline-none bg-surface text-sm flex justify-between items-center transition-colors shadow-xs cursor-pointer hover:border-primary/50">
                                     <span x-text="selectedNewCategory || 'Choose a category...'" :class="selectedNewCategory ? 'text-gray-900 font-bold' : 'text-gray-400'"></span>
@@ -506,7 +607,6 @@
                                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
                                     </svg>
                                 </button>
-
                                 <div x-show="dropdownOpen" x-transition x-cloak
                                      class="absolute z-[220] w-full mt-2 bg-white border border-border-subtle rounded-2xl shadow-xl max-h-60 overflow-y-auto custom-scrollbar p-1.5 divide-y divide-gray-100">
                                     @foreach($availableCategoriesToAdd as $availCat)
@@ -521,7 +621,6 @@
                                     @endforeach
                                 </div>
                             </div>
-
                             <div class="flex justify-end gap-3 pt-2">
                                 <button type="button" @click="addCategoryModal = false" class="px-5 py-2.5 rounded-xl font-bold text-gray-600 hover:bg-gray-100 transition-colors text-sm cursor-pointer">
                                     Cancel
@@ -584,7 +683,6 @@
                         <p class="text-xs text-text-muted mt-1">Showing products created under {{ $selectedCategory }}.</p>
                     </div>
                 </div>
-
                 <div class="flex items-center gap-3 self-start sm:self-auto">
                     @if($selectedCategory !== $primaryCategory && $activeCategoryRecord && $products->total() === 0)
                         <form action="{{ route('seller.products.categories.destroy', $activeCategoryRecord->id) }}" method="POST" class="m-0">
@@ -598,7 +696,6 @@
                             </button>
                         </form>
                     @endif
-
                     <a href="{{ route('seller.products.create', ['category' => $selectedCategory]) }}"
                        class="px-5 py-2.5 bg-primary text-white rounded-xl shadow-md hover:bg-primary-dark transition-colors font-bold text-sm flex items-center cursor-pointer">
                         <svg class="w-5 h-5 mr-2 pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6" /></svg>
@@ -611,7 +708,7 @@
                 <table class="w-full text-left border-collapse relative">
                     <thead>
                         <tr class="bg-brand-light/30 text-text-muted text-sm border-b border-border-subtle">
-                            <th class="p-4 font-bold w-16 rounded-tl-2xl">Image</th>
+                            <th class="p-4 font-bold w-16 rounded-tl-2xl">Cover</th>
                             <th class="p-4 font-bold">Product Name</th>
                             <th class="p-4 font-bold">Subcategory</th>
                             <th class="p-4 font-bold">Price</th>
@@ -705,9 +802,14 @@
                                     $totalStock = (int) ($product->stock_quantity ?? 0);
                                 }
 
-                                $firstPic = (!empty($product->pictures) && is_array($product->pictures)) ? asset('storage/' . $product->pictures[0]) : '';
+                                $mainPicsArray = (!empty($product->pictures) && is_array($product->pictures))
+                                    ? array_slice(array_values(array_filter($product->pictures)), 0, 10)
+                                    : [];
+                                $mainPicUrls = array_map(fn ($p) => asset('storage/' . $p), $mainPicsArray);
+                                $firstPic = $mainPicUrls[0] ?? '';
+
                                 $hasPendingAdditions = $isApprovedProduct && ($product->has_pending_variants || $pendingVariantCount > 0 || $pendingSubVariantCount > 0);
-                                
+
                                 $hasSubvariantsArchitecture = !empty($productVariants['sub_title']) || ($priceDependency === 'sub');
                                 if (!$hasSubvariantsArchitecture && isset($productVariants['items']) && is_array($productVariants['items'])) {
                                     foreach ($productVariants['items'] as $it) {
@@ -719,27 +821,37 @@
                                 }
 
                                 $editManagerConfig = [
+                                    'existingPictures' => $mainPicsArray,
                                     'existingVariants' => $existingVariantsData,
                                     'hasSubvariants'   => $hasSubvariantsArchitecture,
                                     'priceDependency'  => $priceDependency,
                                 ];
-                                
+
                                 $existingSpecs = $product->specifications->map(function($s) {
                                     return ['id' => $s->id, 'title' => $s->title, 'desc' => $s->description];
                                 })->values()->toJson();
                             @endphp
+
                             <tr x-data="storkiaProductTableRow({
                                     basePrice: {{ $product->price ?? 0 }},
                                     discountPercent: {{ $product->discount ?? 0 }},
                                     totalStock: {{ $totalStock }},
-                                    defaultImage: '{{ $firstPic }}'
+                                    defaultImage: '{{ $firstPic }}',
+                                    galleryImages: @js($mainPicUrls)
                                 })"
                                 @click="viewModal = true"
                                 class="border-b border-border-subtle hover:bg-brand-light/10 transition-colors text-sm cursor-pointer relative">
-                                
+
                                 <td class="p-4">
                                     @if($firstPic)
-                                        <img src="{{ $firstPic }}" alt="{{ $product->name }}" class="w-12 h-12 rounded-lg object-cover border border-border-subtle shadow-sm cursor-pointer">
+                                        <div class="relative w-12 h-12">
+                                            <img src="{{ $firstPic }}" alt="{{ $product->name }}" class="w-12 h-12 rounded-lg object-cover border border-border-subtle shadow-sm cursor-pointer">
+                                            @if(count($mainPicsArray) > 1)
+                                                <span class="absolute -bottom-1 -right-1 px-1.5 py-0.2 rounded-full bg-primary text-white text-[9px] font-bold">
+                                                    {{ count($mainPicsArray) }}
+                                                </span>
+                                            @endif
+                                        </div>
                                     @else
                                         <div class="w-12 h-12 rounded-lg bg-gray-100 border border-border-subtle flex items-center justify-center text-gray-400">
                                             <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
@@ -789,11 +901,13 @@
                                         @endif
                                     </div>
                                 </td>
+
                                 <td class="p-4 text-right">
                                     <div class="relative inline-block text-left" @click.stop @click.away="menuOpen = false">
                                         <button type="button" @click.stop="menuOpen = !menuOpen" class="p-2 text-text-muted hover:text-primary hover:bg-brand-light/30 rounded-full transition-colors focus:outline-none cursor-pointer">
                                             <svg class="w-5 h-5 pointer-events-none" fill="currentColor" viewBox="0 0 20 20"><path d="M10 6a2 2 0 110-4 2 2 0 010 4zM10 12a2 2 0 110-4 2 2 0 010 4zM10 18a2 2 0 110-4 2 2 0 010 4z"/></svg>
                                         </button>
+
                                         <div x-show="menuOpen" x-transition x-cloak class="absolute right-0 mt-2 w-40 bg-white rounded-xl shadow-xl border border-border-subtle z-[60] overflow-hidden">
                                             @if($approvalStatus === 'Pending')
                                                 <button type="button" disabled class="w-full text-left px-4 py-3 text-sm font-medium text-gray-400 cursor-not-allowed flex items-center" title="Cannot update while pending approval">
@@ -817,6 +931,7 @@
                                     </div>
                                 </td>
 
+                                <!-- Seller Product View Modal (Separates 1-10 Main Pictures from Variant Images) -->
                                 <template x-teleport="body">
                                     <div x-show="viewModal" x-cloak class="fixed inset-0 z-[120] flex items-center justify-center p-4 sm:p-8">
                                         <div @click="viewModal = false" class="absolute inset-0 bg-black/60 backdrop-blur-md transition-opacity cursor-pointer"></div>
@@ -824,23 +939,45 @@
                                             <button type="button" @click="viewModal = false" class="absolute top-4 right-4 z-20 p-2 bg-white/80 backdrop-blur border border-border-subtle text-text-muted hover:text-red-500 rounded-full hover:bg-red-50 transition-all shadow-sm cursor-pointer">
                                                 <svg class="w-6 h-6 pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
                                             </button>
+
                                             <div class="flex flex-col md:flex-row h-full overflow-y-auto custom-scrollbar bg-surface/30 relative z-10">
                                                 <div class="w-full md:w-1/2 p-6 md:p-8 border-b md:border-b-0 md:border-r border-border-subtle bg-white">
-                                                    <div class="aspect-square bg-white rounded-2xl border border-border-subtle overflow-hidden flex items-center justify-center p-4 shadow-inner mb-4">
+                                                    <div class="relative aspect-square bg-white rounded-2xl border border-border-subtle overflow-hidden flex items-center justify-center p-4 shadow-inner mb-4">
                                                         <template x-if="activeImage !== ''">
                                                             <img :src="activeImage" alt="Product" class="w-full h-full object-contain rounded-xl transition-all duration-300">
                                                         </template>
                                                         <template x-if="activeImage === ''">
                                                             <svg class="w-24 h-24 text-gray-200 pointer-events-none" fill="currentColor" viewBox="0 0 24 24"><path d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
                                                         </template>
+
+                                                        <div class="absolute bottom-3 left-3 z-10">
+                                                            <template x-if="isViewingVariantImage">
+                                                                <button type="button"
+                                                                        @click.stop="selectGalleryPic(activeGalleryIndex, galleryImages[activeGalleryIndex] || defaultImage)"
+                                                                        class="px-3 py-1 rounded-full bg-primary text-white text-[11px] font-bold shadow-md cursor-pointer">
+                                                                    Viewing Variant Photo (Click for Main Gallery)
+                                                                </button>
+                                                            </template>
+                                                            <template x-if="!isViewingVariantImage && galleryImages.length > 0">
+                                                                <span class="px-2.5 py-1 rounded-full bg-black/65 text-white text-[11px] font-bold pointer-events-none"
+                                                                      x-text="'Main Gallery ' + (activeGalleryIndex + 1) + ' / ' + galleryImages.length"></span>
+                                                            </template>
+                                                        </div>
                                                     </div>
-                                                    @if($product->pictures && is_array($product->pictures))
+
+                                                    @if(!empty($mainPicUrls))
                                                         <div class="flex gap-3 overflow-x-auto pb-2 custom-scrollbar">
-                                                            @foreach($product->pictures as $pic)
-                                                                <button type="button" @click.stop="activeImage = '{{ asset('storage/' . $pic) }}'"
-                                                                        :class="activeImage === '{{ asset('storage/' . $pic) }}' ? 'border-primary ring-2 ring-primary/20' : 'border-border-subtle hover:border-primary/50'"
-                                                                        class="w-20 h-20 flex-shrink-0 rounded-xl border-2 transition-all p-1 bg-white cursor-pointer">
-                                                                    <img src="{{ asset('storage/' . $pic) }}" class="w-full h-full object-cover rounded-lg pointer-events-none">
+                                                            @foreach($mainPicUrls as $picIdx => $picUrl)
+                                                                <button type="button"
+                                                                        @click.stop="selectGalleryPic({{ $picIdx }}, '{{ $picUrl }}')"
+                                                                        :class="(!isViewingVariantImage && activeGalleryIndex === {{ $picIdx }}) ? 'border-primary ring-2 ring-primary/20' : 'border-border-subtle hover:border-primary/50'"
+                                                                        class="relative w-20 h-20 flex-shrink-0 rounded-xl border-2 transition-all p-1 bg-white cursor-pointer overflow-hidden">
+                                                                    <img src="{{ $picUrl }}" class="w-full h-full object-cover rounded-lg pointer-events-none">
+                                                                    @if($picIdx === 0)
+                                                                        <span class="absolute bottom-0 inset-x-0 bg-primary/90 text-white text-[9px] font-extrabold uppercase text-center py-0.5 pointer-events-none">
+                                                                            Cover
+                                                                        </span>
+                                                                    @endif
                                                                 </button>
                                                             @endforeach
                                                         </div>
@@ -917,16 +1054,18 @@
                                                                             } else {
                                                                                 $itemStock = (int)($item['stock'] ?? 0);
                                                                             }
+                                                                            $itemVariantImg = (!empty($item['image'])) ? asset('storage/' . $item['image']) : '';
                                                                         @endphp
                                                                         <button type="button" @click.stop="
                                                                             if (selectedMain === '{{ $vIndex }}') {
                                                                                 selectedMain = null; selectedSub = null;
-                                                                                activePrice = basePrice; activeStock = totalStockCount; activeImage = defaultImage;
+                                                                                activePrice = basePrice; activeStock = totalStockCount;
+                                                                                resetGalleryPic();
                                                                             } else {
                                                                                 selectedMain = '{{ $vIndex }}'; selectedSub = null;
                                                                                 activePrice = {{ (float)($item['price'] ?? $product->price) }}; activeStock = {{ $itemStock }};
-                                                                                @if(isset($item['image']) && $item['image'])
-                                                                                    activeImage = '{{ asset('storage/' . $item['image']) }}';
+                                                                                @if($itemVariantImg !== '')
+                                                                                    selectVariantPic('{{ $itemVariantImg }}');
                                                                                 @endif
                                                                             }"
                                                                             :class="selectedMain === '{{ $vIndex }}' ? 'bg-primary text-white border-primary shadow-md' : 'bg-surface text-text-main border-border-subtle hover:border-primary hover:bg-brand-light/10'"
@@ -961,12 +1100,8 @@
                                                                                 <button type="button" @click.stop="
                                                                                     if (selectedSub === '{{ $sIndex }}') {
                                                                                         selectedSub = null; activePrice = {{ (float)($item['price'] ?? $product->price) }}; activeStock = {{ $totalStock }};
-                                                                                        activeImage = {{ (isset($item['image']) && $item['image']) ? '\'' . asset('storage/' . $item['image']) . '\'' : 'defaultImage' }};
                                                                                     } else {
                                                                                         selectedSub = '{{ $sIndex }}'; activePrice = {{ (float)($sub['price'] ?? ($item['price'] ?? $product->price)) }}; activeStock = {{ $subStock }};
-                                                                                        @if(isset($sub['image']) && $sub['image'])
-                                                                                            activeImage = '{{ asset('storage/' . $sub['image']) }}';
-                                                                                        @endif
                                                                                     }"
                                                                                     :class="selectedSub === '{{ $sIndex }}' ? 'bg-primary text-white border-primary shadow-md' : 'bg-surface text-text-main border-border-subtle hover:border-primary hover:bg-brand-light/10'"
                                                                                     class="px-4 py-2 border-2 rounded-xl text-sm font-bold transition-all cursor-pointer flex items-center gap-2">
@@ -1051,7 +1186,7 @@
                                                             </div>
                                                         </div>
                                                     @endif
-                                                    
+
                                                     @if($product->specifications && $product->specifications->count() > 0)
                                                         <div class="bg-white p-5 rounded-2xl border border-border-subtle shadow-sm mb-2">
                                                             <h3 class="font-bold text-text-muted text-xs uppercase tracking-wider mb-3">Specifications</h3>
@@ -1069,7 +1204,7 @@
                                                     <div class="bg-white p-5 rounded-2xl border border-border-subtle shadow-sm flex-1">
                                                         <h3 class="font-bold text-text-muted text-xs uppercase tracking-wider mb-3">Product Description</h3>
                                                         <p class="text-sm text-text-main leading-relaxed whitespace-pre-line">{{ $product->description ?: 'No description provided.' }}</p>
-                                                        
+
                                                         @if(!empty($product->additional_descriptions))
                                                             <div class="mt-4 pt-4 border-t border-border-subtle">
                                                                 <h3 class="font-bold text-text-muted text-xs uppercase tracking-wider mb-2">Additional Descriptions</h3>
@@ -1085,14 +1220,15 @@
                                     </div>
                                 </template>
 
+                                <!-- Seller Product Edit Modal (With 1-10 Main Pictures Reordering & Cover Manager) -->
                                 <template x-teleport="body">
                                     <div x-show="editModal" x-cloak class="fixed inset-0 z-[120] flex items-center justify-center p-4 sm:p-8"
                                          x-data="storkiaEditVariantManager(@js($editManagerConfig))">
-                                        
+
                                         <div @click.stop="editModal = false" class="absolute inset-0 bg-black/60 backdrop-blur-md transition-opacity cursor-pointer"></div>
-                                         
+
                                         <div class="bg-white rounded-3xl w-full max-w-4xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh] text-left relative z-10 pointer-events-auto">
-                                            
+
                                             <div x-show="confirmModal && confirmModal.open" x-cloak
                                                  :class="(confirmModal && confirmModal.open) ? 'pointer-events-auto z-[200]' : 'pointer-events-none hidden'"
                                                  class="absolute inset-0 flex items-center justify-center rounded-3xl overflow-hidden">
@@ -1137,7 +1273,7 @@
                                                     <svg class="w-6 h-6 pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
                                                 </button>
                                             </div>
-                                            
+
                                             <form action="{{ route('seller.products.update', $product->id) }}" method="POST" enctype="multipart/form-data"
                                                   x-ref="editForm"
                                                   x-init="$watch('editModal', val => { if(val) setTimeout(() => initForm($refs.editForm), 100) })"
@@ -1146,14 +1282,14 @@
                                                   @submit="if(hasValidationErrors() || !isFormValid) { $event.preventDefault(); }"
                                                   class="flex flex-col flex-1 overflow-hidden relative z-10">
                                                 @csrf @method('PUT')
-                                                
+
                                                 <div class="p-6 space-y-6 overflow-y-auto custom-scrollbar bg-surface/30 flex-1 relative z-10">
-                                                    
+
                                                     <div x-show="hasValidationErrors()" x-cloak class="p-4 bg-red-50 border-l-4 border-red-500 rounded-r-xl shadow-sm flex items-start gap-3">
                                                         <svg class="w-6 h-6 text-red-500 shrink-0 pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                                                         <div>
                                                             <h4 class="text-sm font-bold text-red-900 uppercase tracking-wider">Validation Error</h4>
-                                                            <p class="text-xs text-red-800 mt-1 font-medium italic">Please ensure all variant and subvariant names are filled and unique to proceed.</p>
+                                                            <p class="text-xs text-red-800 mt-1 font-medium italic">Please ensure 1 to 10 main pictures are present and all variant/subvariant names are filled and unique.</p>
                                                         </div>
                                                     </div>
 
@@ -1174,16 +1310,16 @@
                                                         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                                                             <div>
                                                                 <label class="block text-sm font-bold text-gray-700 mb-1">Product Name <span class="text-red-500">*</span></label>
-                                                                <input type="text" name="name" maxlength="100" value="{{ $product->name }}" {{ $isApprovedProduct ? 'readonly' : 'required' }} 
+                                                                <input type="text" name="name" maxlength="100" value="{{ $product->name }}" {{ $isApprovedProduct ? 'readonly' : 'required' }}
                                                                        :class="hasError('name') ? 'border-red-500 focus:border-red-500' : 'border-border-subtle focus:border-primary'"
                                                                        class="w-full p-3 rounded-xl border outline-none text-sm cursor-text {{ $isApprovedProduct ? 'bg-gray-100 text-gray-500 cursor-not-allowed' : '' }}">
                                                                 <span x-show="hasError('name')" x-cloak class="text-red-500 text-[10px] font-bold mt-1 block">Product Name is required.</span>
                                                             </div>
-                                                            
+
                                                             <div x-data="{ subDropdownOpen: false, selectedSub: '{{ addslashes($product->subcategory ?? '') }}' }" class="relative">
                                                                 <label class="block text-sm font-bold text-gray-700 mb-1">Subcategory ({{ $productCategoryName }}) <span class="text-red-500">*</span></label>
                                                                 <input type="hidden" name="subcategory" :value="selectedSub" required>
-                                                                
+
                                                                 <button type="button" {{ $isApprovedProduct ? 'disabled' : '' }}
                                                                         @click.stop="if(!{{ $isApprovedProduct ? 'true' : 'false' }}) { subDropdownOpen = !subDropdownOpen; touched['subcategory'] = true; }"
                                                                         @click.away="subDropdownOpen = false"
@@ -1195,7 +1331,7 @@
                                                                     @endif
                                                                 </button>
                                                                 <span x-show="hasError('subcategory')" x-cloak class="text-red-500 text-[10px] font-bold mt-1 block">Subcategory is required.</span>
-                                                                
+
                                                                 @if(!$isApprovedProduct)
                                                                     <div x-show="subDropdownOpen" x-cloak class="absolute z-[150] w-full mt-2 bg-white border border-border-subtle rounded-xl shadow-xl max-h-60 overflow-y-auto custom-scrollbar">
                                                                         @foreach($productSubcategories as $sub)
@@ -1210,28 +1346,101 @@
                                                             </div>
                                                         </div>
 
-                                                        <div>
-                                                            <label class="block text-sm font-bold text-gray-700 mb-2">Main Pictures</label>
-                                                            @if($isApprovedProduct)
-                                                                <div class="flex gap-3 overflow-x-auto custom-scrollbar bg-gray-50 p-3 rounded-xl border border-gray-200">
-                                                                    @if($product->pictures && is_array($product->pictures))
-                                                                        @foreach($product->pictures as $pic)
-                                                                            <img src="{{ asset('storage/' . $pic) }}" class="h-20 w-20 object-cover rounded-lg border border-gray-200 shadow-sm shrink-0 pointer-events-none">
-                                                                        @endforeach
-                                                                    @else
-                                                                        <span class="text-xs text-gray-500 italic pointer-events-none">No images available</span>
-                                                                    @endif
+                                                        <!-- 1 to 10 Main Pictures Manager (Slot #1 = Cover Photo) -->
+                                                        <div class="space-y-3">
+                                                            <div class="flex flex-wrap items-center justify-between gap-2">
+                                                                <div>
+                                                                    <label class="block text-sm font-bold text-gray-700">
+                                                                        Main Product Pictures (Min 1, Max 10 — 1st Image is Cover Photo)
+                                                                    </label>
+                                                                    <p class="text-xs text-text-muted">
+                                                                        Click <strong>Set Cover</strong> to promote any picture to slot #1. Variant images are managed separately below.
+                                                                    </p>
                                                                 </div>
-                                                            @else
-                                                                <input type="file" name="pictures[]" multiple accept="image/*" class="w-full p-2.5 rounded-xl border border-gray-200 bg-gray-50 text-sm cursor-pointer file:cursor-pointer file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-xs file:font-bold file:bg-primary/10 file:text-primary hover:file:bg-primary/20">
-                                                            @endif
+                                                                <span class="px-3 py-1 rounded-full text-xs font-extrabold border"
+                                                                      :class="totalMainPicturesCount >= 1 && totalMainPicturesCount <= 10 ? 'bg-primary/10 text-primary border-primary/20' : 'bg-red-100 text-red-700 border-red-200'"
+                                                                      x-text="totalMainPicturesCount + ' / 10 Main Pictures'"></span>
+                                                            </div>
+
+                                                            <template x-for="(picPath, pIdx) in existingPictures" :key="'hidden_' + pIdx + '_' + picPath">
+                                                                <input type="hidden" name="existing_pictures[]" :value="picPath">
+                                                            </template>
+
+                                                            <div class="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-5 gap-3 bg-gray-50 p-3.5 rounded-2xl border border-gray-200">
+                                                                <template x-for="(picPath, pIdx) in existingPictures" :key="picPath + '_' + pIdx">
+                                                                    <div :class="pIdx === 0 ? 'border-primary ring-2 ring-primary/20' : 'border-gray-200'"
+                                                                         class="relative rounded-xl border-2 bg-white overflow-hidden shadow-2xs flex flex-col">
+                                                                        <div class="relative aspect-square w-full overflow-hidden bg-surface-subtle">
+                                                                            <img :src="'/storage/' + picPath" class="w-full h-full object-cover pointer-events-none">
+                                                                            <span x-show="pIdx === 0" class="absolute top-1.5 left-1.5 px-2 py-0.5 rounded-full bg-primary text-white text-[9px] font-extrabold uppercase">
+                                                                                Cover (#1)
+                                                                            </span>
+                                                                            <span x-show="pIdx > 0" class="absolute top-1.5 left-1.5 px-1.5 py-0.5 rounded-full bg-black/65 text-white text-[9px] font-bold" x-text="'#' + (pIdx + 1)"></span>
+
+                                                                            @if(!$isApprovedProduct)
+                                                                                <button type="button"
+                                                                                        @click.stop="removeExistingPicture(pIdx)"
+                                                                                        class="absolute top-1.5 right-1.5 w-5 h-5 rounded-full bg-red-600 text-white text-xs font-bold flex items-center justify-center cursor-pointer">
+                                                                                    &times;
+                                                                                </button>
+                                                                            @endif
+                                                                        </div>
+                                                                        <div class="p-1.5 bg-white border-t border-gray-100 flex items-center justify-between text-[10px]">
+                                                                            <button type="button"
+                                                                                    x-show="pIdx > 0"
+                                                                                    @click.stop="promoteExistingToCover(pIdx)"
+                                                                                    class="px-1.5 py-0.5 rounded bg-primary/10 hover:bg-primary text-primary hover:text-white font-bold cursor-pointer">
+                                                                                Set Cover
+                                                                            </button>
+                                                                            <span x-show="pIdx === 0" class="text-primary font-extrabold px-1">Cover</span>
+                                                                            <div class="flex items-center gap-0.5 ml-auto">
+                                                                                <button type="button" :disabled="pIdx === 0" @click.stop="moveExistingPicture(pIdx, pIdx - 1)" class="px-1 rounded hover:bg-gray-100 disabled:opacity-30 cursor-pointer">&larr;</button>
+                                                                                <button type="button" :disabled="pIdx === existingPictures.length - 1" @click.stop="moveExistingPicture(pIdx, pIdx + 1)" class="px-1 rounded hover:bg-gray-100 disabled:opacity-30 cursor-pointer">&rarr;</button>
+                                                                            </div>
+                                                                        </div>
+                                                                    </div>
+                                                                </template>
+
+                                                                <template x-for="(newPrev, npIdx) in newPicturePreviews" :key="'new_' + npIdx">
+                                                                    <div class="relative rounded-xl border-2 border-emerald-400 bg-white overflow-hidden shadow-2xs flex flex-col">
+                                                                        <div class="relative aspect-square w-full overflow-hidden bg-surface-subtle">
+                                                                            <img :src="newPrev" class="w-full h-full object-cover pointer-events-none">
+                                                                            <span class="absolute top-1.5 left-1.5 px-2 py-0.5 rounded-full bg-emerald-600 text-white text-[9px] font-extrabold uppercase">
+                                                                                New
+                                                                            </span>
+                                                                            <button type="button"
+                                                                                    @click.stop="removeEditNewPicture(npIdx)"
+                                                                                    class="absolute top-1.5 right-1.5 w-5 h-5 rounded-full bg-red-600 text-white text-xs font-bold flex items-center justify-center cursor-pointer">
+                                                                                &times;
+                                                                            </button>
+                                                                        </div>
+                                                                        <div class="p-1.5 bg-emerald-50 text-emerald-800 text-[9px] font-bold text-center">
+                                                                            Queued Upload
+                                                                        </div>
+                                                                    </div>
+                                                                </template>
+                                                            </div>
+
+                                                            <div x-show="totalMainPicturesCount < 10">
+                                                                <input x-ref="editMainPicturesInput"
+                                                                       type="file"
+                                                                       name="pictures[]"
+                                                                       multiple
+                                                                       accept="image/jpeg,image/png,image/jpg,image/webp"
+                                                                       @change="handleEditNewPictures($event)"
+                                                                       class="w-full p-2.5 rounded-xl border border-gray-200 bg-gray-50 text-xs cursor-pointer file:cursor-pointer file:mr-4 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-bold file:bg-primary/10 file:text-primary hover:file:bg-primary/20">
+                                                            </div>
+
+                                                            <template x-if="pictureError">
+                                                                <p class="text-red-500 text-xs font-bold" x-text="pictureError"></p>
+                                                            </template>
                                                         </div>
 
                                                         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                                                             <div>
                                                                 <label class="block text-sm font-bold text-gray-700 mb-1">Set Discount (%)</label>
                                                                 <div class="relative">
-                                                                    <input type="number" step="0.01" min="0" max="100" name="discount" x-model="discountPercent"
+                                                                    <input type="number" step="0.01" min="0" max="99" name="discount" x-model="discountPercent"
                                                                            onkeypress="return (event.charCode >= 48 && event.charCode <= 57) || event.charCode === 46"
                                                                            :class="hasError('discount') ? 'border-red-500 focus:border-red-500' : 'border-border-subtle focus:border-primary'"
                                                                            class="w-full pr-8 p-3 rounded-xl border outline-none text-sm cursor-text">
@@ -1255,6 +1464,7 @@
                                                     @if($productVariants && isset($productVariants['items']))
                                                         <div class="bg-white p-6 rounded-2xl border border-gray-200 shadow-sm space-y-5 relative">
                                                             <h3 class="text-lg font-bold text-primary-dark">Edit Product Variants</h3>
+
                                                             <div class="space-y-4">
                                                                 @foreach($productVariants['items'] as $vIndex => $item)
                                                                     @php
@@ -1262,8 +1472,9 @@
                                                                         $vEffStatus = !$isApprovedProduct ? $approvalStatus : ($item['status'] ?? 'Approved');
                                                                     @endphp
                                                                     @if(!empty($item['is_archived']) || $vEffStatus === 'Disapproved') @continue @endif
+
                                                                     <div x-show="!isVariantArchived('{{ $vKey }}')" class="variant-container p-5 bg-white rounded-2xl border border-gray-200 shadow-sm relative">
-                                                                        
+
                                                                         @if($vEffStatus === 'Pending')
                                                                             <span class="absolute top-3 right-3 px-2.5 py-0.5 bg-yellow-100 text-yellow-800 text-[10px] font-bold rounded-md border border-yellow-300 z-10 pointer-events-none">Pending Review</span>
                                                                         @elseif($vEffStatus === 'Approved')
@@ -1282,19 +1493,20 @@
                                                                                 <span x-show="hasError('variant_names[{{ $vIndex }}]')" x-cloak class="text-red-500 text-[10px] font-bold mt-1 block">Name is required.</span>
                                                                                 <span x-show="isVariantDuplicate(existingVariants['{{ $vKey }}']?.name)" class="text-red-500 text-[10px] font-bold block mt-1 pointer-events-none">Variant name must be unique.</span>
                                                                             </div>
+
                                                                             <div>
-                                                                                <label class="block text-xs font-bold text-gray-700 mb-1">Image</label>
+                                                                                <label class="block text-xs font-bold text-gray-700 mb-1">Dedicated Variant Image</label>
                                                                                 <div class="flex items-center gap-2">
                                                                                     @if(!empty($item['image']))
                                                                                         <img src="{{ asset('storage/'.$item['image']) }}" class="h-10 w-10 object-cover rounded-lg border border-gray-200 shadow-sm shrink-0 pointer-events-none">
                                                                                     @endif
                                                                                     @if(!$isApprovedProduct || $vEffStatus !== 'Approved')
-                                                                                        <input type="file" name="variant_pictures[{{ $vIndex }}]" accept="image/*" class="w-full p-1.5 text-xs rounded-lg border border-gray-200 cursor-pointer file:cursor-pointer file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:bg-gray-100 file:text-gray-600 file:text-[10px] file:font-bold bg-white">
+                                                                                        <input type="file" name="variant_pictures[{{ $vIndex }}]" accept="image/jpeg,image/png,image/jpg,image/webp" class="w-full p-1.5 text-xs rounded-lg border border-gray-200 cursor-pointer file:cursor-pointer file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:bg-gray-100 file:text-gray-600 file:text-[10px] file:font-bold bg-white">
                                                                                     @endif
                                                                                 </div>
                                                                             </div>
                                                                         </div>
-                                                                        
+
                                                                         <hr class="border-gray-100 my-4">
 
                                                                         @if($priceDependency === 'main')
@@ -1302,7 +1514,7 @@
                                                                                 <div class="flex flex-col w-32">
                                                                                     <div class="relative w-full">
                                                                                         <span class="absolute left-2.5 top-2.5 text-gray-400 text-xs font-bold pointer-events-none">₱</span>
-                                                                                        <input type="number" step="0.01" min="20" name="variant_prices[{{ $vIndex }}]" x-model="existingVariants['{{ $vKey }}'].price" :required="!isVariantArchived('{{ $vKey }}')" onkeypress="return (event.charCode >= 48 && event.charCode <= 57) || event.charCode === 46" 
+                                                                                        <input type="number" step="0.01" min="20" name="variant_prices[{{ $vIndex }}]" x-model="existingVariants['{{ $vKey }}'].price" :required="!isVariantArchived('{{ $vKey }}')" onkeypress="return (event.charCode >= 48 && event.charCode <= 57) || event.charCode === 46"
                                                                                                :class="hasError('variant_prices[{{ $vIndex }}]') ? 'border-red-500 focus:border-red-500' : 'border-border-subtle focus:border-primary'"
                                                                                                class="w-full pl-6 p-2 text-sm rounded-lg border outline-none no-spinners text-gray-800 cursor-text" placeholder="Price">
                                                                                     </div>
@@ -1310,7 +1522,7 @@
                                                                                 </div>
                                                                                 <div class="flex flex-col w-28">
                                                                                     <div class="relative w-full">
-                                                                                        <input type="number" step="0.01" min="0" name="variant_weights[{{ $vIndex }}]" x-model="existingVariants['{{ $vKey }}'].weight" :required="!isVariantArchived('{{ $vKey }}')" onkeypress="return (event.charCode >= 48 && event.charCode <= 57) || event.charCode === 46" 
+                                                                                        <input type="number" step="0.01" min="0.01" name="variant_weights[{{ $vIndex }}]" x-model="existingVariants['{{ $vKey }}'].weight" :required="!isVariantArchived('{{ $vKey }}')" onkeypress="return (event.charCode >= 48 && event.charCode <= 57) || event.charCode === 46"
                                                                                                :class="hasError('variant_weights[{{ $vIndex }}]') ? 'border-red-500 focus:border-red-500' : 'border-border-subtle focus:border-primary'"
                                                                                                class="w-full pr-8 p-2 text-sm rounded-lg border outline-none no-spinners text-gray-800 cursor-text" placeholder="Weight">
                                                                                         <span class="absolute right-2.5 top-2.5 text-gray-400 text-xs font-bold pointer-events-none">KG</span>
@@ -1319,7 +1531,7 @@
                                                                                 </div>
                                                                                 <div class="flex flex-col w-24">
                                                                                     <div class="relative w-full">
-                                                                                        <input type="number" min="0" name="variant_stocks[{{ $vIndex }}]" x-model="existingVariants['{{ $vKey }}'].stock" :required="!isVariantArchived('{{ $vKey }}')" onkeypress="return (event.charCode >= 48 && event.charCode <= 57)" 
+                                                                                        <input type="number" min="0" name="variant_stocks[{{ $vIndex }}]" x-model="existingVariants['{{ $vKey }}'].stock" :required="!isVariantArchived('{{ $vKey }}')" onkeypress="return (event.charCode >= 48 && event.charCode <= 57)"
                                                                                                :class="hasError('variant_stocks[{{ $vIndex }}]') ? 'border-red-500 focus:border-red-500' : 'border-border-subtle focus:border-primary'"
                                                                                                class="w-full p-2 text-sm rounded-lg border outline-none no-spinners text-center text-gray-800 cursor-text" placeholder="Stock">
                                                                                     </div>
@@ -1335,7 +1547,7 @@
                                                                                     <label class="block text-[10px] font-bold text-gray-700 uppercase tracking-widest pointer-events-none">{{ $productVariants['sub_title'] ?? 'SIZES' }}</label>
                                                                                     <span x-show="!existingVariants['{{ $vKey }}']?.name || existingVariants['{{ $vKey }}'].name.trim() === ''" class="text-[10px] text-red-400 font-medium italic">(Fill main variant name first)</span>
                                                                                 </div>
-                                                                                
+
                                                                                 @if(isset($item['subs']) && is_array($item['subs']))
                                                                                     @foreach($item['subs'] as $sIndex => $sub)
                                                                                         @php
@@ -1343,14 +1555,15 @@
                                                                                             $sEffStatus = !$isApprovedProduct ? $approvalStatus : ($vEffStatus !== 'Approved' ? $vEffStatus : ($sub['status'] ?? 'Approved'));
                                                                                         @endphp
                                                                                         @if(!empty($sub['is_archived']) || $sEffStatus === 'Disapproved') @continue @endif
+
                                                                                         <div x-show="!isSubArchived('{{ $vKey }}', '{{ $sKey }}')" class="flex flex-col sm:flex-row items-start gap-3 bg-brand-light/10 p-3 rounded-xl border border-brand-light/30 shadow-sm mb-3 relative mt-3">
-                                                                                            
+
                                                                                             @if($sEffStatus === 'Pending')
                                                                                                 <span class="absolute -top-2.5 left-3 px-2 py-0.5 bg-yellow-100 border border-yellow-300 text-yellow-800 text-[9px] font-bold rounded-md z-10 pointer-events-none">Pending</span>
                                                                                             @elseif($sEffStatus === 'Approved')
                                                                                                 <span class="absolute -top-2.5 left-3 px-2 py-0.5 bg-green-100 border border-green-200 text-green-700 text-[9px] font-bold rounded-md z-10 pointer-events-none">Approved</span>
                                                                                             @endif
-                                                                                            
+
                                                                                             <div class="flex-1 w-full min-w-[160px] pt-1">
                                                                                                 <input type="text" name="sub_variant_names[{{ $vIndex }}][{{ $sIndex }}]"
                                                                                                        x-model="existingVariants['{{ $vKey }}'].subs['{{ $sKey }}'].name"
@@ -1361,13 +1574,13 @@
                                                                                                 <span x-show="hasError('sub_variant_names[{{ $vIndex }}][{{ $sIndex }}]')" x-cloak class="text-red-500 text-[9px] font-bold mt-1 block">Required</span>
                                                                                                 <span x-show="isExistingVariantSubDuplicate('{{ $vKey }}', existingVariants['{{ $vKey }}']?.subs?.['{{ $sKey }}']?.name)" class="text-red-500 text-[10px] font-bold block mt-1 pointer-events-none">Sub-variant must be unique.</span>
                                                                                             </div>
-                                                                                            
+
                                                                                             @if($priceDependency === 'sub')
                                                                                                 <div class="flex flex-wrap gap-2 w-full sm:w-auto pt-1">
                                                                                                     <div class="flex flex-col min-w-[100px] flex-1">
                                                                                                         <div class="relative w-full">
                                                                                                             <span class="absolute left-2.5 top-2 text-text-muted text-xs font-bold pointer-events-none">₱</span>
-                                                                                                            <input type="number" step="0.01" min="20" name="sub_variant_prices[{{ $vIndex }}][{{ $sIndex }}]" x-model="existingVariants['{{ $vKey }}'].subs['{{ $sKey }}'].price" :required="!isVariantArchived('{{ $vKey }}') && !isSubArchived('{{ $vKey }}', '{{ $sKey }}')" onkeypress="return (event.charCode >= 48 && event.charCode <= 57) || event.charCode === 46" 
+                                                                                                            <input type="number" step="0.01" min="20" name="sub_variant_prices[{{ $vIndex }}][{{ $sIndex }}]" x-model="existingVariants['{{ $vKey }}'].subs['{{ $sKey }}'].price" :required="!isVariantArchived('{{ $vKey }}') && !isSubArchived('{{ $vKey }}', '{{ $sKey }}')" onkeypress="return (event.charCode >= 48 && event.charCode <= 57) || event.charCode === 46"
                                                                                                                    :class="hasError('sub_variant_prices[{{ $vIndex }}][{{ $sIndex }}]') ? 'border-red-500' : 'border-border-subtle focus:border-primary'"
                                                                                                                    class="w-full pl-6 p-2 text-xs rounded-md border outline-none no-spinners bg-white text-gray-800 cursor-text" placeholder="Price">
                                                                                                         </div>
@@ -1375,7 +1588,7 @@
                                                                                                     </div>
                                                                                                     <div class="flex flex-col min-w-[90px] flex-1">
                                                                                                         <div class="relative w-full">
-                                                                                                            <input type="number" step="0.01" min="0" name="sub_variant_weights[{{ $vIndex }}][{{ $sIndex }}]" x-model="existingVariants['{{ $vKey }}'].subs['{{ $sKey }}'].weight" :required="!isVariantArchived('{{ $vKey }}') && !isSubArchived('{{ $vKey }}', '{{ $sKey }}')" onkeypress="return (event.charCode >= 48 && event.charCode <= 57) || event.charCode === 46" 
+                                                                                                            <input type="number" step="0.01" min="0.01" name="sub_variant_weights[{{ $vIndex }}][{{ $sIndex }}]" x-model="existingVariants['{{ $vKey }}'].subs['{{ $sKey }}'].weight" :required="!isVariantArchived('{{ $vKey }}') && !isSubArchived('{{ $vKey }}', '{{ $sKey }}')" onkeypress="return (event.charCode >= 48 && event.charCode <= 57) || event.charCode === 46"
                                                                                                                    :class="hasError('sub_variant_weights[{{ $vIndex }}][{{ $sIndex }}]') ? 'border-red-500' : 'border-border-subtle focus:border-primary'"
                                                                                                                    class="w-full pr-7 p-2 text-xs rounded-md border outline-none no-spinners bg-white text-gray-800 cursor-text" placeholder="Weight">
                                                                                                             <span class="absolute right-2 top-2 text-text-muted text-xs font-bold pointer-events-none">KG</span>
@@ -1384,19 +1597,19 @@
                                                                                                     </div>
                                                                                                     <div class="flex flex-col min-w-[80px] flex-1">
                                                                                                         <div class="relative w-full">
-                                                                                                            <input type="number" min="0" name="sub_variant_stocks[{{ $vIndex }}][{{ $sIndex }}]" x-model="existingVariants['{{ $vKey }}'].subs['{{ $sKey }}'].stock" :required="!isVariantArchived('{{ $vKey }}') && !isSubArchived('{{ $vKey }}', '{{ $sKey }}')" onkeypress="return (event.charCode >= 48 && event.charCode <= 57)" 
+                                                                                                            <input type="number" min="0" name="sub_variant_stocks[{{ $vIndex }}][{{ $sIndex }}]" x-model="existingVariants['{{ $vKey }}'].subs['{{ $sKey }}'].stock" :required="!isVariantArchived('{{ $vKey }}') && !isSubArchived('{{ $vKey }}', '{{ $sKey }}')" onkeypress="return (event.charCode >= 48 && event.charCode <= 57)"
                                                                                                                    :class="hasError('sub_variant_stocks[{{ $vIndex }}][{{ $sIndex }}]') ? 'border-red-500' : 'border-border-subtle focus:border-primary'"
                                                                                                                    class="w-full p-2 text-xs rounded-md border outline-none no-spinners bg-white text-center text-gray-800 cursor-text" placeholder="Stock">
                                                                                                         </div>
                                                                                                         <span x-show="hasError('sub_variant_stocks[{{ $vIndex }}][{{ $sIndex }}]')" x-cloak class="text-red-500 text-[9px] font-bold mt-1 block">Required</span>
                                                                                                     </div>
                                                                                             @endif
-                                                                                            
+
                                                                                             <button type="button" @click.stop="requestRemoveSubVariant('{{ $vKey }}', '{{ $sKey }}')" title="Remove Subvariant" class="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors mt-0.5 cursor-pointer shrink-0">
                                                                                                 <svg class="w-4 h-4 pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
                                                                                             </button>
                                                                                             <input type="hidden" name="archive_sub_variants[{{ $vIndex }}][{{ $sIndex }}]" :value="isSubArchived('{{ $vKey }}', '{{ $sKey }}') ? 1 : 0">
-                                                                                            
+
                                                                                             @if($priceDependency === 'sub')
                                                                                                 </div>
                                                                                             @endif
@@ -1408,7 +1621,7 @@
                                                                                     <template x-for="(ns, nsIndex) in getNewSubsForVariant('{{ $vKey }}')" :key="ns.id">
                                                                                         <div class="space-y-2 bg-brand-light/10 p-3 rounded-xl border border-primary/40 shadow-sm relative mt-3">
                                                                                             <span class="absolute -top-2.5 left-3 px-2 py-0.5 bg-yellow-100 border border-yellow-300 text-yellow-800 text-[9px] font-bold rounded-md z-10 shadow-sm pointer-events-none">
-                                                                                                {{ $isApprovedProduct ? 'New Subvariant • Pending Approval' : 'New Subvariant' }}
+                                                                                                {{ $isApprovedProduct ? 'New Subvariant — Pending Approval' : 'New Subvariant' }}
                                                                                             </span>
 
                                                                                             <div x-show="!ns.isCopied && getFirstSubTemplateForExisting('{{ $vKey }}')" x-transition class="p-2 bg-blue-50 border border-blue-200 rounded-lg flex flex-wrap items-center justify-between gap-2 text-xs text-blue-900 shadow-sm mt-1">
@@ -1429,12 +1642,13 @@
                                                                                                     <span x-show="hasError(`new_existing_sub_variant_names[{{ $vIndex }}][${ns.id}]`)" x-cloak class="text-red-500 text-[9px] font-bold mt-1 block">Required</span>
                                                                                                     <span x-show="isExistingVariantSubDuplicate('{{ $vKey }}', ns.name)" class="text-red-500 text-[10px] font-bold block mt-1 pointer-events-none">Sub-variant must be unique.</span>
                                                                                                 </div>
+
                                                                                                 @if($priceDependency === 'sub')
                                                                                                     <div class="flex flex-wrap gap-2 w-full sm:w-auto">
                                                                                                         <div class="flex flex-col min-w-[100px] flex-1">
                                                                                                             <div class="relative w-full">
                                                                                                                 <span class="absolute left-2.5 top-2 text-text-muted text-xs font-bold pointer-events-none">₱</span>
-                                                                                                                <input type="number" step="0.01" min="20" :name="`new_existing_sub_variant_prices[{{ $vIndex }}][${ns.id}]`" x-model="ns.price" required onkeypress="return (event.charCode >= 48 && event.charCode <= 57) || event.charCode === 46" placeholder="Price" 
+                                                                                                                <input type="number" step="0.01" min="20" :name="`new_existing_sub_variant_prices[{{ $vIndex }}][${ns.id}]`" x-model="ns.price" required onkeypress="return (event.charCode >= 48 && event.charCode <= 57) || event.charCode === 46" placeholder="Price"
                                                                                                                        :class="hasError(`new_existing_sub_variant_prices[{{ $vIndex }}][${ns.id}]`) ? 'border-red-500' : 'border-border-subtle focus:border-primary'"
                                                                                                                        class="w-full pl-6 p-2 text-xs rounded-md border outline-none no-spinners bg-white text-gray-800 cursor-text">
                                                                                                             </div>
@@ -1442,7 +1656,7 @@
                                                                                                         </div>
                                                                                                         <div class="flex flex-col min-w-[90px] flex-1">
                                                                                                             <div class="relative w-full">
-                                                                                                                <input type="number" step="0.01" min="0" :name="`new_existing_sub_variant_weights[{{ $vIndex }}][${ns.id}]`" x-model="ns.weight" required onkeypress="return (event.charCode >= 48 && event.charCode <= 57) || event.charCode === 46" placeholder="Weight" 
+                                                                                                                <input type="number" step="0.01" min="0.01" :name="`new_existing_sub_variant_weights[{{ $vIndex }}][${ns.id}]`" x-model="ns.weight" required onkeypress="return (event.charCode >= 48 && event.charCode <= 57) || event.charCode === 46" placeholder="Weight"
                                                                                                                        :class="hasError(`new_existing_sub_variant_weights[{{ $vIndex }}][${ns.id}]`) ? 'border-red-500' : 'border-border-subtle focus:border-primary'"
                                                                                                                        class="w-full pr-7 p-2 text-xs rounded-md border outline-none no-spinners bg-white text-gray-800 cursor-text">
                                                                                                                 <span class="absolute right-2 top-2 text-text-muted text-xs font-bold pointer-events-none">KG</span>
@@ -1451,7 +1665,7 @@
                                                                                                         </div>
                                                                                                         <div class="flex flex-col min-w-[80px] flex-1">
                                                                                                             <div class="relative w-full">
-                                                                                                                <input type="number" min="0" :name="`new_existing_sub_variant_stocks[{{ $vIndex }}][${ns.id}]`" x-model="ns.stock" required onkeypress="return (event.charCode >= 48 && event.charCode <= 57)" placeholder="Stock" 
+                                                                                                                <input type="number" min="0" :name="`new_existing_sub_variant_stocks[{{ $vIndex }}][${ns.id}]`" x-model="ns.stock" required onkeypress="return (event.charCode >= 48 && event.charCode <= 57)" placeholder="Stock"
                                                                                                                        :class="hasError(`new_existing_sub_variant_stocks[{{ $vIndex }}][${ns.id}]`) ? 'border-red-500' : 'border-border-subtle focus:border-primary'"
                                                                                                                        class="w-full p-2 text-xs rounded-md border outline-none no-spinners bg-white text-center text-gray-800 cursor-text">
                                                                                                             </div>
@@ -1465,6 +1679,7 @@
                                                                                             </div>
                                                                                         </div>
                                                                                     </template>
+
                                                                                     <button type="button"
                                                                                             @click.stop="existingVariants['{{ $vKey }}']?.name?.trim() !== '' ? addNewSubToVariant('{{ $vKey }}') : null"
                                                                                             :disabled="!existingVariants['{{ $vKey }}']?.name || existingVariants['{{ $vKey }}'].name.trim() === ''"
@@ -1491,9 +1706,9 @@
                                                                     <template x-for="(nv, nvIndex) in newVariants" :key="nv.id">
                                                                         <div class="p-5 bg-white rounded-2xl border border-primary/40 shadow-sm mb-4 relative mt-4">
                                                                             <span class="absolute -top-3 left-5 px-2.5 py-0.5 bg-yellow-100 border border-yellow-300 text-yellow-800 text-[10px] font-bold rounded-lg shadow-sm z-10 pointer-events-none">
-                                                                                {{ $isApprovedProduct ? 'New Variant • Pending Approval' : 'New Variant Block' }}
+                                                                                {{ $isApprovedProduct ? 'New Variant — Pending Approval' : 'New Variant Block' }}
                                                                             </span>
-                                                                            
+
                                                                             <div class="flex flex-col sm:flex-row sm:items-start gap-6 px-2 mt-2">
                                                                                 <div class="flex-1">
                                                                                     <label class="block text-xs font-bold text-gray-700 mb-1">New {{ $productVariants['title'] ?? 'Variant' }} Name <span class="text-red-500">*</span></label>
@@ -1505,8 +1720,8 @@
                                                                                     <span x-show="isVariantDuplicate(nv.name)" class="text-red-500 text-[10px] font-bold block mt-1 pointer-events-none">Variant name must be unique.</span>
                                                                                 </div>
                                                                                 <div>
-                                                                                    <label class="block text-xs font-bold text-gray-700 mb-1">Image <span class="text-red-500">*</span></label>
-                                                                                    <input type="file" :name="`new_variant_pictures[${nv.id}]`" accept="image/*" required 
+                                                                                    <label class="block text-xs font-bold text-gray-700 mb-1">Dedicated Variant Image <span class="text-red-500">*</span></label>
+                                                                                    <input type="file" :name="`new_variant_pictures[${nv.id}]`" accept="image/jpeg,image/png,image/jpg,image/webp" required
                                                                                            :class="hasError(`new_variant_pictures[${nv.id}]`) ? 'border-red-500' : 'border-gray-200'"
                                                                                            class="w-full p-1.5 text-xs rounded-lg border cursor-pointer file:cursor-pointer file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:bg-gray-100 file:text-gray-600 file:text-[10px] file:font-bold bg-white focus:outline-none">
                                                                                     <span x-show="hasError(`new_variant_pictures[${nv.id}]`)" x-cloak class="text-red-500 text-[10px] font-bold mt-1 block">Image is required.</span>
@@ -1520,7 +1735,7 @@
                                                                                     <div class="flex flex-col w-32">
                                                                                         <div class="relative w-full">
                                                                                             <span class="absolute left-2.5 top-2.5 text-gray-400 text-xs font-bold pointer-events-none">₱</span>
-                                                                                            <input type="number" step="0.01" min="20" :name="`new_variant_prices[${nv.id}]`" x-model="nv.price" required onkeypress="return (event.charCode >= 48 && event.charCode <= 57) || event.charCode === 46" 
+                                                                                            <input type="number" step="0.01" min="20" :name="`new_variant_prices[${nv.id}]`" x-model="nv.price" required onkeypress="return (event.charCode >= 48 && event.charCode <= 57) || event.charCode === 46"
                                                                                                    :class="hasError(`new_variant_prices[${nv.id}]`) ? 'border-red-500 focus:border-red-500' : 'border-border-subtle focus:border-primary'"
                                                                                                    class="w-full pl-6 p-2 text-sm rounded-lg border outline-none no-spinners text-gray-800 cursor-text" placeholder="Price">
                                                                                         </div>
@@ -1528,7 +1743,7 @@
                                                                                     </div>
                                                                                     <div class="flex flex-col w-28">
                                                                                         <div class="relative w-full">
-                                                                                            <input type="number" step="0.01" min="0" :name="`new_variant_weights[${nv.id}]`" x-model="nv.weight" required onkeypress="return (event.charCode >= 48 && event.charCode <= 57) || event.charCode === 46" 
+                                                                                            <input type="number" step="0.01" min="0.01" :name="`new_variant_weights[${nv.id}]`" x-model="nv.weight" required onkeypress="return (event.charCode >= 48 && event.charCode <= 57) || event.charCode === 46"
                                                                                                    :class="hasError(`new_variant_weights[${nv.id}]`) ? 'border-red-500 focus:border-red-500' : 'border-border-subtle focus:border-primary'"
                                                                                                    class="w-full pr-8 p-2 text-sm rounded-lg border outline-none no-spinners text-gray-800 cursor-text" placeholder="Weight">
                                                                                             <span class="absolute right-2.5 top-2.5 text-gray-400 text-xs font-bold pointer-events-none">KG</span>
@@ -1537,7 +1752,7 @@
                                                                                     </div>
                                                                                     <div class="flex flex-col w-24">
                                                                                         <div class="relative w-full">
-                                                                                            <input type="number" min="0" :name="`new_variant_stocks[${nv.id}]`" x-model="nv.stock" required onkeypress="return (event.charCode >= 48 && event.charCode <= 57)" 
+                                                                                            <input type="number" min="0" :name="`new_variant_stocks[${nv.id}]`" x-model="nv.stock" required onkeypress="return (event.charCode >= 48 && event.charCode <= 57)"
                                                                                                    :class="hasError(`new_variant_stocks[${nv.id}]`) ? 'border-red-500 focus:border-red-500' : 'border-border-subtle focus:border-primary'"
                                                                                                    class="w-full p-2 text-sm rounded-lg border outline-none no-spinners text-center text-gray-800 cursor-text" placeholder="Stock">
                                                                                         </div>
@@ -1576,12 +1791,13 @@
                                                                                                     <span x-show="hasError(`new_sub_variant_names[${nv.id}][${sub.id}]`)" x-cloak class="text-red-500 text-[9px] font-bold mt-1 block">Required</span>
                                                                                                     <span x-show="isNewVariantSubDuplicate(nv, sub.name)" class="text-red-500 text-[10px] font-bold block mt-1 pointer-events-none">Sub-variant must be unique.</span>
                                                                                                 </div>
+
                                                                                                 @if($priceDependency === 'sub')
                                                                                                     <div class="flex flex-wrap gap-2 w-full sm:w-auto">
                                                                                                         <div class="flex flex-col min-w-[100px] flex-1">
                                                                                                             <div class="relative w-full">
                                                                                                                 <span class="absolute left-2.5 top-2 text-text-muted text-xs font-bold pointer-events-none" :class="nv.name.trim() === '' ? 'opacity-50' : ''">₱</span>
-                                                                                                                <input type="number" step="0.01" min="20" :name="`new_sub_variant_prices[${nv.id}][${sub.id}]`" x-model="sub.price" required :disabled="nv.name.trim() === ''" onkeypress="return (event.charCode >= 48 && event.charCode <= 57) || event.charCode === 46" 
+                                                                                                                <input type="number" step="0.01" min="20" :name="`new_sub_variant_prices[${nv.id}][${sub.id}]`" x-model="sub.price" required :disabled="nv.name.trim() === ''" onkeypress="return (event.charCode >= 48 && event.charCode <= 57) || event.charCode === 46"
                                                                                                                        :class="hasError(`new_sub_variant_prices[${nv.id}][${sub.id}]`) ? 'border-red-500' : 'border-border-subtle focus:border-primary'"
                                                                                                                        class="w-full pl-6 p-2 text-xs rounded-md border outline-none no-spinners bg-white cursor-text" placeholder="Price">
                                                                                                             </div>
@@ -1589,7 +1805,7 @@
                                                                                                         </div>
                                                                                                         <div class="flex flex-col min-w-[90px] flex-1">
                                                                                                             <div class="relative w-full">
-                                                                                                                <input type="number" step="0.01" min="0" :name="`new_sub_variant_weights[${nv.id}][${sub.id}]`" x-model="sub.weight" required :disabled="nv.name.trim() === ''" onkeypress="return (event.charCode >= 48 && event.charCode <= 57) || event.charCode === 46" 
+                                                                                                                <input type="number" step="0.01" min="0.01" :name="`new_sub_variant_weights[${nv.id}][${sub.id}]`" x-model="sub.weight" required :disabled="nv.name.trim() === ''" onkeypress="return (event.charCode >= 48 && event.charCode <= 57) || event.charCode === 46"
                                                                                                                        :class="hasError(`new_sub_variant_weights[${nv.id}][${sub.id}]`) ? 'border-red-500' : 'border-border-subtle focus:border-primary'"
                                                                                                                        class="w-full pr-7 p-2 text-xs rounded-md border outline-none no-spinners bg-white cursor-text" placeholder="Weight">
                                                                                                                 <span class="absolute right-2 top-2 text-text-muted text-xs font-bold pointer-events-none" :class="nv.name.trim() === '' ? 'opacity-50' : ''">KG</span>
@@ -1598,7 +1814,7 @@
                                                                                                         </div>
                                                                                                         <div class="flex flex-col min-w-[80px] flex-1">
                                                                                                             <div class="relative w-full">
-                                                                                                                <input type="number" min="0" :name="`new_sub_variant_stocks[${nv.id}][${sub.id}]`" x-model="sub.stock" required :disabled="nv.name.trim() === ''" onkeypress="return (event.charCode >= 48 && event.charCode <= 57)" 
+                                                                                                                <input type="number" min="0" :name="`new_sub_variant_stocks[${nv.id}][${sub.id}]`" x-model="sub.stock" required :disabled="nv.name.trim() === ''" onkeypress="return (event.charCode >= 48 && event.charCode <= 57)"
                                                                                                                        :class="hasError(`new_sub_variant_stocks[${nv.id}][${sub.id}]`) ? 'border-red-500' : 'border-border-subtle focus:border-primary'"
                                                                                                                        class="w-full p-2 text-xs rounded-md border outline-none no-spinners bg-white text-center text-gray-800 cursor-text" placeholder="Stock">
                                                                                                             </div>
@@ -1624,6 +1840,7 @@
                                                                             </div>
                                                                         </div>
                                                                     </template>
+
                                                                     <button type="button" @click.stop="addVariant()" class="w-full py-4 bg-primary/5 hover:bg-primary/10 text-primary font-bold rounded-2xl border-2 border-primary/30 border-dashed transition-colors cursor-pointer tracking-wide shadow-sm">
                                                                         + Add New Variant
                                                                     </button>
@@ -1631,7 +1848,7 @@
                                                             </div>
                                                         </div>
                                                     @endif
-                                                    
+
                                                     <div x-data="{
                                                         enableSpecs: {{ $product->specifications->count() > 0 ? 'true' : 'false' }},
                                                         specs: {{ $product->specifications->count() > 0 ? $existingSpecs : "[{ id: Date.now(), title: '', desc: '' }]" }},
@@ -1646,7 +1863,7 @@
                                                                 <span x-text="enableSpecs ? 'Disable Specifications' : 'Enable Specifications'"></span>
                                                             </button>
                                                         </div>
-                                                        
+
                                                         <div x-show="enableSpecs" x-collapse class="space-y-3">
                                                             <template x-for="(spec, index) in specs" :key="spec.id">
                                                                 <div class="flex items-start gap-3">

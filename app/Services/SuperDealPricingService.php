@@ -4,7 +4,6 @@ namespace App\Services;
 
 use App\Models\Product;
 use App\Models\SellerProfile;
-use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Validation\ValidationException;
@@ -77,11 +76,6 @@ class SuperDealPricingService
     }
 
     /**
-     * Live Super Deals keyed by product id, loaded with ONE query and reused for the rest of the
-     * request, so listing cards (home, category, search...) never query once per product.
-     * Same rule as getActiveSuperDeal(): the earliest-ending live deal wins, and a sold-out
-     * Super Deal slot no longer applies.
-     *
      * @return array<int, object|null>
      */
     public function liveSuperDealMap(): array
@@ -91,7 +85,6 @@ class SuperDealPricingService
         }
 
         $map = [];
-
         if (Schema::hasTable('super_deals')) {
             $rows = DB::table('super_deals')
                 ->where('deal_type', 'super_deal')
@@ -105,12 +98,10 @@ class SuperDealPricingService
             foreach ($rows as $row) {
                 $pid = (int) $row->product_id;
                 if (array_key_exists($pid, $map)) {
-                    continue; // the earliest-ending deal for this product was already taken
+                    continue;
                 }
-
                 $soldOut = $row->flash_quantity !== null
                     && (int) $row->sold_quantity >= (int) $row->flash_quantity;
-
                 $map[$pid] = $soldOut ? null : $row;
             }
         }
@@ -153,10 +144,6 @@ class SuperDealPricingService
         );
     }
 
-    /**
-     * Price after the Store Sale (if any) or the product's own discount %.
-     * Shared by checkout and the display resolver so both always agree.
-     */
     protected function storeSaleOrProductDiscountPrice(?object $storeSale, Product $product, float $baseUnitPrice): float
     {
         if ($storeSale) {
@@ -176,11 +163,6 @@ class SuperDealPricingService
         return round($baseUnitPrice, 2);
     }
 
-    /**
-     * Unit price of one unit sold under a Super Deal.
-     * A fixed deal_price applies to every variant of the product (never above that variant's own price);
-     * otherwise the discount percentage is taken off the variant's price.
-     */
     public function superDealUnitPrice(object $deal, float $baseUnitPrice): float
     {
         if ($deal->deal_price !== null && (float) $deal->deal_price > 0) {
@@ -190,15 +172,9 @@ class SuperDealPricingService
         return round($baseUnitPrice * (1 - ((float) ($deal->discount_percentage ?? 0) / 100)), 2);
     }
 
-    /**
-     * The price a buyer should SEE for a product (home card, product page, cart).
-     * Priority matches checkout: Super Deal -> Store Sale -> product discount -> regular price.
-     * Read-only (does not run the expiry UPDATE), so it is cheap to call per cart item.
-     */
     public function resolveDisplayPricing(Product $product, float $baseUnitPrice): array
     {
         $base = round($baseUnitPrice, 2);
-
         $result = [
             'type'           => 'regular',
             'label'          => null,
@@ -213,7 +189,6 @@ class SuperDealPricingService
 
         $storeSale = null;
         $superDeal = null;
-
         if (Schema::hasTable('super_deals')) {
             $rows = DB::table('super_deals')
                 ->where('product_id', $product->id)
@@ -227,7 +202,6 @@ class SuperDealPricingService
             $storeSale = $rows->firstWhere('deal_type', 'store_sale');
             $superDeal = $rows->firstWhere('deal_type', 'super_deal');
 
-            // Same rule as getActiveSuperDeal(): a sold-out Super Deal slot no longer applies.
             if ($superDeal && $superDeal->flash_quantity !== null
                 && (int) $superDeal->sold_quantity >= (int) $superDeal->flash_quantity) {
                 $superDeal = null;
@@ -248,13 +222,11 @@ class SuperDealPricingService
                 ? (float) ($superDeal->discount_percentage ?? 0) : null;
         } else {
             $price = $this->storeSaleOrProductDiscountPrice($storeSale, $product, $base);
-
             if ($price < $base) {
                 $result['type']       = $storeSale ? 'store_sale' : 'product_discount';
                 $result['label']      = $storeSale ? 'Store Sale' : null;
                 $result['unit_price'] = $price;
                 $result['ends_at']    = $storeSale?->ends_at;
-
                 if ($storeSale) {
                     $result['deal_price'] = ($storeSale->deal_price !== null && (float) $storeSale->deal_price > 0)
                         ? round((float) $storeSale->deal_price, 2) : null;
@@ -332,7 +304,6 @@ class SuperDealPricingService
             ];
         }
 
-        // Units beyond the remaining Super Deal quantity are charged on a separate line at the Store Sale price (or Regular price)
         if ($overflowUnits > 0) {
             $lines[] = [
                 'product'               => $product,
@@ -378,12 +349,17 @@ class SuperDealPricingService
 
             $qualifyingQty = 0;
             $qualifyingSubtotal = 0.00;
+            $lowestQualifyingUnitPrice = null;
 
             foreach ($packageLines as $line) {
                 $prodId = (int) ($line['product_id'] ?? ($line['product']->id ?? 0));
                 if (in_array($prodId, $applicableIds, true)) {
                     $qualifyingQty += (int) $line['quantity'];
                     $qualifyingSubtotal = round($qualifyingSubtotal + (float) $line['line_total'], 2);
+                    $unitPrice = round((float) $line['discounted_unit_price'], 2);
+                    if ($unitPrice > 0 && ($lowestQualifyingUnitPrice === null || $unitPrice < $lowestQualifyingUnitPrice)) {
+                        $lowestQualifyingUnitPrice = $unitPrice;
+                    }
                 }
             }
 
@@ -398,16 +374,25 @@ class SuperDealPricingService
                 }
             }
 
-            if ($bundle->bundle_type === 'buy_x_get_y' && $qualifyingQty >= (int) $bundle->required_quantity && $bundle->free_gift_product_id) {
-                foreach ($packageLines as $line) {
-                    $prodId = (int) ($line['product_id'] ?? ($line['product']->id ?? 0));
-                    if ($prodId === (int) $bundle->free_gift_product_id) {
-                        $freeAmount = round((float) $line['discounted_unit_price'], 2);
-                        return [
-                            'bundle_discount' => $freeAmount,
-                            'bundle_title'    => $bundle->title . ' (Free Gift Applied)',
-                        ];
+            if ($bundle->bundle_type === 'buy_x_get_y' && $qualifyingQty >= (int) $bundle->required_quantity) {
+                if ($bundle->free_gift_product_id) {
+                    foreach ($packageLines as $line) {
+                        $prodId = (int) ($line['product_id'] ?? ($line['product']->id ?? 0));
+                        if ($prodId === (int) $bundle->free_gift_product_id) {
+                            $freeAmount = round((float) $line['discounted_unit_price'], 2);
+                            return [
+                                'bundle_discount' => $freeAmount,
+                                'bundle_title'    => $bundle->title . ' (Free Gift Applied)',
+                            ];
+                        }
                     }
+                }
+
+                if ($lowestQualifyingUnitPrice !== null && $lowestQualifyingUnitPrice > 0) {
+                    return [
+                        'bundle_discount' => $lowestQualifyingUnitPrice,
+                        'bundle_title'    => $bundle->title . ' (Free Item Discount Applied)',
+                    ];
                 }
             }
         }

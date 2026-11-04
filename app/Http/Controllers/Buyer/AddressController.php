@@ -3,7 +3,8 @@
 namespace App\Http\Controllers\Buyer;
 
 use App\Http\Controllers\Controller;
-use App\Services\AddressService;
+use App\Models\UserAddress;
+use App\Services\PsgcService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -11,46 +12,59 @@ use Illuminate\Validation\ValidationException;
 
 class AddressController extends Controller
 {
-    public const MAX_ADDRESSES_PER_BUYER = 10;
+    protected const MAX_ADDRESSES = 10;
 
-    public function __construct(
-        protected AddressService $addressService
-    ) {}
+    public function __construct(protected PsgcService $psgc) {}
 
-    public function index()
+    public function index(Request $request)
     {
-        $user = auth()->user();
-        $addresses = $user->addresses()->orderByDesc('is_default')->latest('id')->get();
-        $provinces = $this->addressService->getProvinces();
+        $addresses = $request->user()
+            ->addresses()
+            ->orderByDesc('is_default')
+            ->orderByDesc('id')
+            ->get();
 
-        return view('buyer.option.account.address-book', compact('user', 'addresses', 'provinces'));
+        $provinces = $this->psgc->getProvinces();
+
+        return view('buyer.option.account.address-book', compact('addresses', 'provinces'));
     }
 
     public function getMunicipalities(string $provinceCode): JsonResponse
     {
-        return response()->json($this->addressService->getMunicipalities($provinceCode));
+        return response()->json($this->psgc->getMunicipalities($provinceCode));
+    }
+
+    public function municipalities(string $provinceCode): JsonResponse
+    {
+        return $this->getMunicipalities($provinceCode);
     }
 
     public function getBarangays(string $municipalityCode): JsonResponse
     {
-        return response()->json($this->addressService->getBarangays($municipalityCode));
+        return response()->json($this->psgc->getBarangays($municipalityCode));
+    }
+
+    public function barangays(string $municipalityCode): JsonResponse
+    {
+        return $this->getBarangays($municipalityCode);
     }
 
     public function store(Request $request): JsonResponse
     {
-        $user = auth()->user();
+        $user = $request->user();
 
-        if ($user->addresses()->count() >= self::MAX_ADDRESSES_PER_BUYER) {
-            throw ValidationException::withMessages([
-                'address_limit' => 'You can save a maximum of ' . self::MAX_ADDRESSES_PER_BUYER . ' addresses in your Address Book. Please delete or edit an existing address first.',
-            ]);
+        if ($user->addresses()->count() >= self::MAX_ADDRESSES) {
+            return response()->json([
+                'success' => false,
+                'message' => 'You can only save up to ' . self::MAX_ADDRESSES . ' delivery addresses.',
+            ], 422);
         }
 
         $validated = $this->validateAddress($request);
 
         $address = DB::transaction(function () use ($user, $validated) {
-            $hasExisting = $user->addresses()->lockForUpdate()->exists();
-            $makeDefault = ($validated['is_default'] ?? false) || ! $hasExisting;
+            $hasExisting = $user->addresses()->exists();
+            $makeDefault = ! $hasExisting || ! empty($validated['is_default']);
 
             if ($makeDefault) {
                 $user->addresses()->update(['is_default' => false]);
@@ -58,102 +72,179 @@ class AddressController extends Controller
 
             return $user->addresses()->create([
                 ...$validated,
-                'country'    => 'Philippines',
                 'is_default' => $makeDefault,
             ]);
         });
 
         return response()->json([
             'success'   => true,
-            'message'   => 'Address saved successfully.',
+            'message'   => 'Shipping address saved successfully.',
             'address'   => $address,
-            'addresses' => $user->addresses()->orderByDesc('is_default')->latest('id')->get(),
-        ]);
+            'addresses' => $this->getOrderedAddresses($user),
+        ], 201);
     }
 
     public function update(Request $request, $id): JsonResponse
     {
-        $user = auth()->user();
-        $address = $user->addresses()->findOrFail($id);
+        $user = $request->user();
+        $address = $id instanceof UserAddress
+            ? $id
+            : UserAddress::where('user_id', $user->id)->findOrFail($id);
+
+        if ((int) $address->user_id !== (int) $user->id) {
+            abort(403);
+        }
+
         $validated = $this->validateAddress($request);
 
         DB::transaction(function () use ($user, $address, $validated) {
-            if (($validated['is_default'] ?? false) && ! $address->is_default) {
-                $user->addresses()->where('id', '!=', $address->id)->update(['is_default' => false]);
-            }
+            $wantsDefault = ! empty($validated['is_default']);
 
-            $isOnlyAddress = $user->addresses()->count() === 1;
-            $newDefault = ($isOnlyAddress || $address->is_default) ? true : (bool) ($validated['is_default'] ?? false);
+            if ($wantsDefault) {
+                $user->addresses()->where('id', '!=', $address->id)->update(['is_default' => false]);
+            } elseif ($address->is_default) {
+                $otherExists = $user->addresses()->where('id', '!=', $address->id)->exists();
+                if (! $otherExists) {
+                    $wantsDefault = true;
+                } else {
+                    $nextDefault = $user->addresses()->where('id', '!=', $address->id)->latest('id')->first();
+                    $nextDefault?->update(['is_default' => true]);
+                }
+            }
 
             $address->update([
                 ...$validated,
-                'country'    => 'Philippines',
-                'is_default' => $newDefault,
+                'is_default' => $wantsDefault,
             ]);
         });
 
         return response()->json([
             'success'   => true,
-            'message'   => 'Address updated successfully.',
+            'message'   => 'Shipping address updated successfully.',
             'address'   => $address->fresh(),
-            'addresses' => $user->addresses()->orderByDesc('is_default')->latest('id')->get(),
+            'addresses' => $this->getOrderedAddresses($user),
         ]);
     }
 
-    public function destroy($id): JsonResponse
+    public function destroy(Request $request, $id): JsonResponse
     {
-        $user = auth()->user();
-        $address = $user->addresses()->findOrFail($id);
+        $user = $request->user();
+        $address = $id instanceof UserAddress
+            ? $id
+            : UserAddress::where('user_id', $user->id)->findOrFail($id);
+
+        if ((int) $address->user_id !== (int) $user->id) {
+            abort(403);
+        }
 
         if ($address->is_default) {
             return response()->json([
                 'success' => false,
-                'message' => 'Your default address cannot be deleted. Please set another address as your default first before deleting this one.',
-                'errors'  => [
-                    'default_address' => ['Your default address cannot be deleted. Please choose another default address first.'],
-                ],
+                'message' => 'Your default shipping address cannot be deleted. Please set another address as default first.',
             ], 422);
         }
 
-        DB::transaction(function () use ($address) {
-            $address->delete();
-        });
+        $address->delete();
 
         return response()->json([
             'success'   => true,
             'message'   => 'Address deleted successfully.',
-            'addresses' => $user->addresses()->orderByDesc('is_default')->latest('id')->get(),
+            'addresses' => $this->getOrderedAddresses($user),
+        ]);
+    }
+
+    public function setDefault(Request $request, $id): JsonResponse
+    {
+        $user = $request->user();
+        $address = $id instanceof UserAddress
+            ? $id
+            : UserAddress::where('user_id', $user->id)->findOrFail($id);
+
+        if ((int) $address->user_id !== (int) $user->id) {
+            abort(403);
+        }
+
+        DB::transaction(function () use ($user, $address) {
+            $user->addresses()->update(['is_default' => false]);
+            $address->update(['is_default' => true]);
+        });
+
+        return response()->json([
+            'success'   => true,
+            'message'   => 'Default shipping address updated.',
+            'addresses' => $this->getOrderedAddresses($user),
         ]);
     }
 
     protected function validateAddress(Request $request): array
     {
-        $cleanPhone = ltrim(preg_replace('/\D/', '', (string) $request->input('phone_number')), '0');
-        if (str_starts_with($cleanPhone, '63')) {
-            $cleanPhone = substr($cleanPhone, 2);
+        $rawPhone = preg_replace('/\D/', '', (string) $request->input('phone_number', ''));
+        if (str_starts_with($rawPhone, '63') && strlen($rawPhone) >= 12) {
+            $rawPhone = substr($rawPhone, 2);
         }
-        $request->merge(['phone_number' => $cleanPhone]);
+        $cleanPhone = ltrim($rawPhone, '0');
 
-        return $request->validate([
-            'first_name'        => ['required', 'string', 'max:60', 'regex:/^[A-Za-z\s]+$/'],
-            'last_name'         => ['required', 'string', 'max:60', 'regex:/^[A-Za-z\s]+$/'],
-            'phone_number'      => ['required', 'regex:/^9\d{9}$/'],
-            'province_code'     => ['required', 'string'],
-            'province'          => ['required', 'string'],
-            'municipality_code' => ['required', 'string'],
-            'municipality'      => ['required', 'string'],
-            'barangay_code'     => ['required', 'string'],
-            'barangay'          => ['required', 'string'],
-            'postcode'          => ['required', 'string', 'max:10'],
-            'street_address'    => ['required', 'string', 'max:255'],
-            'building_details'  => ['nullable', 'string', 'max:255'],
-            'is_default'        => ['boolean'],
-        ], [
-            'first_name.regex'       => 'First name must contain only letters and spaces.',
-            'last_name.regex'        => 'Last name must contain only letters and spaces.',
-            'phone_number.regex'     => 'Please enter a valid 11-digit mobile number starting with 09 or +639.',
-            'barangay.required'      => 'Please select a Barangay.',
-            'barangay_code.required' => 'Please select a Barangay.',
+        $municipalityCode = trim((string) $request->input('municipality_code', ''));
+        $barangayCode = trim((string) $request->input('barangay_code', ''));
+        $barangayName = trim((string) $request->input('barangay', ''));
+
+        if (($barangayCode === '' || $barangayName === '') && $municipalityCode !== '') {
+            $barangays = $this->psgc->getBarangays($municipalityCode);
+            if (! empty($barangays)) {
+                $firstBrgy = $barangays[0];
+                $barangayCode = $barangayCode ?: (string) ($firstBrgy['code'] ?? 'BRGY-01');
+                $barangayName = $barangayName ?: (string) ($firstBrgy['name'] ?? 'Poblacion');
+            }
+        }
+
+        $request->merge([
+            'first_name'       => trim((string) $request->input('first_name', '')),
+            'last_name'        => trim((string) $request->input('last_name', '')),
+            'phone_number'     => $cleanPhone,
+            'barangay_code'    => $barangayCode,
+            'barangay'         => $barangayName,
+            'postcode'         => trim((string) $request->input('postcode', '')),
+            'street_address'   => trim((string) $request->input('street_address', '')),
+            'building_details' => $request->filled('building_details') ? trim((string) $request->input('building_details')) : null,
         ]);
+
+        $validated = $request->validate([
+            'first_name'       => ['required', 'string', 'min:2', 'max:60', 'regex:/^[\p{L}\s\'\-\.]+$/u'],
+            'last_name'        => ['required', 'string', 'min:2', 'max:60', 'regex:/^[\p{L}\s\'\-\.]+$/u'],
+            'phone_number'     => ['required', 'string', 'regex:/^9\d{9}$/'],
+            'province_code'    => ['required', 'string', 'max:30'],
+            'province'         => ['required', 'string', 'max:100'],
+            'municipality_code'=> ['required', 'string', 'max:30'],
+            'municipality'     => ['required', 'string', 'max:100'],
+            'barangay_code'    => ['required', 'string', 'max:30'],
+            'barangay'         => ['required', 'string', 'max:120'],
+            'postcode'         => ['required', 'string', 'regex:/^\d{4}$/'],
+            'street_address'   => ['required', 'string', 'min:5', 'max:150'],
+            'building_details' => ['nullable', 'string', 'max:150'],
+            'is_default'       => ['nullable', 'boolean'],
+        ], [
+            'first_name.regex'   => 'First name may only contain letters, spaces, hyphens, apostrophes, and periods.',
+            'last_name.regex'    => 'Last name may only contain letters, spaces, hyphens, apostrophes, and periods.',
+            'phone_number.regex' => 'Please enter a valid 10-digit Philippine mobile number starting with 9 (e.g. 917 123 4567).',
+            'barangay.required'  => 'Please select a barangay.',
+            'postcode.regex'     => 'Postal code must be a valid 4-digit Philippine zip code.',
+            'street_address.min' => 'Please enter a complete street address (at least 5 characters).',
+        ]);
+
+        if (! $this->psgc->isLocationServiceable($validated['province'], $validated['municipality'])) {
+            throw ValidationException::withMessages([
+                'province' => 'Sorry, this island or municipality is currently outside our serviceable delivery zones.',
+            ]);
+        }
+
+        return $validated;
+    }
+
+    protected function getOrderedAddresses($user)
+    {
+        return $user->addresses()
+            ->orderByDesc('is_default')
+            ->orderByDesc('id')
+            ->get();
     }
 }

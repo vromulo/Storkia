@@ -1,5 +1,26 @@
+@php
+    $badges = $sellerSidebarBadges ?? [
+        'orders_new'        => 0,
+        'orders_pending'    => 0,
+        'orders_to_process' => 0,
+        'orders_to_ship'    => 0,
+        'orders_disputed'   => 0,
+        'orders_total'      => 0,
+        'low_stock'         => 0,
+        'disapproved_prods' => 0,
+        'products_total'    => 0,
+        'unread_messages'   => 0,
+        'unreplied_reviews' => 0,
+    ];
+    $isProductsActive = request()->is('seller/products*');
+    $isPromotionsActive = request()->is('seller/promotions*') || request()->is('seller/vouchers*');
+    $isOrdersActive = request()->is('seller/orders*');
+    $isSalesActive = request()->is('seller/sales*');
+    $isRatingsActive = request()->is('seller/ratings*');
+@endphp
+
 <aside :class="sidebarOpen ? 'w-72' : 'w-20'" class="relative flex flex-col h-screen border-r border-border-subtle shadow-lg transition-all duration-300 ease-in-out bg-gradient-to-b from-surface via-surface to-brand-light/30 flex-shrink-0 z-40">
-    
+
     <button @click="sidebarOpen = !sidebarOpen" class="absolute -right-3.5 top-8 bg-surface border border-border-subtle text-primary rounded-full p-1.5 shadow-md hover:bg-brand-light/50 transition-colors z-50 focus:outline-none cursor-pointer">
         <svg class="w-4 h-4 transition-transform duration-300" :class="!sidebarOpen ? 'rotate-180' : ''" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
@@ -15,14 +36,8 @@
         </a>
     </div>
 
-    @php
-        $isProductsActive = request()->is('seller/products*');
-        $isPromotionsActive = request()->is('seller/promotions*') || request()->is('seller/vouchers*');
-        $isOrdersActive = request()->is('seller/orders*');
-        $isSalesActive = request()->is('seller/sales*');
-    @endphp
-
     <nav x-data="{ activeDropdown: '{{ $isProductsActive ? 'products' : ($isPromotionsActive ? 'promotions' : ($isOrdersActive ? 'orders' : ($isSalesActive ? 'sales' : (request()->is('seller/account*') ? 'account' : null)))) }}' }" class="flex-1 overflow-y-auto overflow-x-hidden p-3 space-y-1.5 custom-scrollbar">
+
         <a href="{{ route('seller.seller-dashboard') }}"
             @click="activeDropdown = null"
             class="flex items-center px-3 py-3 rounded-xl transition-all duration-200 font-bold group whitespace-nowrap relative text-sm cursor-pointer {{ request()->routeIs('seller.seller-dashboard') ? 'text-primary bg-brand-light/60 shadow-xs' : 'text-text-muted hover:bg-brand-light/30 hover:text-primary' }}"
@@ -44,16 +59,29 @@
                     </svg>
                     <span x-show="sidebarOpen" x-transition.opacity.duration.300ms class="ml-3">Products</span>
                 </div>
-                <svg x-show="sidebarOpen" class="w-4 h-4 transition-transform duration-200 text-text-muted group-hover:text-primary" :class="{'rotate-180': activeDropdown === 'products'}" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
-                </svg>
+                <div class="flex items-center gap-1.5">
+                    @if(($badges['products_total'] ?? 0) > 0)
+                        <span class="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-amber-500 text-white">
+                            {{ $badges['products_total'] }}
+                        </span>
+                    @endif
+                    <svg x-show="sidebarOpen" class="w-4 h-4 transition-transform duration-200 text-text-muted group-hover:text-primary" :class="{'rotate-180': activeDropdown === 'products'}" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                    </svg>
+                </div>
             </button>
             <div x-show="activeDropdown === 'products' && sidebarOpen" x-collapse x-cloak class="ml-6 pl-4 my-1 border-l-2 border-border-subtle/70 space-y-1">
-                <a href="{{ route('seller.products.index') }}" class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ request()->routeIs('seller.products.index') || request()->routeIs('seller.products.create') ? 'bg-primary/10 text-primary font-bold shadow-xs' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">
-                    All Products &amp; Drafts
+                <a href="{{ route('seller.products.index') }}" class="flex items-center justify-between px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ request()->routeIs('seller.products.index') || request()->routeIs('seller.products.create') ? 'bg-primary/10 text-primary font-bold shadow-xs' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">
+                    <span>All Products &amp; Drafts</span>
+                    @if(($badges['disapproved_prods'] ?? 0) > 0)
+                        <span class="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-red-100 text-danger">{{ $badges['disapproved_prods'] }}</span>
+                    @endif
                 </a>
-                <a href="{{ route('seller.products.inventory') }}" class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ request()->routeIs('seller.products.inventory') ? 'bg-primary/10 text-primary font-bold shadow-xs' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">
-                    Inventory
+                <a href="{{ route('seller.products.inventory') }}" class="flex items-center justify-between px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ request()->routeIs('seller.products.inventory') ? 'bg-primary/10 text-primary font-bold shadow-xs' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">
+                    <span>Inventory</span>
+                    @if(($badges['low_stock'] ?? 0) > 0)
+                        <span class="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800">{{ $badges['low_stock'] }}</span>
+                    @endif
                 </a>
                 <a href="{{ route('seller.products.archived') }}" class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ request()->routeIs('seller.products.archived') ? 'bg-primary/10 text-primary font-bold shadow-xs' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">
                     Archived Products
@@ -95,19 +123,51 @@
                     </svg>
                     <span x-show="sidebarOpen" x-transition.opacity.duration.300ms class="ml-3">Orders</span>
                 </div>
-                <svg x-show="sidebarOpen" class="w-4 h-4 transition-transform duration-200 text-text-muted group-hover:text-primary" :class="{'rotate-180': activeDropdown === 'orders'}" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
-                </svg>
+                <div class="flex items-center gap-1.5">
+                    @if(($badges['orders_total'] ?? 0) > 0)
+                        <span class="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-red-500 text-white">
+                            {{ $badges['orders_total'] > 99 ? '99+' : $badges['orders_total'] }}
+                        </span>
+                    @endif
+                    <svg x-show="sidebarOpen" class="w-4 h-4 transition-transform duration-200 text-text-muted group-hover:text-primary" :class="{'rotate-180': activeDropdown === 'orders'}" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                    </svg>
+                </div>
             </button>
             <div x-show="activeDropdown === 'orders' && sidebarOpen" x-collapse x-cloak class="ml-6 pl-4 my-1 border-l-2 border-border-subtle/70 space-y-1">
                 <a href="{{ route('seller.orders.index') }}" class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ request()->routeIs('seller.orders.index') && !request('status') ? 'bg-primary/10 text-primary font-bold shadow-xs' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">All Orders</a>
-                <a href="{{ route('seller.orders.index', ['status' => 'new']) }}" class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ request('status') === 'new' ? 'bg-primary/10 text-primary font-bold shadow-xs' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">New Orders</a>
-                <a href="{{ route('seller.orders.index', ['status' => 'pending']) }}" class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ request('status') === 'pending' ? 'bg-primary/10 text-primary font-bold shadow-xs' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">Pending Buyer Response</a>
-                <a href="{{ route('seller.orders.index', ['status' => 'to_process']) }}" class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ request('status') === 'to_process' ? 'bg-primary/10 text-primary font-bold shadow-xs' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">To Process</a>
-                <a href="{{ route('seller.orders.index', ['status' => 'to_ship']) }}" class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ request('status') === 'to_ship' ? 'bg-primary/10 text-primary font-bold shadow-xs' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">To Ship</a>
+                <a href="{{ route('seller.orders.index', ['status' => 'new']) }}" class="flex items-center justify-between px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ request('status') === 'new' ? 'bg-primary/10 text-primary font-bold shadow-xs' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">
+                    <span>New Orders</span>
+                    @if(($badges['orders_new'] ?? 0) > 0)
+                        <span class="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-red-100 text-danger">{{ $badges['orders_new'] }}</span>
+                    @endif
+                </a>
+                <a href="{{ route('seller.orders.index', ['status' => 'pending']) }}" class="flex items-center justify-between px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ request('status') === 'pending' ? 'bg-primary/10 text-primary font-bold shadow-xs' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">
+                    <span>Pending Buyer Response</span>
+                    @if(($badges['orders_pending'] ?? 0) > 0)
+                        <span class="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800">{{ $badges['orders_pending'] }}</span>
+                    @endif
+                </a>
+                <a href="{{ route('seller.orders.index', ['status' => 'to_process']) }}" class="flex items-center justify-between px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ request('status') === 'to_process' ? 'bg-primary/10 text-primary font-bold shadow-xs' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">
+                    <span>To Process</span>
+                    @if(($badges['orders_to_process'] ?? 0) > 0)
+                        <span class="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 text-blue-800">{{ $badges['orders_to_process'] }}</span>
+                    @endif
+                </a>
+                <a href="{{ route('seller.orders.index', ['status' => 'to_ship']) }}" class="flex items-center justify-between px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ request('status') === 'to_ship' ? 'bg-primary/10 text-primary font-bold shadow-xs' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">
+                    <span>To Ship</span>
+                    @if(($badges['orders_to_ship'] ?? 0) > 0)
+                        <span class="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-indigo-100 text-indigo-800">{{ $badges['orders_to_ship'] }}</span>
+                    @endif
+                </a>
                 <a href="{{ route('seller.orders.index', ['status' => 'shipped']) }}" class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ request('status') === 'shipped' ? 'bg-primary/10 text-primary font-bold shadow-xs' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">Shipped</a>
                 <a href="{{ route('seller.orders.index', ['status' => 'delivered']) }}" class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ request('status') === 'delivered' ? 'bg-primary/10 text-primary font-bold shadow-xs' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">Delivered</a>
-                <a href="{{ route('seller.orders.index', ['status' => 'cancelled']) }}" class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ request('status') === 'cancelled' ? 'bg-primary/10 text-primary font-bold shadow-xs' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">Cancelled / Returned</a>
+                <a href="{{ route('seller.orders.index', ['status' => 'cancelled']) }}" class="flex items-center justify-between px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ request('status') === 'cancelled' ? 'bg-primary/10 text-primary font-bold shadow-xs' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">
+                    <span>Cancelled / Returned</span>
+                    @if(($badges['orders_disputed'] ?? 0) > 0)
+                        <span class="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-red-100 text-danger">{{ $badges['orders_disputed'] }}</span>
+                    @endif
+                </a>
             </div>
         </div>
 
@@ -131,14 +191,38 @@
             </div>
         </div>
 
+        <a href="{{ route('seller.ratings.index') }}"
+            @click="activeDropdown = null"
+            class="flex items-center justify-between px-3 py-3 rounded-xl transition-all duration-200 font-medium group whitespace-nowrap text-sm cursor-pointer {{ $isRatingsActive ? 'text-primary font-bold bg-brand-light/20' : 'text-text-muted hover:bg-brand-light/30 hover:text-primary' }}"
+            :title="!sidebarOpen ? 'Store & Product Ratings' : ''">
+            <div class="flex items-center">
+                <svg class="w-6 h-6 flex-shrink-0 transition-colors {{ $isRatingsActive ? 'text-primary' : 'text-text-muted group-hover:text-primary' }}" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" />
+                </svg>
+                <span x-show="sidebarOpen" x-transition.opacity.duration.300ms class="ml-3">Store &amp; Product Ratings</span>
+            </div>
+            @if(($badges['unreplied_reviews'] ?? 0) > 0)
+                <span class="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-amber-500 text-white">
+                    {{ $badges['unreplied_reviews'] }}
+                </span>
+            @endif
+        </a>
+
         <a href="{{ route('seller.messages.seller-messages') }}"
             @click="activeDropdown = null"
-            class="flex items-center px-3 py-3 rounded-xl transition-all duration-200 font-medium group whitespace-nowrap text-sm cursor-pointer {{ request()->is('seller/messages*') ? 'text-primary font-bold bg-brand-light/20' : 'text-text-muted hover:bg-brand-light/30 hover:text-primary' }}"
+            class="flex items-center justify-between px-3 py-3 rounded-xl transition-all duration-200 font-medium group whitespace-nowrap text-sm cursor-pointer {{ request()->is('seller/messages*') ? 'text-primary font-bold bg-brand-light/20' : 'text-text-muted hover:bg-brand-light/30 hover:text-primary' }}"
             :title="!sidebarOpen ? 'Messages' : ''">
-            <svg class="w-6 h-6 flex-shrink-0 transition-colors {{ request()->is('seller/messages*') ? 'text-primary' : 'text-text-muted group-hover:text-primary' }}" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
-            </svg>
-            <span x-show="sidebarOpen" x-transition.opacity.duration.300ms class="ml-3">Messages</span>
+            <div class="flex items-center">
+                <svg class="w-6 h-6 flex-shrink-0 transition-colors {{ request()->is('seller/messages*') ? 'text-primary' : 'text-text-muted group-hover:text-primary' }}" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
+                </svg>
+                <span x-show="sidebarOpen" x-transition.opacity.duration.300ms class="ml-3">Messages</span>
+            </div>
+            @if(($badges['unread_messages'] ?? 0) > 0)
+                <span class="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-red-500 text-white">
+                    {{ $badges['unread_messages'] > 99 ? '99+' : $badges['unread_messages'] }}
+                </span>
+            @endif
         </a>
 
         <a href="{{ route('seller.store-settings') }}"

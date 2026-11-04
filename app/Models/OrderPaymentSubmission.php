@@ -31,6 +31,12 @@ class OrderPaymentSubmission extends Model
         'switched_to_cod',
         'switched_to_cod_at',
         'seller_verified_at',
+        'verified_by_admin_id',
+        'admin_verified_at',
+        'admin_remarks',
+        'refund_status',
+        'refund_reference',
+        'refunded_at',
     ];
 
     protected function casts(): array
@@ -43,6 +49,8 @@ class OrderPaymentSubmission extends Model
             'switched_to_cod'        => 'boolean',
             'switched_to_cod_at'     => 'datetime',
             'seller_verified_at'     => 'datetime',
+            'admin_verified_at'      => 'datetime',
+            'refunded_at'            => 'datetime',
         ];
     }
 
@@ -78,6 +86,6 @@ class OrderPaymentSubmission extends Model
 
     public function getScreenshotUrlAttribute(): ?string
     {
-        return $this->screenshot_path ? asset('storage/' . $this->screenshot_path) : null;
+        return $this->screenshot_path ? asset('storage/' . ltrim($this->screenshot_path, '/')) : null;
     }
 }

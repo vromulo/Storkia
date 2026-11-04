@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Support\Facades\Schema;
 
 class SellerOrderExtra extends Model
 {
@@ -31,6 +32,7 @@ class SellerOrderExtra extends Model
         'dispute_reason_category',
         'seller_return_decision',
         'seller_return_Decision_reason',
+        'seller_return_decision_reason',
         'seller_return_responded_at',
         'is_escalated_to_admin',
         'escalated_at',
@@ -57,6 +59,19 @@ class SellerOrderExtra extends Model
             'refund_amount'              => 'decimal:2',
             'refund_released_at'         => 'datetime',
         ];
+    }
+
+    public function getSellerReturnDecisionReasonAttribute($value): ?string
+    {
+        return $value ?? ($this->attributes['seller_return_Decision_reason'] ?? null);
+    }
+
+    public function setSellerReturnDecisionReasonAttribute($value): void
+    {
+        $this->attributes['seller_return_Decision_reason'] = $value;
+        if (Schema::hasColumn('seller_order_extras', 'seller_return_decision_reason')) {
+            $this->attributes['seller_return_decision_reason'] = $value;
+        }
     }
 
     public function order(): BelongsTo

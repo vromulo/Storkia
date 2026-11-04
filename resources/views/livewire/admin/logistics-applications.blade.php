@@ -1,77 +1,155 @@
-<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 w-full py-6">
-    <!-- Header -->
-    <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-8">
+@extends('layouts.admin', ['title' => 'Storkia Admin - Logistics Applications'])
+
+@section('content')
+@php
+    $activeTab = $activeTab ?? request()->query('status', 'pending');
+    $search = $search ?? request()->query('search', '');
+    $allUserIds = $applications->pluck('user_id')->filter()->unique()->all();
+    $historyByUser = !empty($allUserIds)
+        ? \App\Models\LogisticsApplication::whereIn('user_id', $allUserIds)->orderByDesc('version')->get()->groupBy('user_id')
+        : collect();
+@endphp
+
+<div x-data="{
+        detailModalOpen: false,
+        docModalOpen: false,
+        rejectModalOpen: false,
+        selectedApp: null,
+        docModalTitle: '',
+        docModalUrl: '',
+        docModalType: 'image',
+        rejectionReason: '',
+        openApplication(appData) {
+            this.selectedApp = appData;
+            this.detailModalOpen = true;
+        },
+        openDocModal(title, url, ext) {
+            this.docModalTitle = title;
+            this.docModalUrl = url;
+            this.docModalType = (ext === 'pdf') ? 'pdf' : 'image';
+            this.docModalOpen = true;
+        },
+        openRejectModal() {
+            this.rejectionReason = '';
+            this.rejectModalOpen = true;
+        }
+     }"
+     class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 w-full py-4 select-none space-y-6">
+
+    <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-            <div class="flex items-center gap-3">
-                <h1 class="text-2xl sm:text-3xl font-bold text-primary">Logistics Applications</h1>
-            </div>
+            <h1 class="text-2xl sm:text-3xl font-bold text-primary-dark">Logistics Applications</h1>
             <p class="text-text-muted text-xs sm:text-sm mt-1">Review hub documentation, facility locations, and onboarding requests.</p>
         </div>
-        <div class="w-full md:w-72">
-            <input type="text" wire:model.live.debounce.300ms="search" placeholder="Search hub name or contact..." class="w-full py-2 px-3 text-sm bg-surface border border-border-subtle rounded-xl outline-none focus:border-primary focus:ring-1 focus:ring-primary shadow-xs">
-        </div>
+        <form method="GET" action="{{ route('admin.applications.logistics') }}" class="flex items-center gap-2 w-full md:w-auto">
+            <input type="hidden" name="status" value="{{ $activeTab }}">
+            <input type="text"
+                   name="search"
+                   value="{{ $search }}"
+                   placeholder="Search hub name or contact..."
+                   class="w-full md:w-72 py-2.5 px-3.5 text-xs bg-surface border border-border-subtle rounded-xl outline-none focus:border-primary shadow-xs">
+            <button type="submit" class="px-4 py-2.5 rounded-xl bg-primary-dark hover:bg-text-main text-white text-xs font-bold cursor-pointer">
+                Search
+            </button>
+        </form>
     </div>
 
     @if(session('success'))
-        <div class="mb-6 p-4 rounded-xl bg-green-50 border border-green-200 text-green-700 text-sm font-semibold flex items-center gap-2">
+        <div class="p-4 rounded-2xl bg-green-50 border border-green-200 text-green-700 text-xs sm:text-sm font-bold flex items-center gap-2">
             <svg class="w-5 h-5 text-green-600 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
-            {{ session('success') }}
+            <span>{{ session('success') }}</span>
         </div>
     @endif
 
-    <!-- Status Tabs -->
-    <div class="flex border-b border-border-subtle mb-6 gap-2 sm:gap-6">
-        <button type="button" wire:click="setTab('pending')" class="pb-3 px-2 text-sm font-bold border-b-2 transition-colors cursor-pointer flex items-center gap-2 {{ $activeTab === 'pending' ? 'border-primary text-primary' : 'border-transparent text-text-muted hover:text-text-main' }}">
-            <span>Pending</span>
-            <span class="text-xs px-2 py-0.5 rounded-full {{ $activeTab === 'pending' ? 'bg-primary text-white' : 'bg-surface-subtle text-text-muted' }}">{{ $counts['pending'] }}</span>
-        </button>
-        <button type="button" wire:click="setTab('approved')" class="pb-3 px-2 text-sm font-bold border-b-2 transition-colors cursor-pointer flex items-center gap-2 {{ $activeTab === 'approved' ? 'border-primary text-primary' : 'border-transparent text-text-muted hover:text-text-main' }}">
-            <span>Approved</span>
-            <span class="text-xs px-2 py-0.5 rounded-full {{ $activeTab === 'approved' ? 'bg-primary text-white' : 'bg-surface-subtle text-text-muted' }}">{{ $counts['approved'] }}</span>
-        </button>
-        <button type="button" wire:click="setTab('rejected')" class="pb-3 px-2 text-sm font-bold border-b-2 transition-colors cursor-pointer flex items-center gap-2 {{ $activeTab === 'rejected' ? 'border-primary text-primary' : 'border-transparent text-text-muted hover:text-text-main' }}">
-            <span>Rejected</span>
-            <span class="text-xs px-2 py-0.5 rounded-full {{ $activeTab === 'rejected' ? 'bg-primary text-white' : 'bg-surface-subtle text-text-muted' }}">{{ $counts['rejected'] }}</span>
-        </button>
+    @if($errors->any())
+        <div class="p-4 rounded-2xl bg-red-50 border border-red-200 text-red-700 text-xs sm:text-sm space-y-1">
+            @foreach($errors->all() as $err)
+                <p class="font-semibold">{{ $err }}</p>
+            @endforeach
+        </div>
+    @endif
+
+    <div class="flex border-b border-border-subtle gap-2 sm:gap-6">
+        @foreach(['pending' => 'Pending', 'approved' => 'Approved', 'rejected' => 'Rejected'] as $tabKey => $tabLabel)
+            <a href="{{ route('admin.applications.logistics', array_filter(['status' => $tabKey, 'search' => $search])) }}"
+               class="pb-3 px-2 text-sm font-bold border-b-2 transition-colors cursor-pointer flex items-center gap-2 {{ $activeTab === $tabKey ? 'border-primary text-primary' : 'border-transparent text-text-muted hover:text-text-main' }}">
+                <span>{{ $tabLabel }}</span>
+                <span class="text-xs px-2 py-0.5 rounded-full {{ $activeTab === $tabKey ? 'bg-primary text-white' : 'bg-surface-subtle text-text-muted' }}">
+                    {{ $counts[$tabKey] ?? 0 }}
+                </span>
+            </a>
+        @endforeach
     </div>
 
-    <!-- Applications Table -->
-    <div class="bg-surface rounded-2xl border border-border-subtle shadow-xs overflow-hidden">
-        <table class="w-full text-left text-sm">
+    <div class="bg-surface rounded-3xl border border-border-subtle shadow-xs overflow-hidden">
+        <table class="w-full text-left text-xs sm:text-sm">
             <thead class="bg-surface-subtle border-b border-border-subtle text-text-muted text-xs uppercase font-bold tracking-wider">
                 <tr>
-                    <th class="py-3.5 px-4">Hub / Center Name</th>
+                    <th class="py-3.5 px-5">Hub / Center Name</th>
                     <th class="py-3.5 px-4">Manager / Contact</th>
                     <th class="py-3.5 px-4">Location</th>
                     <th class="py-3.5 px-4 text-center">Version</th>
                     <th class="py-3.5 px-4">Submitted</th>
-                    <th class="py-3.5 px-4 text-right">Action</th>
+                    <th class="py-3.5 px-5 text-right">Action</th>
                 </tr>
             </thead>
             <tbody class="divide-y divide-border-subtle/70">
                 @forelse($applications as $app)
+                    @php
+                        $idExt = strtolower(pathinfo($app->id_path ?? '', PATHINFO_EXTENSION));
+                        $permitExt = strtolower(pathinfo($app->permit_path ?? '', PATHINFO_EXTENSION));
+                        $userHistory = ($historyByUser->get($app->user_id) ?? collect())->map(fn ($h) => [
+                            'id'               => $h->id,
+                            'version'          => $h->version,
+                            'status'           => $h->status,
+                            'created_at'       => $h->created_at?->format('M d, Y h:i A'),
+                            'rejection_reason' => $h->rejection_reason,
+                        ])->values()->all();
+
+                        $appPayload = [
+                            'id'               => $app->id,
+                            'business_name'    => $app->business_name,
+                            'version'          => $app->version,
+                            'status'           => $app->status,
+                            'submitted_at'     => $app->created_at?->format('M d, Y h:i A'),
+                            'manager_name'     => trim(($app->user->first_name ?? '') . ' ' . ($app->user->last_name ?? '')),
+                            'email'            => $app->user->email ?? '',
+                            'contact_no'       => $app->contact_no,
+                            'address'          => collect([$app->house_details, $app->street, $app->barangay, $app->municipality, $app->province])->filter()->implode(', '),
+                            'rejection_reason' => $app->rejection_reason,
+                            'id_url'           => route('admin.applications.logistics.document', [$app->id, 'id']),
+                            'id_ext'           => $idExt,
+                            'permit_url'       => route('admin.applications.logistics.document', [$app->id, 'permit']),
+                            'permit_ext'       => $permitExt,
+                            'approve_url'      => route('admin.applications.logistics.approve', $app->id),
+                            'reject_url'       => route('admin.applications.logistics.reject', $app->id),
+                            'history'          => $userHistory,
+                        ];
+                    @endphp
                     <tr class="hover:bg-brand-light/10 transition-colors">
-                        <td class="py-3.5 px-4">
+                        <td class="py-3.5 px-5">
                             <p class="font-bold text-text-main">{{ $app->business_name }}</p>
                         </td>
                         <td class="py-3.5 px-4">
-                            <p class="font-medium text-text-main">{{ $app->user->first_name }} {{ $app->user->last_name }}</p>
+                            <p class="font-medium text-text-main">{{ $app->user?->first_name }} {{ $app->user?->last_name }}</p>
                             <p class="text-xs text-text-muted">{{ $app->contact_no }}</p>
                         </td>
                         <td class="py-3.5 px-4 text-text-muted">{{ $app->municipality }}, {{ $app->province }}</td>
                         <td class="py-3.5 px-4 text-center">
                             <span class="px-2 py-0.5 bg-surface-subtle border border-border-subtle text-text-main font-bold rounded-md text-xs">v{{ $app->version }}</span>
                         </td>
-                        <td class="py-3.5 px-4 text-text-muted text-xs">{{ $app->created_at->format('M d, Y h:i A') }}</td>
-                        <td class="py-3.5 px-4 text-right">
-                            <button type="button" wire:click="viewApplication({{ $app->id }})" class="px-3 py-1.5 bg-primary/10 text-primary hover:bg-primary hover:text-white font-bold text-xs rounded-lg transition-colors cursor-pointer">
+                        <td class="py-3.5 px-4 text-text-muted text-xs">{{ $app->created_at?->format('M d, Y h:i A') }}</td>
+                        <td class="py-3.5 px-5 text-right">
+                            <button type="button"
+                                    @click="openApplication(@js($appPayload))"
+                                    class="px-3.5 py-1.5 bg-primary/10 text-primary hover:bg-primary hover:text-white font-bold text-xs rounded-xl transition-colors cursor-pointer">
                                 Review Details
                             </button>
                         </td>
                     </tr>
                 @empty
                     <tr>
-                        <td colspan="6" class="p-8 text-center text-text-muted text-sm">
+                        <td colspan="6" class="p-10 text-center text-text-muted text-xs sm:text-sm">
                             No {{ $activeTab }} logistics applications found.
                         </td>
                     </tr>
@@ -85,136 +163,151 @@
     </div>
 
     <!-- Review Modal -->
-    @if($detailModalOpen && $currentApp)
-        <div class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs overflow-y-auto">
-            <div class="bg-surface rounded-3xl max-w-3xl w-full p-6 sm:p-8 shadow-2xl border border-border-subtle max-h-[90vh] overflow-y-auto space-y-6 my-auto">
+    <template x-teleport="body">
+        <div x-show="detailModalOpen && selectedApp"
+             x-cloak
+             class="fixed inset-0 z-[190] flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs overflow-y-auto">
+            <div @click.away="detailModalOpen = false"
+                 class="bg-surface rounded-3xl max-w-3xl w-full p-6 sm:p-8 shadow-2xl border border-border-subtle max-h-[90vh] overflow-y-auto space-y-6 my-auto">
                 <div class="flex items-center justify-between border-b border-border-subtle pb-4">
                     <div>
-                        <h2 class="text-xl font-bold text-primary">{{ $currentApp->business_name }}</h2>
-                        <p class="text-xs text-text-muted">Application Revision v{{ $currentApp->version }} • Submitted {{ $currentApp->created_at->format('M d, Y h:i A') }}</p>
+                        <h2 class="text-xl font-bold text-primary-dark" x-text="selectedApp?.business_name"></h2>
+                        <p class="text-xs text-text-muted" x-text="'Application Revision v' + (selectedApp?.version || 1) + ' • Submitted ' + (selectedApp?.submitted_at || '')"></p>
                     </div>
-                    <button type="button" wire:click="$set('detailModalOpen', false)" class="text-text-muted hover:text-danger p-1">
+                    <button type="button" @click="detailModalOpen = false" class="text-text-muted hover:text-danger p-1 cursor-pointer">
                         <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
                     </button>
                 </div>
 
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs bg-surface-subtle p-4 rounded-2xl border border-border-subtle">
-                    <div><span class="text-text-muted">Hub Manager:</span> <strong class="text-text-main">{{ $currentApp->user->first_name }} {{ $currentApp->user->last_name }}</strong></div>
-                    <div><span class="text-text-muted">Email:</span> <strong class="text-text-main">{{ $currentApp->user->email }}</strong></div>
-                    <div><span class="text-text-muted">Contact:</span> <strong class="text-text-main">{{ $currentApp->contact_no }}</strong></div>
-                    <div><span class="text-text-muted">Status:</span> <strong class="capitalize text-text-main">{{ $currentApp->status }}</strong></div>
-                    <div class="md:col-span-2"><span class="text-text-muted">Hub Facility Address:</span> <strong class="text-text-main">{{ $currentApp->house_details ? $currentApp->house_details.', ' : '' }}{{ $currentApp->street ? $currentApp->street.', ' : '' }}{{ $currentApp->barangay }}, {{ $currentApp->municipality }}, {{ $currentApp->province }}</strong></div>
+                    <div><span class="text-text-muted">Hub Manager:</span> <strong class="text-text-main" x-text="selectedApp?.manager_name"></strong></div>
+                    <div><span class="text-text-muted">Email:</span> <strong class="text-text-main font-mono" x-text="selectedApp?.email"></strong></div>
+                    <div><span class="text-text-muted">Contact:</span> <strong class="text-text-main" x-text="selectedApp?.contact_no"></strong></div>
+                    <div><span class="text-text-muted">Status:</span> <strong class="capitalize text-text-main" x-text="selectedApp?.status"></strong></div>
+                    <div class="md:col-span-2"><span class="text-text-muted">Hub Facility Address:</span> <strong class="text-text-main" x-text="selectedApp?.address"></strong></div>
                 </div>
 
-                <!-- Documents Inspection -->
                 <div>
-                    <h3 class="text-xs font-bold uppercase tracking-wider text-text-muted mb-2">Facility & Identity Documents</h3>
+                    <h3 class="text-xs font-bold uppercase tracking-wider text-text-muted mb-2">Facility &amp; Identity Documents</h3>
                     <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                        <div class="border border-border-subtle rounded-xl p-3 flex items-center justify-between bg-surface">
-                            <span class="text-xs font-semibold text-text-main truncate">Valid Government ID</span>
-                            <button type="button" wire:click="inspectDoc('id', {{ $currentApp->id }})" class="text-xs font-bold text-primary hover:underline px-2 py-1 cursor-pointer">
+                        <div class="border border-border-subtle rounded-2xl p-3.5 flex items-center justify-between bg-surface">
+                            <span class="text-xs font-bold text-text-main truncate">Valid Government ID</span>
+                            <button type="button"
+                                    @click="openDocModal('Valid Government ID — ' + selectedApp.business_name, selectedApp.id_url, selectedApp.id_ext)"
+                                    class="px-3 py-1.5 rounded-xl bg-primary/10 text-primary hover:bg-primary hover:text-white text-xs font-bold transition-colors cursor-pointer">
                                 Inspect Document
                             </button>
                         </div>
-                        <div class="border border-border-subtle rounded-xl p-3 flex items-center justify-between bg-surface">
-                            <span class="text-xs font-semibold text-text-main truncate">Hub Business Permit</span>
-                            <button type="button" wire:click="inspectDoc('permit', {{ $currentApp->id }})" class="text-xs font-bold text-primary hover:underline px-2 py-1 cursor-pointer">
+                        <div class="border border-border-subtle rounded-2xl p-3.5 flex items-center justify-between bg-surface">
+                            <span class="text-xs font-bold text-text-main truncate">Hub Business Permit</span>
+                            <button type="button"
+                                    @click="openDocModal('Hub Business Permit — ' + selectedApp.business_name, selectedApp.permit_url, selectedApp.permit_ext)"
+                                    class="px-3 py-1.5 rounded-xl bg-primary/10 text-primary hover:bg-primary hover:text-white text-xs font-bold transition-colors cursor-pointer">
                                 Inspect Document
                             </button>
                         </div>
                     </div>
                 </div>
 
-                <!-- Revision History -->
-                @if($history->count() > 1)
+                <template x-if="selectedApp?.history && selectedApp.history.length > 1">
                     <div class="border-t border-border-subtle pt-4">
-                        <h3 class="text-xs font-bold uppercase tracking-wider text-text-muted mb-3">Submission History & Revisions ({{ $history->count() }})</h3>
+                        <h3 class="text-xs font-bold uppercase tracking-wider text-text-muted mb-3" x-text="'Submission History & Revisions (' + selectedApp.history.length + ')'"></h3>
                         <div class="space-y-2 max-h-40 overflow-y-auto">
-                            @foreach($history as $past)
-                                <div class="p-3 rounded-xl border border-border-subtle text-xs flex items-center justify-between {{ $past->id === $currentApp->id ? 'bg-brand-light/20 border-primary/40' : 'bg-surface-subtle' }}">
+                            <template x-for="past in selectedApp.history" :key="past.id">
+                                <div class="p-3 rounded-xl border border-border-subtle text-xs flex items-center justify-between bg-surface-subtle">
                                     <div>
-                                        <span class="font-bold">v{{ $past->version }}</span>
-                                        <span class="ml-2 font-semibold capitalize {{ $past->status === 'approved' ? 'text-green-600' : ($past->status === 'rejected' ? 'text-danger' : 'text-yellow-600') }}">{{ $past->status }}</span>
-                                        <span class="text-text-muted text-[10px] ml-2">{{ $past->created_at->format('M d, Y h:i A') }}</span>
-                                        @if($past->rejection_reason)
-                                            <p class="text-[11px] text-danger mt-1 italic font-medium">"{{ $past->rejection_reason }}"</p>
-                                        @endif
+                                        <span class="font-bold" x-text="'v' + past.version"></span>
+                                        <span class="ml-2 font-semibold capitalize" x-text="past.status"></span>
+                                        <span class="text-text-muted text-[10px] ml-2" x-text="past.created_at"></span>
+                                        <template x-if="past.rejection_reason">
+                                            <p class="text-[11px] text-danger mt-1 italic font-medium" x-text="'\"' + past.rejection_reason + '\"'"></p>
+                                        </template>
                                     </div>
-                                    @if($past->id !== $currentApp->id)
-                                        <button type="button" wire:click="viewApplication({{ $past->id }})" class="text-primary text-[11px] font-bold hover:underline cursor-pointer">
-                                            View Snapshot
-                                        </button>
-                                    @else
-                                        <span class="text-[10px] text-primary font-bold">Viewing</span>
-                                    @endif
                                 </div>
-                            @endforeach
+                            </template>
                         </div>
                     </div>
-                @endif
+                </template>
 
-                <!-- Modal Actions -->
                 <div class="flex justify-end gap-3 border-t border-border-subtle pt-4">
-                    <button type="button" wire:click="$set('detailModalOpen', false)" class="px-4 py-2 text-xs font-bold text-text-muted hover:bg-surface-subtle rounded-xl cursor-pointer">
+                    <button type="button" @click="detailModalOpen = false" class="px-4 py-2 text-xs font-bold text-text-muted hover:bg-surface-subtle rounded-xl cursor-pointer">
                         Close
                     </button>
-                    @if($currentApp->status === 'pending')
-                        <button type="button" wire:click="promptReject({{ $currentApp->id }})" class="px-5 py-2 text-xs font-bold text-white bg-danger hover:bg-red-700 rounded-xl transition-colors cursor-pointer">
-                            Reject Application
-                        </button>
-                        <button type="button" wire:click="approve({{ $currentApp->id }})" class="px-5 py-2 text-xs font-bold text-white bg-green-600 hover:bg-green-700 rounded-xl transition-colors cursor-pointer">
-                            Approve Application
-                        </button>
-                    @endif
+                    <template x-if="selectedApp?.status === 'pending'">
+                        <div class="flex items-center gap-2.5">
+                            <button type="button"
+                                    @click="openRejectModal()"
+                                    class="px-5 py-2.5 text-xs font-bold text-white bg-danger hover:bg-red-700 rounded-xl transition-colors cursor-pointer">
+                                Reject Application
+                            </button>
+                            <form :action="selectedApp?.approve_url" method="POST" class="m-0">
+                                @csrf
+                                @method('PATCH')
+                                <button type="submit" class="px-5 py-2.5 text-xs font-bold text-white bg-green-600 hover:bg-green-700 rounded-xl transition-colors cursor-pointer">
+                                    Approve Application
+                                </button>
+                            </form>
+                        </div>
+                    </template>
                 </div>
             </div>
         </div>
-    @endif
+    </template>
 
     <!-- Document Inspection Modal -->
-    @if($docModalOpen)
-        <div class="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/70 backdrop-blur-xs">
-            <div class="bg-surface rounded-3xl max-w-4xl w-full p-4 sm:p-6 shadow-2xl border border-border-subtle flex flex-col h-[85vh]">
+    <template x-teleport="body">
+        <div x-show="docModalOpen"
+             x-cloak
+             class="fixed inset-0 z-[205] flex items-center justify-center p-4 bg-black/75 backdrop-blur-xs">
+            <div @click.away="docModalOpen = false"
+                 class="bg-surface rounded-3xl max-w-4xl w-full p-4 sm:p-6 shadow-2xl border border-border-subtle flex flex-col h-[85vh]">
                 <div class="flex items-center justify-between pb-3 border-b border-border-subtle">
-                    <h3 class="font-bold text-sm text-primary truncate">{{ $docModalTitle }}</h3>
-                    <div class="flex items-center gap-2">
-                        <a href="{{ $docModalUrl }}" target="_blank" class="text-xs font-bold text-primary hover:underline px-2 py-1">Open in Tab</a>
-                        <button type="button" wire:click="closeDocModal" class="p-1 rounded-lg hover:bg-surface-subtle text-text-muted hover:text-text-main cursor-pointer">
+                    <h3 class="font-bold text-sm text-primary-dark truncate" x-text="docModalTitle"></h3>
+                    <div class="flex items-center gap-3">
+                        <a :href="docModalUrl" target="_blank" class="text-xs font-bold text-primary hover:underline">Open in New Tab &nearr;</a>
+                        <button type="button" @click="docModalOpen = false" class="p-1 rounded-lg hover:bg-surface-subtle text-text-muted hover:text-text-main cursor-pointer">
                             <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
                         </button>
                     </div>
                 </div>
                 <div class="flex-1 overflow-auto p-2 flex items-center justify-center bg-surface-subtle rounded-2xl mt-3">
-                    @if($docModalType === 'image')
-                        <img src="{{ $docModalUrl }}" alt="Document" class="max-h-full max-w-full object-contain rounded-lg shadow-sm">
-                    @else
-                        <iframe src="{{ $docModalUrl }}" class="w-full h-full rounded-lg border-0"></iframe>
-                    @endif
-                </div>
-                <div class="pt-3 flex justify-end">
-                    <button type="button" wire:click="closeDocModal" class="px-4 py-2 bg-primary text-white text-xs font-bold rounded-xl hover:bg-primary-dark cursor-pointer">
-                        Return to Application
-                    </button>
+                    <template x-if="docModalType === 'image'">
+                        <img :src="docModalUrl" alt="Document" class="max-h-full max-w-full object-contain rounded-lg shadow-sm">
+                    </template>
+                    <template x-if="docModalType === 'pdf'">
+                        <iframe :src="docModalUrl" class="w-full h-full rounded-lg border-0"></iframe>
+                    </template>
                 </div>
             </div>
         </div>
-    @endif
+    </template>
 
-    <!-- Rejection Reason Modal -->
-    @if($rejectModalOpen)
-        <div class="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
-            <div class="bg-surface rounded-3xl max-w-md w-full p-6 shadow-2xl border border-border-subtle space-y-4">
+    <!-- Reject Reason Modal -->
+    <template x-teleport="body">
+        <div x-show="rejectModalOpen && selectedApp"
+             x-cloak
+             class="fixed inset-0 z-[210] flex items-center justify-center p-4 bg-black/65 backdrop-blur-xs">
+            <div @click.away="rejectModalOpen = false"
+                 class="bg-surface rounded-3xl max-w-md w-full p-6 shadow-2xl border border-border-subtle space-y-4">
                 <h3 class="text-base font-bold text-danger">Reject Logistics Application</h3>
                 <p class="text-xs text-text-muted">Specify why this hub application is rejected. The reason will appear on the hub manager's dashboard for correction.</p>
-                <div>
-                    <textarea wire:model="rejectionReason" rows="4" placeholder="e.g. Invalid or expired business permit. Please upload an updated permit." class="w-full p-3 text-xs border-2 rounded-xl outline-none border-border-subtle focus:border-danger"></textarea>
-                    @error('rejectionReason') <p class="text-danger text-xs mt-1">{{ $message }}</p> @enderror
-                </div>
-                <div class="flex justify-end gap-2 pt-2">
-                    <button type="button" wire:click="$set('rejectModalOpen', false)" class="px-4 py-2 text-xs font-bold text-text-muted hover:bg-surface-subtle rounded-xl cursor-pointer">Cancel</button>
-                    <button type="button" wire:click="confirmReject" class="px-4 py-2 text-xs font-bold text-white bg-danger hover:bg-red-700 rounded-xl cursor-pointer">Submit Rejection</button>
-                </div>
+                <form :action="selectedApp?.reject_url" method="POST" class="space-y-4 text-xs">
+                    @csrf
+                    @method('PATCH')
+                    <textarea name="rejection_reason"
+                              x-model="rejectionReason"
+                              rows="4"
+                              required
+                              minlength="5"
+                              placeholder="e.g. Invalid or expired business permit. Please upload an updated permit."
+                              class="w-full p-3 border border-border-subtle rounded-xl outline-none focus:border-danger"></textarea>
+                    <div class="flex justify-end gap-2">
+                        <button type="button" @click="rejectModalOpen = false" class="px-4 py-2 font-bold text-text-muted cursor-pointer">Cancel</button>
+                        <button type="submit" class="px-5 py-2 font-bold text-white bg-danger hover:bg-red-700 rounded-xl cursor-pointer">Submit Rejection</button>
+                    </div>
+                </form>
             </div>
         </div>
-    @endif
+    </template>
 </div>
+@endsection

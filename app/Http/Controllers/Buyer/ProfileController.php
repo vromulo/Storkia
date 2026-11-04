@@ -4,11 +4,9 @@ namespace App\Http\Controllers\Buyer;
 
 use App\Http\Controllers\Controller;
 use App\Models\BuyerProfile;
-use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
 use Intervention\Image\Drivers\Gd\Driver;
-use Intervention\Image\Encoders\WebpEncoder;
 use Intervention\Image\ImageManager;
 
 class ProfileController extends Controller
@@ -16,21 +14,22 @@ class ProfileController extends Controller
     private function optimizeAndStoreAvatar($file, string $folder = 'buyer_avatars'): string
     {
         $extension = strtolower($file->getClientOriginalExtension());
-        if (in_array($extension, ['svg', 'gif'])) {
+
+        if (in_array($extension, ['svg', 'gif'], true)) {
             return $file->store($folder, 'public');
         }
 
         $filename = uniqid('avatar_') . '_' . time() . '.webp';
         $path = $folder . '/' . $filename;
 
-        $manager = ImageManager::usingDriver(Driver::class);
-        $image = $manager->decode($file->getRealPath());
-        $image->scaleDown(width: 600, height: 600);
-        $encoded = $image->encode(new WebpEncoder(quality: 85));
-
-        Storage::disk('public')->put($path, $encoded->toString());
-
-        return $path;
+        try {
+            $manager = new ImageManager(new Driver());
+            $encoded = $manager->read($file->getRealPath())->scaleDown(600, 600)->toWebp(85);
+            Storage::disk('public')->put($path, (string) $encoded);
+            return $path;
+        } catch (\Throwable $e) {
+            return $file->store($folder, 'public');
+        }
     }
 
     public function index()
@@ -38,7 +37,6 @@ class ProfileController extends Controller
         /** @var \App\Models\User $user */
         $user = auth()->user();
 
-        // Ensure BuyerProfile exists if the account was seeded without one
         $profile = $user->buyerProfile ?: BuyerProfile::create([
             'user_id'  => $user->id,
             'username' => BuyerProfile::generateUniqueUsername($user->email),
@@ -56,10 +54,8 @@ class ProfileController extends Controller
             'username' => BuyerProfile::generateUniqueUsername($user->email),
         ]);
 
-        // 1. Enforce 1-week cooldown
         if (! $profile->canChangeUsername()) {
             $availableIn = $profile->username_changed_at->copy()->addDays(7)->diffForHumans();
-
             return response()->json([
                 'success' => false,
                 'message' => "You can only change your username once a week. Available {$availableIn}.",
@@ -69,7 +65,6 @@ class ProfileController extends Controller
             ], 422);
         }
 
-        // 2. Normalize and validate input (min: 3, max: 30)
         $cleanUsername = strtolower(trim((string) $request->input('username')));
         $request->merge(['username' => $cleanUsername]);
 
@@ -81,7 +76,6 @@ class ProfileController extends Controller
             'username.max'      => 'Username cannot exceed 30 characters.',
         ]);
 
-        // 3. Verify it is not identical to current username
         if ($cleanUsername === strtolower(trim($profile->username))) {
             return response()->json([
                 'success' => false,
@@ -90,7 +84,6 @@ class ProfileController extends Controller
             ], 422);
         }
 
-        // 4. Case-insensitive uniqueness check against other current users
         if (BuyerProfile::whereRaw('LOWER(TRIM(username)) = ?', [$cleanUsername])
             ->where('id', '!=', $profile->id)
             ->exists()) {

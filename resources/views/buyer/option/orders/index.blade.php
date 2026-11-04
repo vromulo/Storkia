@@ -4,7 +4,24 @@
 ])
 
 @section('option-content')
-<div class="space-y-6 select-none w-full min-w-0 max-w-full overflow-x-hidden">
+<div x-data="{
+        proofLightboxOpen: false,
+        proofData: {
+            url: '',
+            orderNo: '',
+            trackingNo: '',
+            recipient: '',
+            relation: '',
+            rider: '',
+            capturedAt: '',
+            notes: ''
+        },
+        openProofLightbox(payload) {
+            this.proofData = payload;
+            this.proofLightboxOpen = true;
+        }
+     }"
+     class="space-y-6 select-none w-full min-w-0 max-w-full overflow-x-hidden">
 
     @if(session('success'))
         <div class="p-4 rounded-2xl bg-green-50 border border-green-200 text-green-700 text-xs sm:text-sm font-bold">
@@ -82,6 +99,7 @@
                     $subm = $so->paymentSubmission;
                     $extra = $so->extra;
                     $isRated = $so->isRatedByBuyer();
+                    $cardProof = $so->shipment?->latestDeliveryProof ?? $so->shipment?->deliveryProofs?->first();
                     $badgeColor = match($so->status) {
                         'completed'                 => $isRated ? 'bg-green-100 text-green-700 border-green-200' : 'bg-amber-100 text-amber-800 border-amber-300',
                         'delivered'                 => 'bg-blue-100 text-blue-700 border-blue-200',
@@ -158,7 +176,7 @@
                             <div class="p-4 sm:px-5 flex items-center gap-3.5 min-w-0">
                                 <div class="w-14 h-14 rounded-xl bg-surface-subtle border border-border-subtle overflow-hidden shrink-0 flex items-center justify-center p-1">
                                     @if($item->product_image)
-                                        <img src="{{ asset('storage/' . $item->product_image) }}" alt="{{ $item->product_name }}" class="w-full h-full object-contain rounded-lg">
+                                        <img src="{{ asset('storage/' . ltrim($item->product_image, '/')) }}" alt="{{ $item->product_name }}" class="w-full h-full object-contain rounded-lg">
                                     @else
                                         <svg class="w-5 h-5 text-text-muted/40" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
@@ -208,6 +226,23 @@
                                 Total ({{ $payMethod }}): ₱{{ number_format((float) $so->total_amount, 2) }}
                             </span>
 
+                            @if($cardProof)
+                                <button type="button"
+                                        @click.stop="openProofLightbox({
+                                            url: '{{ route('user.orders.proof-image', $cardProof->id) }}',
+                                            orderNo: '{{ $so->seller_order_number }}',
+                                            trackingNo: '{{ $so->shipment->tracking_number ?? 'N/A' }}',
+                                            recipient: '{{ addslashes($cardProof->recipient_name ?: 'Recipient') }}',
+                                            relation: '{{ addslashes($cardProof->recipient_relation ?: '') }}',
+                                            rider: '{{ addslashes($cardProof->rider?->full_name ?? 'Assigned Rider') }}',
+                                            capturedAt: '{{ ($cardProof->captured_at ?? $so->delivered_at)?->format('M d, Y h:i A') ?? '' }}',
+                                            notes: '{{ addslashes($cardProof->notes ?? '') }}'
+                                        })"
+                                        class="px-3.5 py-2 rounded-xl bg-surface border border-primary/40 hover:bg-primary/10 text-primary-dark text-xs font-bold transition-colors cursor-pointer">
+                                    Inspect Delivery Photo
+                                </button>
+                            @endif
+
                             @if($so->status === 'delivered' && !$so->has_unresolved_dispute)
                                 <form action="{{ route('user.orders.confirm-receipt', $so->id) }}" method="POST" class="m-0">
                                     @csrf
@@ -243,6 +278,58 @@
             {{ $sellerOrders->links() }}
         </div>
     @endif
+
+    <template x-teleport="body">
+        <div x-show="proofLightboxOpen"
+             x-cloak
+             @keydown.escape.window="proofLightboxOpen = false"
+             class="fixed inset-0 z-[195] flex items-center justify-center p-4">
+            <div @click="proofLightboxOpen = false" class="absolute inset-0 bg-black/75 backdrop-blur-xs cursor-pointer"></div>
+            <div @click.stop class="relative z-10 bg-surface rounded-3xl max-w-xl w-full p-6 shadow-2xl border border-border-subtle space-y-4 max-h-[90vh] overflow-y-auto">
+                <div class="flex items-center justify-between pb-3 border-b border-border-subtle">
+                    <div>
+                        <h3 class="text-base font-bold text-primary-dark">Proof of Delivery</h3>
+                        <p class="text-xs text-text-muted" x-text="'Order #' + proofData.orderNo + ' • Tracking #' + proofData.trackingNo"></p>
+                    </div>
+                    <button type="button" @click="proofLightboxOpen = false" class="p-1.5 text-text-muted hover:text-text-main cursor-pointer text-lg leading-none">&times;</button>
+                </div>
+
+                <div class="rounded-2xl overflow-hidden bg-surface-subtle border border-border-subtle flex items-center justify-center max-h-[55vh] p-2">
+                    <img :src="proofData.url" alt="Proof of Delivery" class="max-h-[52vh] w-auto object-contain rounded-xl shadow-xs">
+                </div>
+
+                <div class="p-4 rounded-2xl bg-surface-subtle border border-border-subtle grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                    <div>
+                        <span class="text-text-muted block">Received By:</span>
+                        <strong class="text-text-main" x-text="proofData.recipient + (proofData.relation ? ' (' + proofData.relation + ')' : '')"></strong>
+                    </div>
+                    <div>
+                        <span class="text-text-muted block">Delivered At:</span>
+                        <strong class="text-text-main" x-text="proofData.capturedAt || 'Recorded'"></strong>
+                    </div>
+                    <div class="sm:col-span-2">
+                        <span class="text-text-muted block">Delivered By Rider:</span>
+                        <strong class="text-text-main" x-text="proofData.rider"></strong>
+                    </div>
+                    <template x-if="proofData.notes">
+                        <div class="sm:col-span-2">
+                            <span class="text-text-muted block">Rider Handover Notes:</span>
+                            <p class="text-text-main italic" x-text="proofData.notes"></p>
+                        </div>
+                    </template>
+                </div>
+
+                <div class="flex items-center justify-between pt-2 border-t border-border-subtle text-xs">
+                    <a :href="proofData.url" target="_blank" class="font-bold text-primary hover:underline">
+                        Open Full Image in New Tab &nearr;
+                    </a>
+                    <button type="button" @click="proofLightboxOpen = false" class="px-5 py-2 rounded-xl bg-primary-dark hover:bg-text-main text-white font-bold cursor-pointer">
+                        Done
+                    </button>
+                </div>
+            </div>
+        </div>
+    </template>
 
 </div>
 @endsection

@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Logistics;
 
 use App\Http\Controllers\Controller;
+use App\Http\Controllers\Courier\PickupController as WebPickupController;
 use App\Models\Courier;
 use App\Models\DeliveryAssignment;
 use App\Models\OrderStatusHistory;
@@ -12,11 +13,14 @@ use App\Models\Shipment;
 use App\Models\ShipmentTracking;
 use App\Models\ShipmentVerification;
 use App\Models\User;
+use App\Models\WalletTransaction;
+use App\Notifications\OrderLifecycleNotification;
 use App\Services\AddressService;
 use App\Services\BuyerAbandonmentService;
 use App\Services\BuyerOrderNotificationService;
 use App\Services\InventoryStockService;
 use App\Services\OrderCompletionService;
+use App\Services\RoleWalletService;
 use App\Services\ShipmentVerificationService;
 use App\Services\VoucherService;
 use Illuminate\Http\Request;
@@ -32,7 +36,8 @@ class ShipmentController extends Controller
         protected AddressService $addressService,
         protected BuyerAbandonmentService $buyerAbandonmentService,
         protected VoucherService $voucherService,
-        protected BuyerOrderNotificationService $buyerNotifications
+        protected BuyerOrderNotificationService $buyerNotifications,
+        protected RoleWalletService $roleWalletService
     ) {}
 
     public function index(Request $request)
@@ -53,11 +58,9 @@ class ShipmentController extends Controller
         $statusTab = $request->query('status', 'all');
         $search = trim((string) $request->query('search', ''));
 
-        // Strict isolation: ONLY shipments explicitly assigned to THIS logistics_profile_id
         $baseQuery = Shipment::where('logistics_profile_id', $profile->id)
             ->whereHas('sellerOrder', fn ($q) => $q->where('logistics_profile_id', $profile->id));
 
-        // If logged in as a Branch Hub account, strictly limit to packages routed to this exact Branch Hub ID
         if ($activeBranchHub) {
             $baseQuery->where(function ($q) use ($activeBranchHub) {
                 $q->whereHas('packages', fn ($pq) => $pq->where('logistics_hub_id', $activeBranchHub->id))
@@ -104,7 +107,6 @@ class ShipmentController extends Controller
             });
         }
 
-        // Strict First-In, First-Out (FIFO) ordering
         $shipments = $query
             ->orderBy('created_at', 'asc')
             ->orderBy('id', 'asc')
@@ -176,17 +178,15 @@ class ShipmentController extends Controller
             $primaryPackage?->logisticsHub?->municipality
             ?? ($shipment->hub_address_snapshot['municipality'] ?? ($shipment->pickup_address_snapshot['municipality'] ?? ''))
         );
-
         $deliveryMun = $this->addressService->normalizeName($shipment->delivery_address_snapshot['municipality'] ?? '');
         $deliveryBarangay = $this->addressService->normalizeName($shipment->delivery_address_snapshot['barangay'] ?? '');
 
         $allCouriers = Courier::with(['currentHubAssignment.hub'])
             ->where('logistics_profile_id', $profile->id)
-            ->whereIn('status', ['active', 'on_delivery'])
+            ->whereIn('status', ['active', 'Active', 'on_delivery'])
             ->orderBy('first_name')
             ->get();
 
-        // Strictly show ONLY Couriers registered to the designated Hub / Municipality (even for Main Hub!)
         $availableCouriers = $allCouriers->filter(function (Courier $c) use ($targetHubId, $pickupMun) {
             $assignedHub = $c->assigned_hub;
             if (! $assignedHub) {
@@ -198,6 +198,7 @@ class ShipmentController extends Controller
             if ($pickupMun !== '' && $this->addressService->normalizeName($assignedHub->municipality) === $pickupMun) {
                 return true;
             }
+
             return false;
         })->values();
 
@@ -207,7 +208,6 @@ class ShipmentController extends Controller
             ->orderBy('first_name')
             ->get();
 
-        // Strictly filter Riders registered to the target Municipality / Hub (even for Main Hub!)
         $municipalityRiders = $allRiders->filter(function (Rider $r) use ($targetHubId, $deliveryMun, $pickupMun) {
             $assignedHub = $r->assigned_hub;
             if (! $assignedHub) {
@@ -223,6 +223,7 @@ class ShipmentController extends Controller
             if ($pickupMun !== '' && $riderMun === $pickupMun) {
                 return true;
             }
+
             return false;
         })->values();
 
@@ -230,6 +231,7 @@ class ShipmentController extends Controller
             if ($deliveryBarangay === '') {
                 return true;
             }
+
             return $r->barangayCoverages->contains(function ($cov) use ($deliveryBarangay) {
                 return $this->addressService->normalizeName($cov->barangay_name) === $deliveryBarangay;
             });
@@ -327,7 +329,7 @@ class ShipmentController extends Controller
         /** @var Courier $courier */
         $courier = Courier::with('currentHubAssignment.hub')
             ->where('logistics_profile_id', $profile->id)
-            ->whereIn('status', ['active', 'on_delivery'])
+            ->whereIn('status', ['active', 'Active', 'on_delivery'])
             ->findOrFail($validated['courier_id']);
 
         $courierHub = $courier->assigned_hub;
@@ -340,7 +342,9 @@ class ShipmentController extends Controller
             ]);
         }
 
-        DB::transaction(function () use ($shipment, $courier, $profile, $user, $validated) {
+        $createdAssignment = null;
+
+        DB::transaction(function () use ($shipment, $courier, $profile, $user, $validated, &$createdAssignment) {
             $locked = Shipment::with(['sellerOrder.order', 'packages'])->where('id', $shipment->id)->lockForUpdate()->firstOrFail();
 
             if (! in_array($locked->status, ['pickup_requested', 'courier_assigned'], true)) {
@@ -349,7 +353,6 @@ class ShipmentController extends Controller
                 ]);
             }
 
-            // Mark other couriers' pending assignments on this shipment as reassigned
             PickupAssignment::where('shipment_id', $locked->id)
                 ->where('courier_id', '!=', $courier->id)
                 ->whereIn('status', ['assigned', 'accepted'])
@@ -359,8 +362,7 @@ class ShipmentController extends Controller
                 ? '[Scheduled Pickup By: ' . \Carbon\Carbon::parse($validated['scheduled_pickup_by'])->format('M d, Y h:i A') . '] '
                 : '[SLA: Pickup within 2 hours] ';
 
-            // Single-record upsert per (shipment_id, courier_id) so duplicate cards never appear!
-            PickupAssignment::updateOrCreate(
+            $createdAssignment = PickupAssignment::updateOrCreate(
                 [
                     'shipment_id' => $locked->id,
                     'courier_id'  => $courier->id,
@@ -423,6 +425,25 @@ class ShipmentController extends Controller
             ]);
         });
 
+        try {
+            $sellerName = $shipment->pickup_address_snapshot['business_name']
+                ?? $shipment->sellerProfile?->business_name
+                ?? 'Seller Store';
+            $payInfo = WebPickupController::calculateFirstMileCourierPay($shipment);
+            $peso = "\u{20B1}";
+
+            $courier->notify(new OrderLifecycleNotification(
+                title: "New Pickup Assignment (#{$shipment->tracking_number})",
+                message: "Collect package from {$sellerName} and transport to " . ($courier->assigned_hub?->hub_name ?? $profile->business_name) . ". Haulage Pay: {$peso}" . number_format((float) $payInfo['total_pay'], 2) . '.',
+                type: 'info',
+                url: '/courier/dashboard',
+                orderId: $shipment->order_id,
+                sellerOrderId: $shipment->seller_order_id,
+                shipmentId: $shipment->id
+            ));
+        } catch (\Throwable $e) {
+        }
+
         return back()->with('success', "Courier {$courier->full_name} has been assigned to pick up Shipment #{$shipment->tracking_number}.");
     }
 
@@ -436,7 +457,10 @@ class ShipmentController extends Controller
             abort(403);
         }
 
-        DB::transaction(function () use ($shipment, $profile, $user) {
+        $notifiableCourier = null;
+        $creditedPayInfo = null;
+
+        DB::transaction(function () use ($shipment, $profile, $user, &$notifiableCourier, &$creditedPayInfo) {
             $locked = Shipment::with([
                 'sellerOrder.order',
                 'latestPickupAssignment',
@@ -494,6 +518,29 @@ class ShipmentController extends Controller
             }
 
             if ($locked->currentCourier) {
+                $notifiableCourier = $locked->currentCourier;
+                $creditedPayInfo = WebPickupController::calculateFirstMileCourierPay($locked);
+
+                $alreadyCredited = WalletTransaction::where('owner_type', 'Courier')
+                    ->where('owner_id', $locked->currentCourier->id)
+                    ->where('shipment_id', $locked->id)
+                    ->exists();
+
+                if (! $alreadyCredited) {
+                    $this->roleWalletService->creditAvailableDirect(
+                        ownerType: 'Courier',
+                        ownerId: (int) $locked->currentCourier->id,
+                        ownerName: $locked->currentCourier->full_name,
+                        amount: (float) $creditedPayInfo['total_pay'],
+                        sellerOrderId: (int) $locked->seller_order_id,
+                        shipmentId: (int) $locked->id,
+                        entryType: 'first_mile_pickup_pay',
+                        paymentMethod: $locked->sellerOrder?->effective_payment_method ?? 'COD',
+                        description: "First-Mile Pickup Haulage Pay ({$creditedPayInfo['distance_tier']}) for Shipment #{$locked->tracking_number}",
+                        meta: $creditedPayInfo
+                    );
+                }
+
                 $remainingActive = PickupAssignment::where('courier_id', $locked->currentCourier->id)
                     ->whereIn('status', ['assigned', 'accepted', 'picked_up', 'in_transit_to_hub'])
                     ->exists();
@@ -550,6 +597,22 @@ class ShipmentController extends Controller
                     : "Courier handover verified and received at {$hubName}.",
             ]);
         });
+
+        if ($notifiableCourier && $creditedPayInfo) {
+            try {
+                $peso = "\u{20B1}";
+                $notifiableCourier->notify(new OrderLifecycleNotification(
+                    title: "Hub Handover Completed (#{$shipment->tracking_number})",
+                    message: "Sorting Hub verified receipt of Shipment #{$shipment->tracking_number}. {$peso}" . number_format((float) $creditedPayInfo['total_pay'], 2) . ' earned in your Courier E-Wallet.',
+                    type: 'success',
+                    url: '/courier/dashboard',
+                    orderId: $shipment->order_id,
+                    sellerOrderId: $shipment->seller_order_id,
+                    shipmentId: $shipment->id
+                ));
+            } catch (\Throwable $e) {
+            }
+        }
 
         $this->buyerNotifications->arrivedAtHub($shipment);
 
@@ -609,18 +672,17 @@ class ShipmentController extends Controller
                 ]);
             }
 
-            // Mark other riders' pending assignments on this shipment as reassigned
             DeliveryAssignment::where('shipment_id', $locked->id)
                 ->where('rider_id', '!=', $rider->id)
                 ->whereIn('status', ['assigned', 'accepted', 'collected'])
                 ->update(['status' => 'reassigned']);
 
             $nextAttemptNumber = (int) $locked->delivery_attempts_count + 1;
+
             $scheduledNote = ! empty($validated['scheduled_delivery_by'])
                 ? '[Scheduled Delivery By: ' . \Carbon\Carbon::parse($validated['scheduled_delivery_by'])->format('M d, Y h:i A') . '] '
                 : '[SLA: Dispatch within 2 hours] ';
 
-            // Single-record upsert per (shipment_id, rider_id) so duplicate cards never appear on Rider dashboard!
             DeliveryAssignment::updateOrCreate(
                 [
                     'shipment_id' => $locked->id,
@@ -890,6 +952,7 @@ class ShipmentController extends Controller
         /** @var User $user */
         $user = $request->user();
         $profile = $user->logisticsProfile;
+
         if (! $profile) {
             abort(403);
         }
@@ -909,7 +972,6 @@ class ShipmentController extends Controller
             ->where('logistics_profile_id', $profile->id)
             ->where('status', 'approved');
 
-        // Branch Hub only sees its own registered riders; Main Hub sees all riders across its branches
         if ($user->isBranchLogisticsAccount() && $user->branchLogisticsHub) {
             $branchId = (int) $user->branchLogisticsHub->id;
             $query->whereHas('currentHubAssignment', fn ($q) => $q->where('logistics_hub_id', $branchId)->where('is_current', true));

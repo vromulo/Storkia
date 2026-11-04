@@ -8,71 +8,71 @@ class StoreProductRequest extends FormRequest
 {
     public function authorize(): bool
     {
-        return $this->user() && $this->user()->role === 'Seller' && (bool) $this->user()->sellerProfile;
+        return $this->user() && $this->user()->role === 'Seller' && $this->user()->sellerProfile !== null;
     }
 
     public function rules(): array
     {
-        $hasSubVariants = $this->filled('sub_variant_title');
-
-        $rules = [
-            'name'                    => ['required', 'string', 'max:100'],
-            'category'                => ['required', 'string'],
-            'subcategory'             => ['required', 'string'],
-            'discount'                => ['nullable', 'numeric', 'min:0', 'max:100'],
-            'description'             => ['nullable', 'string'],
-            'additional_descriptions' => ['nullable', 'string'],
-            'pictures'                => ['required', 'array', 'min:1'],
-            'pictures.*'              => ['image', 'mimes:jpeg,png,jpg,webp', 'max:5120'],
-
-            'variant_title'           => ['required', 'string', 'max:50'],
-            'sub_variant_title'       => ['nullable', 'string', 'max:50'],
+        return [
+            'name'                    => ['required', 'string', 'min:2', 'max:100'],
+            'category'                => ['required', 'string', 'max:80'],
+            'subcategory'             => ['required', 'string', 'max:100'],
+            'discount'                => ['nullable', 'numeric', 'min:0', 'max:99'],
+            'pictures'                => ['required', 'array', 'min:1', 'max:10'],
+            'pictures.*'              => [
+                'required',
+                'file',
+                'mimetypes:image/jpeg,image/png,image/webp',
+                'mimes:jpg,jpeg,png,webp',
+                'max:5120',
+            ],
+            'variant_title'           => ['required', 'string', 'max:60'],
+            'sub_variant_title'       => ['nullable', 'string', 'max:60'],
             'variant_names'           => ['required', 'array', 'min:1'],
-            'variant_names.*'         => ['required', 'string', 'max:50'],
-            'variant_pictures'        => ['nullable', 'array'],
-            'variant_pictures.*'      => ['nullable', 'image', 'mimes:jpeg,png,jpg,webp', 'max:5120'],
+            'variant_names.*'         => ['required', 'string', 'max:80'],
+            'variant_pictures'        => ['required', 'array', 'min:1'],
+            'variant_pictures.*'      => [
+                'required',
+                'file',
+                'mimetypes:image/jpeg,image/png,image/webp',
+                'mimes:jpg,jpeg,png,webp',
+                'max:5120',
+            ],
+            'variant_prices'          => ['nullable', 'array'],
+            'variant_prices.*'        => ['nullable', 'numeric', 'min:20', 'max:9999999.99'],
+            'variant_weights'         => ['nullable', 'array'],
+            'variant_weights.*'       => ['nullable', 'numeric', 'min:0.01', 'max:5000'],
+            'variant_stocks'          => ['nullable', 'array'],
+            'variant_stocks.*'        => ['nullable', 'integer', 'min:0', 'max:1000000'],
+            'sub_variant_names'       => ['nullable', 'array'],
+            'sub_variant_names.*.*'   => ['required', 'string', 'max:80'],
+            'sub_variant_prices'      => ['nullable', 'array'],
+            'sub_variant_prices.*.*'  => ['required', 'numeric', 'min:20', 'max:9999999.99'],
+            'sub_variant_weights'     => ['nullable', 'array'],
+            'sub_variant_weights.*.*' => ['required', 'numeric', 'min:0.01', 'max:5000'],
+            'sub_variant_stocks'      => ['nullable', 'array'],
+            'sub_variant_stocks.*.*'  => ['required', 'integer', 'min:0', 'max:1000000'],
+            'specifications'          => ['nullable', 'array'],
+            'specifications.*.title'       => ['nullable', 'string', 'max:80'],
+            'specifications.*.description' => ['nullable', 'string', 'max:255'],
+            'description'             => ['nullable', 'string', 'max:5000'],
+            'additional_descriptions' => ['nullable', 'string', 'max:5000'],
+            'per_buyer_limit'         => ['nullable', 'integer', 'min:1', 'max:1000'],
         ];
-
-        if (! $hasSubVariants) {
-            $rules['variant_prices']    = ['required', 'array'];
-            $rules['variant_prices.*']  = ['required', 'numeric', 'min:0'];
-            $rules['variant_weights']   = ['required', 'array'];
-            $rules['variant_weights.*'] = ['required', 'numeric', 'min:0'];
-            $rules['variant_stocks']    = ['required', 'array'];
-            $rules['variant_stocks.*']  = ['required', 'integer', 'min:0'];
-        } else {
-            $rules['sub_variant_names']       = ['required', 'array'];
-            $rules['sub_variant_names.*']     = ['required', 'array', 'min:1'];
-            $rules['sub_variant_names.*.*']   = ['required', 'string', 'max:50'];
-            $rules['sub_variant_prices']      = ['required', 'array'];
-            $rules['sub_variant_prices.*']    = ['required', 'array', 'min:1'];
-            $rules['sub_variant_prices.*.*']  = ['required', 'numeric', 'min:0'];
-            $rules['sub_variant_weights']     = ['required', 'array'];
-            $rules['sub_variant_weights.*']   = ['required', 'array', 'min:1'];
-            $rules['sub_variant_weights.*.*'] = ['required', 'numeric', 'min:0'];
-            $rules['sub_variant_stocks']      = ['required', 'array'];
-            $rules['sub_variant_stocks.*']    = ['required', 'array', 'min:1'];
-            $rules['sub_variant_stocks.*.*']  = ['required', 'integer', 'min:0'];
-        }
-
-        return $rules;
     }
 
-    public function attributes(): array
+    public function messages(): array
     {
         return [
-            'variant_title'          => 'variant title',
-            'sub_variant_title'      => 'sub-variant title',
-            'variant_names.*'        => 'variant name',
-            'variant_prices.*'       => 'variant price',
-            'variant_weights.*'      => 'variant weight',
-            'variant_stocks.*'       => 'variant stock',
-            'sub_variant_names.*.*'  => 'sub-variant name',
-            'sub_variant_prices.*.*' => 'sub-variant price',
-            'sub_variant_weights.*.*'=> 'sub-variant weight',
-            'sub_variant_stocks.*.*' => 'sub-variant stock',
-            'pictures.*'             => 'product picture',
-            'variant_pictures.*'     => 'variant picture',
+            'pictures.required'           => 'Please upload at least 1 main product picture (up to 10 pictures allowed).',
+            'pictures.min'                => 'Please upload at least 1 main product picture.',
+            'pictures.max'                => 'You can upload a maximum of 10 main product pictures. The 1st picture serves as the product cover.',
+            'pictures.*.mimetypes'        => 'Each main product picture must be a valid JPG, PNG, or WEBP image (max 5 MB).',
+            'pictures.*.max'              => 'Each main product picture must not exceed 5 MB.',
+            'variant_pictures.*.required' => 'Each product variant must have its own dedicated variant image.',
+            'variant_pictures.*.mimetypes'=> 'Each variant image must be a valid JPG, PNG, or WEBP file (max 5 MB).',
+            'variant_prices.*.min'        => 'Variant price must be at least ₱20.00.',
+            'sub_variant_prices.*.*.min'  => 'Sub-variant price must be at least ₱20.00.',
         ];
     }
 }

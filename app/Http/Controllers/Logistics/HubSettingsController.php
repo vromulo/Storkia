@@ -3,95 +3,80 @@
 namespace App\Http\Controllers\Logistics;
 
 use App\Http\Controllers\Controller;
-use App\Mail\RegistrationOtpMail;
+use App\Mail\OtpMail;
 use App\Models\EmailChangeRequest;
 use App\Models\User;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Storage;
-use Illuminate\Support\Str;
+use Illuminate\Validation\Rule;
+use Illuminate\Validation\Rules\Password;
 use Intervention\Image\Drivers\Gd\Driver;
-use Intervention\Image\Encoders\WebpEncoder;
 use Intervention\Image\ImageManager;
-use Symfony\Component\HttpFoundation\BinaryFileResponse;
 
 class HubSettingsController extends Controller
 {
-    /**
-     * Optimize and store logistics hub photo/logo as WebP (Intervention Image v4).
-     */
-    private function optimizeAndStoreImage($file, string $folder): string
+    public function index(Request $request)
     {
-        $extension = strtolower($file->getClientOriginalExtension());
-
-        if (in_array($extension, ['svg', 'gif'])) {
-            return $file->store($folder, 'public');
-        }
-
-        $filename = uniqid('hub_') . '_' . time() . '.webp';
-        $path = $folder . '/' . $filename;
-
-        $manager = ImageManager::usingDriver(Driver::class);
-        $image = $manager->decode($file->getRealPath());
-        $image->scaleDown(width: 800, height: 800);
-        $encoded = $image->encode(new WebpEncoder(quality: 85));
-
-        Storage::disk('public')->put($path, $encoded->toString());
-
-        return $path;
-    }
-
-    public function index()
-    {
-        /** @var \App\Models\User $user */
-        $user = auth()->user();
+        $user = $request->user();
         $profile = $user->logisticsProfile;
+
+        if (! $profile) {
+            abort(403, 'Approved logistics hub profile required.');
+        }
 
         return view('logistics.settings.hub-settings', compact('user', 'profile'));
     }
 
-    /**
-     * Update Hub Photo / Logo (AJAX).
-     */
-    public function updatePhoto(Request $request)
+    public function updatePhoto(Request $request): JsonResponse
     {
+        $profile = $request->user()?->logisticsProfile;
+
+        if (! $profile) {
+            abort(403);
+        }
+
         $request->validate([
-            'photo' => ['required', 'image', 'mimes:jpeg,png,jpg,webp', 'max:5120'],
+            'photo' => ['required', 'file', 'mimetypes:image/jpeg,image/png,image/webp', 'mimes:jpg,jpeg,png,webp', 'max:5120'],
         ], [
-            'photo.required' => 'Please select an image to upload.',
-            'photo.image'    => 'The uploaded file must be a valid image.',
-            'photo.mimes'    => 'Supported formats: JPEG, PNG, JPG, WEBP.',
-            'photo.max'      => 'Photo size must not exceed 5MB.',
+            'photo.mimetypes' => 'Hub logo must be a valid JPG, PNG, or WEBP image (max 5 MB).',
+            'photo.max'       => 'Hub logo must not exceed 5 MB.',
         ]);
 
-        /** @var \App\Models\User $user */
-        $user = auth()->user();
-        $profile = $user->logisticsProfile;
+        $file = $request->file('photo');
+        $filename = 'logistics_logos/hub_' . $profile->id . '_' . uniqid('', true) . '.webp';
+
+        try {
+            $manager = new ImageManager(new Driver());
+            $encoded = $manager->read($file->getRealPath())->cover(500, 500)->toWebp(84);
+            Storage::disk('public')->put($filename, (string) $encoded);
+        } catch (\Throwable $e) {
+            $filename = $file->store('logistics_logos', 'public');
+        }
 
         if ($profile->logo_path && Storage::disk('public')->exists($profile->logo_path)) {
             Storage::disk('public')->delete($profile->logo_path);
         }
 
-        $path = $this->optimizeAndStoreImage($request->file('photo'), 'logistics_photos');
-        $profile->update(['logo_path' => $path]);
+        $profile->update(['logo_path' => $filename]);
 
         return response()->json([
             'success'   => true,
-            'message'   => 'Hub photo updated successfully.',
-            'photo_url' => asset('storage/' . $path),
+            'status'    => 'success',
+            'message'   => 'Hub photo updated and optimized to WebP.',
+            'photo_url' => asset('storage/' . $filename),
         ]);
     }
 
-    /**
-     * Remove Hub Photo / Logo (AJAX).
-     */
-    public function removePhoto()
+    public function removePhoto(Request $request): JsonResponse
     {
-        /** @var \App\Models\User $user */
-        $user = auth()->user();
-        $profile = $user->logisticsProfile;
+        $profile = $request->user()?->logisticsProfile;
+
+        if (! $profile) {
+            abort(403);
+        }
 
         if ($profile->logo_path && Storage::disk('public')->exists($profile->logo_path)) {
             Storage::disk('public')->delete($profile->logo_path);
@@ -100,487 +85,333 @@ class HubSettingsController extends Controller
         $profile->update(['logo_path' => null]);
 
         return response()->json([
-            'success' => true,
-            'message' => 'Hub photo removed.',
+            'success'   => true,
+            'status'    => 'success',
+            'message'   => 'Hub photo removed.',
+            'photo_url' => '',
         ]);
     }
 
-    /**
-     * Update Sorting Center / Hub Name (AJAX).
-     */
-    public function updateHubName(Request $request)
+    public function updateHubName(Request $request): JsonResponse
     {
-        $validated = $request->validate([
-            'business_name' => ['required', 'string', 'min:2', 'max:80'],
-        ], [
-            'business_name.required' => 'Please enter your sorting center or hub name.',
-            'business_name.min'      => 'Hub name must be at least 2 characters.',
-            'business_name.max'      => 'Hub name cannot exceed 80 characters.',
+        $profile = $request->user()?->logisticsProfile;
+
+        if (! $profile) {
+            abort(403);
+        }
+
+        $request->merge([
+            'business_name' => trim((string) $request->input('business_name', '')),
         ]);
 
-        /** @var \App\Models\User $user */
-        $user = auth()->user();
-        $profile = $user->logisticsProfile;
-
-        $businessName = trim(preg_replace('/\s+/', ' ', $validated['business_name']));
+        $validated = $request->validate([
+            'business_name' => [
+                'required',
+                'string',
+                'min:3',
+                'max:100',
+                Rule::unique('logistics_profiles', 'business_name')->ignore($profile->id),
+            ],
+        ], [
+            'business_name.min'    => 'Hub name must be at least 3 characters.',
+            'business_name.unique' => 'This logistics hub name is already registered.',
+        ]);
 
         $profile->update([
-            'business_name' => $businessName,
+            'business_name' => $validated['business_name'],
         ]);
 
         return response()->json([
             'success'       => true,
-            'message'       => 'Sorting center name updated successfully.',
-            'business_name' => $businessName,
+            'status'        => 'success',
+            'message'       => 'Logistics hub name updated.',
+            'business_name' => $profile->business_name,
         ]);
     }
 
-    /**
-     * Securely stream logistics hub's own verified ID or Permit for inline preview.
-     */
-    public function viewDocument(string $type): BinaryFileResponse
+    public function viewDocument(Request $request, string $type)
     {
-        /** @var \App\Models\User $user */
-        $user = auth()->user();
-        $profile = $user->logisticsProfile;
+        $profile = $request->user()?->logisticsProfile;
+
+        if (! $profile) {
+            abort(403);
+        }
 
         $path = match ($type) {
-            'id'     => $profile?->id_path,
-            'permit' => $profile?->permit_path,
-            default  => abort(404),
+            'id'     => $profile->id_path,
+            'permit' => $profile->permit_path,
+            default  => null,
         };
 
         if (! $path || ! Storage::disk('public')->exists($path)) {
-            abort(404, 'Document not found.');
+            abort(404);
         }
 
-        $fullPath = Storage::disk('public')->path($path);
-        $mimeType = mime_content_type($fullPath) ?: 'application/octet-stream';
-
-        return response()->file($fullPath, [
-            'Content-Type'        => $mimeType,
-            'Content-Disposition' => 'inline; filename="' . basename($path) . '"',
-        ]);
+        return response()->file(Storage::disk('public')->path($path));
     }
 
-    /**
-     * Update Logistics Manager / Handler's Full Name (AJAX).
-     */
-    public function updateName(Request $request)
+    public function updateName(Request $request): JsonResponse
     {
-        $validated = $request->validate([
-            'first_name' => ['required', 'string', 'max:50', 'regex:/^[A-Za-z\s]+$/'],
-            'last_name'  => ['required', 'string', 'max:50', 'regex:/^[A-Za-z\s]+$/'],
-        ], [
-            'first_name.regex' => 'First name must contain only letters and spaces.',
-            'last_name.regex'  => 'Last name must contain only letters and spaces.',
+        $user = $request->user();
+
+        $request->merge([
+            'first_name' => trim((string) $request->input('first_name', '')),
+            'last_name'  => trim((string) $request->input('last_name', '')),
         ]);
 
-        /** @var \App\Models\User $user */
-        $user = auth()->user();
-
-        $firstName = ucwords(strtolower(trim($validated['first_name'])));
-        $lastName  = ucwords(strtolower(trim($validated['last_name'])));
+        $validated = $request->validate([
+            'first_name' => ['required', 'string', 'min:2', 'max:50', 'regex:/^[\p{L}\s\'\-\.]+$/u'],
+            'last_name'  => ['required', 'string', 'min:2', 'max:50', 'regex:/^[\p{L}\s\'\-\.]+$/u'],
+        ], [
+            'first_name.regex' => 'First name may only contain letters, spaces, hyphens, apostrophes, and periods.',
+            'last_name.regex'  => 'Last name may only contain letters, spaces, hyphens, apostrophes, and periods.',
+        ]);
 
         $user->update([
-            'first_name' => $firstName,
-            'last_name'  => $lastName,
+            'first_name' => $validated['first_name'],
+            'last_name'  => $validated['last_name'],
         ]);
 
         return response()->json([
             'success'    => true,
-            'message'    => 'Name updated successfully.',
-            'first_name' => $firstName,
-            'last_name'  => $lastName,
-            'full_name'  => trim("{$firstName} {$lastName}"),
+            'status'     => 'success',
+            'message'    => 'Hub manager name updated.',
+            'first_name' => $user->first_name,
+            'last_name'  => $user->last_name,
+            'full_name'  => $user->full_name,
         ]);
     }
 
-    /**
-     * Update Phone Number on BOTH users.contact_no and logistics_profiles.contact_no (AJAX).
-     */
-    public function updatePhone(Request $request)
+    public function updatePhone(Request $request): JsonResponse
     {
-        /** @var \App\Models\User $user */
-        $user = auth()->user();
+        $user = $request->user();
+        $profile = $user->logisticsProfile;
 
-        $cleanContact = preg_replace('/\D/', '', (string) $request->input('contact_no'));
-        if (str_starts_with($cleanContact, '63')) {
-            $cleanContact = substr($cleanContact, 2);
+        $digits = preg_replace('/\D/', '', (string) $request->input('contact_no', ''));
+        if (str_starts_with($digits, '63') && strlen($digits) >= 12) {
+            $digits = substr($digits, 2);
         }
-        $cleanContact = ltrim($cleanContact, '0');
+        $cleanDigits = ltrim($digits, '0');
+        $normalizedPhone = '0' . $cleanDigits;
 
-        $request->merge(['clean_contact' => $cleanContact]);
+        $request->merge([
+            'contact_no_clean' => $cleanDigits,
+            'contact_no_norm'  => $normalizedPhone,
+        ]);
 
         $request->validate([
-            'clean_contact' => ['required', 'regex:/^9\d{9}$/'],
+            'contact_no_clean' => ['required', 'string', 'regex:/^9\d{9}$/'],
+            'contact_no_norm'  => [
+                'required',
+                Rule::unique('users', 'contact_no')->ignore($user->id),
+            ],
         ], [
-            'clean_contact.required' => 'Please enter your phone number.',
-            'clean_contact.regex'    => 'Please enter a valid 10-digit mobile number starting with 9 (e.g., 912 345 6789).',
+            'contact_no_clean.regex' => 'Please enter a valid 10-digit Philippine mobile number starting with 9.',
+            'contact_no_norm.unique' => 'This mobile number is already registered to another account.',
         ]);
 
-        $formattedNumber = '+63' . $cleanContact;
+        $user->update(['contact_no' => $normalizedPhone]);
+        $profile?->update(['contact_no' => $normalizedPhone]);
 
-        if (User::where('contact_no', $formattedNumber)->where('id', '!=', $user->id)->exists()) {
-            return response()->json([
-                'success' => false,
-                'message' => 'This phone number is already registered to another account.',
-                'errors'  => [
-                    'contact_no' => ['This phone number is already registered to another account.'],
-                ],
-            ], 422);
-        }
-
-        DB::transaction(function () use ($user, $formattedNumber) {
-            $user->update(['contact_no' => $formattedNumber]);
-            if ($user->logisticsProfile) {
-                $user->logisticsProfile->update(['contact_no' => $formattedNumber]);
-            }
-        });
-
-        $cleanForMask = preg_replace('/\D/', '', $formattedNumber);
-        $maskedPhone = substr($cleanForMask, 0, 5) . '****' . substr($cleanForMask, -3);
+        $fullDigits = '63' . $cleanDigits;
+        $maskedPhone = substr($fullDigits, 0, 5) . '****' . substr($fullDigits, -3);
+        $formattedPhone = substr($cleanDigits, 0, 3) . ' ' . substr($cleanDigits, 3, 3) . ' ' . substr($cleanDigits, 6, 4);
 
         return response()->json([
-            'success'      => true,
-            'message'      => 'Phone number updated across your account and hub profile.',
-            'phone'        => $formattedNumber,
-            'masked_phone' => $maskedPhone,
-            'raw_phone'    => $cleanContact,
+            'success'         => true,
+            'status'          => 'success',
+            'message'         => 'Hub contact number updated.',
+            'phone_raw'       => $cleanDigits,
+            'formatted_phone' => $formattedPhone,
+            'masked_phone'    => $maskedPhone,
+            'has_phone'       => true,
         ]);
     }
 
-    /**
-     * Request 6-digit OTP to change Email Address.
-     */
-    public function requestEmailOtp(Request $request)
+    public function requestEmailOtp(Request $request): JsonResponse
     {
-        /** @var \App\Models\User $user */
-        $user = auth()->user();
+        $user = $request->user();
+        $newEmail = strtolower(trim((string) $request->input('email', '')));
+        $request->merge(['email' => $newEmail]);
 
-        $cleanEmail = strtolower(trim((string) $request->input('email')));
-        $request->merge(['email' => $cleanEmail]);
-
-        $validated = $request->validate([
-            'email' => ['required', 'email:rfc,dns', 'max:255'],
+        $request->validate([
+            'email' => [
+                'required',
+                'string',
+                'email:rfc',
+                'max:120',
+                Rule::unique('users', 'email')->ignore($user->id),
+            ],
         ], [
-            'email.required' => 'Please enter your email address.',
-            'email.email'    => 'Please enter a valid email address.',
+            'email.unique' => 'This email address is already registered to another account.',
         ]);
 
-        $newEmail = $validated['email'];
-
-        if ($newEmail === strtolower(trim($user->email))) {
-            return response()->json([
-                'success' => false,
-                'message' => 'This is already your current email address.',
-                'errors'  => ['email' => ['This is already your current email address.']],
-            ], 422);
-        }
-
-        if (User::whereRaw('LOWER(TRIM(email)) = ?', [$newEmail])->where('id', '!=', $user->id)->exists()) {
-            return response()->json([
-                'success' => false,
-                'message' => 'This email address is already in use.',
-                'errors'  => ['email' => ['This email address is already in use.']],
-            ], 422);
-        }
-
-        $existing = EmailChangeRequest::where('user_id', $user->id)
-            ->where('new_email', $newEmail)
-            ->first();
-
-        if ($existing && $existing->secondsUntilResend() > 0) {
-            return response()->json([
-                'success'  => false,
-                'message'  => "Please wait {$existing->secondsUntilResend()}s before requesting a new code.",
-                'cooldown' => $existing->secondsUntilResend(),
-            ], 429);
-        }
-
-        $code = EmailChangeRequest::generateCode();
-
-        try {
-            Mail::to($newEmail)->send(new RegistrationOtpMail($code, EmailChangeRequest::CODE_TTL_MINUTES));
-        } catch (\Throwable $e) {
-            return response()->json([
-                'success' => false,
-                'message' => 'We could not send the verification email right now. Please try again shortly.',
-            ], 500);
-        }
+        $code = (string) random_int(100000, 999999);
 
         EmailChangeRequest::updateOrCreate(
             ['user_id' => $user->id],
             [
                 'new_email'       => $newEmail,
                 'code_hash'       => Hash::make($code),
-                'attempts'        => 0,
                 'last_sent_at'    => now(),
-                'code_expires_at' => now()->addMinutes(EmailChangeRequest::CODE_TTL_MINUTES),
+                'code_expires_at' => now()->addMinutes(10),
+                'attempts'        => 0,
             ]
         );
 
-        $maskedEmail = $newEmail;
-        if (str_contains($newEmail, '@')) {
-            [$name, $domain] = explode('@', $newEmail, 2);
-            $maskedEmail = substr($name, 0, 1) . str_repeat('*', max(strlen($name) - 2, 3)) . substr($name, -1) . '@' . $domain;
-        }
-
-        return response()->json([
-            'success'      => true,
-            'message'      => 'Verification code sent.',
-            'masked_email' => $maskedEmail,
-            'cooldown'     => EmailChangeRequest::RESEND_COOLDOWN_SECONDS,
-        ]);
-    }
-
-    /**
-     * Verify 6-digit OTP to apply new Email Address.
-     */
-    public function verifyEmailOtp(Request $request)
-    {
-        $request->validate([
-            'code' => ['required', 'digits:6'],
-        ]);
-
-        /** @var \App\Models\User $user */
-        $user = auth()->user();
-
-        $changeRequest = EmailChangeRequest::where('user_id', $user->id)->first();
-
-        if (! $changeRequest) {
-            return response()->json([
-                'success' => false,
-                'message' => 'No active email change request found. Please request a new code.',
-            ], 422);
-        }
-
-        if ($changeRequest->isExpired()) {
-            return response()->json([
-                'success' => false,
-                'message' => 'The verification code has expired. Please request a new one.',
-            ], 422);
-        }
-
-        if ($changeRequest->attempts >= EmailChangeRequest::MAX_ATTEMPTS) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Too many invalid attempts. Please request a new code.',
-            ], 422);
-        }
-
-        if (! Hash::check($request->code, $changeRequest->code_hash)) {
-            $changeRequest->increment('attempts');
-            $remaining = max(0, EmailChangeRequest::MAX_ATTEMPTS - $changeRequest->attempts);
-
-            return response()->json([
-                'success' => false,
-                'message' => "Invalid code. {$remaining} attempt(s) remaining.",
-            ], 422);
-        }
-
-        $targetEmail = strtolower(trim($changeRequest->new_email));
-
-        if (User::whereRaw('LOWER(TRIM(email)) = ?', [$targetEmail])->where('id', '!=', $user->id)->exists()) {
-            return response()->json([
-                'success' => false,
-                'message' => 'This email address is already in use.',
-            ], 422);
-        }
-
-        $user->update(['email' => $targetEmail]);
-        $updatedEmail = $user->email;
-
-        $changeRequest->delete();
-
-        $maskedEmail = $updatedEmail;
-        if (str_contains($updatedEmail, '@')) {
-            [$name, $domain] = explode('@', $updatedEmail, 2);
-            $maskedEmail = substr($name, 0, 1) . str_repeat('*', max(strlen($name) - 2, 4)) . substr($name, -1) . '@' . $domain;
-        }
-
-        return response()->json([
-            'success'      => true,
-            'message'      => 'Email updated successfully.',
-            'email'        => $updatedEmail,
-            'masked_email' => $maskedEmail,
-        ]);
-    }
-
-    /**
-     * Request 6-digit OTP to current email before allowing Password Change.
-     */
-    public function requestPasswordOtp()
-    {
-        /** @var \App\Models\User $user */
-        $user = auth()->user();
-
-        $sessionKey = "pwd_otp_{$user->id}";
-        $existing = session()->get($sessionKey);
-
-        if ($existing && ! empty($existing['last_sent_at'])) {
-            $lastSentAt = \Carbon\Carbon::parse($existing['last_sent_at']);
-            $unlockAt = $lastSentAt->copy()->addSeconds(60);
-
-            if (now()->lt($unlockAt)) {
-                $diff = (int) now()->diffInSeconds($unlockAt);
-                return response()->json([
-                    'success'  => false,
-                    'message'  => "Please wait {$diff}s before requesting a new code.",
-                    'cooldown' => $diff,
-                ], 429);
-            }
-        }
-
-        $code = (string) random_int(100000, 999999);
-
         try {
-            Mail::to($user->email)->send(new RegistrationOtpMail($code, 10));
+            Mail::to($newEmail)->send(new OtpMail($code, $user->first_name));
         } catch (\Throwable $e) {
-            return response()->json([
-                'success' => false,
-                'message' => 'We could not send the verification email right now. Please try again.',
-            ], 500);
+            report($e);
         }
 
-        session()->put($sessionKey, [
-            'code_hash'    => Hash::make($code),
-            'attempts'     => 0,
-            'last_sent_at' => now()->toDateTimeString(),
-            'expires_at'   => now()->addMinutes(10)->toDateTimeString(),
-        ]);
-
-        $maskedEmail = $user->email;
-        if (str_contains($user->email, '@')) {
-            [$name, $domain] = explode('@', $user->email, 2);
-            $maskedEmail = substr($name, 0, 1) . str_repeat('*', max(strlen($name) - 2, 3)) . substr($name, -1) . '@' . $domain;
-        }
+        [$name, $domain] = explode('@', $newEmail, 2);
+        $masked = substr($name, 0, 1) . str_repeat('*', max(strlen($name) - 2, 4)) . substr($name, -1) . '@' . $domain;
 
         return response()->json([
             'success'      => true,
-            'message'      => 'Verification code sent.',
-            'masked_email' => $maskedEmail,
+            'status'       => 'otp_sent',
+            'masked_email' => $masked,
             'cooldown'     => 60,
         ]);
     }
 
-    /**
-     * Verify 6-digit OTP to unlock Password Form.
-     */
-    public function verifyPasswordOtp(Request $request)
+    public function verifyEmailOtp(Request $request): JsonResponse
     {
-        $request->validate([
-            'code' => ['required', 'digits:6'],
-        ]);
+        $user = $request->user();
+        $otpInput = preg_replace('/\D/', '', (string) ($request->input('otp') ?? $request->input('code') ?? ''));
 
-        /** @var \App\Models\User $user */
-        $user = auth()->user();
-
-        $sessionKey = "pwd_otp_{$user->id}";
-        $data = session()->get($sessionKey);
-
-        if (! $data) {
-            return response()->json([
-                'success' => false,
-                'message' => 'No active verification code found. Please request a new code.',
-            ], 422);
+        if (strlen($otpInput) !== 6) {
+            return response()->json(['success' => false, 'message' => 'Please enter a valid 6-digit verification code.'], 422);
         }
 
-        if (now()->isAfter($data['expires_at'])) {
-            session()->forget($sessionKey);
-            return response()->json([
-                'success' => false,
-                'message' => 'The verification code has expired. Please request a new one.',
-            ], 422);
+        $changeReq = EmailChangeRequest::where('user_id', $user->id)->first();
+        if (! $changeReq || ($changeReq->code_expires_at && $changeReq->code_expires_at->isPast())) {
+            return response()->json(['success' => false, 'message' => 'Verification code has expired.'], 422);
         }
 
-        if ($data['attempts'] >= 5) {
-            session()->forget($sessionKey);
-            return response()->json([
-                'success' => false,
-                'message' => 'Too many invalid attempts. Please request a new code.',
-            ], 422);
+        if ($changeReq->attempts >= 5) {
+            return response()->json(['success' => false, 'message' => 'Maximum verification attempts exceeded.'], 422);
         }
 
-        if (! Hash::check($request->code, $data['code_hash'])) {
-            $data['attempts']++;
-            session()->put($sessionKey, $data);
-            $remaining = max(0, 5 - $data['attempts']);
-
-            return response()->json([
-                'success' => false,
-                'message' => "Invalid code. {$remaining} attempt(s) remaining.",
-            ], 422);
+        if (! Hash::check($otpInput, $changeReq->code_hash)) {
+            $changeReq->increment('attempts');
+            return response()->json(['success' => false, 'message' => 'Invalid verification code.'], 422);
         }
 
-        session()->forget($sessionKey);
-        $token = Str::random(40);
-        session()->put("pwd_unlock_token_{$user->id}", [
-            'token'      => $token,
-            'expires_at' => now()->addMinutes(15),
-        ]);
+        $newEmail = strtolower(trim($changeReq->new_email));
+        if (User::where('email', $newEmail)->where('id', '!=', $user->id)->exists()) {
+            return response()->json(['success' => false, 'message' => 'Email already in use.'], 422);
+        }
+
+        $user->update(['email' => $newEmail]);
+        $changeReq->delete();
+
+        [$name, $domain] = explode('@', $newEmail, 2);
+        $masked = substr($name, 0, 1) . str_repeat('*', max(strlen($name) - 2, 4)) . substr($name, -1) . '@' . $domain;
 
         return response()->json([
             'success'      => true,
-            'unlock_token' => $token,
-            'message'      => 'Identity verified successfully.',
+            'status'       => 'success',
+            'message'      => 'Email address updated successfully.',
+            'email'        => $newEmail,
+            'masked_email' => $masked,
         ]);
     }
 
-    /**
-     * Update Password via AJAX after OTP verification.
-     */
-    public function updatePassword(Request $request)
+    public function requestPasswordOtp(Request $request): JsonResponse
     {
-        /** @var \App\Models\User $user */
-        $user = auth()->user();
+        $user = $request->user();
+        $code = (string) random_int(100000, 999999);
 
-        $tokenData = session()->get("pwd_unlock_token_{$user->id}");
+        $request->session()->put('logistics_password_otp', [
+            'hash'       => Hash::make($code),
+            'expires_at' => now()->addMinutes(10)->timestamp,
+            'attempts'   => 0,
+            'verified'   => false,
+        ]);
 
-        if (! $tokenData || $tokenData['token'] !== $request->input('unlock_token') || now()->isAfter($tokenData['expires_at'])) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Verification expired. Please verify your identity again.',
-            ], 403);
+        try {
+            Mail::to($user->email)->send(new OtpMail($code, $user->first_name));
+        } catch (\Throwable $e) {
+            report($e);
+        }
+
+        [$name, $domain] = explode('@', $user->email, 2);
+        $masked = substr($name, 0, 1) . str_repeat('*', max(strlen($name) - 2, 4)) . substr($name, -1) . '@' . $domain;
+
+        return response()->json([
+            'success'      => true,
+            'status'       => 'otp_sent',
+            'masked_email' => $masked,
+            'cooldown'     => 60,
+        ]);
+    }
+
+    public function verifyPasswordOtp(Request $request): JsonResponse
+    {
+        $otpInput = preg_replace('/\D/', '', (string) ($request->input('otp') ?? $request->input('code') ?? ''));
+
+        if (strlen($otpInput) !== 6) {
+            return response()->json(['success' => false, 'message' => 'Please enter a valid 6-digit verification code.'], 422);
+        }
+
+        $otpData = $request->session()->get('logistics_password_otp');
+
+        if (! $otpData || now()->timestamp > ($otpData['expires_at'] ?? 0)) {
+            return response()->json(['success' => false, 'message' => 'Verification code has expired.'], 422);
+        }
+
+        if (($otpData['attempts'] ?? 0) >= 5) {
+            return response()->json(['success' => false, 'message' => 'Too many incorrect attempts.'], 422);
+        }
+
+        if (! Hash::check($otpInput, $otpData['hash'])) {
+            $otpData['attempts'] = ($otpData['attempts'] ?? 0) + 1;
+            $request->session()->put('logistics_password_otp', $otpData);
+            return response()->json(['success' => false, 'message' => 'Invalid verification code.'], 422);
+        }
+
+        $otpData['verified'] = true;
+        $request->session()->put('logistics_password_otp', $otpData);
+
+        return response()->json([
+            'success'  => true,
+            'verified' => true,
+            'status'   => 'verified',
+        ]);
+    }
+
+    public function updatePassword(Request $request): JsonResponse
+    {
+        $user = $request->user();
+        $otpData = $request->session()->get('logistics_password_otp');
+
+        if (! $otpData || empty($otpData['verified'])) {
+            return response()->json(['success' => false, 'message' => 'Please verify OTP first.'], 403);
         }
 
         $validated = $request->validate([
             'password' => [
                 'required',
                 'string',
-                'min:8',
-                function ($attribute, $value, $fail) {
-                    if (! preg_match('/[A-Z]/', $value)) {
-                        $fail('Password must contain at least 1 uppercase letter.');
-                    }
-                    if (! preg_match('/[0-9]/', $value)) {
-                        $fail('Password must contain at least 1 number.');
-                    }
-                    if (! preg_match('/[\W_]/', $value)) {
-                        $fail('Password must contain at least 1 special character.');
-                    }
-                },
+                'confirmed',
+                Password::min(8)->mixedCase()->numbers()->symbols(),
             ],
-            'password_confirmation' => ['required', 'same:password'],
-        ], [
-            'password.required'              => 'Please enter a new password.',
-            'password.min'                   => 'Password must be at least 8 characters long.',
-            'password_confirmation.required' => 'Please confirm your password.',
-            'password_confirmation.same'     => 'The password confirmation does not match.',
         ]);
 
         $user->update([
-            'password'            => Hash::make($validated['password']),
+            'password'            => $validated['password'],
             'password_changed_at' => now(),
         ]);
 
-        session()->forget("pwd_unlock_token_{$user->id}");
+        $request->session()->forget('logistics_password_otp');
 
         return response()->json([
-            'success'             => true,
-            'message'             => 'Password updated successfully.',
-            'password_changed_at' => $user->password_changed_at->toISOString(),
-            'formatted_time'      => $user->formattedPasswordLastUpdated(),
+            'success'               => true,
+            'status'                => 'success',
+            'message'               => 'Password updated successfully.',
+            'password_last_updated' => $user->fresh()->formattedPasswordLastUpdated(),
         ]);
     }
 }

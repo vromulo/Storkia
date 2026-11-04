@@ -6,7 +6,7 @@
 @section('content')
     <x-auth.login-form 
         title="Logistics Operations" 
-        subtitle="Sign in to your Main Hub, Branch Hub, Courier, or Rider account"
+        subtitle="Sign in to your Main Logistics Hub or Authorized Branch Hub account"
         expectedRole="Logistics"
         :registerRoute="route('logistics.register')"
         registerText="Apply for Main Logistics Hub"

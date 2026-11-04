@@ -7,12 +7,19 @@ use App\Models\Cart;
 use App\Models\OrderItem;
 use App\Models\Product;
 use App\Models\SellerStoreFollow;
+use App\Services\BuyerRewardService;
+use App\Services\OrderCompletionService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Schema;
 
 class HomeController extends Controller
 {
+    public function __construct(
+        protected BuyerRewardService $buyerRewardService,
+        protected OrderCompletionService $orderCompletionService
+    ) {}
+
     public function index(Request $request)
     {
         $allApprovedProducts = Product::with(['approval', 'user.sellerProfile'])
@@ -27,7 +34,14 @@ class HomeController extends Controller
         $products = $this->rankProductsByBuyerPreferences($allApprovedProducts, $user?->id);
         $youMayAlsoLike = $products->take(18)->values();
 
-        return view('buyer.home', compact('products', 'youMayAlsoLike'));
+        $rewardWallet = null;
+        if ($user && $user->role === 'Buyer') {
+            $this->orderCompletionService->runLifecycleMaintenance(buyerId: (int) $user->id);
+            $grant = $this->buyerRewardService->grantDailyLoginSpinIfEligible((int) $user->id);
+            $rewardWallet = $grant['wallet'];
+        }
+
+        return view('buyer.home', compact('products', 'youMayAlsoLike', 'rewardWallet'));
     }
 
     public static function rankProductsByBuyerPreferences(Collection $products, ?int $buyerId = null, ?Product $contextProduct = null): Collection
@@ -46,7 +60,6 @@ class HomeController extends Controller
         }
 
         if ($buyerId) {
-            // 1. Weight categories & subcategories from Buyer's past Orders
             $orderedProductIds = OrderItem::whereHas('sellerOrder', fn ($q) => $q->where('buyer_id', $buyerId))
                 ->latest('id')
                 ->limit(40)
@@ -66,7 +79,6 @@ class HomeController extends Controller
                 }
             }
 
-            // 2. Weight categories & subcategories from Buyer's active Cart
             $cartProductIds = Cart::where('user_id', $buyerId)->pluck('product_id')->filter()->all();
             if (! empty($cartProductIds)) {
                 $cartProducts = Product::whereIn('id', $cartProductIds)->get(['id', 'category', 'subcategory']);
@@ -80,7 +92,6 @@ class HomeController extends Controller
                 }
             }
 
-            // 3. Boost products from Stores the Buyer follows
             if (Schema::hasTable('seller_store_follows')) {
                 $followedProfileIds = SellerStoreFollow::where('follower_user_id', $buyerId)
                     ->where('is_following', true)

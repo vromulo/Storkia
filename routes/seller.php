@@ -41,6 +41,7 @@ Route::middleware('throttle:120,1')->group(function () {
             Route::patch('/promotions/deals/{id}', [SuperDealController::class, 'updateRunningSale'])->name('promotions.deals.update');
             Route::post('/promotions/deals/{id}/end', [SuperDealController::class, 'endPromotionNow'])->name('promotions.deals.end');
             Route::post('/promotions/bundles', [SuperDealController::class, 'storeBundleDeal'])->name('promotions.bundles.store');
+            Route::post('/promotions/bundles/{id}/end', [SuperDealController::class, 'endBundleDealNow'])->name('promotions.bundles.end');
 
             Route::get('/vouchers', [VoucherController::class, 'index'])->name('vouchers.index');
             Route::post('/vouchers', [VoucherController::class, 'store'])->name('vouchers.store');
@@ -50,7 +51,6 @@ Route::middleware('throttle:120,1')->group(function () {
             Route::get('/orders', [OrderController::class, 'index'])->name('orders.index');
             Route::get('/orders/{sellerOrder}', [OrderController::class, 'show'])->name('orders.show');
             Route::post('/orders/{sellerOrder}/accept', [OrderController::class, 'accept'])->name('orders.accept');
-            Route::post('/orders/{sellerOrder}/reject', [OrderController::class, 'reject'])->name('orders.reject');
             Route::post('/orders/{sellerOrder}/ready-for-pickup', [OrderController::class, 'markReadyForPickup'])->name('orders.ready-for-pickup');
             Route::post('/orders/{sellerOrder}/report-suspicious-payment', [OrderController::class, 'reportSuspiciousPayment'])->name('orders.report-suspicious-payment');
             Route::post('/orders/{sellerOrder}/verify-online-payment', [OrderController::class, 'verifyOnlinePayment'])->name('orders.verify-online-payment');
@@ -64,6 +64,7 @@ Route::middleware('throttle:120,1')->group(function () {
             Route::get('/sales/formal-report', [OrderController::class, 'formalPdfReport'])->name('reports.formal-pdf');
             Route::post('/sales/payouts', [OrderController::class, 'requestPayout'])->name('payouts.store');
             Route::post('/sales/arrears-remittance', [OrderController::class, 'submitArrearsRemittance'])->name('arrears.remit');
+            Route::get('/ratings', [OrderController::class, 'ratingsIndex'])->name('ratings.index');
             Route::post('/reviews/{review}/reply', [OrderController::class, 'replyToReview'])->name('reviews.reply');
 
             Route::get('/store-settings', [StoreSettingsController::class, 'index'])->name('store-settings');

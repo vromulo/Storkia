@@ -12,10 +12,50 @@
     $paymentSubmission = $sellerOrder->paymentSubmission;
     $extra = $sellerOrder->extra;
     $evidencePhotos = is_array($extra?->dispute_evidence_photos) ? $extra->dispute_evidence_photos : [];
+
+    $unifiedTimeline = collect();
+
+    if ($shipment && $shipment->trackingLogs->isNotEmpty()) {
+        foreach ($shipment->trackingLogs as $tLog) {
+            $unifiedTimeline->push((object) [
+                'title'       => $tLog->title,
+                'description' => $tLog->description,
+                'location'    => $tLog->location,
+                'actor'       => $tLog->actor_type,
+                'occurred_at' => $tLog->occurred_at ?? $tLog->created_at,
+                'badge'       => 'Shipment',
+            ]);
+        }
+    }
+
+    if ($sellerOrder->statusHistories && $sellerOrder->statusHistories->isNotEmpty()) {
+        foreach ($sellerOrder->statusHistories as $sHist) {
+            $unifiedTimeline->push((object) [
+                'title'       => 'Order Status: ' . ucwords(str_replace('_', ' ', (string) $sHist->to_status)),
+                'description' => $sHist->remarks,
+                'location'    => null,
+                'actor'       => $sHist->actor_type,
+                'occurred_at' => $sHist->created_at,
+                'badge'       => 'Order',
+            ]);
+        }
+    }
+
+    if ($unifiedTimeline->isEmpty()) {
+        $unifiedTimeline->push((object) [
+            'title'       => 'Order Placed by Buyer',
+            'description' => 'Order #' . $sellerOrder->seller_order_number . ' created and awaiting seller acceptance within 24 hours.',
+            'location'    => ($deliverySnap['municipality'] ?? '') . ', ' . ($deliverySnap['province'] ?? ''),
+            'actor'       => 'Buyer',
+            'occurred_at' => $sellerOrder->created_at,
+            'badge'       => 'Order',
+        ]);
+    }
+
+    $unifiedTimeline = $unifiedTimeline->sortByDesc(fn ($e) => $e->occurred_at ? $e->occurred_at->timestamp : 0)->values();
 @endphp
 
 <div x-data="{
-        rejectModalOpen: false,
         suspiciousModalOpen: false,
         gcashScreenshotModalOpen: false,
         proofModalOpen: false,
@@ -36,7 +76,7 @@
             <a href="{{ route('seller.orders.index') }}"
                class="p-2.5 bg-surface rounded-full border border-border-subtle text-text-muted hover:text-primary transition-colors">
                 <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18" />
                 </svg>
             </a>
             <div>
@@ -133,7 +173,6 @@
                                 </button>
                             </form>
                         @endif
-
                         <button type="button"
                                 @click.stop="suspiciousModalOpen = true"
                                 class="px-4 py-2 rounded-xl bg-danger hover:opacity-95 text-white text-xs font-bold shadow-xs transition-opacity cursor-pointer">
@@ -149,19 +188,16 @@
                     <p class="font-mono font-bold text-sm text-text-main mt-0.5">{{ $paymentSubmission->sender_gcash_number }}</p>
                     <span class="text-[11px] text-text-muted">To: {{ $paymentSubmission->seller_gcash_name }} ({{ $paymentSubmission->seller_gcash_number }})</span>
                 </div>
-
                 <div class="p-3.5 rounded-2xl bg-white border border-blue-200">
                     <span class="text-[10px] font-bold uppercase text-text-muted block">Unique Reference Number</span>
                     <p class="font-mono font-bold text-sm text-primary-dark mt-0.5">{{ $paymentSubmission->reference_number }}</p>
                     <span class="text-[11px] text-text-muted">Ref Code: <strong class="font-mono">{{ $paymentSubmission->reference_code }}</strong></span>
                 </div>
-
                 <div class="p-3.5 rounded-2xl bg-white border border-blue-200">
-                    <span class="text-[10px] font-bold uppercase text-text-muted block">Date & Time Paid</span>
+                    <span class="text-[10px] font-bold uppercase text-text-muted block">Date &amp; Time Paid</span>
                     <p class="font-bold text-sm text-text-main mt-0.5">{{ $paymentSubmission->paid_at?->format('M d, Y h:i A') }}</p>
                     <span class="text-[11px] text-text-muted">Submitted {{ $paymentSubmission->created_at?->diffForHumans() }}</span>
                 </div>
-
                 <div class="p-3.5 rounded-2xl bg-white border border-blue-200">
                     <span class="text-[10px] font-bold uppercase text-text-muted block">Submitted Amount</span>
                     <p class="font-serif font-extrabold text-base text-primary mt-0.5">₱{{ number_format((float) $paymentSubmission->submitted_amount, 2) }}</p>
@@ -177,23 +213,24 @@
 
     @if($sellerOrder->status === 'pending_seller_acceptance')
         <div class="p-6 rounded-3xl bg-surface border-2 border-primary/30 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-            <div>
-                <h2 class="text-base font-bold text-primary-dark">Step 1: Accept or Reject Incoming Order (24-Hour SLA)</h2>
-                <p class="text-xs text-text-muted mt-1">
+            <div class="space-y-1">
+                <div class="flex flex-wrap items-center gap-2">
+                    <span class="px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-300 text-[10px] font-extrabold uppercase">
+                        24-Hour Platform Auto-Rejection Timer Active
+                    </span>
+                    <h2 class="text-base font-bold text-primary-dark">Step 1: Accept Incoming Order Within 24 Hours</h2>
+                </div>
+                <p class="text-xs text-text-muted leading-relaxed">
                     Please accept this order before <strong>{{ $sellerOrder->acceptance_deadline_at?->format('M d, Y h:i A') }}</strong>
-                    ({{ $sellerOrder->acceptance_deadline_at?->diffForHumans() }}). Unaccepted orders auto-cancel and restore reserved stock.
+                    ({{ $sellerOrder->acceptance_deadline_at?->diffForHumans() }}).
+                    Manual seller rejection is disabled — if no action is taken before the 24-hour timer expires, the platform automatically cancels the order, restores stock, and compensates the buyer with Storkia Coins.
                 </p>
             </div>
             <div class="flex items-center gap-2.5 shrink-0">
-                <button type="button"
-                        @click.stop="rejectModalOpen = true"
-                        class="px-4 py-2.5 rounded-xl border border-red-300 bg-white hover:bg-red-50 text-danger text-xs font-bold transition-colors cursor-pointer">
-                    Reject Order
-                </button>
                 <form action="{{ route('seller.orders.accept', $sellerOrder->id) }}" method="POST" class="m-0">
                     @csrf
-                    <button type="submit" class="px-6 py-2.5 rounded-xl bg-primary hover:bg-primary-dark text-white text-xs font-bold shadow-sm transition-colors cursor-pointer">
-                        Accept Order & Start Preparing
+                    <button type="submit" class="px-6 py-3 rounded-xl bg-primary hover:bg-primary-dark text-white text-xs font-bold shadow-sm transition-colors cursor-pointer">
+                        Accept Order &amp; Start Preparing
                     </button>
                 </form>
             </div>
@@ -203,7 +240,7 @@
     @if(in_array($sellerOrder->status, ['accepted', 'preparing'], true))
         <div class="p-6 rounded-3xl bg-surface border-2 border-primary/30 shadow-xs space-y-5">
             <div>
-                <h2 class="text-base font-bold text-primary-dark">Step 2: Verify Product Checklist & Select Logistics Handover Method</h2>
+                <h2 class="text-base font-bold text-primary-dark">Step 2: Verify Product Checklist &amp; Select Logistics Handover Method</h2>
                 <p class="text-xs text-text-muted mt-0.5">
                     Verify all ordered items below, choose between <strong>First-Mile Courier Pickup</strong> or <strong>Seller Self Drop-Off at Hub</strong>, and generate your Shipping Label.
                 </p>
@@ -249,7 +286,6 @@
                             @endforeach
                         </select>
                     </div>
-
                     <div>
                         <label class="block font-bold text-text-muted uppercase tracking-wider mb-1">Total Packages Count</label>
                         <input type="number" name="package_count" min="1" max="10" value="1" required class="w-full p-3 rounded-xl border border-border-subtle bg-surface font-bold text-xs">
@@ -298,7 +334,7 @@
                             :disabled="!manifestConfirmed"
                             :class="manifestConfirmed ? 'bg-primary hover:bg-primary-dark text-white cursor-pointer' : 'bg-gray-300 text-gray-500 cursor-not-allowed'"
                             class="px-6 py-3 rounded-xl font-bold shadow-sm transition-colors">
-                        Confirm Package Ready & Generate QR Shipping Label
+                        Confirm Package Ready &amp; Generate QR Shipping Label
                     </button>
                 </div>
             </form>
@@ -355,7 +391,7 @@
                         <label class="p-3 rounded-xl border cursor-pointer flex items-center gap-2 font-bold"
                                :class="returnDecision === 'approved' ? 'border-green-600 bg-green-50 text-green-800' : 'border-border-subtle text-text-muted'">
                             <input type="radio" name="decision" value="approved" x-model="returnDecision">
-                            <span>Approve Return & Refund (Restores Stock)</span>
+                            <span>Approve Return &amp; Refund (Restores Stock)</span>
                         </label>
                         <label class="p-3 rounded-xl border cursor-pointer flex items-center gap-2 font-bold"
                                :class="returnDecision === 'rejected' ? 'border-danger bg-red-50 text-danger' : 'border-border-subtle text-text-muted'">
@@ -387,13 +423,11 @@
 
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div class="lg:col-span-2 space-y-6">
-
             <div class="bg-surface rounded-3xl border border-border-subtle overflow-hidden shadow-xs">
                 <div class="p-5 bg-surface-subtle/60 border-b border-border-subtle flex items-center justify-between">
                     <h3 class="text-sm font-bold text-primary-dark">Ordered Items (FIFO Checkout Order)</h3>
                     <span class="text-xs text-text-muted">{{ $sellerOrder->items->sum('quantity') }} item(s)</span>
                 </div>
-
                 <div class="divide-y divide-border-subtle/60">
                     @foreach($sellerOrder->items as $item)
                         <div class="p-5 flex items-center justify-between gap-4">
@@ -464,24 +498,43 @@
                 </div>
             </div>
 
-            @if($shipment && $shipment->trackingLogs->isNotEmpty())
-                <div class="bg-surface rounded-3xl border border-border-subtle p-6 shadow-xs space-y-4">
-                    <h3 class="text-sm font-bold text-primary-dark">Shipment Tracking Timeline ({{ $shipment->tracking_number }})</h3>
-                    <div class="relative pl-6 border-l-2 border-primary/30 space-y-5">
-                        @foreach($shipment->trackingLogs as $idx => $log)
-                            <div class="relative">
-                                <span class="absolute -left-[31px] top-1 w-3.5 h-3.5 rounded-full border-2 border-white {{ $idx === 0 ? 'bg-primary ring-4 ring-primary/20' : 'bg-gray-300' }}"></span>
-                                <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
-                                    <span class="text-xs sm:text-sm font-bold text-text-main">{{ $log->title }}</span>
-                                    <span class="text-[11px] text-text-muted">{{ $log->occurred_at?->format('M d, Y h:i A') }}</span>
-                                </div>
-                                <p class="text-xs text-text-muted mt-0.5">{{ $log->description }}</p>
-                            </div>
-                        @endforeach
-                    </div>
+            <div class="bg-surface rounded-3xl border border-border-subtle p-6 shadow-xs space-y-4">
+                <div class="flex items-center justify-between">
+                    <h3 class="text-sm font-bold text-primary-dark">
+                        Order &amp; Shipment Tracking Timeline
+                        @if($shipment)
+                            <span class="font-mono text-xs text-primary ml-1">({{ $shipment->tracking_number }})</span>
+                        @endif
+                    </h3>
+                    <span class="text-[11px] font-bold text-text-muted">{{ $unifiedTimeline->count() }} milestone(s)</span>
                 </div>
-            @endif
 
+                <div class="relative pl-6 border-l-2 border-primary/30 space-y-5">
+                    @foreach($unifiedTimeline as $idx => $log)
+                        <div class="relative">
+                            <span class="absolute -left-[31px] top-1 w-3.5 h-3.5 rounded-full border-2 border-white {{ $idx === 0 ? 'bg-primary ring-4 ring-primary/20' : 'bg-gray-300' }}"></span>
+                            <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
+                                <div class="flex items-center gap-2">
+                                    <span class="px-2 py-0.5 rounded text-[9px] font-extrabold uppercase {{ $log->badge === 'Shipment' ? 'bg-primary/10 text-primary' : 'bg-surface-subtle text-text-muted border border-border-subtle' }}">
+                                        {{ $log->badge }}
+                                    </span>
+                                    <span class="text-xs sm:text-sm font-bold text-text-main">{{ $log->title }}</span>
+                                </div>
+                                <span class="text-[11px] text-text-muted">{{ $log->occurred_at?->format('M d, Y h:i A') }}</span>
+                            </div>
+                            @if($log->description)
+                                <p class="text-xs text-text-muted mt-1">{{ $log->description }}</p>
+                            @endif
+                            @if($log->location || $log->actor)
+                                <p class="text-[11px] text-text-muted/80 mt-0.5">
+                                    @if($log->actor) Actor: {{ $log->actor }} @endif
+                                    @if($log->location) &bull; Location: {{ $log->location }} @endif
+                                </p>
+                            @endif
+                        </div>
+                    @endforeach
+                </div>
+            </div>
         </div>
 
         <div class="space-y-6">
@@ -505,31 +558,6 @@
             @endif
         </div>
     </div>
-
-    <template x-teleport="body">
-        <div x-show="rejectModalOpen"
-             x-cloak
-             class="fixed inset-0 z-[190] flex items-center justify-center p-4">
-            <div @click="rejectModalOpen = false" class="absolute inset-0 bg-black/60 backdrop-blur-xs cursor-pointer"></div>
-            <div @click.stop class="relative z-10 bg-surface rounded-3xl max-w-md w-full p-6 shadow-2xl border border-border-subtle space-y-4">
-                <div class="flex items-center justify-between pb-3 border-b border-border-subtle">
-                    <h3 class="text-base font-bold text-danger">Reject / Cancel Order</h3>
-                    <button type="button" @click="rejectModalOpen = false" class="p-1 text-text-muted hover:text-text-main cursor-pointer">&times;</button>
-                </div>
-                <form action="{{ route('seller.orders.reject', $sellerOrder->id) }}" method="POST" class="space-y-4 text-xs">
-                    @csrf
-                    <div>
-                        <label class="block font-bold text-text-muted mb-1">Reason for Rejection <span class="text-danger">*</span></label>
-                        <textarea name="rejection_reason" rows="3" required minlength="5" placeholder="e.g. Out of stock / damaged inventory..." class="w-full p-3 rounded-xl border border-border-subtle outline-none focus:border-primary"></textarea>
-                    </div>
-                    <div class="flex justify-end gap-2">
-                        <button type="button" @click="rejectModalOpen = false" class="px-4 py-2 rounded-xl bg-surface-subtle text-text-muted font-bold cursor-pointer">Cancel</button>
-                        <button type="submit" class="px-5 py-2 rounded-xl bg-danger text-white font-bold cursor-pointer">Confirm Reject</button>
-                    </div>
-                </form>
-            </div>
-        </div>
-    </template>
 
     @if($paymentSubmission)
         <template x-teleport="body">
@@ -558,7 +586,7 @@
                         </div>
                         <div class="flex justify-end gap-2">
                             <button type="button" @click="suspiciousModalOpen = false" class="px-4 py-2 rounded-xl bg-surface-subtle text-text-muted font-bold cursor-pointer">Cancel</button>
-                            <button type="submit" class="px-5 py-2.5 rounded-xl bg-danger text-white font-bold cursor-pointer">Send Report to Buyer & Pause Order</button>
+                            <button type="submit" class="px-5 py-2.5 rounded-xl bg-danger text-white font-bold cursor-pointer">Send Report to Buyer &amp; Pause Order</button>
                         </div>
                     </form>
                 </div>
@@ -621,6 +649,5 @@
             </div>
         </template>
     @endif
-
 </div>
 @endsection

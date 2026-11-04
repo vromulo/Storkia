@@ -7,7 +7,6 @@ use App\Models\Courier;
 use App\Models\Rider;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\MessageBag;
 use Illuminate\Support\ViewErrorBag;
 use Illuminate\Validation\ValidationException;
@@ -23,47 +22,21 @@ class AuthService
 
         $normalizedEmail = strtolower(trim($credentials['email']));
 
-        $courier = Courier::whereRaw('LOWER(TRIM(email)) = ?', [$normalizedEmail])->first();
-
-        if ($courier && Hash::check($credentials['password'], $courier->password)) {
-            $allowedCourierStatuses = (array) config('security.allowed_statuses.courier', ['active', 'on_delivery', 'off_duty']);
-
-            if (! in_array($courier->status, $allowedCourierStatuses, true)) {
-                throw ValidationException::withMessages([
-                    'email' => 'Your courier account is currently suspended by your logistics hub.',
-                ]);
-            }
-
-            Auth::guard('courier')->login($courier, $request->filled('remember'));
-            $request->session()->regenerate();
-
-            return redirect()->route('courier.dashboard')->with('success', "Welcome back, Courier {$courier->first_name}!");
+        $isCourierEmail = Courier::whereRaw('LOWER(TRIM(email)) = ?', [$normalizedEmail])->exists();
+        if ($isCourierEmail) {
+            throw ValidationException::withMessages([
+                'email' => 'First-Mile Courier accounts cannot sign in through the web portal. Please use the Storkia Mobile App.',
+            ]);
         }
 
-        $rider = Rider::whereRaw('LOWER(TRIM(email)) = ?', [$normalizedEmail])->first();
-
-        if ($rider && Hash::check($credentials['password'], $rider->password)) {
-            $allowedRiderStatuses = (array) config('security.allowed_statuses.rider', ['approved']);
-
-            if ($rider->status === 'pending') {
-                throw ValidationException::withMessages([
-                    'email' => 'Your rider account is currently pending activation by your logistics company.',
-                ]);
-            }
-
-            if (! in_array($rider->status, $allowedRiderStatuses, true)) {
-                throw ValidationException::withMessages([
-                    'email' => 'Your rider account is currently deactivated or suspended by your logistics company.',
-                ]);
-            }
-
-            Auth::guard('rider')->login($rider, $request->filled('remember'));
-            $request->session()->regenerate();
-
-            return redirect()->route('rider.dashboard')->with('success', "Welcome back, Rider {$rider->first_name}!");
+        $isRiderEmail = Rider::whereRaw('LOWER(TRIM(email)) = ?', [$normalizedEmail])->exists();
+        if ($isRiderEmail) {
+            throw ValidationException::withMessages([
+                'email' => 'Last-Mile Rider accounts cannot sign in through the web portal. Please use the Storkia Mobile App.',
+            ]);
         }
 
-        if (! Auth::attempt([
+        if (! Auth::guard('web')->attempt([
             'email'    => $normalizedEmail,
             'password' => $credentials['password'],
         ], $request->filled('remember'))) {
@@ -73,13 +46,10 @@ class AuthService
         }
 
         /** @var \App\Models\User $user */
-        $user = Auth::user();
+        $user = Auth::guard('web')->user();
 
-        // A deleted (archived) account can never sign in, whichever portal
-        // form was used. Checked before the role check so the message is the
-        // same everywhere and nobody is sent to another portal's login.
         if ($user->isArchived()) {
-            Auth::logout();
+            Auth::guard('web')->logout();
             $request->session()->invalidate();
             $request->session()->regenerateToken();
 
@@ -89,7 +59,7 @@ class AuthService
         }
 
         if ($user->role !== $expectedRole) {
-            Auth::logout();
+            Auth::guard('web')->logout();
             $request->session()->invalidate();
             $request->session()->regenerateToken();
 
@@ -102,40 +72,47 @@ class AuthService
             $errors = new MessageBag([
                 'email' => "You have a {$user->role} account. Please sign in through the {$target['portal']} instead.",
             ]);
+
             session()->flash('errors', (new ViewErrorBag)->put('default', $errors));
 
             return redirect()->route($target['route']);
         }
 
-        if ($user->role === 'Logistics' && $user->isBranchLogisticsAccount()) {
-            $branchHub = $user->branchLogisticsHub;
-            if (! $branchHub || $branchHub->status !== 'active' || ! $branchHub->parentLogisticsProfile) {
-                Auth::logout();
+        if ($user->role === 'Logistics') {
+            if ($user->isBranchLogisticsAccount()) {
+                $branchHub = $user->branchLogisticsHub;
+                if (! $branchHub || $branchHub->status !== 'active' || ! $branchHub->parentLogisticsProfile) {
+                    Auth::guard('web')->logout();
+                    $request->session()->invalidate();
+                    $request->session()->regenerateToken();
+
+                    throw ValidationException::withMessages([
+                        'email' => 'Your Branch Hub account is currently deactivated by your Main Logistics company.',
+                    ]);
+                }
+            } elseif (! $user->isMainLogisticsAccount() && ! $user->logisticsApplications()->exists()) {
+                Auth::guard('web')->logout();
                 $request->session()->invalidate();
                 $request->session()->regenerateToken();
 
                 throw ValidationException::withMessages([
-                    'email' => 'Your Branch Hub account is currently deactivated by your Main Logistics company.',
+                    'email' => 'This account is not an authorized Main Logistics or Branch Logistics hub account.',
                 ]);
             }
         }
 
-        // Bans and suspensions are enforced for every role, whichever login
-        // form was used (the Livewire login form calls this service directly).
         $sanction = BuyerAccountSanction::where('buyer_id', $user->id)->first();
 
         if ($sanction && $sanction->isBlockedFromMarketplace()) {
             if ($user->role === 'Buyer') {
-                // Same hand-off the buyer login controller uses for the
-                // suspended page, so the appeal flow keeps working.
                 $request->session()->regenerate();
-                Auth::logout();
+                Auth::guard('web')->logout();
                 $request->session()->put('suspended_buyer_id', $user->id);
 
                 return redirect()->route('buyer.suspended');
             }
 
-            Auth::logout();
+            Auth::guard('web')->logout();
             $request->session()->invalidate();
             $request->session()->regenerateToken();
 

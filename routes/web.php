@@ -1,8 +1,10 @@
 <?php
 
 use Illuminate\Support\Facades\Route;
+use App\Http\Controllers\Buyer\AnnouncementController;
 use App\Http\Controllers\Buyer\AuthController;
 use App\Http\Controllers\Auth\PasswordResetController;
+use App\Http\Controllers\Buyer\BundleDealController;
 use App\Http\Controllers\Buyer\HomeController;
 use App\Http\Controllers\Buyer\CategoryController;
 use App\Http\Controllers\Buyer\DealController;
@@ -15,6 +17,7 @@ use App\Http\Controllers\Buyer\CartController;
 use App\Http\Controllers\Buyer\CheckoutController;
 use App\Http\Controllers\Buyer\DeleteAccountController;
 use App\Http\Controllers\Buyer\OrderController;
+use App\Http\Controllers\Buyer\PointsRewardController;
 use App\Http\Controllers\Buyer\ReviewController;
 use App\Http\Controllers\Buyer\SellerController;
 use App\Http\Controllers\Buyer\VoucherController;
@@ -27,8 +30,11 @@ Route::middleware('throttle:120,1')->group(function () {
     Route::view('/terms-and-conditions', 'buyer.terms-and-conditions')->name('terms');
     Route::view('/privacy-policy', 'buyer.privacy-policy')->name('privacy');
     Route::view('/cookie-policy', 'buyer.cookie-policy')->name('cookies');
+
     Route::get('/shop', [HomeController::class, 'index'])->name('home');
     Route::get('/super-deals', [DealController::class, 'index'])->name('deals.index');
+    Route::get('/bundles', [BundleDealController::class, 'index'])->name('bundles.index');
+    Route::get('/announcements', [AnnouncementController::class, 'index'])->name('announcements.index');
     Route::get('/trends', [TrendController::class, 'index'])->name('trends.index');
     Route::get('/sellers', [SellerController::class, 'index'])->name('sellers.index');
     Route::get('/sellers/{seller}', [SellerController::class, 'show'])->name('sellers.show');
@@ -36,7 +42,6 @@ Route::middleware('throttle:120,1')->group(function () {
     Route::get('/category/{slug}', [CategoryController::class, 'show'])->name('category.show');
     Route::get('/search', [SearchController::class, 'index'])->name('search.search');
     Route::get('/search/suggestions', [SearchController::class, 'suggestions'])->name('search.suggestions');
-
     Route::get('/user/orders/proof/{proof}', [OrderController::class, 'proofImage'])->name('user.orders.proof-image');
 
     Route::middleware(['guest', 'throttle:30,1'])->group(function () {
@@ -44,7 +49,6 @@ Route::middleware('throttle:120,1')->group(function () {
         Route::post('/login', [AuthController::class, 'login'])->name('login.post');
         Route::get('/register', [AuthController::class, 'showRegister'])->name('register');
 
-        // Password reset for buyer, seller and logistics (users table) accounts.
         Route::get('/forgot-password', [PasswordResetController::class, 'showRequestForm'])->name('password.request');
         Route::post('/forgot-password', [PasswordResetController::class, 'sendResetLink'])
             ->middleware('throttle:5,1')
@@ -67,6 +71,18 @@ Route::middleware('throttle:120,1')->group(function () {
             ->middleware('throttle:30,1')
             ->name('sellers.follow');
 
+        Route::post('/bundles/{id}/add', [BundleDealController::class, 'addBundleToCart'])
+            ->middleware('throttle:30,1')
+            ->name('bundles.add');
+        Route::post('/bundles/{id}/cart', [BundleDealController::class, 'addBundleToCart'])
+            ->middleware('throttle:30,1')
+            ->name('bundles.add-to-cart');
+
+        Route::match(['post', 'patch'], '/announcements/read-all', [AnnouncementController::class, 'markAllAsRead'])
+            ->name('announcements.markAllRead');
+        Route::match(['post', 'patch'], '/announcements/{id}/read', [AnnouncementController::class, 'markAsRead'])
+            ->name('announcements.markRead');
+
         Route::middleware('role:Buyer')->group(function () {
             Route::get('/cart', [CartController::class, 'index'])->name('cart.index');
             Route::post('/cart', [CartController::class, 'store'])->middleware('throttle:60,1')->name('cart.store');
@@ -85,7 +101,7 @@ Route::middleware('throttle:120,1')->group(function () {
                 Route::patch('/profile/username', [ProfileController::class, 'updateUsername'])->name('profile.update-username');
                 Route::post('/profile/avatar', [ProfileController::class, 'updateAvatar'])->name('profile.update-avatar');
                 Route::delete('/profile/avatar', [ProfileController::class, 'removeAvatar'])->name('profile.remove-avatar');
-                
+
                 Route::get('/account-management', [AccountManagementController::class, 'index'])->name('account-management');
                 Route::patch('/account-management/name', [AccountManagementController::class, 'updateName'])->name('account-management.update-name');
                 Route::patch('/account-management/phone', [AccountManagementController::class, 'updatePhone'])->name('account-management.update-phone');
@@ -100,6 +116,7 @@ Route::middleware('throttle:120,1')->group(function () {
                 Route::get('/addresses', [AddressController::class, 'index'])->name('addresses');
                 Route::post('/addresses', [AddressController::class, 'store'])->name('addresses.store');
                 Route::put('/addresses/{id}', [AddressController::class, 'update'])->name('addresses.update');
+                Route::patch('/addresses/{id}/default', [AddressController::class, 'setDefault'])->name('addresses.set-default');
                 Route::delete('/addresses/{id}', [AddressController::class, 'destroy'])->name('addresses.destroy');
                 Route::get('/addresses/psgc/municipalities/{provinceCode}', [AddressController::class, 'getMunicipalities'])->name('addresses.psgc.municipalities');
                 Route::get('/addresses/psgc/barangays/{municipalityCode}', [AddressController::class, 'getBarangays'])->name('addresses.psgc.barangays');
@@ -121,19 +138,22 @@ Route::middleware('throttle:120,1')->group(function () {
                 Route::get('/orders/{sellerOrder}/rate', [OrderController::class, 'showRatePage'])->name('orders.rate.show');
                 Route::post('/orders/{sellerOrder}/rate', [OrderController::class, 'submitRatings'])->name('orders.rate.submit');
                 Route::post('/orders/{sellerOrder}/buy-again', [OrderController::class, 'buyAgain'])->name('orders.buy-again');
-
                 Route::patch('/reviews/{review}', [ReviewController::class, 'update'])->name('reviews.update');
 
                 Route::get('/coupons', [VoucherController::class, 'index'])->name('coupons');
                 Route::post('/coupons/claim', [VoucherController::class, 'claim'])->middleware('throttle:30,1')->name('coupons.claim');
 
+                Route::get('/points', [PointsRewardController::class, 'index'])->name('points');
+                Route::post('/points/spin', [PointsRewardController::class, 'spin'])->middleware('throttle:30,1')->name('points.spin');
+                Route::post('/points/daily-chest', [PointsRewardController::class, 'openChest'])->middleware('throttle:30,1')->name('points.chest');
+                Route::post('/points/redeem', [PointsRewardController::class, 'redeemVoucher'])->middleware('throttle:30,1')->name('points.redeem');
+
                 Route::get('/wishlist', [WishlistController::class, 'index'])->name('wishlist');
                 Route::post('/wishlist/toggle/{product}', [WishlistController::class, 'toggle'])->middleware('throttle:60,1')->name('wishlist.toggle');
                 Route::delete('/wishlist/{product}', [WishlistController::class, 'destroy'])->name('wishlist.destroy');
 
-                Route::view('/change-password', 'buyer.option.coming-soon', ['title' => 'Change Password'])->name('change-password');
-                Route::view('/points', 'buyer.option.coming-soon', ['title' => 'My Points/Coins'])->name('points');
-                Route::view('/recently-viewed', 'buyer.option.coming-soon', ['title' => 'Recently Viewed'])->name('recently-viewed');
+                Route::redirect('/change-password', '/user/account-management')->name('change-password');
+                Route::get('/recently-viewed', [ProductController::class, 'recentlyViewed'])->name('recently-viewed');
                 Route::get('/following', [SellerController::class, 'followingList'])->name('following');
             });
 
@@ -149,15 +169,12 @@ Route::middleware('throttle:120,1')->group(function () {
                 return back();
             })->name('user.notifications.markRead');
 
-            // opening a notification marks it as read and
-            // takes the buyer to the order it is about.
             Route::get('/user/notifications/{id}/open', function ($id) {
                 $notification = auth()->user()->notifications()->findOrFail($id);
                 $notification->markAsRead();
 
                 $target = parse_url((string) ($notification->data['url'] ?? ''));
 
-                // Only follow links that point back to this same site.
                 if ($target && (empty($target['host']) || $target['host'] === request()->getHost())) {
                     return redirect(($target['path'] ?? '/') . (isset($target['query']) ? '?' . $target['query'] : ''));
                 }

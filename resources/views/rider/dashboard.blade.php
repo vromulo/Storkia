@@ -11,7 +11,6 @@
     <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
 </head>
 <body class="bg-surface-subtle/50 font-sans antialiased text-text-main min-h-screen pb-16">
-
     <header class="bg-surface border-b border-border-subtle sticky top-0 z-40">
         <div class="max-w-6xl mx-auto px-4 sm:px-6 py-3 flex flex-wrap items-center justify-between gap-3">
             <div class="flex items-center gap-3">
@@ -31,8 +30,13 @@
                     </p>
                 </div>
             </div>
-
-            <div class="flex items-center gap-2.5">
+            <div class="flex flex-wrap items-center gap-2">
+                <a href="{{ route('rider.report') }}" class="px-3.5 py-2 rounded-xl bg-primary hover:bg-primary-dark text-white text-xs font-bold transition-colors">
+                    E-Wallet &amp; Withdrawals
+                </a>
+                <a href="{{ route('rider.ratings') }}" class="px-3.5 py-2 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 text-xs font-bold transition-colors">
+                    &#9733; My Ratings
+                </a>
                 <a href="{{ route('rider.download-app') }}" class="px-3.5 py-2 rounded-xl border border-border-subtle bg-surface-subtle hover:bg-brand-light/30 text-xs font-bold text-text-main transition-colors">
                     Mobile APK Info
                 </a>
@@ -47,7 +51,6 @@
     </header>
 
     <main class="max-w-6xl mx-auto px-4 sm:px-6 pt-6 space-y-6">
-
         @if(session('success'))
             <div class="p-4 rounded-2xl bg-green-50 border border-green-200 text-green-700 text-xs sm:text-sm font-bold">
                 {{ session('success') }}
@@ -70,19 +73,19 @@
             </div>
             <div class="p-5 bg-surface rounded-2xl border border-border-subtle shadow-xs">
                 <span class="text-[11px] font-bold uppercase text-text-muted">Unremitted COD Cash on Hand</span>
-                <p class="text-2xl font-serif font-bold text-primary mt-1">₱{{ number_format($metrics['cod_on_hand'], 2) }}</p>
+                <p class="text-2xl font-serif font-bold text-primary mt-1">&#8369;{{ number_format($metrics['cod_on_hand'], 2) }}</p>
                 <span class="text-[11px] text-text-muted">{{ $unremittedCollections->count() }} collection(s) to remit</span>
             </div>
             <div class="p-5 bg-surface rounded-2xl border border-border-subtle shadow-xs">
                 <span class="text-[11px] font-bold uppercase text-text-muted">Pending Rider Commission (10%)</span>
-                <p class="text-2xl font-serif font-bold text-blue-700 mt-1">₱{{ number_format($metrics['pending_rider_comm'], 2) }}</p>
+                <p class="text-2xl font-serif font-bold text-blue-700 mt-1">&#8369;{{ number_format($metrics['pending_rider_comm'], 2) }}</p>
                 <span class="text-[11px] text-text-muted">10% of Shipping Fee on unremitted COD</span>
             </div>
-            <div class="p-5 bg-surface rounded-2xl border border-border-subtle shadow-xs">
+            <a href="{{ route('rider.report') }}" class="p-5 bg-surface rounded-2xl border border-border-subtle hover:border-primary/50 shadow-xs transition-all block">
                 <span class="text-[11px] font-bold uppercase text-text-muted">Verified Commission Earned</span>
-                <p class="text-2xl font-serif font-bold text-green-700 mt-1">₱{{ number_format($metrics['verified_rider_earnings'], 2) }}</p>
-                <span class="text-[11px] text-text-muted">Settled via verified remittances</span>
-            </div>
+                <p class="text-2xl font-serif font-bold text-green-700 mt-1">&#8369;{{ number_format($metrics['verified_rider_earnings'], 2) }}</p>
+                <span class="text-[11px] text-primary font-semibold">Open E-Wallet &amp; Withdraw &rarr;</span>
+            </a>
         </div>
 
         <div class="flex flex-wrap items-center gap-2">
@@ -228,13 +231,12 @@
                                     <p class="text-text-muted font-semibold">Phone: {{ $deliv['phone_number'] ?? '' }}</p>
                                     <p class="text-text-main leading-relaxed">{{ $deliv['full_address'] ?? '' }}</p>
                                 </div>
-
                                 <div class="p-4 rounded-2xl bg-brand-light/20 border border-border-subtle space-y-1.5">
                                     <span class="text-[10px] font-bold uppercase tracking-wider text-primary-dark block">Cash on Delivery (COD) To Collect</span>
-                                    <p class="text-2xl font-serif font-extrabold text-primary">₱{{ number_format((float) $shipment->cod_amount, 2) }}</p>
+                                    <p class="text-2xl font-serif font-extrabold text-primary">&#8369;{{ number_format((float) $shipment->cod_amount, 2) }}</p>
                                     <p class="text-text-muted">
-                                        Includes Shipping Fee ₱{{ number_format((float) $shipment->shipping_fee, 2) }}
-                                        (Your 10% Rider Commission: <strong class="text-green-700">₱{{ number_format($riderComm, 2) }}</strong>)
+                                        Includes Shipping Fee &#8369;{{ number_format((float) $shipment->shipping_fee, 2) }}
+                                        (Your 10% Rider Commission: <strong class="text-green-700">&#8369;{{ number_format($riderComm, 2) }}</strong>)
                                     </p>
                                 </div>
                             </div>
@@ -250,7 +252,6 @@
                                                 Scanning or looking up a package verifies its manifest without advancing status automatically.
                                             </p>
                                         </div>
-
                                         <div class="flex items-center gap-1.5">
                                             <button type="button"
                                                     @click="startQrCamera('rider-qr-reader-{{ $assignment->id }}')"
@@ -350,7 +351,7 @@
                                             <button type="submit"
                                                     :disabled="{{ $allCollectionVerified ? 'false' : 'true' }} || isSubmittingCollect"
                                                     class="px-5 py-2.5 rounded-xl font-bold shadow-xs transition-colors {{ $allCollectionVerified ? 'bg-primary hover:bg-primary-dark text-white cursor-pointer' : 'bg-gray-300 text-gray-500 cursor-not-allowed' }}">
-                                                3. Confirm Package Collection from Hub & Start Delivery
+                                                3. Confirm Package Collection from Hub &amp; Start Delivery
                                             </button>
                                         </form>
                                     @endif
@@ -365,7 +366,7 @@
                                         <button type="button"
                                                 @click.stop="deliverModalOpen = true"
                                                 class="px-5 py-2.5 rounded-xl bg-green-600 hover:bg-green-700 text-white font-bold shadow-xs cursor-pointer">
-                                            Confirm COD Paid & Upload Photo Proof
+                                            Confirm COD Paid &amp; Upload Photo Proof
                                         </button>
                                     @endif
                                 </div>
@@ -377,7 +378,6 @@
                                      class="fixed inset-0 z-[180] flex items-center justify-center p-4">
                                     <div @click="deliverModalOpen = false"
                                          class="absolute inset-0 bg-black/60 backdrop-blur-xs cursor-pointer"></div>
-
                                     <div @click.stop
                                          class="relative z-10 bg-surface rounded-3xl max-w-md w-full p-6 shadow-2xl border border-border-subtle space-y-4 max-h-[90vh] overflow-y-auto">
                                         <div class="flex items-center justify-between pb-3 border-b border-border-subtle">
@@ -397,9 +397,8 @@
                                               class="space-y-4 text-xs">
                                             @csrf
                                             <input type="hidden" name="verification_method" :value="verificationMethod">
-
                                             <div>
-                                                <label class="block font-bold text-text-muted mb-1">Exact COD Amount Collected (₱) <span class="text-danger">*</span></label>
+                                                <label class="block font-bold text-text-muted mb-1">Exact COD Amount Collected (&#8369;) <span class="text-danger">*</span></label>
                                                 <input type="number"
                                                        step="0.01"
                                                        name="collected_amount"
@@ -453,7 +452,6 @@
                                      class="fixed inset-0 z-[180] flex items-center justify-center p-4">
                                     <div @click="failModalOpen = false"
                                          class="absolute inset-0 bg-black/60 backdrop-blur-xs cursor-pointer"></div>
-
                                     <div @click.stop
                                          class="relative z-10 bg-surface rounded-3xl max-w-md w-full p-6 shadow-2xl border border-border-subtle space-y-4 max-h-[90vh] overflow-y-auto">
                                         <div class="flex items-center justify-between pb-3 border-b border-border-subtle">
@@ -480,12 +478,10 @@
                                                     <option value="Weather / Road Obstruction">Weather / Road Obstruction</option>
                                                 </select>
                                             </div>
-
                                             <div>
                                                 <label class="block font-bold text-text-muted mb-1">Additional Details</label>
                                                 <textarea name="failure_notes" rows="3" placeholder="Provide details for Logistics review..." class="w-full p-3 rounded-xl border border-border-subtle"></textarea>
                                             </div>
-
                                             <div class="flex justify-end gap-2 pt-2">
                                                 <button type="button" @click="failModalOpen = false" class="px-4 py-2 rounded-xl bg-surface-subtle text-text-muted font-bold cursor-pointer">
                                                     Cancel
@@ -501,12 +497,10 @@
                                     </div>
                                 </div>
                             </template>
-
                         </div>
                     @endforeach
                 </div>
             @endif
-
         @elseif($tab === 'remittance')
             <div class="bg-surface rounded-3xl border border-border-subtle p-6 shadow-xs space-y-4">
                 <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-border-subtle">
@@ -517,12 +511,11 @@
                             Your 10% Rider Commission on Shipping Fees is automatically calculated.
                         </p>
                     </div>
-
                     @if($unremittedCollections->isNotEmpty())
                         <form action="{{ route('rider.remittances.store') }}" method="POST" class="m-0 shrink-0">
                             @csrf
                             <button type="submit" class="px-5 py-3 rounded-xl bg-primary hover:bg-primary-dark text-white text-xs font-bold shadow-sm cursor-pointer">
-                                Remit All Collected COD (₱{{ number_format($metrics['cod_on_hand'], 2) }})
+                                Remit All Collected COD (&#8369;{{ number_format($metrics['cod_on_hand'], 2) }})
                             </button>
                         </form>
                     @endif
@@ -551,9 +544,9 @@
                                             {{ $col->shipment->tracking_number ?? '' }}
                                             <span class="text-text-muted">({{ $col->sellerOrder->seller_order_number ?? '' }})</span>
                                         </td>
-                                        <td class="py-3 px-4 font-bold text-text-main">₱{{ number_format((float) $col->collected_amount, 2) }}</td>
-                                        <td class="py-3 px-4">₱{{ number_format((float) $col->shipping_fee, 2) }}</td>
-                                        <td class="py-3 px-4 font-bold text-green-700">₱{{ number_format(round((float) $col->shipping_fee * 0.10, 2), 2) }}</td>
+                                        <td class="py-3 px-4 font-bold text-text-main">&#8369;{{ number_format((float) $col->collected_amount, 2) }}</td>
+                                        <td class="py-3 px-4">&#8369;{{ number_format((float) $col->shipping_fee, 2) }}</td>
+                                        <td class="py-3 px-4 font-bold text-green-700">&#8369;{{ number_format(round((float) $col->shipping_fee * 0.10, 2), 2) }}</td>
                                         <td class="py-3 px-4 text-right text-text-muted">{{ $col->collected_at?->format('M d, Y h:i A') }}</td>
                                     </tr>
                                 @endforeach
@@ -584,9 +577,9 @@
                                 @foreach($remittances as $rem)
                                     <tr>
                                         <td class="py-3 px-4 font-mono font-bold text-primary-dark">{{ $rem->remittance_reference }}</td>
-                                        <td class="py-3 px-4 font-semibold">₱{{ number_format((float) $rem->total_collected_amount, 2) }}</td>
-                                        <td class="py-3 px-4 font-bold text-green-700">₱{{ number_format((float) $rem->total_rider_commission, 2) }}</td>
-                                        <td class="py-3 px-4 font-bold text-text-main">₱{{ number_format((float) $rem->net_remitted_amount, 2) }}</td>
+                                        <td class="py-3 px-4 font-semibold">&#8369;{{ number_format((float) $rem->total_collected_amount, 2) }}</td>
+                                        <td class="py-3 px-4 font-bold text-green-700">&#8369;{{ number_format((float) $rem->total_rider_commission, 2) }}</td>
+                                        <td class="py-3 px-4 font-bold text-text-main">&#8369;{{ number_format((float) $rem->net_remitted_amount, 2) }}</td>
                                         <td class="py-3 px-4">
                                             <span class="px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase {{ $rem->status === 'verified' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-800' }}">
                                                 {{ $rem->status }}
@@ -600,7 +593,6 @@
                     </div>
                 @endif
             </div>
-
         @else
             <div class="bg-surface rounded-3xl border border-border-subtle p-6 shadow-xs">
                 <h2 class="text-base font-bold text-primary-dark mb-4">Past Delivery Assignments</h2>
@@ -623,7 +615,7 @@
                                     <tr>
                                         <td class="py-3 px-4 font-mono font-bold text-primary-dark">{{ $ha->shipment->tracking_number ?? 'N/A' }}</td>
                                         <td class="py-3 px-4">#{{ $ha->attempt_number }}</td>
-                                        <td class="py-3 px-4 font-bold">₱{{ number_format((float) ($ha->shipment->cod_amount ?? 0), 2) }}</td>
+                                        <td class="py-3 px-4 font-bold">&#8369;{{ number_format((float) ($ha->shipment->cod_amount ?? 0), 2) }}</td>
                                         <td class="py-3 px-4 uppercase font-bold">{{ $ha->status }}</td>
                                         <td class="py-3 px-4 text-right text-text-muted">{{ $ha->updated_at?->format('M d, Y h:i A') }}</td>
                                     </tr>
@@ -634,9 +626,7 @@
                 @endif
             </div>
         @endif
-
     </main>
-
     @livewireScripts
 </body>
 </html>

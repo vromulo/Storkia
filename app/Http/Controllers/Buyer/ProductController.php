@@ -11,6 +11,7 @@ use App\Models\SellerProfile;
 use App\Models\SellerStoreFollow;
 use App\Models\StorkVoucher;
 use App\Services\SuperDealPricingService;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 
@@ -18,10 +19,9 @@ class ProductController extends Controller
 {
     public function __construct(
         protected SuperDealPricingService $superDealPricingService
-    ) {
-    }
+    ) {}
 
-    public function show(Product $product)
+    public function show(Request $request, Product $product)
     {
         $product->loadMissing(['specifications', 'approval', 'user.sellerProfile']);
 
@@ -32,6 +32,11 @@ class ProductController extends Controller
         ) {
             abort(404, 'This product is currently unavailable.');
         }
+
+        $recentIds = (array) $request->session()->get('recently_viewed_product_ids', []);
+        array_unshift($recentIds, (int) $product->id);
+        $recentIds = array_slice(array_values(array_unique(array_map('intval', $recentIds))), 0, 24);
+        $request->session()->put('recently_viewed_product_ids', $recentIds);
 
         $seller = $product->user?->sellerProfile
             ?? ($product->user_id ? SellerProfile::where('user_id', $product->user_id)->first() : null);
@@ -96,8 +101,6 @@ class ProductController extends Controller
             ? BuyerVoucherClaim::where('buyer_id', $user->id)->pluck('voucher_id')->all()
             : [];
 
-        // Same pricing rules checkout uses (Super Deal -> Store Sale -> product discount -> regular),
-        // so the price shown here matches the home page card and what the buyer is charged.
         $dealPricing = $this->superDealPricingService->resolveDisplayPricing($product, (float) ($product->price ?? 0));
 
         $candidates = Product::with(['approval', 'user.sellerProfile'])
@@ -127,5 +130,27 @@ class ProductController extends Controller
             'recommendedProducts',
             'dealPricing'
         ));
+    }
+
+    public function recentlyViewed(Request $request)
+    {
+        $recentIds = array_values(array_filter(array_map('intval', (array) $request->session()->get('recently_viewed_product_ids', []))));
+        $recentProducts = collect();
+
+        if (! empty($recentIds)) {
+            $fetched = Product::with(['approval', 'user.sellerProfile'])
+                ->whereIn('id', $recentIds)
+                ->whereHas('approval', fn ($q) => $q->where('status', 'Approved'))
+                ->get()
+                ->keyBy('id');
+
+            foreach ($recentIds as $pid) {
+                if ($fetched->has($pid)) {
+                    $recentProducts->push($fetched->get($pid));
+                }
+            }
+        }
+
+        return view('buyer.option.recently-viewed', compact('recentProducts'));
     }
 }

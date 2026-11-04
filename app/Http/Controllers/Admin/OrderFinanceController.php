@@ -3,166 +3,224 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
-use App\Models\BuyerAccountSanction;
-use App\Models\BuyerBanAppeal;
+use App\Http\Controllers\Courier\PickupController;
+use App\Http\Controllers\Rider\DeliveryController;
 use App\Models\CommissionRecord;
 use App\Models\Courier;
 use App\Models\DeliveryAssignment;
 use App\Models\LogisticsProfile;
+use App\Models\OrderPaymentSubmission;
+use App\Models\OrderServiceRating;
 use App\Models\OrderStatusHistory;
 use App\Models\PickupAssignment;
 use App\Models\Rider;
+use App\Models\RoleWallet;
 use App\Models\SellerOrder;
-use App\Models\SellerOrderExtra;
 use App\Models\SellerProfile;
-use App\Models\SellerSettlement;
 use App\Models\Shipment;
 use App\Models\StorkVoucher;
-use App\Models\User;
-use App\Models\WalletTransaction;
+use App\Models\WithdrawalRequest;
 use App\Notifications\OrderLifecycleNotification;
-use App\Services\AccountArchiveService;
-use App\Services\BuyerAbandonmentService;
-use App\Services\InventoryStockService;
-use App\Services\OrderCompletionService;
+use App\Services\AuditLoggerService;
 use App\Services\RoleWalletService;
-use App\Services\VoucherService;
+use App\Services\StorkSchemaBootstrapService;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Validation\ValidationException;
 
 class OrderFinanceController extends Controller
 {
     public function __construct(
-        protected OrderCompletionService $orderCompletionService,
-        protected InventoryStockService $inventoryStockService,
-        protected RoleWalletService $roleWalletService,
-        protected BuyerAbandonmentService $buyerAbandonmentService,
-        protected VoucherService $voucherService,
-        protected AccountArchiveService $accountArchiveService
+        protected RoleWalletService $roleWalletService
     ) {}
 
-    public function commissions(Request $request)
+    public function index(Request $request)
     {
-        $this->orderCompletionService->runLifecycleMaintenance();
-        $this->voucherService->expireOverdueVouchers();
+        StorkSchemaBootstrapService::ensureTablesExist();
 
-        $completedOrders = SellerOrder::where('status', 'completed')->get();
-        foreach ($completedOrders as $compOrder) {
-            $this->roleWalletService->releaseCompletedOrderEarnings($compOrder);
-        }
-
-        $adminWallet = $this->roleWalletService->getOrCreateWallet(
-            ownerType: 'Admin',
-            ownerId: 1,
-            ownerName: 'Storkia Platform Admin'
-        );
-
+        $tab = $request->query('tab', 'commissions');
+        $roleFilter = $request->query('role_filter', 'all');
+        $statusFilter = $request->query('status_filter', 'all');
         $status = $request->query('status', 'all');
         $search = trim((string) $request->query('search', ''));
 
-        $query = CommissionRecord::with([
-            'sellerOrder.order',
-            'sellerOrder.items',
-            'sellerOrder.extra',
-            'sellerProfile',
-            'logisticsProfile',
-            'rider',
-            'settlementItem.settlement',
-        ]);
+        $commQuery = CommissionRecord::with(['sellerOrder.buyer', 'sellerProfile', 'logisticsProfile', 'shipment', 'rider'])
+            ->orderByDesc('created_at');
 
-        if (in_array($status, ['recorded', 'settled'], true)) {
-            $query->where('status', $status);
+        if ($status !== 'all' && in_array($status, ['recorded', 'pending_settlement', 'settled'], true)) {
+            if ($status === 'recorded') {
+                $commQuery->whereIn('status', ['recorded', 'pending_settlement']);
+            } else {
+                $commQuery->where('status', $status);
+            }
         }
 
         if ($search !== '') {
-            $query->where(function ($q) use ($search) {
-                $q->whereHas('sellerOrder', fn ($sq) => $sq->where('seller_order_number', 'like', "%{$search}%"))
-                  ->orWhereHas('sellerProfile', fn ($sp) => $sp->where('business_name', 'like', "%{$search}%"))
-                  ->orWhereHas('logisticsProfile', fn ($lp) => $lp->where('business_name', 'like', "%{$search}%"));
+            $commQuery->where(function ($q) use ($search) {
+                $q->whereHas('sellerOrder', fn ($oq) => $oq->where('seller_order_number', 'like', "%{$search}%"))
+                  ->orWhereHas('sellerProfile', fn ($sq) => $sq->where('business_name', 'like', "%{$search}%"))
+                  ->orWhereHas('logisticsProfile', fn ($lq) => $lq->where('business_name', 'like', "%{$search}%"));
             });
         }
 
-        $commissions = $query
-            ->orderBy('created_at', 'asc')
-            ->orderBy('id', 'asc')
-            ->paginate(12)
-            ->withQueryString();
+        $commissionRecords = $commQuery->paginate(20, ['*'], 'comm_page')->withQueryString();
+        $commissions = $commissionRecords;
 
-        $settlements = SellerSettlement::with(['sellerProfile', 'logisticsProfile'])
-            ->orderBy('settled_at', 'asc')
-            ->orderBy('id', 'asc')
-            ->take(8)
+        $platformVouchers = StorkVoucher::whereIn('scope', ['platform', 'shipping'])
+            ->withCount('claims')
+            ->orderByDesc('created_at')
             ->get();
 
-        $platformVouchers = StorkVoucher::withCount('claims')
-            ->whereNull('seller_profile_id')
-            ->whereIn('scope', ['platform', 'shipping'])
-            ->orderBy('created_at', 'asc')
-            ->get();
+        $withdrawalsQuery = WithdrawalRequest::with(['wallet', 'histories'])
+            ->orderByRaw("CASE WHEN status = 'pending' THEN 0 WHEN status = 'approved' THEN 1 ELSE 2 END")
+            ->orderBy('created_at', 'asc');
 
-        $adminPlatformSubsidy = (float) SellerOrderExtra::whereHas('sellerOrder', fn ($q) => $q->whereIn('status', ['delivered', 'completed']))
-            ->sum('platform_voucher_discount');
+        if ($roleFilter !== 'all' && in_array($roleFilter, ['Seller', 'Logistics', 'Rider', 'Courier'], true)) {
+            $withdrawalsQuery->where('requester_type', $roleFilter);
+        }
+        if ($statusFilter !== 'all' && in_array($statusFilter, ['pending', 'completed', 'rejected'], true)) {
+            $withdrawalsQuery->where('status', $statusFilter);
+        }
 
-        $adminShippingSubsidy = (float) SellerOrderExtra::whereHas('sellerOrder', fn ($q) => $q->whereIn('status', ['delivered', 'completed']))
-            ->whereHas('shippingVoucher', fn ($vq) => $vq->whereNull('seller_profile_id'))
-            ->sum('shipping_voucher_discount');
+        $withdrawalRequests = Schema::hasTable('withdrawal_requests')
+            ? $withdrawalsQuery->paginate(20, ['*'], 'wdr_page')->withQueryString()
+            : collect();
+        $payoutRequests = $withdrawalRequests;
 
-        $grossAdminComm = (float) CommissionRecord::sum('admin_commission_amount');
+        $arrearsRemittances = Schema::hasTable('seller_commission_remittances')
+            ? collect(
+                DB::table('seller_commission_remittances')
+                    ->orderByRaw("CASE WHEN status = 'pending' THEN 0 ELSE 1 END")
+                    ->orderBy('created_at', 'asc')
+                    ->get()
+            )->map(function ($row) {
+                $row->sellerProfile = SellerProfile::find($row->seller_profile_id);
+                return $row;
+            })
+            : collect();
+
+        $gcashSubmissions = Schema::hasTable('order_payment_submissions')
+            ? OrderPaymentSubmission::with(['sellerOrder.buyer', 'sellerOrder.extra', 'sellerProfile', 'order'])
+                ->orderByRaw("CASE WHEN status IN ('submitted', 'refund_required_seller_timeout') OR refund_status = 'pending_admin_refund' THEN 0 WHEN is_suspicious = 1 THEN 1 ELSE 2 END")
+                ->orderByDesc('created_at')
+                ->paginate(20, ['*'], 'gcash_page')
+                ->withQueryString()
+            : collect();
+
+        $allCommissions = CommissionRecord::all();
+        $grossMerchandiseSales = round((float) $allCommissions->sum('product_subtotal'), 2);
+        $grossAdminCommission10 = round((float) $allCommissions->sum('admin_commission_amount'), 2);
+        $grossShippingFees = round((float) $allCommissions->sum('shipping_fee'), 2);
+        $sellerNet90 = round((float) $allCommissions->sum(fn ($c) => (float) ($c->seller_net_earning ?? $c->seller_net_amount ?? 0)), 2);
+        $logisticsComm10 = round((float) $allCommissions->sum('logistics_commission_amount'), 2);
+        $logisticsOps80 = round((float) $allCommissions->sum(fn ($c) => (float) ($c->logistics_operational_revenue ?? $c->logistics_operational_amount ?? 0)), 2);
+        $logisticsNet90 = round((float) $allCommissions->sum(fn ($c) => (float) ($c->logistics_total_earning ?: ((float) $c->logistics_commission_amount + (float) ($c->logistics_operational_revenue ?? $c->logistics_operational_amount ?? 0)))), 2);
+        $riderNet10 = round((float) $allCommissions->sum('rider_commission_amount'), 2);
+
+        $completedOrderIds = $allCommissions->pluck('seller_order_id')->unique()->values();
+        $adminVoucherSubsidy = Schema::hasTable('seller_order_extras') && $completedOrderIds->isNotEmpty()
+            ? round((float) DB::table('seller_order_extras')
+                ->whereIn('seller_order_id', $completedOrderIds)
+                ->selectRaw('COALESCE(SUM(platform_voucher_discount + shipping_voucher_discount), 0) as total_subsidy')
+                ->value('total_subsidy'), 2)
+            : 0.00;
+
+        $netAdminProfit = round($grossAdminCommission10 - $adminVoucherSubsidy, 2);
+
+        $pendingWithdrawalsCount = Schema::hasTable('withdrawal_requests')
+            ? WithdrawalRequest::where('status', 'pending')->count()
+            : 0;
+        $pendingWithdrawalsAmount = Schema::hasTable('withdrawal_requests')
+            ? round((float) WithdrawalRequest::where('status', 'pending')->sum('requested_amount'), 2)
+            : 0.00;
+        $completedWithdrawalsAmount = Schema::hasTable('withdrawal_requests')
+            ? round((float) WithdrawalRequest::where('status', 'completed')->sum('requested_amount'), 2)
+            : 0.00;
+
+        $pendingGcashVerificationsCount = Schema::hasTable('order_payment_submissions')
+            ? OrderPaymentSubmission::whereIn('status', ['submitted', 'refund_required_seller_timeout'])
+                ->orWhere('refund_status', 'pending_admin_refund')
+                ->count()
+            : 0;
 
         $metrics = [
-            'admin_wallet_available'    => (float) $adminWallet->available_balance,
-            'admin_wallet_pending'      => (float) $adminWallet->pending_balance,
-            'gross_product_volume'      => (float) CommissionRecord::sum('product_subtotal'),
-            'gross_shipping_volume'     => (float) CommissionRecord::sum('shipping_fee'),
-            'admin_10_commission_total' => $grossAdminComm,
-            'admin_voucher_subsidies'   => round($adminPlatformSubsidy + $adminShippingSubsidy, 2),
-            'admin_net_profit_after_sub'=> max(0.0, round($grossAdminComm - $adminPlatformSubsidy - $adminShippingSubsidy, 2)),
-            'seller_90_net_total'       => (float) CommissionRecord::sum('seller_net_earning'),
-            'logistics_10_commission'   => (float) CommissionRecord::sum('logistics_commission_amount'),
-            'logistics_80_operational'  => (float) CommissionRecord::sum('logistics_operational_revenue'),
-            'rider_10_commission'       => (float) CommissionRecord::sum('rider_commission_amount'),
-            'settled_seller_payouts'    => (float) SellerSettlement::sum('net_settlement_amount'),
+            'gross_merchandise_sales'      => $grossMerchandiseSales,
+            'gross_admin_commission'       => $grossAdminCommission10,
+            'admin_voucher_subsidy'        => $adminVoucherSubsidy,
+            'net_admin_profit'             => $netAdminProfit,
+            'gross_shipping_fees'          => $grossShippingFees,
+            'seller_net_90'                => $sellerNet90,
+            'logistics_net_90'             => $logisticsNet90,
+            'rider_net_10'                 => $riderNet10,
+            'pending_withdrawals_count'    => $pendingWithdrawalsCount,
+            'pending_withdrawals_amount'   => $pendingWithdrawalsAmount,
+            'completed_withdrawals_amount' => $completedWithdrawalsAmount,
+            'pending_gcash_verifications'  => $pendingGcashVerificationsCount,
+            'admin_wallet_available'       => $netAdminProfit,
+            'admin_wallet_pending'         => round((float) $allCommissions->where('status', '!=', 'settled')->sum('admin_commission_amount'), 2),
+            'admin_10_commission_total'    => $grossAdminCommission10,
+            'admin_net_profit_after_sub'   => $netAdminProfit,
+            'seller_90_net_total'          => $sellerNet90,
+            'settled_seller_payouts'       => $completedWithdrawalsAmount,
+            'logistics_10_commission'      => $logisticsComm10,
+            'logistics_80_operational'     => $logisticsOps80,
+            'rider_10_commission'          => $riderNet10,
+            'gross_shipping_volume'        => $grossShippingFees,
         ];
 
-        return view('admin.finance.commissions', compact(
-            'adminWallet',
-            'commissions',
-            'settlements',
-            'platformVouchers',
-            'status',
-            'search',
-            'metrics'
-        ));
+        return view()->first(
+            ['admin.commissions.index', 'admin.finance.commissions'],
+            compact(
+                'tab',
+                'status',
+                'search',
+                'roleFilter',
+                'statusFilter',
+                'commissionRecords',
+                'commissions',
+                'platformVouchers',
+                'withdrawalRequests',
+                'payoutRequests',
+                'arrearsRemittances',
+                'gcashSubmissions',
+                'metrics'
+            )
+        );
     }
 
     public function storePlatformVoucher(Request $request)
     {
-        $normalizedCode = strtoupper(trim((string) $request->input('code')));
-        $request->merge(['code' => $normalizedCode]);
+        StorkSchemaBootstrapService::ensureTablesExist();
+
+        $code = strtoupper(preg_replace('/[^A-Za-z0-9]/', '', (string) $request->input('code', '')));
+        $request->merge([
+            'code'          => $code,
+            'discount_type' => $request->input('discount_type', 'fixed'),
+        ]);
 
         $validated = $request->validate([
-            'code'              => ['required', 'string', 'min:4', 'max:15', 'regex:/^[A-Z0-9]+$/', 'unique:stork_vouchers,code'],
+            'code'              => ['required', 'string', 'min:4', 'max:20', 'unique:stork_vouchers,code'],
             'title'             => ['required', 'string', 'min:3', 'max:120'],
+            'description'       => ['nullable', 'string', 'max:255'],
             'scope'             => ['required', 'in:platform,shipping'],
             'discount_type'     => ['required', 'in:fixed,percentage'],
-            'discount_value'    => ['required', 'numeric', 'gt:0'],
-            'max_discount_cap'  => ['nullable', 'numeric', 'gt:0'],
-            'min_spend'         => ['required', 'numeric', 'min:1'],
-            'total_usage_limit' => ['required', 'integer', 'min:1', 'max:100000'],
-            'per_buyer_limit'   => ['required', 'integer', 'min:1', 'max:50'],
+            'discount_value'    => ['required', 'numeric', 'min:1', 'max:100000'],
+            'max_discount_cap'  => ['nullable', 'numeric', 'min:1', 'max:100000'],
+            'min_spend'         => ['required', 'numeric', 'min:0', 'max:500000'],
+            'total_usage_limit' => ['required', 'integer', 'min:1', 'max:1000000'],
+            'per_buyer_limit'   => ['required', 'integer', 'min:1', 'max:100'],
             'visibility'        => ['required', 'in:claimable,code_only'],
             'starts_at'         => ['required', 'date'],
             'ends_at'           => ['required', 'date', 'after:starts_at'],
-        ], [
-            'ends_at.after' => 'Expiration date must be after the start date.',
         ]);
 
-        if ($validated['scope'] === 'shipping') {
-            $validated['discount_type'] = 'fixed';
-            $validated['max_discount_cap'] = $validated['discount_value'];
+        if ($validated['discount_type'] === 'percentage' && (float) $validated['discount_value'] > 99) {
+            throw ValidationException::withMessages([
+                'discount_value' => 'Percentage discount must be between 1% and 99%.',
+            ]);
         }
 
         StorkVoucher::create([
@@ -170,531 +228,647 @@ class OrderFinanceController extends Controller
             'created_by'        => null,
             'code'              => $validated['code'],
             'title'             => trim($validated['title']),
-            'description'       => $validated['scope'] === 'shipping'
-                ? 'Admin Free Shipping Voucher: Up to ₱' . number_format((float) $validated['discount_value'], 2) . ' off shipping (Min. spend ₱' . number_format((float) $validated['min_spend'], 2) . ').'
-                : 'Storkia Platform Voucher: ' . ($validated['discount_type'] === 'percentage' ? $validated['discount_value'] . '% off' : '₱' . number_format((float) $validated['discount_value'], 2) . ' off') . ' (Min. spend ₱' . number_format((float) $validated['min_spend'], 2) . ').',
+            'description'       => $validated['description'] ?? null,
             'scope'             => $validated['scope'],
             'discount_type'     => $validated['discount_type'],
-            'discount_value'    => $validated['discount_value'],
-            'max_discount_cap'  => $validated['max_discount_cap'] ?? null,
-            'min_spend'         => $validated['min_spend'],
+            'discount_value'    => round((float) $validated['discount_value'], 2),
+            'max_discount_cap'  => ! empty($validated['max_discount_cap']) ? round((float) $validated['max_discount_cap'], 2) : null,
+            'min_spend'         => round((float) $validated['min_spend'], 2),
             'total_usage_limit' => (int) $validated['total_usage_limit'],
             'used_count'        => 0,
             'per_buyer_limit'   => (int) $validated['per_buyer_limit'],
             'visibility'        => $validated['visibility'],
-            'starts_at'         => $validated['starts_at'],
-            'ends_at'           => $validated['ends_at'],
+            'starts_at'         => Carbon::parse($validated['starts_at']),
+            'ends_at'           => Carbon::parse($validated['ends_at']),
             'status'            => 'active',
         ]);
 
-        return back()->with('success', "Admin Voucher \"{$validated['code']}\" created with expiration date " . Carbon::parse($validated['ends_at'])->format('M d, Y h:i A') . '!');
+        return back()->with('success', "Platform voucher {$validated['code']} created and published!");
     }
 
-    public function endPlatformVoucher(Request $request, StorkVoucher $voucher)
+    public function updatePlatformVoucher(Request $request, StorkVoucher $voucher)
+    {
+        $validated = $request->validate([
+            'total_usage_limit' => ['required', 'integer', 'min:' . max(1, (int) $voucher->used_count)],
+            'ends_at'           => ['required', 'date', 'after:now'],
+        ]);
+
+        $voucher->update([
+            'total_usage_limit' => (int) $validated['total_usage_limit'],
+            'ends_at'           => Carbon::parse($validated['ends_at']),
+        ]);
+
+        return back()->with('success', "Voucher {$voucher->code} limits updated.");
+    }
+
+    public function endPlatformVoucher(StorkVoucher $voucher)
     {
         $voucher->update([
             'status'  => 'ended',
             'ends_at' => now(),
         ]);
 
-        return back()->with('success', "Voucher \"{$voucher->code}\" has been ended immediately.");
+        return back()->with('success', "Voucher {$voucher->code} ended immediately.");
     }
 
-    public function salesReport(Request $request)
-    {
-        $this->orderCompletionService->runLifecycleMaintenance();
-
-        $fromDate = $request->query('from_date', now()->startOfMonth()->toDateString());
-        $toDate = $request->query('to_date', now()->toDateString());
-        $roleTab = $request->query('role_tab', 'sellers');
-
-        $start = Carbon::parse($fromDate)->startOfDay();
-        $end = Carbon::parse($toDate)->endOfDay();
-        if ($end->lt($start)) {
-            [$start, $end] = [$end->copy()->startOfDay(), $start->copy()->endOfDay()];
-        }
-
-        $periodCommissions = CommissionRecord::with(['sellerOrder.extra', 'sellerProfile', 'logisticsProfile', 'rider'])
-            ->whereBetween('calculated_at', [$start, $end])
-            ->orderBy('calculated_at', 'asc')
-            ->get();
-
-        $periodOrders = SellerOrder::with(['sellerProfile', 'logisticsProfile', 'extra'])
-            ->whereBetween('created_at', [$start, $end])
-            ->orderBy('created_at', 'asc')
-            ->get();
-
-        $adminPlatformSub = (float) $periodOrders->whereIn('status', ['delivered', 'completed'])
-            ->sum(fn ($o) => (float) ($o->extra?->platform_voucher_discount ?? 0));
-
-        $adminShippingSub = (float) $periodOrders->whereIn('status', ['delivered', 'completed'])
-            ->sum(fn ($o) => (float) ($o->extra?->shipping_voucher_discount ?? 0));
-
-        $grossAdmin10 = (float) $periodCommissions->sum('admin_commission_amount');
-
-        $financialSummary = [
-            'from_date'                  => $start->toDateString(),
-            'to_date'                    => $end->toDateString(),
-            'total_orders_in_period'     => $periodOrders->count(),
-            'completed_orders_in_period' => $periodOrders->where('status', 'completed')->count(),
-            'cancelled_rts_in_period'    => $periodOrders->whereIn('status', ['cancelled', 'rejected', 'returned_to_seller'])->count(),
-            'gross_merchandise_volume'   => round((float) $periodCommissions->sum('product_subtotal'), 2),
-            'gross_shipping_volume'      => round((float) $periodCommissions->sum('shipping_fee'), 2),
-            'admin_10_gross_commission'  => round($grossAdmin10, 2),
-            'admin_voucher_subsidies'    => round($adminPlatformSub + $adminShippingSub, 2),
-            'admin_net_platform_profit'  => max(0.0, round($grossAdmin10 - $adminPlatformSub - $adminShippingSub, 2)),
-            'seller_90_total_payout'     => round((float) $periodCommissions->sum('seller_net_earning'), 2),
-            'logistics_90_total_share'   => round((float) $periodCommissions->sum('logistics_total_earning'), 2),
-            'rider_10_total_share'       => round((float) $periodCommissions->sum('rider_commission_amount'), 2),
-        ];
-
-        $sellerPerformance = SellerProfile::with('user')
-            ->orderBy('created_at', 'asc')
-            ->get()
-            ->map(function (SellerProfile $sp) use ($periodOrders, $periodCommissions) {
-                $spOrders = $periodOrders->where('seller_profile_id', $sp->id);
-                $spComms = $periodCommissions->where('seller_profile_id', $sp->id);
-
-                return [
-                    'seller_profile'   => $sp,
-                    'orders_count'     => $spOrders->count(),
-                    'completed_count'  => $spOrders->where('status', 'completed')->count(),
-                    'rts_cancel_count' => $spOrders->whereIn('status', ['cancelled', 'rejected', 'returned_to_seller'])->count(),
-                    'gross_sales'      => round((float) $spComms->sum('product_subtotal'), 2),
-                    'admin_10_cut'     => round((float) $spComms->sum('admin_commission_amount'), 2),
-                    'seller_90_net'    => round((float) $spComms->sum('seller_net_earning'), 2),
-                ];
-            });
-
-        $logisticsPerformance = LogisticsProfile::with('user')
-            ->orderBy('created_at', 'asc')
-            ->get()
-            ->map(function (LogisticsProfile $lp) use ($start, $end, $periodCommissions) {
-                $lpShipments = Shipment::where('logistics_profile_id', $lp->id)
-                    ->whereBetween('created_at', [$start, $end])
-                    ->get();
-                $lpComms = $periodCommissions->where('logistics_profile_id', $lp->id);
-
-                return [
-                    'logistics_profile' => $lp,
-                    'shipments_total'   => $lpShipments->count(),
-                    'delivered_count'   => $lpShipments->where('status', 'delivered')->count(),
-                    'failed_rts_count'  => $lpShipments->whereIn('status', ['delivery_failed', 'returned_to_seller', 'returning_to_seller'])->count(),
-                    'gross_shipping'    => round((float) $lpComms->sum('shipping_fee'), 2),
-                    'hub_10_commission' => round((float) $lpComms->sum('logistics_commission_amount'), 2),
-                    'hub_80_ops'        => round((float) $lpComms->sum('logistics_operational_revenue'), 2),
-                    'hub_90_total'      => round((float) $lpComms->sum('logistics_total_earning'), 2),
-                ];
-            });
-
-        $courierPerformance = Courier::with('logisticsProfile')
-            ->orderBy('created_at', 'asc')
-            ->get()
-            ->map(function (Courier $c) use ($start, $end) {
-                $pickups = PickupAssignment::with('shipment')
-                    ->where('courier_id', $c->id)
-                    ->whereBetween('created_at', [$start, $end])
-                    ->get();
-
-                $completed = $pickups->where('status', 'completed');
-
-                return [
-                    'courier'             => $c,
-                    'assigned_pickups'    => $pickups->count(),
-                    'completed_dropoffs'  => $completed->count(),
-                    'active_pickups'      => $pickups->whereIn('status', ['assigned', 'accepted', 'picked_up', 'in_transit_to_hub'])->count(),
-                    'total_weight_hauled' => round((float) $completed->sum(fn ($p) => (float) ($p->shipment?->total_weight ?? 0)), 2),
-                ];
-            });
-
-        $riderPerformance = Rider::with('logisticsProfile')
-            ->orderBy('created_at', 'asc')
-            ->get()
-            ->map(function (Rider $r) use ($start, $end, $periodCommissions) {
-                $deliveries = DeliveryAssignment::where('rider_id', $r->id)
-                    ->whereBetween('created_at', [$start, $end])
-                    ->get();
-                $rComms = $periodCommissions->where('rider_id', $r->id);
-
-                return [
-                    'rider'                => $r,
-                    'assigned_deliveries'  => $deliveries->count(),
-                    'completed_deliveries' => $deliveries->where('status', 'delivered')->count(),
-                    'failed_attempts'      => $deliveries->where('status', 'failed')->count(),
-                    'rider_10_commission'  => round((float) $rComms->sum('rider_commission_amount'), 2),
-                ];
-            });
-
-        return view('admin.reports.sales', compact(
-            'fromDate',
-            'toDate',
-            'roleTab',
-            'financialSummary',
-            'sellerPerformance',
-            'logisticsPerformance',
-            'courierPerformance',
-            'riderPerformance'
-        ));
-    }
-
-    public function accountsIndex(Request $request)
-    {
-        $roleTab = $request->query('role', 'Buyer');
-        $search = trim((string) $request->query('search', ''));
-
-        // Accounts their owners deleted are counted under "Archived" only.
-        $counts = [
-            'Buyer'     => User::notArchived()->where('role', 'Buyer')->count(),
-            'Seller'    => User::notArchived()->where('role', 'Seller')->count(),
-            'Logistics' => User::notArchived()->where('role', 'Logistics')->count(),
-            'Courier'   => Courier::count(),
-            'Rider'     => Rider::count(),
-            'Appeals'   => BuyerBanAppeal::where('status', 'pending')->count(),
-            'Archived'  => User::archived()->count(),
-        ];
-
-        $users = collect();
-        $archivedUsers = collect();
-        $couriers = collect();
-        $riders = collect();
-        $appeals = BuyerBanAppeal::with(['buyer', 'sanction'])
-            ->orderByRaw("CASE WHEN status = 'pending' THEN 0 ELSE 1 END")
-            ->orderBy('created_at', 'asc')
-            ->get();
-
-        $sanctionsMap = BuyerAccountSanction::all()->keyBy('buyer_id');
-
-        if (in_array($roleTab, ['Buyer', 'Seller', 'Logistics'], true)) {
-            // Archived (deleted) accounts have their own tab, so they are left out of the role directories.
-            $uQuery = User::notArchived()
-                ->with(['sellerProfile', 'logisticsProfile', 'identityVerification'])
-                ->where('role', $roleTab);
-
-            if ($search !== '') {
-                $uQuery->where(function ($q) use ($search) {
-                    $q->where('first_name', 'like', "%{$search}%")
-                      ->orWhere('last_name', 'like', "%{$search}%")
-                      ->orWhere('email', 'like', "%{$search}%")
-                      ->orWhere('contact_no', 'like', "%{$search}%");
-                });
-            }
-
-            $users = $uQuery->orderBy('created_at', 'asc')->orderBy('id', 'asc')->paginate(12)->withQueryString();
-        } elseif ($roleTab === 'Archived') {
-            $archivedQuery = User::archived()->with(['sellerProfile', 'logisticsProfile']);
-
-            if ($search !== '') {
-                $archivedQuery->where(function ($q) use ($search) {
-                    $q->where('first_name', 'like', "%{$search}%")
-                      ->orWhere('last_name', 'like', "%{$search}%")
-                      ->orWhere('email', 'like', "%{$search}%")
-                      ->orWhere('contact_no', 'like', "%{$search}%");
-                });
-            }
-
-            $archivedUsers = $archivedQuery->orderByDesc('archived_at')->orderByDesc('id')->paginate(12)->withQueryString();
-        } elseif ($roleTab === 'Courier') {
-            $cQuery = Courier::with(['logisticsProfile', 'currentHubAssignment.hub']);
-            if ($search !== '') {
-                $cQuery->where(function ($q) use ($search) {
-                    $q->where('first_name', 'like', "%{$search}%")
-                      ->orWhere('last_name', 'like', "%{$search}%")
-                      ->orWhere('email', 'like', "%{$search}%")
-                      ->orWhere('plate_number', 'like', "%{$search}%");
-                });
-            }
-            $couriers = $cQuery->orderBy('created_at', 'asc')->orderBy('id', 'asc')->paginate(12)->withQueryString();
-        } elseif ($roleTab === 'Rider') {
-            $rQuery = Rider::with(['logisticsProfile', 'currentHubAssignment.hub', 'barangayCoverages']);
-            if ($search !== '') {
-                $rQuery->where(function ($q) use ($search) {
-                    $q->where('first_name', 'like', "%{$search}%")
-                      ->orWhere('last_name', 'like', "%{$search}%")
-                      ->orWhere('email', 'like', "%{$search}%")
-                      ->orWhere('plate_number', 'like', "%{$search}%");
-                });
-            }
-            $riders = $rQuery->orderBy('created_at', 'asc')->orderBy('id', 'asc')->paginate(12)->withQueryString();
-        }
-
-        return view('admin.accounts.index', compact(
-            'roleTab',
-            'search',
-            'counts',
-            'users',
-            'archivedUsers',
-            'couriers',
-            'riders',
-            'appeals',
-            'sanctionsMap'
-        ));
-    }
-
-    public function toggleAccountStatus(Request $request)
-    {
-        $validated = $request->validate([
-            'entity_type' => ['required', 'in:user,courier,rider'],
-            'entity_id'   => ['required', 'integer'],
-            'action'      => ['required', 'in:suspend_temp,suspend_perm,reactivate'],
-            'reason'      => ['nullable', 'string', 'max:300'],
-        ]);
-
-        $reason = trim((string) ($validated['reason'] ?: 'Administrative account action by Storkia Admin.'));
-
-        if ($validated['entity_type'] === 'user') {
-            $targetUser = User::findOrFail($validated['entity_id']);
-
-            // A deleted account is handled from the Archived Accounts tab, not by suspending or reactivating it.
-            if ($targetUser->isArchived()) {
-                return back()->withErrors([
-                    'account' => "{$targetUser->full_name} deleted this account. Restore it from the Archived Accounts tab first.",
-                ]);
-            }
-
-            $sanction = $this->buyerAbandonmentService->getOrCreateSanction((int) $targetUser->id);
-
-            if ($validated['action'] === 'suspend_temp') {
-                $sanction->update([
-                    'ban_level'               => max(1, (int) $sanction->ban_level),
-                    'account_status'          => 'temp_banned',
-                    'temp_ban_started_at'     => now(),
-                    'temp_ban_ends_at'        => now()->addDays(7),
-                    'appeal_required'         => true,
-                    'last_abandonment_reason' => $reason,
-                ]);
-                return back()->with('success', "Account {$targetUser->full_name} ({$targetUser->role}) suspended for 7 days with mandatory appeal.");
-            }
-
-            if ($validated['action'] === 'suspend_perm') {
-                $sanction->update([
-                    'ban_level'               => 2,
-                    'account_status'          => 'permanently_banned',
-                    'appeal_required'         => false,
-                    'permanently_banned_at'   => now(),
-                    'last_abandonment_reason' => $reason,
-                ]);
-                return back()->with('success', "Account {$targetUser->full_name} ({$targetUser->role}) permanently banned.");
-            }
-
-            $sanction->update([
-                'account_status'  => 'active',
-                'appeal_required' => false,
-            ]);
-
-            return back()->with('success', "Account {$targetUser->full_name} ({$targetUser->role}) reactivated.");
-        }
-
-        if ($validated['entity_type'] === 'courier') {
-            $courier = Courier::findOrFail($validated['entity_id']);
-            $newStatus = $validated['action'] === 'reactivate' ? 'active' : 'suspended';
-            $courier->update(['status' => $newStatus]);
-
-            return back()->with('success', "Courier {$courier->full_name} status updated to {$newStatus}.");
-        }
-
-        $rider = Rider::findOrFail($validated['entity_id']);
-        $newStatus = $validated['action'] === 'reactivate' ? 'approved' : 'rejected';
-        $rider->update([
-            'status'      => $newStatus,
-            'approved_at' => $newStatus === 'approved' ? now() : $rider->approved_at,
-            'rejected_at' => $newStatus === 'rejected' ? now() : null,
-        ]);
-
-        return back()->with('success', "Rider {$rider->full_name} status updated to {$newStatus}.");
-    }
-
-    /**
-     * Bring back an account its owner deleted (Account Management > Delete
-     * Account). Only the archive stamp is cleared: the password, orders and
-     * any ban or suspension stay exactly as they were.
-     */
-    public function restoreArchivedAccount(Request $request, User $user)
-    {
-        $validated = $request->validate([
-            'remarks' => ['nullable', 'string', 'max:300'],
-        ]);
-
-        if (! $user->isArchived()) {
-            return back()->withErrors(['account' => "{$user->full_name} is not archived."]);
-        }
-
-        $this->accountArchiveService->restore($user, $validated['remarks'] ?? null);
-
-        return back()->with(
-            'success',
-            "Account {$user->full_name} ({$user->role}) restored. They can sign in again with their existing password."
-        );
-    }
-
-    public function resolveBuyerAppeal(Request $request, BuyerBanAppeal $appeal)
+    public function decideWithdrawalRequest(Request $request, int $id)
     {
         $admin = Auth::guard('admin')->user();
 
         $validated = $request->validate([
-            'decision' => ['required', 'in:approve,reject'],
-            'remarks'  => ['required', 'string', 'min:5', 'max:500'],
+            'decision'               => ['required', 'in:approve,reject,completed,rejected'],
+            'remarks'                => ['nullable', 'string', 'max:500'],
+            'payout_proof_reference' => ['nullable', 'string', 'max:100'],
         ]);
 
-        $this->buyerAbandonmentService->resolveBuyerAppeal(
-            appeal: $appeal,
+        $withdrawal = $this->roleWalletService->processWithdrawalDecision(
+            withdrawalRequestId: $id,
             adminId: (int) ($admin?->id ?? 1),
             decision: $validated['decision'],
-            remarks: $validated['remarks']
+            remarks: $validated['remarks'] ?? null,
+            proofReference: $validated['payout_proof_reference'] ?? null
         );
 
-        return back()->with(
-            'success',
-            $validated['decision'] === 'approve'
-                ? 'Buyer appeal approved! Account has been reactivated on probation (a 2nd ban offense will trigger a Permanent Ban).'
-                : 'Buyer appeal rejected. Account remains suspended.'
-        );
+        $actionWord = $withdrawal->status === 'completed' ? 'approved and marked as disbursed' : 'rejected and refunded to wallet';
+
+        return back()->with('success', "Withdrawal Request #{$withdrawal->withdrawal_reference} ({$withdrawal->requester_type} - {$withdrawal->requester_name}) {$actionWord}.");
     }
 
-    public function disputes(Request $request)
-    {
-        $this->orderCompletionService->runLifecycleMaintenance();
-
-        $status = $request->query('status', 'unresolved');
-        $search = trim((string) $request->query('search', ''));
-
-        $baseQuery = SellerOrder::whereNotNull('dispute_reported_at');
-
-        $counts = [
-            'all'        => (clone $baseQuery)->count(),
-            'unresolved' => (clone $baseQuery)->where('has_unresolved_dispute', true)->count(),
-            'resolved'   => (clone $baseQuery)->where('has_unresolved_dispute', false)->count(),
-        ];
-
-        $query = SellerOrder::with([
-            'order',
-            'buyer',
-            'sellerProfile.user',
-            'logisticsProfile',
-            'items',
-            'extra',
-            'shipment.latestDeliveryProof',
-        ])->whereNotNull('dispute_reported_at');
-
-        if ($status === 'unresolved') {
-            $query->where('has_unresolved_dispute', true);
-        } elseif ($status === 'resolved') {
-            $query->where('has_unresolved_dispute', false);
-        }
-
-        if ($search !== '') {
-            $query->where(function ($q) use ($search) {
-                $q->where('seller_order_number', 'like', "%{$search}%")
-                  ->orWhereHas('sellerProfile', fn ($sp) => $sp->where('business_name', 'like', "%{$search}%"))
-                  ->orWhereHas('buyer', fn ($bq) => $bq->where('first_name', 'like', "%{$search}%")->orWhere('last_name', 'like', "%{$search}%"));
-            });
-        }
-
-        $disputedOrders = $query
-            ->orderBy('created_at', 'asc')
-            ->orderBy('id', 'asc')
-            ->paginate(10)
-            ->withQueryString();
-
-        return view('admin.orders.disputes', compact(
-            'disputedOrders',
-            'status',
-            'search',
-            'counts'
-        ));
-    }
-
-    public function resolveDispute(Request $request, SellerOrder $sellerOrder)
+    public function processSellerPayout(Request $request, int $id)
     {
         $admin = Auth::guard('admin')->user();
 
         $validated = $request->validate([
-            'resolution' => ['required', 'in:complete_order,return_and_cancel'],
-            'remarks'    => ['required', 'string', 'min:5', 'max:500'],
+            'decision'               => ['nullable', 'in:approve,reject,completed,rejected'],
+            'status'                 => ['nullable', 'in:completed,rejected'],
+            'remarks'                => ['nullable', 'string', 'max:500'],
+            'admin_remarks'          => ['nullable', 'string', 'max:500'],
+            'payout_proof_reference' => ['nullable', 'string', 'max:100'],
         ]);
 
-        DB::transaction(function () use ($sellerOrder, $admin, $validated) {
-            $locked = SellerOrder::with(['order', 'payment', 'shipment', 'extra'])->where('id', $sellerOrder->id)->lockForUpdate()->firstOrFail();
+        $decision = $validated['decision'] ?? $validated['status'] ?? 'approve';
+        $remarks = $validated['remarks'] ?? $validated['admin_remarks'] ?? null;
 
-            if (! $locked->has_unresolved_dispute) {
-                throw ValidationException::withMessages([
-                    'dispute' => 'This delivery dispute has already been resolved.',
-                ]);
+        $withdrawal = WithdrawalRequest::find($id);
+        if (! $withdrawal && Schema::hasTable('seller_payout_requests')) {
+            $legacy = DB::table('seller_payout_requests')->where('id', $id)->first();
+            if ($legacy) {
+                $withdrawal = WithdrawalRequest::where('withdrawal_reference', $legacy->payout_reference)->first();
             }
+        }
 
-            $prevStatus = $locked->status;
+        if (! $withdrawal) {
+            abort(404, 'Withdrawal request not found.');
+        }
 
-            if ($validated['resolution'] === 'complete_order') {
-                $locked->update([
-                    'has_unresolved_dispute' => false,
-                    'dispute_resolved_at'    => now(),
-                    'status'                 => 'completed',
-                    'completed_at'           => now(),
-                ]);
+        $processed = $this->roleWalletService->processWithdrawalDecision(
+            withdrawalRequestId: (int) $withdrawal->id,
+            adminId: (int) ($admin?->id ?? 1),
+            decision: $decision,
+            remarks: $remarks,
+            proofReference: $validated['payout_proof_reference'] ?? null
+        );
 
-                $this->roleWalletService->releaseCompletedOrderEarnings($locked);
+        return back()->with('success', "Withdrawal Request #{$processed->withdrawal_reference} processed ({$processed->status}).");
+    }
 
-                OrderStatusHistory::create([
-                    'order_id'        => $locked->order_id,
-                    'seller_order_id' => $locked->id,
-                    'from_status'     => $prevStatus,
-                    'to_status'       => 'completed',
-                    'actor_type'      => 'Admin',
-                    'actor_id'        => $admin?->id,
-                    'remarks'         => 'Admin resolved dispute, completed order, and released E-Wallet commissions: ' . trim($validated['remarks']),
-                ]);
+    public function verifyArrearsRemittance(Request $request, int $id)
+    {
+        $admin = Auth::guard('admin')->user();
+        $remittance = DB::table('seller_commission_remittances')->where('id', $id)->first();
+        if (! $remittance) {
+            abort(404);
+        }
+
+        $validated = $request->validate([
+            'decision'      => ['required', 'in:approve,reject'],
+            'admin_remarks' => ['nullable', 'string', 'max:300'],
+        ]);
+
+        DB::transaction(function () use ($remittance, $validated, $admin) {
+            if ($validated['decision'] === 'approve') {
+                DB::table('seller_commission_remittances')
+                    ->where('id', $remittance->id)
+                    ->update([
+                        'status'               => 'verified',
+                        'verified_by_admin_id' => $admin?->id,
+                        'admin_remarks'        => $validated['admin_remarks'] ?? 'Verified by Admin',
+                        'verified_at'          => now(),
+                        'updated_at'           => now(),
+                    ]);
+
+                $wallet = RoleWallet::where('id', $remittance->role_wallet_id)->lockForUpdate()->first();
+                if ($wallet) {
+                    $remittedAmt = round((float) $remittance->amount_remitted, 2);
+                    $newArrears = max(0.00, round((float) $wallet->platform_commission_arrears - $remittedAmt, 2));
+                    $newAvailable = round((float) $wallet->available_balance + $remittedAmt, 2);
+
+                    $wallet->update([
+                        'platform_commission_arrears' => $newArrears,
+                        'available_balance'           => $newAvailable,
+                    ]);
+
+                    if ($newArrears < RoleWalletService::GCASH_ARREARS_CAP) {
+                        SellerProfile::where('id', $remittance->seller_profile_id)->update([
+                            'gcash_blocked_for_arrears' => false,
+                        ]);
+                    }
+                }
             } else {
-                $locked->update([
-                    'has_unresolved_dispute' => false,
-                    'dispute_resolved_at'    => now(),
-                    'status'                 => 'returned_to_seller',
-                    'payment_status'         => 'cancelled',
-                    'cancelled_at'           => now(),
+                DB::table('seller_commission_remittances')
+                    ->where('id', $remittance->id)
+                    ->update([
+                        'status'               => 'rejected',
+                        'verified_by_admin_id' => $admin?->id,
+                        'admin_remarks'        => $validated['admin_remarks'] ?? 'Rejected by Admin',
+                        'verified_at'          => now(),
+                        'updated_at'           => now(),
+                    ]);
+            }
+        });
+
+        return back()->with('success', 'Seller arrears remittance updated.');
+    }
+
+    public function verifyBuyerGcashPayment(Request $request, OrderPaymentSubmission $submission)
+    {
+        $admin = Auth::guard('admin')->user();
+
+        $validated = $request->validate([
+            'decision'      => ['required', 'in:verify,flag_suspicious'],
+            'admin_remarks' => ['nullable', 'string', 'max:500'],
+        ]);
+
+        DB::transaction(function () use ($submission, $validated, $admin) {
+            $lockedSub = OrderPaymentSubmission::with(['sellerOrder.buyer', 'sellerOrder.seller', 'sellerOrder.payment'])
+                ->where('id', $submission->id)
+                ->lockForUpdate()
+                ->firstOrFail();
+
+            $sellerOrder = $lockedSub->sellerOrder;
+
+            if ($validated['decision'] === 'verify') {
+                $lockedSub->update([
+                    'status'               => 'verified',
+                    'is_suspicious'        => false,
+                    'verified_by_admin_id' => $admin?->id,
+                    'admin_verified_at'    => now(),
+                    'seller_verified_at'   => $lockedSub->seller_verified_at ?? now(),
+                    'admin_remarks'        => $validated['admin_remarks'] ?? 'Verified by Storkia Admin Escrow',
                 ]);
 
-                $locked->payment?->update([
-                    'status' => 'cancelled',
+                if ($sellerOrder) {
+                    $sellerOrder->update([
+                        'payment_status' => 'paid',
+                    ]);
+                    $sellerOrder->payment?->update([
+                        'status'       => 'paid',
+                        'collected_at' => $lockedSub->paid_at ?? now(),
+                    ]);
+
+                    try {
+                        $sellerOrder->buyer?->notify(new OrderLifecycleNotification(
+                            title: 'GCash Payment Verified by Storkia Admin!',
+                            message: "Your GCash payment (Ref #{$lockedSub->reference_number}) for Order #{$sellerOrder->seller_order_number} has been verified and secured in Storkia Escrow.",
+                            type: 'success',
+                            url: route('user.orders.show', $sellerOrder->id),
+                            orderId: $sellerOrder->order_id,
+                            sellerOrderId: $sellerOrder->id
+                        ));
+
+                        $sellerOrder->seller?->notify(new OrderLifecycleNotification(
+                            title: 'Buyer GCash Payment Verified by Admin Escrow',
+                            message: "Storkia Admin verified the buyer's GCash payment (₱" . number_format((float) $lockedSub->submitted_amount, 2) . ") for Order #{$sellerOrder->seller_order_number}. You may safely accept and prepare the order.",
+                            type: 'success',
+                            url: route('seller.orders.show', $sellerOrder->id),
+                            orderId: $sellerOrder->order_id,
+                            sellerOrderId: $sellerOrder->id
+                        ));
+                    } catch (\Throwable $e) {
+                    }
+                }
+            } else {
+                $reason = trim((string) ($validated['admin_remarks'] ?? '')) ?: 'GCash reference number or receipt screenshot could not be verified by Storkia Admin.';
+
+                $lockedSub->update([
+                    'status'                 => 'flagged_suspicious',
+                    'is_suspicious'          => true,
+                    'suspicious_reason'      => $reason,
+                    'suspicious_reported_at' => now(),
+                    'verified_by_admin_id'   => $admin?->id,
+                    'admin_remarks'          => $reason,
                 ]);
 
-                $locked->shipment?->update([
-                    'status'      => 'returned_to_seller',
-                    'returned_at' => now(),
-                ]);
+                if ($sellerOrder && in_array($sellerOrder->status, ['pending_seller_acceptance', 'accepted', 'preparing'], true)) {
+                    $oldStatus = $sellerOrder->status;
+                    $sellerOrder->update([
+                        'status' => 'pending_buyer_response',
+                    ]);
 
-                $locked->extra?->update([
+                    OrderStatusHistory::create([
+                        'order_id'        => $sellerOrder->order_id,
+                        'seller_order_id' => $sellerOrder->id,
+                        'from_status'     => $oldStatus,
+                        'to_status'       => 'pending_buyer_response',
+                        'actor_type'      => 'Admin',
+                        'actor_id'        => $admin?->id,
+                        'remarks'         => "Admin flagged GCash receipt as unverifiable: {$reason}",
+                    ]);
+
+                    try {
+                        $sellerOrder->buyer?->notify(new OrderLifecycleNotification(
+                            title: 'Action Required: GCash Payment Flagged for Verification',
+                            message: "Order #{$sellerOrder->seller_order_number} GCash payment was flagged ({$reason}). Please switch to COD or cancel the order in My Orders.",
+                            type: 'warning',
+                            url: route('user.orders.show', $sellerOrder->id),
+                            orderId: $sellerOrder->order_id,
+                            sellerOrderId: $sellerOrder->id
+                        ));
+                    } catch (\Throwable $e) {
+                    }
+                }
+            }
+        });
+
+        return back()->with('success', 'GCash payment submission status updated.');
+    }
+
+    public function refundBuyerGcashPayment(Request $request, OrderPaymentSubmission $submission)
+    {
+        $admin = Auth::guard('admin')->user();
+
+        $validated = $request->validate([
+            'refund_reference' => ['required', 'string', 'min:4', 'max:80'],
+            'admin_remarks'    => ['nullable', 'string', 'max:500'],
+        ]);
+
+        $refundRef = strtoupper(trim($validated['refund_reference']));
+        $remarks = trim((string) ($validated['admin_remarks'] ?? "Refunded via GCash (Ref: {$refundRef})"));
+
+        DB::transaction(function () use ($submission, $refundRef, $remarks, $admin) {
+            $lockedSub = OrderPaymentSubmission::with(['sellerOrder.buyer', 'sellerOrder.extra'])
+                ->where('id', $submission->id)
+                ->lockForUpdate()
+                ->firstOrFail();
+
+            $lockedSub->update([
+                'status'               => 'refunded',
+                'refund_status'        => 'refunded',
+                'refund_reference'     => $refundRef,
+                'refunded_at'          => now(),
+                'verified_by_admin_id' => $admin?->id,
+                'admin_remarks'        => $remarks,
+            ]);
+
+            $sellerOrder = $lockedSub->sellerOrder;
+            if ($sellerOrder) {
+                $sellerOrder->extra?->update([
                     'refund_status'      => 'refund_released',
                     'refund_released_at' => now(),
                 ]);
 
-                $this->inventoryStockService->restoreStockForSellerOrder($locked);
-
                 OrderStatusHistory::create([
-                    'order_id'        => $locked->order_id,
-                    'seller_order_id' => $locked->id,
-                    'from_status'     => $prevStatus,
-                    'to_status'       => 'returned_to_seller',
+                    'order_id'        => $sellerOrder->order_id,
+                    'seller_order_id' => $sellerOrder->id,
+                    'from_status'     => $sellerOrder->status,
+                    'to_status'       => $sellerOrder->status,
                     'actor_type'      => 'Admin',
                     'actor_id'        => $admin?->id,
-                    'remarks'         => 'Admin upheld buyer dispute, approved refund, marked returned to seller, and restored stock: ' . trim($validated['remarks']),
+                    'remarks'         => "Admin disbursed Buyer GCash refund of ₱" . number_format((float) $lockedSub->submitted_amount, 2) . " (Ref #{$refundRef}).",
                 ]);
-            }
 
-            if ($locked->order) {
-                $this->orderCompletionService->syncParentOrderStatus($locked->order);
+                try {
+                    $sellerOrder->buyer?->notify(new OrderLifecycleNotification(
+                        title: 'GCash Refund Disbursed!',
+                        message: "Your GCash refund of ₱" . number_format((float) $lockedSub->submitted_amount, 2) . " for Order #{$sellerOrder->seller_order_number} has been sent (GCash Ref #{$refundRef}).",
+                        type: 'success',
+                        url: route('user.orders.show', $sellerOrder->id),
+                        orderId: $sellerOrder->order_id,
+                        sellerOrderId: $sellerOrder->id
+                    ));
+                } catch (\Throwable $e) {
+                }
             }
         });
 
-        try {
-            $sellerOrder->buyer?->notify(new OrderLifecycleNotification(
-                title: 'Delivery Dispute Resolved',
-                message: "Admin resolved the dispute on Order #{$sellerOrder->seller_order_number}: {$validated['remarks']}",
-                type: 'info',
-                url: route('user.orders.show', $sellerOrder->id),
-                orderId: $sellerOrder->order_id,
-                sellerOrderId: $sellerOrder->id
-            ));
-        } catch (\Throwable $e) {
+        AuditLoggerService::log(
+            action: 'buyer_gcash_refund_disbursed',
+            targetType: 'OrderPaymentSubmission',
+            targetId: (int) $submission->id,
+            targetReference: $refundRef,
+            newValues: ['refund_status' => 'refunded', 'refund_reference' => $refundRef],
+            reason: $remarks
+        );
+
+        return back()->with('success', "Buyer GCash refund recorded (Ref #{$refundRef}).");
+    }
+
+    public function salesReport(Request $request)
+    {
+        StorkSchemaBootstrapService::ensureTablesExist();
+
+        $roleTab = $request->query('role_tab', 'sellers');
+        if (! in_array($roleTab, ['sellers', 'logistics', 'couriers', 'riders'], true)) {
+            $roleTab = 'sellers';
         }
 
-        return back()->with('success', "Dispute for Order #{$sellerOrder->seller_order_number} resolved.");
+        $preset = $request->query('preset', 'this_month');
+        $now = now();
+
+        if ($preset === 'today') {
+            $from = $now->copy()->startOfDay();
+            $to = $now->copy()->endOfDay();
+        } elseif ($preset === 'last_7_days') {
+            $from = $now->copy()->subDays(6)->startOfDay();
+            $to = $now->copy()->endOfDay();
+        } elseif ($preset === 'last_30_days') {
+            $from = $now->copy()->subDays(29)->startOfDay();
+            $to = $now->copy()->endOfDay();
+        } elseif ($preset === 'this_quarter') {
+            $from = $now->copy()->firstOfQuarter()->startOfDay();
+            $to = $now->copy()->endOfDay();
+        } elseif ($preset === 'this_year') {
+            $from = $now->copy()->startOfYear()->startOfDay();
+            $to = $now->copy()->endOfDay();
+        } elseif ($preset === 'custom' && $request->filled('from_date') && $request->filled('to_date')) {
+            $from = Carbon::parse($request->query('from_date'))->startOfDay();
+            $to = Carbon::parse($request->query('to_date'))->endOfDay();
+            if ($to->lt($from)) {
+                [$from, $to] = [$to->copy()->startOfDay(), $from->copy()->endOfDay()];
+            }
+        } else {
+            $preset = 'this_month';
+            $from = $now->copy()->startOfMonth()->startOfDay();
+            $to = $now->copy()->endOfDay();
+        }
+
+        $fromDate = $from->toDateString();
+        $toDate = $to->toDateString();
+        $search = trim((string) $request->query('search', ''));
+
+        $periodCommissions = CommissionRecord::with(['sellerOrder', 'sellerProfile', 'logisticsProfile', 'shipment'])
+            ->whereBetween('created_at', [$from, $to])
+            ->orderBy('created_at', 'asc')
+            ->get();
+
+        $periodCompletedOrdersCount = $periodCommissions->count();
+        $periodGrossMerchandise = round((float) $periodCommissions->sum('product_subtotal'), 2);
+        $periodAdminComm10 = round((float) $periodCommissions->sum('admin_commission_amount'), 2);
+        $periodSellerNet90 = round((float) $periodCommissions->sum(fn ($c) => (float) ($c->seller_net_earning ?? $c->seller_net_amount ?? 0)), 2);
+        $periodGrossShipping = round((float) $periodCommissions->sum('shipping_fee'), 2);
+        $periodLogisticsNet90 = round((float) $periodCommissions->sum(fn ($c) => (float) ($c->logistics_total_earning ?: ((float) $c->logistics_commission_amount + (float) ($c->logistics_operational_revenue ?? $c->logistics_operational_amount ?? 0)))), 2);
+        $periodRiderComm10 = round((float) $periodCommissions->sum('rider_commission_amount'), 2);
+
+        $periodOrderIds = $periodCommissions->pluck('seller_order_id')->unique()->values();
+        $periodVoucherSubsidy = Schema::hasTable('seller_order_extras') && $periodOrderIds->isNotEmpty()
+            ? round((float) DB::table('seller_order_extras')
+                ->whereIn('seller_order_id', $periodOrderIds)
+                ->selectRaw('COALESCE(SUM(platform_voucher_discount + shipping_voucher_discount), 0) as sub')
+                ->value('sub'), 2)
+            : 0.00;
+
+        $periodNetAdminProfit = round($periodAdminComm10 - $periodVoucherSubsidy, 2);
+
+        $platformKpis = [
+            'completed_orders'    => $periodCompletedOrdersCount,
+            'gross_merchandise'   => $periodGrossMerchandise,
+            'admin_commission_10' => $periodAdminComm10,
+            'voucher_subsidy'     => $periodVoucherSubsidy,
+            'net_admin_profit'    => $periodNetAdminProfit,
+            'seller_net_90'       => $periodSellerNet90,
+            'gross_shipping'      => $periodGrossShipping,
+            'logistics_net_90'    => $periodLogisticsNet90,
+            'rider_comm_10'       => $periodRiderComm10,
+        ];
+
+        $sellerReports = SellerProfile::with('user')
+            ->when($search !== '' && $roleTab === 'sellers', function ($q) use ($search) {
+                $q->where(function ($sq) use ($search) {
+                    $sq->where('business_name', 'like', "%{$search}%")
+                       ->orWhere('municipality', 'like', "%{$search}%")
+                       ->orWhere('province', 'like', "%{$search}%");
+                });
+            })
+            ->orderBy('business_name')
+            ->get()
+            ->map(function (SellerProfile $sp) use ($from, $to, $periodCommissions) {
+                $spCommissions = $periodCommissions->where('seller_profile_id', $sp->id)->values();
+                $wallet = RoleWallet::where('owner_type', 'Seller')->where('owner_id', $sp->id)->first();
+                $ordersInPeriod = SellerOrder::where('seller_profile_id', $sp->id)
+                    ->whereBetween('created_at', [$from, $to])
+                    ->get();
+
+                $avgRating = Schema::hasTable('order_service_ratings')
+                    ? round((float) OrderServiceRating::where('seller_profile_id', $sp->id)->avg('seller_service_rating'), 2)
+                    : 0.00;
+
+                return [
+                    'id'                  => $sp->id,
+                    'business_name'       => $sp->business_name,
+                    'owner_name'          => $sp->user?->full_name ?? 'Owner',
+                    'email'               => $sp->user?->email ?? '',
+                    'category'            => $sp->line_of_business,
+                    'location'            => "{$sp->municipality}, {$sp->province}",
+                    'completed_orders'    => $spCommissions->count(),
+                    'cancelled_orders'    => $ordersInPeriod->whereIn('status', ['cancelled', 'rejected', 'returned_to_seller'])->count(),
+                    'gross_sales'         => round((float) $spCommissions->sum('product_subtotal'), 2),
+                    'admin_commission_10' => round((float) $spCommissions->sum('admin_commission_amount'), 2),
+                    'net_earnings_90'     => round((float) $spCommissions->sum(fn ($r) => (float) ($r->seller_net_earning ?? $r->seller_net_amount ?? 0)), 2),
+                    'wallet_available'    => round((float) ($wallet?->available_balance ?? 0), 2),
+                    'wallet_pending'      => round((float) ($wallet?->pending_balance ?? 0), 2),
+                    'wallet_withdrawn'    => round((float) ($wallet?->total_withdrawn ?? 0), 2),
+                    'avg_rating'          => $avgRating,
+                    'recent_ledger'       => $spCommissions->take(10)->map(fn ($r) => [
+                        'date'     => $r->created_at?->format('M d, Y h:i A'),
+                        'order_no' => $r->sellerOrder->seller_order_number ?? ('#' . $r->seller_order_id),
+                        'gross'    => (float) $r->product_subtotal,
+                        'admin_10' => (float) $r->admin_commission_amount,
+                        'net_90'   => (float) ($r->seller_net_earning ?? $r->seller_net_amount ?? 0),
+                    ])->values()->all(),
+                ];
+            });
+
+        $logisticsReports = LogisticsProfile::with(['user', 'hubs'])
+            ->when($search !== '' && $roleTab === 'logistics', function ($q) use ($search) {
+                $q->where(function ($sq) use ($search) {
+                    $sq->where('business_name', 'like', "%{$search}%")
+                       ->orWhere('municipality', 'like', "%{$search}%")
+                       ->orWhere('province', 'like', "%{$search}%");
+                });
+            })
+            ->orderBy('business_name')
+            ->get()
+            ->map(function (LogisticsProfile $lp) use ($from, $to, $periodCommissions) {
+                $lpCommissions = $periodCommissions->where('logistics_profile_id', $lp->id)->values();
+                $wallet = RoleWallet::where('owner_type', 'Logistics')->where('owner_id', $lp->id)->first();
+                $shipmentsInPeriod = Shipment::where('logistics_profile_id', $lp->id)
+                    ->whereBetween('created_at', [$from, $to])
+                    ->get();
+
+                $avgRating = Schema::hasTable('order_service_ratings')
+                    ? round((float) OrderServiceRating::where('logistics_profile_id', $lp->id)->avg('logistics_hub_rating'), 2)
+                    : 0.00;
+
+                return [
+                    'id'                  => $lp->id,
+                    'business_name'       => $lp->business_name,
+                    'owner_name'          => $lp->user?->full_name ?? 'Hub Manager',
+                    'email'               => $lp->user?->email ?? '',
+                    'location'            => "{$lp->municipality}, {$lp->province}",
+                    'active_hubs_count'   => $lp->hubs->where('status', 'active')->count(),
+                    'couriers_count'      => Courier::where('logistics_profile_id', $lp->id)->count(),
+                    'riders_count'        => Rider::where('logistics_profile_id', $lp->id)->count(),
+                    'delivered_shipments' => $lpCommissions->count(),
+                    'failed_shipments'    => $shipmentsInPeriod->whereIn('status', ['delivery_failed', 'returned_to_seller', 'lost', 'damaged'])->count(),
+                    'gross_shipping'      => round((float) $lpCommissions->sum('shipping_fee'), 2),
+                    'hub_net_90'          => round((float) $lpCommissions->sum(fn ($c) => (float) ($c->logistics_total_earning ?: ((float) $c->logistics_commission_amount + (float) ($c->logistics_operational_revenue ?? $c->logistics_operational_amount ?? 0)))), 2),
+                    'rider_share_10'      => round((float) $lpCommissions->sum('rider_commission_amount'), 2),
+                    'wallet_available'    => round((float) ($wallet?->available_balance ?? 0), 2),
+                    'wallet_pending'      => round((float) ($wallet?->pending_balance ?? 0), 2),
+                    'wallet_withdrawn'    => round((float) ($wallet?->total_withdrawn ?? 0), 2),
+                    'avg_rating'          => $avgRating,
+                    'recent_ledger'       => $lpCommissions->take(10)->map(fn ($r) => [
+                        'date'       => $r->created_at?->format('M d, Y h:i A'),
+                        'tracking'   => $r->shipment->tracking_number ?? ('#' . $r->shipment_id),
+                        'gross_ship' => (float) $r->shipping_fee,
+                        'hub_90'     => round((float) ($r->logistics_total_earning ?: ((float) $r->logistics_commission_amount + (float) ($r->logistics_operational_revenue ?? $r->logistics_operational_amount ?? 0))), 2),
+                        'rider_10'   => (float) $r->rider_commission_amount,
+                    ])->values()->all(),
+                ];
+            });
+
+        $courierReports = Courier::with('logisticsProfile')
+            ->when($search !== '' && $roleTab === 'couriers', function ($q) use ($search) {
+                $q->where(function ($sq) use ($search) {
+                    $sq->where('first_name', 'like', "%{$search}%")
+                       ->orWhere('last_name', 'like', "%{$search}%")
+                       ->orWhere('email', 'like', "%{$search}%")
+                       ->orWhere('plate_number', 'like', "%{$search}%");
+                });
+            })
+            ->orderBy('first_name')
+            ->get()
+            ->map(function (Courier $courier) use ($from, $to) {
+                $pickups = PickupAssignment::with('shipment.sellerProfile')
+                    ->where('courier_id', $courier->id)
+                    ->whereBetween('created_at', [$from, $to])
+                    ->get();
+
+                $completedPickups = $pickups->whereIn('status', ['in_transit_to_hub', 'completed']);
+                $totalWeight = round((float) $completedPickups->sum(fn ($p) => (float) ($p->shipment?->total_weight ?? 0)), 2);
+
+                $earnedInPeriod = round((float) $completedPickups->sum(function ($p) {
+                    if (! $p->shipment) {
+                        return 30.00;
+                    }
+                    $pay = PickupController::calculateFirstMileCourierPay($p->shipment);
+                    return (float) $pay['total_pay'];
+                }), 2);
+
+                $wallet = RoleWallet::where('owner_type', 'Courier')->where('owner_id', $courier->id)->first();
+
+                return [
+                    'id'                => $courier->id,
+                    'full_name'         => $courier->full_name,
+                    'email'             => $courier->email,
+                    'contact_no'        => $courier->contact_no,
+                    'hub_name'          => $courier->logisticsProfile->business_name ?? $courier->home_hub,
+                    'vehicle'           => "{$courier->vehicle_type} ({$courier->plate_number})",
+                    'load_capacity'     => (float) $courier->load_capacity,
+                    'status'            => $courier->status,
+                    'assigned_pickups'  => $pickups->count(),
+                    'completed_pickups' => $completedPickups->count(),
+                    'weight_hauled_kg'  => $totalWeight,
+                    'period_earnings'   => $earnedInPeriod,
+                    'wallet_available'  => round((float) ($wallet?->available_balance ?? 0), 2),
+                    'wallet_withdrawn'  => round((float) ($wallet?->total_withdrawn ?? 0), 2),
+                    'recent_ledger'     => $completedPickups->take(10)->map(function ($p) {
+                        $pay = $p->shipment ? PickupController::calculateFirstMileCourierPay($p->shipment) : ['total_pay' => 30.00, 'distance_tier' => 'Same Municipality'];
+                        return [
+                            'date'     => $p->updated_at?->format('M d, Y h:i A'),
+                            'tracking' => $p->shipment->tracking_number ?? 'N/A',
+                            'seller'   => $p->shipment->sellerProfile->business_name ?? 'Seller',
+                            'weight'   => (float) ($p->shipment->total_weight ?? 0),
+                            'tier'     => $pay['distance_tier'],
+                            'pay'      => (float) $pay['total_pay'],
+                        ];
+                    })->values()->all(),
+                ];
+            });
+
+        $riderReports = Rider::with('logisticsProfile')
+            ->when($search !== '' && $roleTab === 'riders', function ($q) use ($search) {
+                $q->where(function ($sq) use ($search) {
+                    $sq->where('first_name', 'like', "%{$search}%")
+                       ->orWhere('last_name', 'like', "%{$search}%")
+                       ->orWhere('email', 'like', "%{$search}%")
+                       ->orWhere('plate_number', 'like', "%{$search}%");
+                });
+            })
+            ->orderBy('first_name')
+            ->get()
+            ->map(function (Rider $rider) use ($from, $to) {
+                $deliveries = DeliveryAssignment::with('shipment')
+                    ->where('rider_id', $rider->id)
+                    ->whereBetween('created_at', [$from, $to])
+                    ->get();
+
+                $completedDeliveries = $deliveries->where('status', 'delivered');
+                $failedDeliveries = $deliveries->where('status', 'failed');
+
+                $earnedInPeriod = round((float) $completedDeliveries->sum(function ($d) {
+                    if (! $d->shipment) {
+                        return 50.00;
+                    }
+                    $pay = DeliveryController::calculateDistanceScaledRiderPay($d->shipment);
+                    return (float) $pay['total_pay'];
+                }), 2);
+
+                $wallet = RoleWallet::where('owner_type', 'Rider')->where('owner_id', $rider->id)->first();
+                $avgRating = Schema::hasTable('order_service_ratings')
+                    ? round((float) OrderServiceRating::where('rider_id', $rider->id)->avg('rider_delivery_rating'), 2)
+                    : 0.00;
+
+                return [
+                    'id'                   => $rider->id,
+                    'full_name'            => $rider->full_name,
+                    'email'                => $rider->email,
+                    'contact_no'           => $rider->contact_no,
+                    'hub_name'             => $rider->logisticsProfile->business_name ?? 'Logistics Hub',
+                    'vehicle'              => "{$rider->vehicle_type} ({$rider->plate_number})",
+                    'status'               => $rider->status,
+                    'assigned_deliveries'  => $deliveries->count(),
+                    'completed_deliveries' => $completedDeliveries->count(),
+                    'failed_deliveries'    => $failedDeliveries->count(),
+                    'period_earnings'      => $earnedInPeriod,
+                    'wallet_available'     => round((float) ($wallet?->available_balance ?? 0), 2),
+                    'wallet_pending'       => round((float) ($wallet?->pending_balance ?? 0), 2),
+                    'wallet_withdrawn'     => round((float) ($wallet?->total_withdrawn ?? 0), 2),
+                    'avg_rating'           => $avgRating,
+                    'recent_ledger'        => $completedDeliveries->take(10)->map(function ($d) {
+                        $pay = $d->shipment ? DeliveryController::calculateDistanceScaledRiderPay($d->shipment) : ['total_pay' => 50.00, 'distance_tier' => 'Same Barangay'];
+                        return [
+                            'date'     => $d->completed_at?->format('M d, Y h:i A') ?? $d->updated_at?->format('M d, Y h:i A'),
+                            'tracking' => $d->shipment->tracking_number ?? 'N/A',
+                            'cod'      => (float) ($d->shipment->cod_amount ?? 0),
+                            'tier'     => $pay['distance_tier'],
+                            'pay'      => (float) $pay['total_pay'],
+                        ];
+                    })->values()->all(),
+                ];
+            });
+
+        return view('admin.reports.sales', compact(
+            'roleTab',
+            'preset',
+            'fromDate',
+            'toDate',
+            'search',
+            'platformKpis',
+            'sellerReports',
+            'logisticsReports',
+            'courierReports',
+            'riderReports'
+        ));
     }
 }

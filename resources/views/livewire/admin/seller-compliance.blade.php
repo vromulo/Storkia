@@ -1,73 +1,177 @@
-<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 w-full py-6">
-    <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-8">
+@extends('layouts.admin', ['title' => 'Storkia Admin - Seller Compliance'])
+
+@section('content')
+@php
+    $activeTab = $activeTab ?? strtolower((string) request()->query('status', 'pending'));
+    $search = $search ?? request()->query('search', '');
+@endphp
+
+<div x-data="{
+        detailModalOpen: false,
+        disapproveModalOpen: false,
+        selectedApproval: null,
+        activePreviewImage: '',
+        disapprovalType: 'Violation',
+        remarks: '',
+        openInspectModal(item) {
+            this.selectedApproval = item;
+            this.activePreviewImage = item.pictures && item.pictures.length > 0 ? item.pictures[0] : '';
+            this.detailModalOpen = true;
+        },
+        openDisapproveModal() {
+            this.disapprovalType = 'Violation';
+            this.remarks = '';
+            this.disapproveModalOpen = true;
+        }
+     }"
+     class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 w-full py-4 select-none space-y-6">
+
+    <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-            <h1 class="text-2xl sm:text-3xl font-bold text-primary">Seller Compliance</h1>
+            <h1 class="text-2xl sm:text-3xl font-bold text-primary-dark">Seller Compliance</h1>
             <p class="text-text-muted text-xs sm:text-sm mt-1">Review catalog submissions, verify variant details, and enforce listing compliance.</p>
         </div>
-        <div class="w-full md:w-72">
-            <input type="text" wire:model.live.debounce.300ms="search" placeholder="Search product or store..." class="w-full py-2 px-3 text-sm bg-surface border border-border-subtle rounded-xl outline-none focus:border-primary focus:ring-1 focus:ring-primary shadow-xs">
-        </div>
+        <form method="GET" action="{{ route('admin.compliance.index') }}" class="flex items-center gap-2 w-full md:w-auto">
+            <input type="hidden" name="status" value="{{ $activeTab }}">
+            <input type="text"
+                   name="search"
+                   value="{{ $search }}"
+                   placeholder="Search product or store..."
+                   class="w-full md:w-72 py-2.5 px-3.5 text-xs bg-surface border border-border-subtle rounded-xl outline-none focus:border-primary shadow-xs">
+            <button type="submit" class="px-4 py-2.5 rounded-xl bg-primary-dark hover:bg-text-main text-white text-xs font-bold cursor-pointer">
+                Search
+            </button>
+        </form>
     </div>
 
     @if(session('success'))
-        <div class="mb-6 p-4 rounded-xl bg-green-50 border border-green-200 text-green-700 text-sm font-semibold flex items-center gap-2">
+        <div class="p-4 rounded-2xl bg-green-50 border border-green-200 text-green-700 text-xs sm:text-sm font-bold flex items-center gap-2">
             <svg class="w-5 h-5 text-green-600 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
-            {{ session('success') }}
+            <span>{{ session('success') }}</span>
         </div>
     @endif
 
-    <div class="flex border-b border-border-subtle mb-6 gap-2 sm:gap-6 overflow-x-auto pb-1">
+    @if($errors->any())
+        <div class="p-4 rounded-2xl bg-red-50 border border-red-200 text-red-700 text-xs sm:text-sm space-y-1">
+            @foreach($errors->all() as $err)
+                <p class="font-semibold">{{ $err }}</p>
+            @endforeach
+        </div>
+    @endif
+
+    <div class="flex border-b border-border-subtle gap-2 sm:gap-6 overflow-x-auto pb-1">
         @foreach (['pending' => 'Pending Review', 'approved' => 'Approved', 'violations' => 'Violations', 'warnings' => 'Warnings'] as $tab => $label)
-            <button type="button" wire:click="setTab('{{ $tab }}')" class="pb-3 px-2 text-sm font-bold border-b-2 transition-colors cursor-pointer flex items-center gap-2 whitespace-nowrap {{ $activeTab === $tab ? 'border-primary text-primary' : 'border-transparent text-text-muted hover:text-text-main' }}">
+            <a href="{{ route('admin.compliance.index', array_filter(['status' => $tab, 'search' => $search])) }}"
+               class="pb-3 px-2 text-sm font-bold border-b-2 transition-colors cursor-pointer flex items-center gap-2 whitespace-nowrap {{ $activeTab === $tab ? 'border-primary text-primary' : 'border-transparent text-text-muted hover:text-text-main' }}">
                 <span>{{ $label }}</span>
-                <span class="text-xs px-2 py-0.5 rounded-full {{ $activeTab === $tab ? 'bg-primary text-white' : 'bg-surface-subtle text-text-muted' }}">{{ $counts[$tab] }}</span>
-            </button>
+                <span class="text-xs px-2 py-0.5 rounded-full {{ $activeTab === $tab ? 'bg-primary text-white' : 'bg-surface-subtle text-text-muted' }}">
+                    {{ $counts[$tab] ?? 0 }}
+                </span>
+            </a>
         @endforeach
     </div>
 
-    <div class="bg-surface rounded-2xl border border-border-subtle shadow-xs overflow-hidden">
-        <table class="w-full text-left text-sm">
+    <div class="bg-surface rounded-3xl border border-border-subtle shadow-xs overflow-hidden">
+        <table class="w-full text-left text-xs sm:text-sm">
             <thead class="bg-surface-subtle border-b border-border-subtle text-text-muted text-xs uppercase font-bold tracking-wider">
                 <tr>
-                    <th class="py-3.5 px-4">Product Details</th>
+                    <th class="py-3.5 px-5">Product Details</th>
                     <th class="py-3.5 px-4">Store / Seller</th>
                     <th class="py-3.5 px-4">Base Price</th>
                     <th class="py-3.5 px-4 text-center">Status</th>
                     <th class="py-3.5 px-4">Submitted</th>
-                    <th class="py-3.5 px-4 text-right">Action</th>
+                    <th class="py-3.5 px-5 text-right">Action</th>
                 </tr>
             </thead>
             <tbody class="divide-y divide-border-subtle/70">
                 @forelse($approvals as $approval)
                     @php
-                        $firstPic = (!empty($approval->product?->pictures) && is_array($approval->product->pictures)) 
-                            ? asset('storage/' . $approval->product->pictures[0]) 
-                            : '';
-                        $rawVars = $approval->product?->raw_variants ?? $approval->product?->variants;
+                        $prod = $approval->product;
+                        if (!$prod) continue;
+                        $sellerUser = $approval->seller ?? $prod->user;
+                        $sellerProfile = $sellerUser?->sellerProfile;
+
+                        $picturesList = (!empty($prod->pictures) && is_array($prod->pictures))
+                            ? array_values(array_map(fn ($p) => asset('storage/' . $p), array_filter($prod->pictures)))
+                            : [];
+                        $firstPic = $picturesList[0] ?? '';
+
+                        $rawVars = $prod->raw_variants ?? $prod->variants;
                         $pendingVariantCount = 0;
                         $pendingSubCount = 0;
+                        $normalizedItems = [];
+
                         if (!empty($rawVars['items']) && is_array($rawVars['items'])) {
-                            foreach ($rawVars['items'] as $vItem) {
+                            foreach ($rawVars['items'] as $vIdx => $vItem) {
                                 if (!empty($vItem['is_archived'])) continue;
-                                if (($vItem['status'] ?? '') === 'Pending') {
+                                $vStatus = $vItem['status'] ?? 'Approved';
+                                if ($vStatus === 'Pending') {
                                     $pendingVariantCount++;
                                 }
+                                $subsNormalized = [];
                                 if (!empty($vItem['subs']) && is_array($vItem['subs'])) {
-                                    foreach ($vItem['subs'] as $sItem) {
+                                    foreach ($vItem['subs'] as $sIdx => $sItem) {
                                         if (!empty($sItem['is_archived'])) continue;
-                                        if (($sItem['status'] ?? '') === 'Pending') {
+                                        $sStatus = $sItem['status'] ?? 'Approved';
+                                        if ($sStatus === 'Pending') {
                                             $pendingSubCount++;
                                         }
+                                        $subsNormalized[] = [
+                                            'sIdx'   => $sIdx,
+                                            'name'   => $sItem['name'] ?? 'Unnamed',
+                                            'status' => $sStatus,
+                                            'price'  => number_format((float) ($sItem['price'] ?? 0), 2),
+                                            'weight' => $sItem['weight'] ?? 0,
+                                            'stock'  => (int) ($sItem['stock'] ?? 0),
+                                        ];
                                     }
                                 }
+                                $normalizedItems[] = [
+                                    'vIdx'      => $vIdx,
+                                    'name'      => $vItem['name'] ?? 'Unnamed Variant',
+                                    'status'    => $vStatus,
+                                    'image_url' => !empty($vItem['image']) ? asset('storage/' . $vItem['image']) : null,
+                                    'price'     => number_format((float) ($vItem['price'] ?? $prod->price ?? 0), 2),
+                                    'weight'    => $vItem['weight'] ?? ($prod->weight ?? 0),
+                                    'stock'     => (int) ($vItem['stock'] ?? 0),
+                                    'subs'      => $subsNormalized,
+                                ];
                             }
                         }
-                        $isVariantUpdate = $approval->status === 'Approved' && ($approval->product?->has_pending_variants || $pendingVariantCount > 0 || $pendingSubCount > 0);
-                        $mainCategory = $approval->product?->category ?: ($approval->seller?->sellerProfile?->line_of_business ?? 'Uncategorized');
-                        $subCategory = $approval->product?->subcategory ?: 'Uncategorized';
+
+                        $isVariantUpdate = $approval->status === 'Approved' && ($prod->has_pending_variants || $pendingVariantCount > 0 || $pendingSubCount > 0);
+                        $mainCategory = $prod->category ?: ($sellerProfile?->line_of_business ?? 'Uncategorized');
+                        $subCategory = $prod->subcategory ?: 'Uncategorized';
+
+                        $modalPayload = [
+                            'approval_id'          => $approval->id,
+                            'product_id'           => $prod->id,
+                            'product_name'         => $prod->name,
+                            'status'               => $approval->status,
+                            'disapproval_type'     => $approval->disapproval_type,
+                            'remarks'              => $approval->remarks,
+                            'is_variant_update'    => $isVariantUpdate,
+                            'submitted_at'         => $approval->created_at?->format('M d, Y h:i A'),
+                            'store_name'           => $sellerProfile?->business_name ?? 'Unknown Store',
+                            'registered_category'  => $sellerProfile?->line_of_business ?? 'N/A',
+                            'product_category'     => $mainCategory . ' / ' . $subCategory,
+                            'price'                => number_format((float) ($prod->price ?? 0), 2),
+                            'discount'             => (float) ($prod->discount ?? 0),
+                            'stock_quantity'       => (int) ($prod->stock_quantity ?? 0),
+                            'description'          => $prod->description ?: 'No description provided.',
+                            'additional_desc'      => $prod->additional_descriptions ?: '',
+                            'pictures'             => $picturesList,
+                            'variant_title'        => $rawVars['title'] ?? 'Variants',
+                            'sub_variant_title'    => $rawVars['sub_title'] ?? null,
+                            'variants'             => $normalizedItems,
+                            'specs'                => $prod->specifications ? $prod->specifications->map(fn ($s) => ['title' => $s->title, 'description' => $s->description])->values()->all() : [],
+                            'approve_url'          => route('admin.compliance.approve', $prod->id),
+                            'disapprove_url'       => route('admin.compliance.disapprove', $prod->id),
+                            'review_variants_url'  => route('admin.compliance.variants.review', $prod->id),
+                        ];
                     @endphp
                     <tr class="hover:bg-brand-light/10 transition-colors">
-                        <td class="py-3.5 px-4">
+                        <td class="py-3.5 px-5">
                             <div class="flex items-center gap-3">
                                 @if($firstPic)
                                     <img src="{{ $firstPic }}" class="w-12 h-12 rounded-xl object-cover border border-border-subtle shrink-0 shadow-xs">
@@ -78,11 +182,11 @@
                                 @endif
                                 <div>
                                     <div class="font-bold text-text-main leading-tight flex flex-wrap items-center gap-1.5">
-                                        <span>{{ $approval->product?->name ?? 'N/A' }}</span>
+                                        <span>{{ $prod->name }}</span>
                                         @if($isVariantUpdate)
                                             <span class="text-[10px] bg-yellow-100 text-yellow-800 border border-yellow-300 px-2 py-0.5 rounded-full font-bold">
                                                 @if($pendingVariantCount > 0 && $pendingSubCount > 0)
-                                                    {{ $pendingVariantCount }} Variant(s) & {{ $pendingSubCount }} Subvariant(s) Pending
+                                                    {{ $pendingVariantCount }} Variant(s) &amp; {{ $pendingSubCount }} Subvariant(s) Pending
                                                 @elseif($pendingVariantCount > 0)
                                                     {{ $pendingVariantCount }} New Variant(s) Pending
                                                 @else
@@ -96,11 +200,11 @@
                             </div>
                         </td>
                         <td class="py-3.5 px-4">
-                            <p class="font-medium text-text-main">{{ $approval->seller?->sellerProfile?->business_name ?? 'Unknown Store' }}</p>
-                            <p class="text-xs text-text-muted">{{ $approval->seller?->email }}</p>
+                            <p class="font-medium text-text-main">{{ $sellerProfile?->business_name ?? 'Unknown Store' }}</p>
+                            <p class="text-xs text-text-muted font-mono">{{ $sellerUser?->email }}</p>
                         </td>
-                        <td class="py-3.5 px-4 font-bold">
-                            ₱{{ number_format((float) ($approval->product?->price ?? 0), 2) }}
+                        <td class="py-3.5 px-4 font-bold text-primary-dark">
+                            &#8369;{{ number_format((float) ($prod->price ?? 0), 2) }}
                         </td>
                         <td class="py-3.5 px-4 text-center">
                             @if($isVariantUpdate)
@@ -119,18 +223,20 @@
                             @endif
                         </td>
                         <td class="py-3.5 px-4 text-text-muted text-xs">
-                            {{ $approval->updated_at->format('M d, Y h:i A') }}
+                            {{ $approval->updated_at?->format('M d, Y h:i A') }}
                         </td>
-                        <td class="py-3.5 px-4 text-right">
-                            <button type="button" wire:click="viewDetails({{ $approval->id }})" class="px-3 py-1.5 {{ $isVariantUpdate ? 'bg-yellow-500 text-white hover:bg-yellow-600' : 'bg-primary/10 text-primary hover:bg-primary hover:text-white' }} font-bold text-xs rounded-lg transition-colors cursor-pointer">
+                        <td class="py-3.5 px-5 text-right">
+                            <button type="button"
+                                    @click="openInspectModal(@js($modalPayload))"
+                                    class="px-3.5 py-1.5 {{ $isVariantUpdate ? 'bg-yellow-500 text-white hover:bg-yellow-600' : 'bg-primary/10 text-primary hover:bg-primary hover:text-white' }} font-bold text-xs rounded-xl transition-colors cursor-pointer">
                                 {{ $isVariantUpdate ? 'Review Additions' : 'Inspect Product' }}
                             </button>
                         </td>
                     </tr>
                 @empty
                     <tr>
-                        <td colspan="6" class="p-8 text-center text-text-muted text-sm">
-                            No records found under {{ strtolower($activeTab) }}.
+                        <td colspan="6" class="p-10 text-center text-text-muted text-xs sm:text-sm">
+                            No product compliance records found under {{ strtolower($activeTab) }}.
                         </td>
                     </tr>
                 @endforelse
@@ -142,318 +248,301 @@
         {{ $approvals->links() }}
     </div>
 
-    @if($detailModalOpen && $currentApproval && $currentApproval->product)
-        @php
-            $prod = $currentApproval->product;
-            $variants = $prod->raw_variants ?? $prod->variants;
-            $items = $variants['items'] ?? [];
-            $hasSubTitle = !empty($variants['sub_title']);
-            $isVariantUpdateOnly = $currentApproval->status === 'Approved' && ($prod->has_pending_variants || $prod->hasPendingVariantItems());
-            $modalMainCategory = $prod->category ?: ($currentApproval->seller?->sellerProfile?->line_of_business ?? 'Uncategorized');
-            $modalSubCategory = $prod->subcategory ?: 'Uncategorized';
-        @endphp
-        <div class="fixed inset-0 z-[150] flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs overflow-y-auto" wire:keydown.escape="$set('detailModalOpen', false)">
-            <div class="bg-surface rounded-3xl max-w-5xl w-full p-6 sm:p-8 shadow-2xl border border-border-subtle max-h-[92vh] overflow-y-auto space-y-6 my-auto text-left relative">
-                
-                @if($isVariantUpdateOnly)
-                    <div class="p-4 bg-yellow-50 border border-yellow-300 rounded-xl text-yellow-900 text-sm font-bold flex items-center gap-2">
-                        <svg class="w-5 h-5 shrink-0 text-yellow-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                        <span>This product is already approved, but the seller has submitted new variants or subvariants for compliance review. Pending items are hidden from the public store until approved.</span>
+    <!-- Product & Variant Compliance Inspection Modal -->
+    <template x-teleport="body">
+        <div x-show="detailModalOpen && selectedApproval"
+             x-cloak
+             @keydown.escape.window="detailModalOpen = false"
+             class="fixed inset-0 z-[190] flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs overflow-y-auto">
+            <div @click.away="detailModalOpen = false"
+                 class="bg-surface rounded-3xl max-w-5xl w-full p-6 sm:p-8 shadow-2xl border border-border-subtle max-h-[92vh] overflow-y-auto space-y-6 my-auto text-left relative custom-scrollbar">
+
+                <template x-if="selectedApproval?.is_variant_update">
+                    <div class="p-4 bg-yellow-50 border border-yellow-300 rounded-2xl text-yellow-900 text-xs sm:text-sm font-bold flex items-center gap-2">
+                        <span>This product is already approved, but the seller has submitted new variants or subvariants for compliance review. Pending items remain hidden from the public store until approved.</span>
                     </div>
-                @endif
+                </template>
 
                 <div class="flex items-center justify-between border-b border-border-subtle pb-4">
                     <div>
-                        <h2 class="text-xl font-bold text-primary-dark">{{ $prod->name }}</h2>
+                        <h2 class="text-xl font-bold text-primary-dark" x-text="selectedApproval?.product_name"></h2>
                         <p class="text-xs text-text-muted">
-                            Submitted on {{ $currentApproval->created_at->format('M d, Y h:i A') }} &bull; Product Status: <strong>{{ $currentApproval->status }}</strong>
+                            Submitted on <span x-text="selectedApproval?.submitted_at"></span> &bull;
+                            Product Status: <strong x-text="selectedApproval?.status"></strong>
                         </p>
                     </div>
-                    <button type="button" wire:click="$set('detailModalOpen', false)" class="text-text-muted hover:text-danger p-1 cursor-pointer">
+                    <button type="button" @click="detailModalOpen = false" class="text-text-muted hover:text-danger p-1 cursor-pointer">
                         <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
                     </button>
                 </div>
 
                 <div class="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs bg-surface-subtle p-4 rounded-2xl border border-border-subtle">
-                    <div><span class="text-text-muted">Store Name:</span> <strong class="text-text-main">{{ $currentApproval->seller?->sellerProfile?->business_name ?? 'N/A' }}</strong></div>
-                    <div><span class="text-text-muted">Registered Category:</span> <strong class="text-text-main">{{ $currentApproval->seller?->sellerProfile?->line_of_business ?? 'N/A' }}</strong></div>
-                    <div><span class="text-text-muted">Product Category:</span> <strong class="text-text-main">{{ $modalMainCategory }} / {{ $modalSubCategory }}</strong></div>
+                    <div><span class="text-text-muted">Store Name:</span> <strong class="text-text-main" x-text="selectedApproval?.store_name"></strong></div>
+                    <div><span class="text-text-muted">Registered Category:</span> <strong class="text-text-main" x-text="selectedApproval?.registered_category"></strong></div>
+                    <div><span class="text-text-muted">Product Category:</span> <strong class="text-text-main" x-text="selectedApproval?.product_category"></strong></div>
                 </div>
 
                 <div class="grid grid-cols-1 md:grid-cols-12 gap-6 items-start">
                     <div class="md:col-span-5 space-y-3">
                         <div class="aspect-square bg-surface-subtle rounded-2xl border border-border-subtle flex items-center justify-center p-2 overflow-hidden shadow-inner">
-                            @if($activePreviewImage)
-                                <img src="{{ $activePreviewImage }}" class="max-h-full max-w-full object-contain rounded-xl">
-                            @else
+                            <template x-if="activePreviewImage">
+                                <img :src="activePreviewImage" class="max-h-full max-w-full object-contain rounded-xl">
+                            </template>
+                            <template x-if="!activePreviewImage">
                                 <span class="text-xs text-text-muted">No Image</span>
-                            @endif
+                            </template>
                         </div>
-                        @if(!empty($prod->pictures) && is_array($prod->pictures))
+
+                        <template x-if="selectedApproval?.pictures && selectedApproval.pictures.length > 0">
                             <div class="flex gap-2 overflow-x-auto pb-2 custom-scrollbar">
-                                @foreach($prod->pictures as $pic)
-                                    @php $url = asset('storage/' . $pic); @endphp
-                                    <button type="button" wire:click="selectPreviewImage('{{ $url }}')" class="w-14 h-14 rounded-xl border-2 shrink-0 p-0.5 bg-surface transition-all cursor-pointer {{ $activePreviewImage === $url ? 'border-primary ring-2 ring-primary/20' : 'border-border-subtle hover:border-primary/50' }}">
-                                        <img src="{{ $url }}" class="w-full h-full object-cover rounded-lg">
+                                <template x-for="(picUrl, pIdx) in selectedApproval.pictures" :key="pIdx">
+                                    <button type="button"
+                                            @click="activePreviewImage = picUrl"
+                                            :class="activePreviewImage === picUrl ? 'border-primary ring-2 ring-primary/20' : 'border-border-subtle hover:border-primary/50'"
+                                            class="w-14 h-14 rounded-xl border-2 shrink-0 p-0.5 bg-surface transition-all cursor-pointer">
+                                        <img :src="picUrl" class="w-full h-full object-cover rounded-lg">
                                     </button>
-                                @endforeach
+                                </template>
                             </div>
-                        @endif
+                        </template>
                     </div>
 
                     <div class="md:col-span-7 space-y-4 text-xs">
                         <div class="p-4 bg-brand-light/10 border border-brand-light/30 rounded-2xl flex items-center justify-between">
                             <div>
-                                <span class="text-text-muted text-[11px] block uppercase font-bold tracking-wider">Base Price & Discount</span>
-                                <span class="text-2xl font-extrabold text-primary-dark">₱{{ number_format((float) $prod->price, 2) }}</span>
-                                @if($prod->discount > 0)
-                                    <span class="ml-2 text-xs font-bold text-red-500">({{ $prod->discount }}% OFF)</span>
-                                @endif
+                                <span class="text-text-muted text-[11px] block uppercase font-bold tracking-wider">Base Price &amp; Discount</span>
+                                <span class="text-2xl font-extrabold text-primary-dark" x-text="'\u20B1' + (selectedApproval?.price || '0.00')"></span>
+                                <template x-if="Number(selectedApproval?.discount || 0) > 0">
+                                    <span class="ml-2 text-xs font-bold text-red-500" x-text="'(' + selectedApproval.discount + '% OFF)'"></span>
+                                </template>
                             </div>
                             <div class="text-right">
                                 <span class="text-text-muted text-[11px] block uppercase font-bold tracking-wider">Active Approved Stock</span>
-                                <span class="text-lg font-bold text-text-main">{{ $prod->stock_quantity }} units</span>
+                                <span class="text-lg font-bold text-text-main" x-text="(selectedApproval?.stock_quantity || 0) + ' units'"></span>
                             </div>
                         </div>
-                        
-                        @if($prod->specifications && $prod->specifications->count() > 0)
+
+                        <template x-if="selectedApproval?.specs && selectedApproval.specs.length > 0">
                             <div>
                                 <h4 class="font-bold text-text-main uppercase tracking-wider text-[11px] mb-1">Specifications</h4>
                                 <div class="p-3 bg-surface border border-border-subtle rounded-xl text-text-muted text-xs divide-y divide-border-subtle/50">
-                                    @foreach($prod->specifications as $spec)
+                                    <template x-for="(spec, sIdx) in selectedApproval.specs" :key="sIdx">
                                         <div class="flex items-center py-1.5">
-                                            <span class="font-medium w-1/3">{{ $spec->title }}</span>
-                                            <span class="text-text-main font-bold flex-1">{{ $spec->description }}</span>
+                                            <span class="font-medium w-1/3" x-text="spec.title"></span>
+                                            <span class="text-text-main font-bold flex-1" x-text="spec.description"></span>
                                         </div>
-                                    @endforeach
+                                    </template>
                                 </div>
                             </div>
-                        @endif
+                        </template>
 
                         <div>
                             <h4 class="font-bold text-text-main uppercase tracking-wider text-[11px] mb-1">Standard Description</h4>
-                            <p class="p-3 bg-surface border border-border-subtle rounded-xl text-text-muted leading-relaxed whitespace-pre-line">{{ $prod->description ?: 'No description provided.' }}</p>
+                            <p class="p-3 bg-surface border border-border-subtle rounded-xl text-text-muted leading-relaxed whitespace-pre-line" x-text="selectedApproval?.description"></p>
                         </div>
-                        
-                        @if(!empty($prod->additional_descriptions))
+
+                        <template x-if="selectedApproval?.additional_desc">
                             <div>
                                 <h4 class="font-bold text-text-main uppercase tracking-wider text-[11px] mb-1">Additional Descriptions</h4>
-                                <p class="p-3 bg-surface border border-border-subtle rounded-xl text-text-muted leading-relaxed whitespace-pre-line">{{ $prod->additional_descriptions }}</p>
+                                <p class="p-3 bg-surface border border-border-subtle rounded-xl text-text-muted leading-relaxed whitespace-pre-line" x-text="selectedApproval?.additional_desc"></p>
                             </div>
-                        @endif
+                        </template>
                     </div>
                 </div>
 
-                @if(!empty($items))
+                <!-- Variants & Subvariants Breakdown -->
+                <template x-if="selectedApproval?.variants && selectedApproval.variants.length > 0">
                     <div class="border-t border-border-subtle pt-4 space-y-3">
                         <div class="flex items-center justify-between">
                             <h3 class="text-xs font-bold uppercase tracking-wider text-text-muted">
-                                Variant Breakdown: <span class="text-primary-dark font-extrabold">{{ $variants['title'] ?? 'Variants' }}</span>
-                                @if($hasSubTitle) &bull; Sub-variant: <span class="text-primary-dark font-extrabold">{{ $variants['sub_title'] }}</span>@endif
+                                Variant Breakdown: <span class="text-primary-dark font-extrabold" x-text="selectedApproval.variant_title"></span>
                             </h3>
-                            <span class="text-[11px] text-text-muted font-semibold">{{ collect($items)->where('is_archived', '!=', true)->count() }} Active Variant(s)</span>
+                            <span class="text-[11px] text-text-muted font-semibold" x-text="selectedApproval.variants.length + ' Active Variant(s)'"></span>
                         </div>
 
                         <div class="space-y-3">
-                            @foreach($items as $vIdx => $vItem)
-                                @if(!empty($vItem['is_archived'])) @continue @endif
-                                @php
-                                    $hasSubs = !empty($vItem['subs']) && is_array($vItem['subs']);
-                                    $variantImage = !empty($vItem['image']) ? asset('storage/' . $vItem['image']) : null;
-                                    $vStatus = $vItem['status'] ?? 'Approved';
-                                    $isPending = $vStatus === 'Pending';
-                                    $isDisapproved = $vStatus === 'Disapproved';
-
-                                    $hasPendingSubs = false;
-                                    $activeSubsCount = 0;
-                                    if ($hasSubs) {
-                                        foreach($vItem['subs'] as $sub) {
-                                            if (!empty($sub['is_archived'])) continue;
-                                            $activeSubsCount++;
-                                            if (($sub['status'] ?? 'Approved') === 'Pending') {
-                                                $hasPendingSubs = true;
-                                            }
-                                        }
-                                    }
-                                @endphp
-                                <div x-data="{ expanded: true }" class="border rounded-2xl bg-surface overflow-hidden shadow-xs {{ ($isPending || $hasPendingSubs) ? 'border-yellow-400 bg-yellow-50/20' : ($isDisapproved ? 'border-red-200 bg-red-50/10' : 'border-border-subtle') }}">
-                                    <div class="p-4 bg-surface-subtle flex flex-wrap items-center justify-between gap-3 border-b border-border-subtle/60">
+                            <template x-for="vItem in selectedApproval.variants" :key="vItem.vIdx">
+                                <div class="border border-border-subtle rounded-2xl bg-surface overflow-hidden shadow-2xs">
+                                    <div class="p-4 bg-surface-subtle flex flex-wrap items-center justify-between gap-3">
                                         <div class="flex items-center gap-3">
-                                            @if($variantImage)
-                                                <button type="button" wire:click="selectPreviewImage('{{ $variantImage }}')" title="Preview in viewer" class="shrink-0 cursor-pointer">
-                                                    <img src="{{ $variantImage }}" class="w-10 h-10 rounded-xl object-cover border border-border-subtle hover:scale-105 transition-transform shadow-xs">
+                                            <template x-if="vItem.image_url">
+                                                <button type="button" @click="activePreviewImage = vItem.image_url" class="shrink-0 cursor-pointer">
+                                                    <img :src="vItem.image_url" class="w-10 h-10 rounded-xl object-cover border border-border-subtle">
                                                 </button>
-                                            @endif
+                                            </template>
                                             <div class="flex flex-wrap items-center gap-2">
-                                                <span class="text-sm font-bold text-primary-dark">{{ $vItem['name'] ?? 'Unnamed Variant' }}</span>
-                                                @if($isPending)
-                                                    <span class="text-[10px] px-2 py-0.5 rounded-full bg-yellow-100 text-yellow-800 font-bold border border-yellow-300">Pending Variant</span>
-                                                @elseif($isDisapproved)
-                                                    <span class="text-[10px] px-2 py-0.5 rounded-full bg-red-100 text-red-700 font-bold border border-red-200">Rejected</span>
-                                                @else
-                                                    <span class="text-[10px] px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-bold border border-green-200">Approved</span>
-                                                @endif
-
-                                                @if($hasPendingSubs && !$isPending)
-                                                    <span class="text-[10px] px-2 py-0.5 rounded-full bg-yellow-100 text-yellow-800 font-bold border border-yellow-300">Has Pending Subvariant(s)</span>
-                                                @endif
-
-                                                @if($hasSubs)
-                                                    <span class="text-[11px] px-2 py-0.5 rounded-full bg-primary/10 text-primary font-bold">
-                                                        {{ $activeSubsCount }} sub-variants
-                                                    </span>
-                                                @endif
+                                                <span class="text-sm font-bold text-primary-dark" x-text="vItem.name"></span>
+                                                <span class="text-[10px] px-2 py-0.5 rounded-full font-bold border"
+                                                      :class="vItem.status === 'Pending' ? 'bg-yellow-100 text-yellow-800 border-yellow-300' : (vItem.status === 'Disapproved' ? 'bg-red-100 text-red-700 border-red-200' : 'bg-green-100 text-green-700 border-green-200')"
+                                                      x-text="vItem.status"></span>
                                             </div>
                                         </div>
 
-                                        <div class="flex items-center gap-4">
-                                            @if(!$hasSubs)
-                                                <div class="flex items-center gap-4 text-xs font-medium">
-                                                    <span>Price: <strong class="text-text-main">₱{{ number_format((float) ($vItem['price'] ?? 0), 2) }}</strong></span>
-                                                    <span>Weight: <strong class="text-text-main">{{ $vItem['weight'] ?? 0 }} KG</strong></span>
-                                                    <span>Stock: <strong class="text-text-main">{{ $vItem['stock'] ?? 0 }} units</strong></span>
+                                        <div class="flex items-center gap-3 text-xs">
+                                            <template x-if="!vItem.subs || vItem.subs.length === 0">
+                                                <div class="flex items-center gap-4">
+                                                    <span>Price: <strong class="text-text-main" x-text="'\u20B1' + vItem.price"></strong></span>
+                                                    <span>Weight: <strong class="text-text-main" x-text="vItem.weight + ' KG'"></strong></span>
+                                                    <span>Stock: <strong class="text-text-main" x-text="vItem.stock + ' units'"></strong></span>
                                                 </div>
-                                            @endif
+                                            </template>
 
-                                            @if($currentApproval->status === 'Approved' && $isPending)
+                                            <template x-if="selectedApproval.status === 'Approved' && vItem.status === 'Pending'">
                                                 <div class="flex items-center gap-1.5">
-                                                    <button type="button" wire:click="approveSingleVariant({{ $prod->id }}, {{ $vIdx }})" class="px-2.5 py-1 bg-green-600 hover:bg-green-700 text-white text-[11px] font-bold rounded-lg transition-colors cursor-pointer">
-                                                        Approve Variant
-                                                    </button>
-                                                    <button type="button" wire:click="disapproveSingleVariant({{ $prod->id }}, {{ $vIdx }})" class="px-2.5 py-1 bg-danger hover:bg-red-700 text-white text-[11px] font-bold rounded-lg transition-colors cursor-pointer">
-                                                        Reject
-                                                    </button>
+                                                    <form :action="selectedApproval.review_variants_url" method="POST" class="m-0">
+                                                        @csrf
+                                                        @method('PATCH')
+                                                        <input type="hidden" :name="`variant_decisions[${vItem.vIdx}]`" value="Approved">
+                                                        <button type="submit" class="px-2.5 py-1 bg-green-600 hover:bg-green-700 text-white text-[11px] font-bold rounded-lg cursor-pointer">
+                                                            Approve Variant
+                                                        </button>
+                                                    </form>
+                                                    <form :action="selectedApproval.review_variants_url" method="POST" class="m-0">
+                                                        @csrf
+                                                        @method('PATCH')
+                                                        <input type="hidden" :name="`variant_decisions[${vItem.vIdx}]`" value="Disapproved">
+                                                        <button type="submit" class="px-2.5 py-1 bg-danger hover:bg-red-700 text-white text-[11px] font-bold rounded-lg cursor-pointer">
+                                                            Reject
+                                                        </button>
+                                                    </form>
                                                 </div>
-                                            @endif
-
-                                            @if($hasSubs)
-                                                <button type="button" @click="expanded = !expanded" class="text-xs font-bold text-primary flex items-center gap-1 hover:underline cursor-pointer">
-                                                    <span x-text="expanded ? 'Hide Sub-variants' : 'View Sub-variants'"></span>
-                                                    <svg class="w-4 h-4 transition-transform duration-200" :class="expanded ? 'rotate-180' : ''" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
-                                                </button>
-                                            @endif
+                                            </template>
                                         </div>
                                     </div>
 
-                                    @if($hasSubs)
-                                        <div x-show="expanded" x-collapse class="p-3 bg-surface">
+                                    <template x-if="vItem.subs && vItem.subs.length > 0">
+                                        <div class="p-3 bg-surface border-t border-border-subtle">
                                             <table class="w-full text-left text-xs">
                                                 <thead class="text-text-muted border-b border-border-subtle">
                                                     <tr>
-                                                        <th class="p-2 font-bold">{{ $variants['sub_title'] ?? 'Sub-variant' }}</th>
+                                                        <th class="p-2 font-bold" x-text="selectedApproval.sub_variant_title || 'Sub-variant'"></th>
                                                         <th class="p-2 font-bold">Status</th>
                                                         <th class="p-2 font-bold">Price</th>
                                                         <th class="p-2 font-bold">Weight</th>
-                                                        <th class="p-2 font-bold text-right">Stock Quantity</th>
-                                                        @if($currentApproval->status === 'Approved')
-                                                            <th class="p-2 font-bold text-right">Review Action</th>
-                                                        @endif
+                                                        <th class="p-2 font-bold text-right">Stock</th>
+                                                        <th class="p-2 font-bold text-right">Action</th>
                                                     </tr>
                                                 </thead>
                                                 <tbody class="divide-y divide-border-subtle/50">
-                                                    @foreach($vItem['subs'] as $sIdx => $sub)
-                                                        @if(!empty($sub['is_archived'])) @continue @endif
-                                                        @php
-                                                            $subStatus = $sub['status'] ?? 'Approved';
-                                                            $isSubPending = $subStatus === 'Pending';
-                                                            $isSubDisapproved = $subStatus === 'Disapproved';
-                                                        @endphp
-                                                        <tr class="{{ $isSubPending ? 'bg-yellow-50/80' : ($isSubDisapproved ? 'bg-red-50/40' : 'hover:bg-brand-light/10') }}">
-                                                            <td class="p-2 font-bold text-text-main">
-                                                                {{ $sub['name'] ?? 'Unnamed' }}
-                                                            </td>
+                                                    <template x-for="sub in vItem.subs" :key="sub.sIdx">
+                                                        <tr>
+                                                            <td class="p-2 font-bold text-text-main" x-text="sub.name"></td>
                                                             <td class="p-2">
-                                                                @if($isSubPending)
-                                                                    <span class="text-[10px] bg-yellow-100 text-yellow-800 border border-yellow-300 px-2 py-0.5 rounded-full font-bold">Pending Approval</span>
-                                                                @elseif($isSubDisapproved)
-                                                                    <span class="text-[10px] bg-red-100 text-red-700 border border-red-200 px-2 py-0.5 rounded-full font-bold">Rejected</span>
-                                                                @else
-                                                                    <span class="text-[10px] bg-green-100 text-green-700 border border-green-200 px-2 py-0.5 rounded-full font-bold">Approved</span>
-                                                                @endif
+                                                                <span class="text-[10px] px-2 py-0.5 rounded-full font-bold border"
+                                                                      :class="sub.status === 'Pending' ? 'bg-yellow-100 text-yellow-800 border-yellow-300' : (sub.status === 'Disapproved' ? 'bg-red-100 text-red-700 border-red-200' : 'bg-green-100 text-green-700 border-green-200')"
+                                                                      x-text="sub.status"></span>
                                                             </td>
-                                                            <td class="p-2 text-text-main font-semibold">₱{{ number_format((float) ($sub['price'] ?? 0), 2) }}</td>
-                                                            <td class="p-2 text-text-muted">{{ $sub['weight'] ?? 0 }} KG</td>
+                                                            <td class="p-2 font-semibold" x-text="'\u20B1' + sub.price"></td>
+                                                            <td class="p-2 text-text-muted" x-text="sub.weight + ' KG'"></td>
+                                                            <td class="p-2 text-right font-bold" x-text="sub.stock + ' units'"></td>
                                                             <td class="p-2 text-right">
-                                                                <span class="px-2 py-0.5 rounded-full font-bold {{ ($sub['stock'] ?? 0) > 0 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700' }}">
-                                                                    {{ $sub['stock'] ?? 0 }} units
-                                                                </span>
-                                                            </td>
-                                                            @if($currentApproval->status === 'Approved')
-                                                                <td class="p-2 text-right">
-                                                                    @if($isSubPending)
-                                                                        <div class="inline-flex items-center gap-1">
-                                                                            <button type="button" wire:click="approveSingleSubVariant({{ $prod->id }}, {{ $vIdx }}, {{ $sIdx }})" class="px-2 py-1 bg-green-600 hover:bg-green-700 text-white text-[10px] font-bold rounded-md transition-colors cursor-pointer">
+                                                                <template x-if="selectedApproval.status === 'Approved' && sub.status === 'Pending'">
+                                                                    <div class="inline-flex items-center gap-1">
+                                                                        <form :action="selectedApproval.review_variants_url" method="POST" class="m-0">
+                                                                            @csrf
+                                                                            @method('PATCH')
+                                                                            <input type="hidden" :name="`sub_variant_decisions[${vItem.vIdx}][${sub.sIdx}]`" value="Approved">
+                                                                            <button type="submit" class="px-2 py-1 bg-green-600 text-white text-[10px] font-bold rounded-md cursor-pointer">
                                                                                 Approve
                                                                             </button>
-                                                                            <button type="button" wire:click="disapproveSingleSubVariant({{ $prod->id }}, {{ $vIdx }}, {{ $sIdx }})" class="px-2 py-1 bg-danger hover:bg-red-700 text-white text-[10px] font-bold rounded-md transition-colors cursor-pointer">
+                                                                        </form>
+                                                                        <form :action="selectedApproval.review_variants_url" method="POST" class="m-0">
+                                                                            @csrf
+                                                                            @method('PATCH')
+                                                                            <input type="hidden" :name="`sub_variant_decisions[${vItem.vIdx}][${sub.sIdx}]`" value="Disapproved">
+                                                                            <button type="submit" class="px-2 py-1 bg-danger text-white text-[10px] font-bold rounded-md cursor-pointer">
                                                                                 Reject
                                                                             </button>
-                                                                        </div>
-                                                                    @else
-                                                                        <span class="text-[10px] text-text-muted italic">Reviewed</span>
-                                                                    @endif
-                                                                </td>
-                                                            @endif
+                                                                        </form>
+                                                                    </div>
+                                                                </template>
+                                                            </td>
                                                         </tr>
-                                                    @endforeach
+                                                    </template>
                                                 </tbody>
                                             </table>
                                         </div>
-                                    @endif
+                                    </template>
                                 </div>
-                            @endforeach
+                            </template>
                         </div>
                     </div>
-                @endif
+                </template>
 
                 <div class="flex items-center justify-between border-t border-border-subtle pt-4">
-                    <button type="button" wire:click="$set('detailModalOpen', false)" class="px-4 py-2 text-xs font-bold text-text-muted hover:bg-surface-subtle rounded-xl cursor-pointer">
+                    <button type="button" @click="detailModalOpen = false" class="px-4 py-2 text-xs font-bold text-text-muted hover:bg-surface-subtle rounded-xl cursor-pointer">
                         Close
                     </button>
 
-                    @if($isVariantUpdateOnly)
-                        <div class="flex gap-2">
-                            <button type="button" wire:click="disapprovePendingVariants({{ $prod->id }})" class="px-5 py-2 text-xs font-bold text-white bg-danger hover:bg-red-700 rounded-xl transition-colors cursor-pointer">
-                                Reject All Pending Additions
-                            </button>
-                            <button type="button" wire:click="approvePendingVariants({{ $prod->id }})" class="px-5 py-2 text-xs font-bold text-white bg-green-600 hover:bg-green-700 rounded-xl transition-colors cursor-pointer">
-                                Approve All Pending Additions
-                            </button>
+                    <template x-if="selectedApproval?.is_variant_update">
+                        <div class="flex items-center gap-2.5">
+                            <form :action="selectedApproval.review_variants_url" method="POST" class="m-0">
+                                @csrf
+                                @method('PATCH')
+                                <input type="hidden" name="decision" value="Disapproved">
+                                <button type="submit" class="px-5 py-2.5 text-xs font-bold text-white bg-danger hover:bg-red-700 rounded-xl cursor-pointer">
+                                    Reject All Pending Additions
+                                </button>
+                            </form>
+                            <form :action="selectedApproval.review_variants_url" method="POST" class="m-0">
+                                @csrf
+                                @method('PATCH')
+                                <input type="hidden" name="decision" value="Approved">
+                                <button type="submit" class="px-5 py-2.5 text-xs font-bold text-white bg-green-600 hover:bg-green-700 rounded-xl cursor-pointer">
+                                    Approve All Pending Additions
+                                </button>
+                            </form>
                         </div>
-                    @elseif($currentApproval->status === 'Pending')
-                        <div class="flex gap-2">
-                            <button type="button" wire:click="promptDisapprove({{ $currentApproval->id }})" class="px-5 py-2 text-xs font-bold text-white bg-danger hover:bg-red-700 rounded-xl transition-colors cursor-pointer">
+                    </template>
+
+                    <template x-if="!selectedApproval?.is_variant_update && selectedApproval?.status === 'Pending'">
+                        <div class="flex items-center gap-2.5">
+                            <button type="button"
+                                    @click="openDisapproveModal()"
+                                    class="px-5 py-2.5 text-xs font-bold text-white bg-danger hover:bg-red-700 rounded-xl cursor-pointer">
                                 Disapprove Product
                             </button>
-                            <button type="button" wire:click="approve({{ $currentApproval->id }})" class="px-5 py-2 text-xs font-bold text-white bg-green-600 hover:bg-green-700 rounded-xl transition-colors cursor-pointer">
-                                Approve & Publish
-                            </button>
+                            <form :action="selectedApproval?.approve_url" method="POST" class="m-0">
+                                @csrf
+                                @method('PATCH')
+                                <button type="submit" class="px-5 py-2.5 text-xs font-bold text-white bg-green-600 hover:bg-green-700 rounded-xl cursor-pointer">
+                                    Approve &amp; Publish
+                                </button>
+                            </form>
                         </div>
-                    @endif
+                    </template>
                 </div>
             </div>
         </div>
-    @endif
+    </template>
 
-    @if($disapproveModalOpen)
-        <div class="fixed inset-0 z-[170] flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
-            <div class="bg-surface rounded-3xl max-w-md w-full p-6 shadow-2xl border border-border-subtle space-y-4 text-left">
+    <!-- Disapprove Product Modal -->
+    <template x-teleport="body">
+        <div x-show="disapproveModalOpen && selectedApproval"
+             x-cloak
+             class="fixed inset-0 z-[205] flex items-center justify-center p-4 bg-black/65 backdrop-blur-xs">
+            <div @click.away="disapproveModalOpen = false"
+                 class="bg-surface rounded-3xl max-w-md w-full p-6 shadow-2xl border border-border-subtle space-y-4 text-left">
                 <h3 class="text-base font-bold text-danger font-serif">Disapprove Product</h3>
                 <p class="text-xs text-text-muted">Specify whether this issue constitutes a strict violation or listing warning. Feedback is delivered directly to the merchant's portal notification center.</p>
 
-                <div class="space-y-3">
+                <form :action="selectedApproval?.disapprove_url" method="POST" class="space-y-4 text-xs">
+                    @csrf
+                    @method('PATCH')
                     <div class="grid grid-cols-2 gap-3">
-                        <label class="cursor-pointer block">
-                            <input type="radio" wire:model.live="disapproval_type" value="Violation" class="peer sr-only">
-                            <div class="p-3 rounded-xl border-2 peer-checked:border-danger peer-checked:bg-danger/5 transition-all text-center">
+                        <label class="cursor-pointer block" @click="disapprovalType = 'Violation'">
+                            <input type="radio" name="disapproval_type" value="Violation" x-model="disapprovalType" class="sr-only">
+                            <div class="p-3 rounded-xl border-2 transition-all text-center"
+                                 :class="disapprovalType === 'Violation' ? 'border-danger bg-danger/5' : 'border-border-subtle'">
                                 <span class="font-bold text-danger text-xs block">Violation</span>
                                 <span class="text-[10px] text-text-muted">Prohibited content</span>
                             </div>
                         </label>
-                        <label class="cursor-pointer block">
-                            <input type="radio" wire:model.live="disapproval_type" value="Warning" class="peer sr-only">
-                            <div class="p-3 rounded-xl border-2 peer-checked:border-warning peer-checked:bg-warning/10 transition-all text-center">
-                                <span class="font-bold text-yellow-600 text-xs block">Warning</span>
+                        <label class="cursor-pointer block" @click="disapprovalType = 'Warning'">
+                            <input type="radio" name="disapproval_type" value="Warning" x-model="disapprovalType" class="sr-only">
+                            <div class="p-3 rounded-xl border-2 transition-all text-center"
+                                 :class="disapprovalType === 'Warning' ? 'border-amber-500 bg-amber-50' : 'border-border-subtle'">
+                                <span class="font-bold text-yellow-700 text-xs block">Warning</span>
                                 <span class="text-[10px] text-text-muted">Category/Listing error</span>
                             </div>
                         </label>
@@ -461,16 +550,22 @@
 
                     <div>
                         <label class="block text-xs font-bold text-text-main mb-1">Feedback Remarks <span class="text-danger">*</span></label>
-                        <textarea wire:model="remarks" rows="4" placeholder="Detail the reasons for disapproval so the seller can address them before resubmitting..." class="w-full p-3 text-xs border border-border-subtle rounded-xl outline-none focus:border-primary custom-scrollbar"></textarea>
-                        @error('remarks') <p class="text-danger text-xs mt-1">{{ $message }}</p> @enderror
+                        <textarea name="remarks"
+                                  x-model="remarks"
+                                  rows="4"
+                                  required
+                                  minlength="3"
+                                  placeholder="Detail the reasons for disapproval so the seller can address them before resubmitting..."
+                                  class="w-full p-3 text-xs border border-border-subtle rounded-xl outline-none focus:border-primary"></textarea>
                     </div>
-                </div>
 
-                <div class="flex justify-end gap-2 pt-2 border-t border-border-subtle">
-                    <button type="button" wire:click="$set('disapproveModalOpen', false)" class="px-4 py-2 text-xs font-bold text-text-muted hover:bg-surface-subtle rounded-xl cursor-pointer">Cancel</button>
-                    <button type="button" wire:click="confirmDisapprove" class="px-4 py-2 text-xs font-bold text-white bg-danger hover:bg-red-700 rounded-xl cursor-pointer">Confirm Disapproval</button>
-                </div>
+                    <div class="flex justify-end gap-2 pt-2 border-t border-border-subtle">
+                        <button type="button" @click="disapproveModalOpen = false" class="px-4 py-2 font-bold text-text-muted cursor-pointer">Cancel</button>
+                        <button type="submit" class="px-5 py-2 font-bold text-white bg-danger hover:bg-red-700 rounded-xl cursor-pointer">Confirm Disapproval</button>
+                    </div>
+                </form>
             </div>
         </div>
-    @endif
+    </template>
 </div>
+@endsection

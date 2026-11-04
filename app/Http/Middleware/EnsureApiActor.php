@@ -9,19 +9,6 @@ use Closure;
 use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\Response;
 
-/**
- * Makes sure the Sanctum token on an API request belongs to the kind of
- * account the route is meant for.
- *
- * Usage in routes:  ->middleware(['auth:sanctum', 'api.actor:buyer'])
- *
- * Two checks run together:
- *  1. The authenticated model must be the right type (a Rider token can never
- *     act as a Buyer, even if both rows happen to share the same numeric id).
- *  2. The token must carry the matching ability. Tokens issued before
- *     abilities were introduced carry "*", which passes this check, so check 1
- *     is what protects them.
- */
 class EnsureApiActor
 {
     public function handle(Request $request, Closure $next, string $actor): Response
@@ -44,13 +31,20 @@ class EnsureApiActor
             return false;
         }
 
-        $typeMatches = match ($actor) {
+        $normalizedActor = strtolower(trim($actor));
+
+        $typeMatches = match ($normalizedActor) {
             'buyer'   => $user instanceof User && $user->role === 'Buyer',
             'rider'   => $user instanceof Rider,
             'courier' => $user instanceof Courier,
             default   => false,
         };
 
-        return $typeMatches && $user->tokenCan($actor);
+        if (! $typeMatches) {
+            return false;
+        }
+
+        return $user->tokenCan($normalizedActor)
+            || $user->tokenCan("role:{$normalizedActor}");
     }
 }

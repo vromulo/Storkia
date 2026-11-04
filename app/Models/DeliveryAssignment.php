@@ -18,10 +18,13 @@ class DeliveryAssignment extends Model
         'attempt_number',
         'status',
         'assigned_at',
+        'accepted_at',
+        'picked_up_at',
         'collected_at',
         'out_for_delivery_at',
         'completed_at',
         'failed_at',
+        'failure_reason',
         'notes',
     ];
 
@@ -30,6 +33,8 @@ class DeliveryAssignment extends Model
         return [
             'attempt_number'      => 'integer',
             'assigned_at'         => 'datetime',
+            'accepted_at'         => 'datetime',
+            'picked_up_at'        => 'datetime',
             'collected_at'        => 'datetime',
             'out_for_delivery_at' => 'datetime',
             'completed_at'        => 'datetime',
@@ -70,5 +75,10 @@ class DeliveryAssignment extends Model
     public function proof(): HasOne
     {
         return $this->hasOne(DeliveryProof::class, 'delivery_assignment_id');
+    }
+
+    public function locations(): HasMany
+    {
+        return $this->hasMany(RiderLocation::class, 'delivery_assignment_id')->latest('recorded_at');
     }
 }

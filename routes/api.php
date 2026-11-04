@@ -8,6 +8,8 @@ use App\Http\Controllers\Api\SellerController;
 use App\Http\Controllers\Api\CartController;
 use App\Http\Controllers\Api\ApiMessageController;
 use App\Http\Controllers\Api\Rider\AuthApiController as RiderAuthApiController;
+use App\Http\Controllers\Api\Rider\RiderDeliveryApiController;
+use App\Http\Controllers\Api\Rider\RiderFinanceApiController;
 use App\Http\Controllers\Api\Courier\AuthApiController as CourierAuthApiController;
 use App\Http\Controllers\Api\AddressController;
 use App\Http\Controllers\Api\CheckoutController;
@@ -19,17 +21,10 @@ use App\Http\Controllers\Api\WishlistController;
 use App\Http\Controllers\Api\VoucherController;
 use App\Http\Controllers\Api\ReviewController;
 use App\Http\Controllers\Api\NotificationController;
-
-/*
-|--------------------------------------------------------------------------
-| API middleware used below
-|--------------------------------------------------------------------------
-| throttle:api-auth  login / OTP / register limits (AppServiceProvider)
-| api.actor:<type>   the token must belong to a buyer, rider or courier, so a
-|                    rider token can never be used on buyer routes
-| account.active     rejects tokens of suspended / banned accounts
-|--------------------------------------------------------------------------
-*/
+use App\Http\Controllers\Api\Courier\CourierLocationController;
+use App\Http\Controllers\Api\Courier\CourierNotificationController;
+use App\Http\Controllers\Api\Courier\CourierPackageVerificationController;
+use App\Http\Controllers\Api\Courier\CourierPickupController;
 
 Route::prefix('v1')->group(function () {
     Route::middleware('throttle:api-auth')->group(function () {
@@ -39,8 +34,6 @@ Route::prefix('v1')->group(function () {
         Route::post('/login', [AuthController::class, 'login']);
     });
 
-    // Buyer token required, but still allowed while the account is suspended:
-    // a banned buyer must be able to read the sanction and submit an appeal.
     Route::middleware(['auth:sanctum', 'api.actor:buyer'])->group(function () {
         Route::post('/logout', [AuthController::class, 'logout']);
         Route::get('/user', [AuthController::class, 'me']);
@@ -49,7 +42,6 @@ Route::prefix('v1')->group(function () {
         Route::post('/account/sanction/appeal', [AuthController::class, 'submitSanctionAppeal']);
     });
 
-    // Buyer token required AND the account must not be suspended or banned.
     Route::middleware(['auth:sanctum', 'api.actor:buyer', 'account.active'])->group(function () {
         Route::get('/products', [ProductController::class, 'index']);
         Route::get('/products/{product}', [ProductController::class, 'show']);
@@ -129,14 +121,37 @@ Route::prefix('v1/rider')->group(function () {
 
     Route::middleware(['auth:sanctum', 'api.actor:rider'])->group(function () {
         Route::post('/logout', [RiderAuthApiController::class, 'logout']);
+        Route::get('/user', [RiderAuthApiController::class, 'me']);
+        Route::get('/profile', [RiderAuthApiController::class, 'me']);
 
         Route::middleware('account.active')->group(function () {
-            Route::get('/user', function (Request $request) {
-                return response()->json([
-                    'status' => 'success',
-                    'data' => $request->user(),
-                ]);
-            });
+            Route::get('/dashboard', [RiderDeliveryApiController::class, 'dashboard']);
+
+            Route::patch('/availability', [RiderAuthApiController::class, 'updateAvailability']);
+            Route::post('/location', [RiderAuthApiController::class, 'updateLocation']);
+            Route::post('/profile/vehicle', [RiderAuthApiController::class, 'updateVehicleAndDocuments']);
+
+            Route::get('/deliveries', [RiderDeliveryApiController::class, 'index']);
+            Route::get('/deliveries/{assignmentId}', [RiderDeliveryApiController::class, 'show']);
+            Route::post('/deliveries/{assignmentId}/accept', [RiderDeliveryApiController::class, 'accept']);
+            Route::post('/deliveries/{assignmentId}/decline', [RiderDeliveryApiController::class, 'decline']);
+            Route::post('/deliveries/{assignmentId}/verify', [RiderDeliveryApiController::class, 'verifyPackage']);
+            Route::post('/deliveries/{assignmentId}/start', [RiderDeliveryApiController::class, 'startDelivery']);
+            Route::post('/deliveries/{assignmentId}/complete', [RiderDeliveryApiController::class, 'completeDelivery']);
+            Route::post('/deliveries/{assignmentId}/fail', [RiderDeliveryApiController::class, 'failDelivery']);
+
+            Route::get('/cod', [RiderFinanceApiController::class, 'codOverview']);
+            Route::post('/cod/remit-all', [RiderFinanceApiController::class, 'remitAllCod']);
+            Route::post('/cod/{codCollectionId}/remit', [RiderFinanceApiController::class, 'remitSingleCod']);
+            Route::post('/cod/{remittanceId}/confirm', [RiderFinanceApiController::class, 'confirmRemittanceBlocked']);
+
+            Route::get('/earnings', [RiderFinanceApiController::class, 'earningsAndWallet']);
+            Route::post('/withdrawals', [RiderFinanceApiController::class, 'requestWithdrawal']);
+            Route::get('/ratings', [RiderFinanceApiController::class, 'ratings']);
+
+            Route::get('/notifications', [RiderFinanceApiController::class, 'notifications']);
+            Route::patch('/notifications/read-all', [RiderFinanceApiController::class, 'markAllNotificationsRead']);
+            Route::patch('/notifications/{id}/read', [RiderFinanceApiController::class, 'markNotificationRead']);
         });
     });
 });
@@ -146,14 +161,44 @@ Route::prefix('v1/courier')->group(function () {
 
     Route::middleware(['auth:sanctum', 'api.actor:courier'])->group(function () {
         Route::post('/logout', [CourierAuthApiController::class, 'logout']);
+        Route::get('/user', [CourierAuthApiController::class, 'me']);
+        Route::get('/profile', [CourierAuthApiController::class, 'me']);
+        Route::get('/me', [CourierAuthApiController::class, 'me']);
+        Route::get('/profile/document/{type}', [CourierAuthApiController::class, 'viewDocument']);
 
         Route::middleware('account.active')->group(function () {
-            Route::get('/user', function (Request $request) {
-                return response()->json([
-                    'status' => 'success',
-                    'data' => $request->user(),
-                ]);
-            });
+            Route::get('/dashboard', [CourierPickupController::class, 'dashboard']);
+
+            Route::patch('/availability', [CourierAuthApiController::class, 'updateAvailability']);
+            Route::post('/availability', [CourierAuthApiController::class, 'updateAvailability']);
+            Route::post('/shift/checklist', [CourierAuthApiController::class, 'submitPreTripChecklist']);
+            Route::post('/profile/vehicle', [CourierAuthApiController::class, 'updateVehicleAndDocuments']);
+
+            Route::post('/location', [CourierLocationController::class, 'updateLocation']);
+            Route::post('/location/batch', [CourierLocationController::class, 'batchUpdateLocations']);
+            Route::get('/location/latest', [CourierLocationController::class, 'latestLocation']);
+
+            Route::get('/pickups', [CourierPickupController::class, 'index']);
+            Route::get('/pickups/{id}', [CourierPickupController::class, 'show']);
+            Route::post('/pickups/{id}/accept', [CourierPickupController::class, 'accept']);
+            Route::post('/pickups/{id}/decline', [CourierPickupController::class, 'decline']);
+            Route::post('/pickups/{id}/verify', [CourierPackageVerificationController::class, 'verifyPackage']);
+            Route::post('/pickups/{id}/verify-package', [CourierPackageVerificationController::class, 'verifyPackage']);
+            Route::post('/pickups/{id}/collect', [CourierPickupController::class, 'confirmCollection']);
+            Route::post('/pickups/{id}/handover', [CourierPickupController::class, 'handoverToHub']);
+            Route::post('/pickups/{id}/report-delay', [CourierPickupController::class, 'reportDelay']);
+            Route::post('/pickups/{id}/report-breakdown', [CourierPickupController::class, 'reportBreakdown']);
+            Route::post('/pickups/{id}/discrepancy-note', [CourierPickupController::class, 'submitDiscrepancyNote']);
+
+            Route::get('/earnings', [CourierNotificationController::class, 'earningsAndWallet']);
+            Route::post('/withdrawals', [CourierNotificationController::class, 'requestWithdrawal']);
+            Route::get('/ratings', [CourierNotificationController::class, 'ratings']);
+
+            Route::get('/notifications/counts', [CourierNotificationController::class, 'badges']);
+            Route::get('/badge-counts', [CourierNotificationController::class, 'badges']);
+            Route::get('/notifications', [CourierNotificationController::class, 'index']);
+            Route::patch('/notifications/read-all', [CourierNotificationController::class, 'markAllAsRead']);
+            Route::patch('/notifications/{id}/read', [CourierNotificationController::class, 'markAsRead']);
         });
     });
 });

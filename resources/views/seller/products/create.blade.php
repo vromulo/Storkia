@@ -44,8 +44,8 @@
         </div>
     @endif
 
-    <div x-data="{ 
-        imageModalOpen: false, 
+    <div x-data="{
+        imageModalOpen: false,
         imageModalSrc: '',
         touched: {},
         fieldErrors: {},
@@ -93,17 +93,17 @@
             <form x-ref="productForm"
                   @input="validateForm"
                   @change="validateForm"
-                  x-data="variantManager()" 
-                  action="{{ route('seller.products.store') }}" 
-                  method="POST" 
-                  enctype="multipart/form-data" 
+                  x-data="variantManager()"
+                  action="{{ route('seller.products.store') }}"
+                  method="POST"
+                  enctype="multipart/form-data"
                   class="bg-white rounded-3xl p-8 shadow-sm border border-border-subtle space-y-6">
                 @csrf
                 <input type="hidden" name="stock_quantity" :value="totalStock">
 
                 <div>
                     <label class="block text-sm font-bold text-text-muted mb-1">Product Name (Max 100 chars) <span class="text-red-500">*</span></label>
-                    <input type="text" name="name" maxlength="100" required value="{{ old('name') }}" 
+                    <input type="text" name="name" maxlength="100" required value="{{ old('name') }}"
                            :class="hasError('name') ? 'border-red-500 focus:border-red-500 focus:ring-red-500' : 'border-border-subtle focus:border-primary focus:ring-primary'"
                            class="w-full p-3 rounded-xl border focus:ring-1 outline-none">
                     <span x-show="hasError('name')" x-cloak class="text-red-500 text-[10px] font-bold mt-1 block">Product Name is required.</span>
@@ -118,27 +118,28 @@
                     <div x-data="searchableSelect({
                             selected: '{{ addslashes(old('subcategory', '')) }}',
                             options: {{ json_encode(array_column($subcategories, 'name')) }}
-                         })" 
-                         @click.away="open = false" 
+                         })"
+                         @click.away="open = false"
                          class="relative w-full">
-                        
+
                         <label class="block text-sm font-bold text-text-muted mb-1">Subcategory <span class="text-red-500">*</span></label>
                         <input type="text" name="subcategory" x-model="selected" required tabindex="-1" class="absolute w-0 h-0 opacity-0 pointer-events-none -z-10">
-                        
+
                         <div @click="open = true; $refs.searchInput.focus(); touched['subcategory'] = true;"
                              :class="hasError('subcategory') ? 'border-red-500' : 'border-gray-300 hover:border-gray-400 focus-within:border-primary'"
                              class="w-full p-3 bg-white rounded-2xl border-2 transition-all flex items-center justify-between cursor-text shadow-sm relative">
                             <input x-ref="searchInput"
-                                   type="text" 
-                                   x-model="search" 
+                                   type="text"
+                                   x-model="search"
                                    @focus="open = true"
                                    @keydown.enter.prevent="if(filteredOptions.length > 0) { selectOption(filteredOptions[0]); setTimeout(() => validateForm(), 50); }"
-                                   :placeholder="selected ? '' : 'Select or type to search...'" 
+                                   :placeholder="selected ? '' : 'Select or type to search...'"
                                    class="w-full bg-transparent outline-none text-text-main font-medium z-10 relative">
-                            
+
                             <div x-show="selected && !search" class="absolute left-3 right-10 top-0 bottom-0 flex items-center text-text-main font-medium pointer-events-none">
                                 <span x-text="selected"></span>
                             </div>
+
                             <button type="button" @click.stop="open = !open" class="text-gray-500 hover:text-gray-700 ml-2 z-10 cursor-pointer">
                                 <svg class="w-5 h-5 transition-transform duration-200" :class="open ? 'rotate-180' : ''" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7" />
@@ -147,8 +148,8 @@
                         </div>
                         <span x-show="hasError('subcategory')" x-cloak class="text-red-500 text-[10px] font-bold mt-1 block">Subcategory is required.</span>
 
-                        <div x-show="open" 
-                             x-cloak 
+                        <div x-show="open"
+                             x-cloak
                              x-transition:enter="transition ease-out duration-150"
                              x-transition:enter-start="opacity-0 scale-95 -translate-y-1"
                              x-transition:enter-end="opacity-100 scale-100 translate-y-0"
@@ -157,7 +158,7 @@
                              x-transition:leave-end="opacity-0 scale-95 -translate-y-1"
                              class="absolute z-50 left-0 right-0 mt-2 bg-white border border-gray-200 rounded-2xl shadow-xl max-h-60 overflow-y-auto custom-scrollbar p-1.5 divide-y divide-gray-100">
                             <template x-for="opt in filteredOptions" :key="opt">
-                                <div @click="selectOption(opt); setTimeout(() => validateForm(), 50)" 
+                                <div @click="selectOption(opt); setTimeout(() => validateForm(), 50)"
                                      class="px-4 py-3 rounded-xl hover:bg-gray-50 cursor-pointer flex items-center justify-between transition-colors text-sm font-medium text-gray-800">
                                     <span x-text="opt"></span>
                                     <svg x-show="selected === opt" class="w-5 h-5 text-pink-600 font-bold" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
@@ -177,7 +178,7 @@
                         <label class="block text-sm font-bold text-text-muted mb-1">Discount <span class="text-xs font-normal italic">(Optional)</span></label>
                         <div class="relative flex flex-col w-full md:w-1/2">
                             <div class="relative w-full">
-                                <input type="number" step="0.01" min="0" name="discount" value="{{ old('discount', 0) }}"
+                                <input type="number" step="0.01" min="0" max="99" name="discount" value="{{ old('discount', 0) }}"
                                        onkeypress="return (event.charCode >= 48 && event.charCode <= 57) || event.charCode === 46"
                                        :class="hasError('discount') ? 'border-red-500 focus:border-red-500' : 'border-border-subtle focus:border-primary'"
                                        class="w-full pr-9 p-3 rounded-xl border outline-none no-spinners cursor-text">
@@ -188,37 +189,52 @@
                     </div>
                 </div>
 
-                <div x-data="imageUploader()">
-                    <label class="block text-sm font-bold text-text-muted mb-1">Main Product Pictures <span class="text-red-500">*</span></label>
+                <!-- Main Product Pictures (1 to 10 Images — 1st Image is Cover Photo) -->
+                <div x-data="imageUploader(10)" class="space-y-3">
+                    <div class="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                            <label class="block text-sm font-bold text-text-muted">
+                                Main Product Pictures (Min 1, Max 10 Images — 1st Image is Cover Photo) <span class="text-red-500">*</span>
+                            </label>
+                            <p class="text-xs text-text-muted mt-0.5">
+                                These images form the main product gallery. Drag thumbnails or click <strong>Set as Cover</strong> so your desired Cover Photo is in slot #1. Variant images are uploaded separately below.
+                            </p>
+                        </div>
+                        <span class="px-3 py-1 rounded-full text-xs font-extrabold border"
+                              :class="previews.length >= 1 && previews.length <= 10 ? 'bg-primary/10 text-primary border-primary/20' : 'bg-gray-100 text-text-muted border-border-subtle'"
+                              x-text="previews.length + ' / 10 Main Pictures'"></span>
+                    </div>
+
                     <div @dragover.prevent="isDragging = true"
                          @dragleave.prevent="isDragging = false"
                          @drop.prevent="handleDrop($event); touched['pictures[]'] = true; setTimeout(() => validateForm(), 100)"
                          :class="hasError('pictures[]') ? 'border-red-500 bg-red-50 scale-[1.005]' : (isDragging ? 'border-primary bg-primary/10 scale-[1.005]' : 'border-border-subtle bg-surface hover:bg-brand-light/10')"
-                         class="border-2 border-dashed rounded-2xl p-10 text-center transition-all cursor-pointer relative flex flex-col items-center justify-center min-h-[220px]">
-                        
+                         class="border-2 border-dashed rounded-2xl p-8 text-center transition-all cursor-pointer relative flex flex-col items-center justify-center min-h-[190px]">
+
                         <input x-ref="mainFileInput"
                                type="file"
                                name="pictures[]"
                                multiple
-                               accept="image/*"
+                               accept="image/jpeg,image/png,image/jpg,image/webp"
                                required
                                @change="handleSelect($event); touched['pictures[]'] = true; setTimeout(() => validateForm(), 100)"
                                class="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10">
-                        
-                        <div class="flex flex-col items-center justify-center space-y-3 pointer-events-none">
+
+                        <div class="flex flex-col items-center justify-center space-y-2.5 pointer-events-none">
                             <div class="p-4 bg-primary/10 text-primary rounded-full shadow-inner shrink-0 flex items-center justify-center">
-                                <svg class="w-10 h-10 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <svg class="w-9 h-9 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
                                 </svg>
                             </div>
                             <p class="text-base font-bold text-primary-dark">
-                                <span class="text-primary underline">Choose Files</span> or drag & drop images here
+                                <span class="text-primary underline">Choose 1 to 10 Images</span> or drag &amp; drop here
                             </p>
-                            <p class="text-xs text-text-muted">Supports PNG, JPG, WEBP, GIF, SVG (PDFs & Documents are rejected)</p>
+                            <p class="text-xs text-text-muted">Supports JPG, PNG, WEBP up to 5MB each (Automatically optimized to WebP)</p>
                         </div>
                     </div>
-                    <span x-show="hasError('pictures[]')" x-cloak class="text-red-500 text-[10px] font-bold mt-1 block">At least one product picture is required.</span>
-                    
+
+                    <span x-show="hasError('pictures[]')" x-cloak class="text-red-500 text-[10px] font-bold mt-1 block">At least 1 main product picture is required (maximum 10).</span>
+
                     <template x-if="errorMessage">
                         <p class="text-red-500 text-xs font-bold mt-2 flex items-center">
                             <svg class="w-4 h-4 mr-1 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
@@ -226,23 +242,79 @@
                         </p>
                     </template>
 
-                    <div x-show="previews.length > 0" x-cloak x-transition class="flex gap-4 overflow-x-auto mt-4 pb-3 custom-scrollbar">
-                        <template x-for="preview in previews">
-                            <div class="relative group shrink-0">
-                                <img :src="preview" @click="imageModalSrc = preview; imageModalOpen = true" class="w-36 h-36 object-cover rounded-2xl border-2 border-border-subtle shadow-md cursor-pointer hover:opacity-90 transition-all transform hover:scale-105">
-                                <span class="absolute bottom-2 right-2 bg-black/60 text-white text-[10px] px-2 py-0.5 rounded-full backdrop-blur pointer-events-none">Click to view</span>
+                    <div x-show="previews.length > 0" x-cloak x-transition class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-4 pt-2">
+                        <template x-for="(preview, idx) in previews" :key="idx">
+                            <div draggable="true"
+                                 @dragstart="onThumbnailDragStart(idx)"
+                                 @dragover.prevent
+                                 @drop.prevent="onThumbnailDrop(idx)"
+                                 :class="idx === 0 ? 'border-primary ring-2 ring-primary/30' : 'border-border-subtle'"
+                                 class="relative group rounded-2xl border-2 bg-surface overflow-hidden shadow-sm flex flex-col">
+                                <div class="relative aspect-square w-full overflow-hidden bg-surface-subtle">
+                                    <img :src="preview"
+                                         @click="imageModalSrc = preview; imageModalOpen = true"
+                                         class="w-full h-full object-cover cursor-pointer hover:opacity-90 transition-all">
+
+                                    <span x-show="idx === 0"
+                                          class="absolute top-2 left-2 px-2.5 py-0.5 rounded-full bg-primary text-white text-[10px] font-extrabold uppercase shadow-sm pointer-events-none">
+                                        Cover Photo (#1)
+                                    </span>
+                                    <span x-show="idx > 0"
+                                          class="absolute top-2 left-2 px-2 py-0.5 rounded-full bg-black/65 text-white text-[10px] font-bold pointer-events-none"
+                                          x-text="'#' + (idx + 1)"></span>
+
+                                    <button type="button"
+                                            @click.stop="removeImage(idx); setTimeout(() => validateForm(), 50)"
+                                            title="Remove image"
+                                            class="absolute top-2 right-2 w-6 h-6 rounded-full bg-red-600 hover:bg-red-700 text-white flex items-center justify-center text-xs font-bold shadow-md cursor-pointer">
+                                        &times;
+                                    </button>
+                                </div>
+
+                                <div class="p-2 bg-white border-t border-border-subtle flex items-center justify-between gap-1 text-[10px]">
+                                    <button type="button"
+                                            x-show="idx > 0"
+                                            @click.stop="promoteToCover(idx)"
+                                            class="px-2 py-1 rounded-lg bg-primary/10 hover:bg-primary text-primary hover:text-white font-bold transition-colors cursor-pointer">
+                                        Set as Cover
+                                    </button>
+                                    <span x-show="idx === 0" class="text-primary font-extrabold px-1">Main Cover</span>
+
+                                    <div class="flex items-center gap-1 ml-auto">
+                                        <button type="button"
+                                                :disabled="idx === 0"
+                                                @click.stop="moveImage(idx, idx - 1)"
+                                                class="p-1 rounded hover:bg-surface-subtle disabled:opacity-30 cursor-pointer"
+                                                title="Move left">
+                                            &larr;
+                                        </button>
+                                        <button type="button"
+                                                :disabled="idx === previews.length - 1"
+                                                @click.stop="moveImage(idx, idx + 1)"
+                                                class="p-1 rounded hover:bg-surface-subtle disabled:opacity-30 cursor-pointer"
+                                                title="Move right">
+                                            &rarr;
+                                        </button>
+                                    </div>
+                                </div>
                             </div>
                         </template>
                     </div>
                 </div>
 
+                <!-- Product Variants (Variant-Specific Images Kept Strictly Separate from Main Gallery) -->
                 <div class="border border-border-subtle rounded-2xl p-6 bg-brand-light/10 space-y-6">
                     <div class="border-b border-border-subtle pb-4">
-                        <h3 class="text-lg font-bold text-primary-dark mb-4">Product Variants</h3>
-                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div class="flex flex-wrap items-center justify-between gap-2 mb-1">
+                            <h3 class="text-lg font-bold text-primary-dark">Product Variants</h3>
+                            <span class="text-[11px] font-semibold text-text-muted">
+                                Each variant image is displayed on the product page only when the buyer clicks that specific variant.
+                            </span>
+                        </div>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-3">
                             <div>
                                 <label class="block text-xs font-bold text-text-muted mb-1">Title of the Variants <span x-show="variants.length > 0" class="text-red-500">*</span></label>
-                                <input type="text" name="variant_title" x-model="variantTitle" placeholder="e.g. Color, Units" :required="variants.length > 0" 
+                                <input type="text" name="variant_title" x-model="variantTitle" placeholder="e.g. Color, Units" :required="variants.length > 0"
                                        :class="hasError('variant_title') ? 'border-red-500 focus:border-red-500' : 'border-border-subtle focus:border-primary'"
                                        class="w-full p-2.5 rounded-lg border outline-none">
                                 <span x-show="hasError('variant_title')" x-cloak class="text-red-500 text-[10px] font-bold mt-1 block">Title is required.</span>
@@ -260,7 +332,7 @@
                     <div class="space-y-4">
                         <template x-for="(v, vIndex) in variants" :key="v.id">
                             <div class="bg-white rounded-xl border border-border-subtle shadow-sm overflow-hidden">
-                                
+
                                 <div x-show="vIndex > 0 && !v.isCopied && variants[0] && (variants[0].price || variants[0].weight || variants[0].stock) && priceDependsOn === 'main'"
                                      x-data="{ promptState: 'active' }"
                                      class="px-4 pt-4">
@@ -295,26 +367,26 @@
                                             <template x-if="v.imagePreview">
                                                 <img :src="v.imagePreview" @click="imageModalSrc = v.imagePreview; imageModalOpen = true" class="w-20 h-20 object-cover rounded-xl border-2 border-border-subtle shadow-sm flex-shrink-0 cursor-pointer hover:opacity-80 transition-opacity">
                                             </template>
-                                            
+
                                             <div @dragover.prevent="v.isDragging = true"
-                                                 @dragleave.prevent="isDragging = false"
+                                                 @dragleave.prevent="v.isDragging = false"
                                                  @drop.prevent="handleVariantDrop($event, v.id); touched[`variant_pictures[${v.id}]`] = true; setTimeout(() => validateForm(), 100)"
                                                  :class="hasError(`variant_pictures[${v.id}]`) ? 'border-red-500 bg-red-50' : (v.isDragging ? 'border-primary bg-primary/10' : 'border-border-subtle bg-white hover:bg-brand-light/10')"
                                                  class="relative flex-1 border-2 border-dashed rounded-xl p-3 transition-all text-center flex items-center justify-center min-h-[64px]">
                                                 <input :id="`variant_picture_input_${v.id}`"
-                                                       type="file" 
-                                                       :name="`variant_pictures[${v.id}]`" 
-                                                       accept="image/*" 
-                                                       required 
-                                                       @change="handleVariantImage($event, v.id); touched[`variant_pictures[${v.id}]`] = true; setTimeout(() => validateForm(), 100)" 
+                                                       type="file"
+                                                       :name="`variant_pictures[${v.id}]`"
+                                                       accept="image/jpeg,image/png,image/jpg,image/webp"
+                                                       required
+                                                       @change="handleVariantImage($event, v.id); touched[`variant_pictures[${v.id}]`] = true; setTimeout(() => validateForm(), 100)"
                                                        class="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10">
                                                 <span class="text-xs font-semibold text-text-muted pointer-events-none flex items-center justify-center gap-1.5">
                                                     <svg class="w-5 h-5 text-primary shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
-                                                    <span>Drag & drop or <span class="text-primary underline font-bold">browse</span></span>
+                                                    <span>Variant Photo: Drag &amp; drop or <span class="text-primary underline font-bold">browse</span></span>
                                                 </span>
                                             </div>
                                         </div>
-                                        <span x-show="hasError(`variant_pictures[${v.id}]`)" x-cloak class="text-red-500 text-[10px] font-bold mt-1 block">Image is required.</span>
+                                        <span x-show="hasError(`variant_pictures[${v.id}]`)" x-cloak class="text-red-500 text-[10px] font-bold mt-1 block">Dedicated variant image is required.</span>
                                     </div>
 
                                     <template x-if="priceDependsOn === 'main'">
@@ -323,23 +395,25 @@
                                                 <div class="relative w-full">
                                                     <span class="absolute left-2.5 top-2.5 text-text-muted text-xs font-bold pointer-events-none">₱</span>
                                                     <input type="number" step="0.01" min="20" :name="`variant_prices[${v.id}]`" x-model="v.price" placeholder="Price" required onkeypress="return (event.charCode >= 48 && event.charCode <= 57) || event.charCode === 46"
-                                                           :class="hasError(`variant_prices[${v.id}]`) ? 'border-red-500 focus:border-red-500' : 'border-border-subtle focus:border-primary'" 
+                                                           :class="hasError(`variant_prices[${v.id}]`) ? 'border-red-500 focus:border-red-500' : 'border-border-subtle focus:border-primary'"
                                                            class="w-full pl-6 p-2 text-sm rounded-lg border outline-none no-spinners cursor-text">
                                                 </div>
-                                                <span x-show="hasError(`variant_prices[${v.id}]`)" x-cloak class="text-red-500 text-[9px] font-bold mt-1 block">Required (Min 20)</span>
+                                                <span x-show="hasError(`variant_prices[${v.id}]`)" x-cloak class="text-red-500 text-[9px] font-bold mt-1 block">Required (Min ₱20)</span>
                                             </div>
+
                                             <div class="flex flex-col w-full lg:w-28">
                                                 <div class="relative w-full">
-                                                    <input type="number" step="0.01" min="0" :name="`variant_weights[${v.id}]`" x-model="v.weight" placeholder="Weight" required onkeypress="return (event.charCode >= 48 && event.charCode <= 57) || event.charCode === 46" 
+                                                    <input type="number" step="0.01" min="0.01" :name="`variant_weights[${v.id}]`" x-model="v.weight" placeholder="Weight" required onkeypress="return (event.charCode >= 48 && event.charCode <= 57) || event.charCode === 46"
                                                            :class="hasError(`variant_weights[${v.id}]`) ? 'border-red-500 focus:border-red-500' : 'border-border-subtle focus:border-primary'"
                                                            class="w-full pr-8 p-2 text-sm rounded-lg border outline-none no-spinners cursor-text">
                                                     <span class="absolute right-2.5 top-2.5 text-text-muted text-xs font-bold pointer-events-none">KG</span>
                                                 </div>
                                                 <span x-show="hasError(`variant_weights[${v.id}]`)" x-cloak class="text-red-500 text-[9px] font-bold mt-1 block">Required</span>
                                             </div>
+
                                             <div class="flex flex-col w-full lg:w-24">
                                                 <div class="relative w-full">
-                                                    <input type="number" min="0" :name="`variant_stocks[${v.id}]`" x-model="v.stock" placeholder="Stock" required onkeypress="return (event.charCode >= 48 && event.charCode <= 57)" 
+                                                    <input type="number" min="0" :name="`variant_stocks[${v.id}]`" x-model="v.stock" placeholder="Stock" required onkeypress="return (event.charCode >= 48 && event.charCode <= 57)"
                                                            :class="hasError(`variant_stocks[${v.id}]`) ? 'border-red-500 focus:border-red-500' : 'border-border-subtle focus:border-primary'"
                                                            class="w-full p-2 text-sm rounded-lg border outline-none no-spinners cursor-text">
                                                 </div>
@@ -347,7 +421,7 @@
                                             </div>
                                         </div>
                                     </template>
-                                    
+
                                     <button type="button" @click="removeMainVariant(v.id)" class="text-red-500 hover:text-red-700 p-2 mt-1 lg:mt-0 cursor-pointer">
                                         <svg class="w-5 h-5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
                                     </button>
@@ -359,18 +433,18 @@
                                             <span class="text-xs font-bold text-text-muted uppercase tracking-wider" x-text="subVariantTitle"></span>
                                             <span x-show="v.name.trim() === ''" class="text-[10px] text-red-400 font-medium italic">(Fill main variant name first)</span>
                                         </div>
-                                        <button type="button" 
-                                                @click="v.name.trim() !== '' ? addSubVariant(v.id) : null" 
+                                        <button type="button"
+                                                @click="v.name.trim() !== '' ? addSubVariant(v.id) : null"
                                                 :disabled="v.name.trim() === ''"
                                                 :class="v.name.trim() === '' ? 'text-gray-400 cursor-not-allowed opacity-60' : 'text-primary hover:text-primary-dark cursor-pointer'"
                                                 class="text-xs font-bold transition-colors">
                                             + Add <span x-text="subVariantTitle"></span>
                                         </button>
                                     </div>
-                                    
+
                                     <template x-for="(sub, sIndex) in v.subs" :key="sub.id">
                                         <div class="space-y-2 bg-brand-light/10 p-3 rounded-xl border border-brand-light/30">
-                                            
+
                                             <div x-show="sIndex > 0 && !sub.isCopied && v.subs[0] && (v.subs[0].price || v.subs[0].weight || v.subs[0].stock)"
                                                  x-data="{ promptState: 'active' }"
                                                  class="mb-2">
@@ -411,9 +485,10 @@
                                                         </div>
                                                         <span x-show="hasError(`sub_variant_prices[${v.id}][${sub.id}]`)" x-cloak class="text-red-500 text-[9px] font-bold mt-1 block">Required</span>
                                                     </div>
+
                                                     <div class="flex flex-col flex-1 min-w-[90px]">
                                                         <div class="relative w-full">
-                                                            <input type="number" step="0.01" min="0" :name="`sub_variant_weights[${v.id}][${sub.id}]`" x-model="sub.weight" placeholder="Weight" required onkeypress="return (event.charCode >= 48 && event.charCode <= 57) || event.charCode === 46"
+                                                            <input type="number" step="0.01" min="0.01" :name="`sub_variant_weights[${v.id}][${sub.id}]`" x-model="sub.weight" placeholder="Weight" required onkeypress="return (event.charCode >= 48 && event.charCode <= 57) || event.charCode === 46"
                                                                    :disabled="v.name.trim() === ''"
                                                                    :class="(hasError(`sub_variant_weights[${v.id}][${sub.id}]`) ? 'border-red-500 ' : 'border-border-subtle focus:border-primary ') + (v.name.trim() === '' ? 'bg-gray-100 text-gray-500 cursor-not-allowed' : 'bg-white cursor-text')"
                                                                    class="w-full pr-7 p-2 text-xs rounded-md border outline-none no-spinners">
@@ -421,6 +496,7 @@
                                                         </div>
                                                         <span x-show="hasError(`sub_variant_weights[${v.id}][${sub.id}]`)" x-cloak class="text-red-500 text-[9px] font-bold mt-1 block">Required</span>
                                                     </div>
+
                                                     <div class="flex flex-col flex-1 min-w-[80px]">
                                                         <div class="relative w-full">
                                                             <input type="number" min="0" :name="`sub_variant_stocks[${v.id}][${sub.id}]`" x-model="sub.stock" placeholder="Stock" required onkeypress="return (event.charCode >= 48 && event.charCode <= 57)"
@@ -430,6 +506,7 @@
                                                         </div>
                                                         <span x-show="hasError(`sub_variant_stocks[${v.id}][${sub.id}]`)" x-cloak class="text-red-500 text-[9px] font-bold mt-1 block">Required</span>
                                                     </div>
+
                                                     <button type="button" @click="removeSubVariant(v.id, sub.id)" class="text-text-muted hover:text-red-500 mt-1.5 md:mt-1 cursor-pointer shrink-0">
                                                         <svg class="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
                                                     </button>
@@ -476,7 +553,7 @@
                             <span x-text="enableSpecs ? 'Disable Specifications' : 'Enable Specifications'"></span>
                         </button>
                     </div>
-                    
+
                     <div x-show="enableSpecs" x-collapse class="space-y-3 mt-4">
                         <template x-for="(spec, index) in specs" :key="spec.id">
                             <div class="flex items-start gap-3">
@@ -499,7 +576,7 @@
                     <label class="block text-sm font-bold text-text-muted mb-1">Standard Description</label>
                     <textarea name="description" rows="3" class="w-full p-3 rounded-xl border border-border-subtle focus:border-primary outline-none custom-scrollbar cursor-text">{{ old('description') }}</textarea>
                 </div>
-                
+
                 <div x-data="{ enableAddDesc: false }">
                     <div class="flex items-center justify-between mb-2">
                         <label class="block text-sm font-bold text-text-muted">Additional Descriptions <span class="text-xs font-normal italic">(Optional)</span></label>
@@ -509,8 +586,8 @@
                 </div>
 
                 <div class="flex flex-col items-end mt-8 border-t border-border-subtle pt-6">
-                    <button type="submit" 
-                            :disabled="hasValidationErrors || !isFormValid" 
+                    <button type="submit"
+                            :disabled="hasValidationErrors || !isFormValid"
                             :class="(hasValidationErrors || !isFormValid) ? 'opacity-50 cursor-not-allowed bg-gray-400' : 'bg-primary hover:bg-primary-dark cursor-pointer'"
                             class="px-8 py-3 text-white rounded-xl shadow-md transition-all font-bold text-lg">
                         Create Product
