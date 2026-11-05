@@ -19,20 +19,33 @@
     @livewireStyles
 </head>
 
-<body class="overflow-x-hidden max-w-full flex flex-col min-h-screen">
+<body class="overflow-x-clip max-w-full flex flex-col min-h-screen">
     <x-ui.preloader />
 
     <header 
-        x-data="{ showHeader: true, lastScroll: 0 }" 
-        @scroll.window="
-            let currentScroll = window.scrollY;
-            if (currentScroll > lastScroll && currentScroll > 100) {
-                showHeader = false;
-            } else if (currentScroll < lastScroll) {
-                showHeader = true;
+        x-data="{
+            showHeader: true,
+            lastScroll: 0,
+            onScroll() {
+                const y = Math.max(window.scrollY, 0);
+                const delta = y - this.lastScroll;
+
+                if (y <= 100) {
+                    this.showHeader = true;
+                } else if (this.$el.matches(':hover') || this.$el.contains(document.activeElement)) {
+                    this.showHeader = true;
+                } else if (delta > 8) {
+                    this.showHeader = false;
+                } else if (delta < -8) {
+                    this.showHeader = true;
+                } else {
+                    return;
+                }
+
+                this.lastScroll = y;
             }
-            lastScroll = currentScroll;
-        "
+        }"
+        @scroll.window.passive="onScroll()"
         :class="showHeader ? 'translate-y-0' : '-translate-y-full'"
         class="sticky top-0 z-40 md:z-50 flex flex-col w-full transition-transform duration-300 ease-in-out"
     >

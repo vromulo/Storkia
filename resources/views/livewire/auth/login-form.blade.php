@@ -41,14 +41,9 @@
         </div>
 
         <div x-data="{ showPassword: false }">
-            <div class="flex items-center justify-between mb-1.5">
-                <label for="password" class="block text-xs uppercase tracking-wider font-bold text-text-muted">
-                    Password
-                </label>
-                <a href="{{ route('password.request', ['portal' => strtolower($expectedRole)]) }}" class="text-xs font-semibold text-primary hover:text-primary-dark underline underline-offset-4 transition-colors cursor-pointer">
-                    Forgot password?
-                </a>
-            </div>
+            <label for="password" class="block text-xs uppercase tracking-wider font-bold text-text-muted mb-1.5 text-left">
+                Password
+            </label>
             <div class="relative flex items-center border-b {{ $errors->has('password') ? 'border-danger' : 'border-border-subtle focus-within:border-text-main' }} transition-colors">
                 <input 
                     :type="showPassword ? 'text' : 'password'" 
@@ -74,6 +69,11 @@
             @error('password')
                 <p class="text-danger text-xs mt-1.5 text-left font-medium">{{ $message }}</p>
             @enderror
+            <div class="mt-2 text-right">
+                <a href="{{ route('password.request', ['portal' => strtolower($expectedRole)]) }}" class="text-xs font-bold text-primary hover:text-primary-dark underline underline-offset-4 transition-colors cursor-pointer">
+                    Forgot password?
+                </a>
+            </div>
         </div>
 
         <div class="pt-2">

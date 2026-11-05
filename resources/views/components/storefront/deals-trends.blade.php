@@ -27,14 +27,6 @@
         }
     }
     $dealProducts = $activeSuperDeals;
-
-    $activeBundlesCount = \Illuminate\Support\Facades\Schema::hasTable('bundle_deals')
-        ? \Illuminate\Support\Facades\DB::table('bundle_deals')
-            ->where('status', 'active')
-            ->where('starts_at', '<=', now())
-            ->where('ends_at', '>=', now())
-            ->count()
-        : 0;
 @endphp
 
 <section class="space-y-5 mb-10">
@@ -55,9 +47,6 @@
                     </div>
 
                     <div class="flex items-center gap-3">
-                        <a href="{{ route('bundles.index') }}" class="text-xs font-bold text-primary hover:underline">
-                            Bundle Deals ({{ $activeBundlesCount }})
-                        </a>
                         <a href="{{ Route::has('deals.index') ? route('deals.index') : '#products-grid' }}" class="text-xs font-semibold text-text-main hover:text-primary transition-colors inline-flex items-center gap-1">
                             Limited-time offers
                             <svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -199,18 +188,5 @@
                 </div>
             </div>
         </div>
-    </div>
-
-    <!-- Store Bundle Deals Callout Strip -->
-    <div class="p-4 sm:px-6 rounded-2xl bg-gradient-to-r from-primary-dark via-primary to-secondary text-white flex flex-wrap items-center justify-between gap-3 shadow-xs">
-        <div class="flex items-center gap-3">
-            <span class="px-2.5 py-0.5 rounded-full bg-white/20 text-[10px] font-extrabold uppercase tracking-wider">Bundle &amp; Save</span>
-            <p class="text-xs sm:text-sm font-bold">
-                Explore Multi-Item Store Bundle Deals — Pick your variants &amp; sizes to unlock Buy N Get % Off or Free Gift (₱0.00) rewards!
-            </p>
-        </div>
-        <a href="{{ route('bundles.index') }}" class="px-4 py-2 rounded-xl bg-white text-primary-dark hover:bg-brand-light text-xs font-extrabold shadow-2xs transition-colors shrink-0">
-            Browse Bundle Deals ({{ $activeBundlesCount }}) &rarr;
-        </a>
     </div>
 </section>

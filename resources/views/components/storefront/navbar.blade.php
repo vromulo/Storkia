@@ -1,24 +1,22 @@
 <nav class="bg-surface sticky top-0 z-50 font-sans text-text-main">
     @php
         $unreadAnnouncementsCount = $unreadAnnouncementsCount ?? 0;
+        $navAnnouncements = $navAnnouncements ?? collect();
+        $navAnnouncementReadIds = $navAnnouncementReadIds ?? [];
     @endphp
     @guest
-    <div class="hidden md:block py-1 text-xs bg-primary font-sans text-surface">
-        <div class="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 flex justify-between items-center">
-            <div class="flex items-center space-x-3">
-                <a href="{{ route('seller.login') }}" class="text-surface hover:text-surface/80 font-medium hover:underline transition-colors">Start Selling</a>
-                <span class="text-surface/60">|</span>
-                <a href="{{ route('logistics.login') }}" class="text-surface hover:text-surface/80 font-medium hover:underline transition-colors">Join the Logistics Team</a>
-            </div>
-            <div class="flex items-center space-x-3">
-                <a href="{{ route('bundles.index') }}" class="text-surface hover:text-surface/80 font-bold hover:underline transition-colors">Bundle Deals</a>
-                <span class="text-surface/60">|</span>
-                <a href="{{ route('announcements.index') }}" class="text-surface hover:text-surface/80 font-medium hover:underline transition-colors">Announcements &amp; Policies</a>
-                <span class="text-surface/60">|</span>
-                <a href="{{ route('terms') }}" class="text-surface hover:text-surface/80 font-medium hover:underline transition-colors">Help</a>
+        <div class="hidden md:block py-1 text-xs bg-primary font-sans text-surface">
+            <div class="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 flex justify-between items-center">
+                <div class="flex items-center space-x-3">
+                    <a href="{{ route('seller.login') }}" class="text-surface hover:text-surface/80 font-medium hover:underline transition-colors">Start Selling</a>
+                    <span class="text-surface/60">|</span>
+                    <a href="{{ route('logistics.login') }}" class="text-surface hover:text-surface/80 font-medium hover:underline transition-colors">Join the Logistics Team</a>
+                </div>
+                <div class="flex items-center space-x-3 ml-auto">
+                    <a href="{{ route('announcements.index') }}" class="text-surface hover:text-surface/80 font-medium hover:underline transition-colors">Announcements &amp; Policies</a>
+                </div>
             </div>
         </div>
-    </div>
     @endguest
 
     <div class="relative z-30 max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8">
@@ -28,21 +26,6 @@
                     <img src="{{ asset('assets/pink-storkia-minimized.webp') }}" alt="Storkia" class="block md:hidden h-8 w-auto object-contain">
                     <img src="{{ asset('assets/pink-storkia-maximized.webp') }}" alt="Storkia" class="hidden md:block h-9 w-auto object-contain">
                 </a>
-                <div class="hidden xl:flex items-center gap-2">
-                    <a href="{{ route('bundles.index') }}"
-                       class="px-3 py-1.5 rounded-full text-xs font-bold transition-colors {{ request()->routeIs('bundles.*') ? 'bg-primary text-white' : 'bg-brand-light/40 text-primary-dark hover:bg-primary/10 hover:text-primary' }}">
-                        Bundle Deals
-                    </a>
-                    <a href="{{ route('announcements.index') }}"
-                       class="relative px-3 py-1.5 rounded-full text-xs font-bold transition-colors inline-flex items-center gap-1.5 {{ request()->routeIs('announcements.*') ? 'bg-primary-dark text-white' : 'bg-surface-subtle text-text-main hover:text-primary' }}">
-                        <span>Announcements</span>
-                        @if($unreadAnnouncementsCount > 0)
-                            <span class="px-1.5 py-0.2 rounded-full text-[10px] font-extrabold bg-red-500 text-white">
-                                {{ $unreadAnnouncementsCount > 9 ? '9+' : $unreadAnnouncementsCount }}
-                            </span>
-                        @endif
-                    </a>
-                </div>
             </div>
 
             <div class="flex flex-1 max-w-4xl mx-3 sm:mx-6 md:mx-8" x-data="searchComponent()">
@@ -91,9 +74,9 @@
             </div>
 
             <div class="flex items-center space-x-5 md:space-x-7">
-                <div x-data="{ open: false, timer: null }"
-                     @mouseenter="if (window.innerWidth >= 768) { clearTimeout(timer); open = true; }"
-                     @mouseleave="if (window.innerWidth >= 768) { timer = setTimeout(() => { open = false; }, 300); }"
+                <div x-data="navDropdown('account', 'open', 300, true)"
+                     @mouseenter="enter()"
+                     @mouseleave="leave()"
                      class="relative flex items-center h-full">
                     @guest
                         <a href="{{ route('login') }}"
@@ -131,13 +114,6 @@
                         <div class="p-2 flex flex-col space-y-1">
                             @guest
                                 <a href="{{ route('login') }}" class="block px-3 py-2 text-xs font-bold text-primary rounded-lg hover:bg-surface-subtle transition-colors">Sign in / Register</a>
-                                <a href="{{ route('bundles.index') }}" class="block px-3 py-2 text-xs font-medium text-text-main rounded-lg hover:bg-surface-subtle hover:text-primary transition-colors">Bundle Deals</a>
-                                <a href="{{ route('announcements.index') }}" class="flex items-center justify-between px-3 py-2 text-xs font-medium text-text-main rounded-lg hover:bg-surface-subtle hover:text-primary transition-colors">
-                                    <span>Announcements</span>
-                                    @if($unreadAnnouncementsCount > 0)
-                                        <span class="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-red-100 text-danger">{{ $unreadAnnouncementsCount }}</span>
-                                    @endif
-                                </a>
                             @endguest
                             @auth
                                 <div class="px-3 py-2.5 bg-surface-subtle rounded-lg border border-border-subtle mb-1 flex items-center justify-between gap-2">
@@ -157,13 +133,6 @@
                                     </a>
                                     <a href="{{ route('user.coupons') }}" class="block px-3 py-2 text-xs font-medium text-text-main rounded-lg hover:bg-surface-subtle hover:text-primary transition-colors">My Vouchers</a>
                                     <a href="{{ route('user.messages.buyer-messages') }}" class="block px-3 py-2 text-xs font-medium text-text-main rounded-lg hover:bg-surface-subtle hover:text-primary transition-colors">My Messages</a>
-                                    <a href="{{ route('bundles.index') }}" class="block px-3 py-2 text-xs font-medium text-text-main rounded-lg hover:bg-surface-subtle hover:text-primary transition-colors">Bundle Deals</a>
-                                    <a href="{{ route('announcements.index') }}" class="flex items-center justify-between px-3 py-2 text-xs font-medium text-text-main rounded-lg hover:bg-surface-subtle hover:text-primary transition-colors">
-                                        <span>Announcements</span>
-                                        @if($unreadAnnouncementsCount > 0)
-                                            <span class="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-red-100 text-danger">{{ $unreadAnnouncementsCount }}</span>
-                                        @endif
-                                    </a>
                                     <a href="{{ route('user.wishlist') }}" class="block px-3 py-2 text-xs font-medium text-text-main rounded-lg hover:bg-surface-subtle hover:text-primary transition-colors">Wishlist</a>
                                 @elseif(auth()->user()->role === 'Seller')
                                     <a href="{{ route('seller.seller-dashboard') }}" class="block px-3 py-2 text-xs font-bold text-primary rounded-lg hover:bg-surface-subtle transition-colors">Seller Dashboard</a>
@@ -187,14 +156,14 @@
                         $unreadCount = auth()->user()->unreadNotifications()->count();
                         $recentNotifications = auth()->user()->notifications()->take(6)->get();
                     @endphp
-                    <div x-data="{ notifOpen: false, notifTimer: null }"
-                         @mouseenter="clearTimeout(notifTimer); notifOpen = true"
-                         @mouseleave="notifTimer = setTimeout(() => { notifOpen = false }, 250)"
-                         @click.away="notifOpen = false"
-                         @keydown.escape.window="notifOpen = false"
+                    <div x-data="navDropdown('notif', 'notifOpen', 250, false, { notifTab: 'general' })"
+                         @mouseenter="enter()"
+                         @mouseleave="leave()"
+                         @click.away="close()"
+                         @keydown.escape.window="close()"
                          class="relative flex items-center h-full">
                         <button type="button"
-                                @click="notifOpen = !notifOpen"
+                                @click="toggle()"
                                 class="relative flex items-center text-text-main hover:text-primary transition-colors cursor-pointer focus:outline-none"
                                 aria-label="Notifications">
                             <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -215,21 +184,50 @@
                             x-transition:leave-start="opacity-100 scale-100 translate-y-0"
                             x-transition:leave-end="opacity-0 scale-95 -translate-y-1"
                             class="absolute right-0 top-full mt-2 w-72 sm:w-96 bg-surface border border-border-subtle rounded-2xl shadow-2xl z-50 overflow-hidden">
-                            <div class="p-4 border-b border-border-subtle flex items-center justify-between bg-surface-subtle">
-                                <span class="font-bold text-sm text-text-main">Notifications</span>
-                                <div class="flex items-center gap-3">
-                                    <a href="{{ route('announcements.index') }}" class="text-xs font-bold text-primary-dark hover:underline">
-                                        Bulletins ({{ $unreadAnnouncementsCount }})
-                                    </a>
-                                    @if($unreadCount > 0)
-                                        <form method="POST" action="{{ route('user.notifications.markAllRead') }}">
-                                            @csrf @method('PATCH')
-                                            <button type="submit" class="text-xs font-bold text-primary hover:underline cursor-pointer">Mark all read</button>
-                                        </form>
-                                    @endif
+                            <div class="p-4 pb-0 bg-surface-subtle">
+                                <div class="flex items-center justify-between">
+                                    <span class="font-bold text-sm text-text-main">Notifications</span>
+                                    <div class="flex items-center gap-3">
+                                        @if($unreadCount > 0)
+                                            <form method="POST" action="{{ route('user.notifications.markAllRead') }}" x-show="notifTab === 'general'">
+                                                @csrf @method('PATCH')
+                                                <button type="submit" class="text-xs font-bold text-primary hover:underline cursor-pointer">Mark all read</button>
+                                            </form>
+                                        @endif
+                                        @if($unreadAnnouncementsCount > 0)
+                                            <form method="POST" action="{{ route('announcements.mark-all-read') }}" x-show="notifTab === 'announcement'" x-cloak>
+                                                @csrf
+                                                <button type="submit" class="text-xs font-bold text-primary hover:underline cursor-pointer">Mark all read</button>
+                                            </form>
+                                        @endif
+                                    </div>
+                                </div>
+
+                                <div class="flex items-end gap-1 mt-3" role="tablist" aria-label="Notification categories">
+                                    <button type="button" role="tab"
+                                            @click="notifTab = 'general'"
+                                            :aria-selected="notifTab === 'general'"
+                                            :class="notifTab === 'general' ? 'text-primary border-primary' : 'text-text-muted border-transparent hover:text-text-main'"
+                                            class="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-bold border-b-2 transition-colors cursor-pointer focus:outline-none">
+                                        General
+                                        @if($unreadCount > 0)
+                                            <span class="min-w-4 h-4 px-1 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center">{{ $unreadCount > 9 ? '9+' : $unreadCount }}</span>
+                                        @endif
+                                    </button>
+                                    <button type="button" role="tab"
+                                            @click="notifTab = 'announcement'"
+                                            :aria-selected="notifTab === 'announcement'"
+                                            :class="notifTab === 'announcement' ? 'text-primary border-primary' : 'text-text-muted border-transparent hover:text-text-main'"
+                                            class="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-bold border-b-2 transition-colors cursor-pointer focus:outline-none">
+                                        Announcement
+                                        @if($unreadAnnouncementsCount > 0)
+                                            <span class="min-w-4 h-4 px-1 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center">{{ $unreadAnnouncementsCount > 9 ? '9+' : $unreadAnnouncementsCount }}</span>
+                                        @endif
+                                    </button>
                                 </div>
                             </div>
-                            <div class="max-h-80 overflow-y-auto divide-y divide-border-subtle/60">
+                            <div class="border-t border-border-subtle"></div>
+                            <div x-show="notifTab === 'general'" role="tabpanel" class="max-h-80 overflow-y-auto divide-y divide-border-subtle/60">
                                 @forelse($recentNotifications as $notif)
                                     @php
                                         $data = $notif->data;
@@ -270,15 +268,58 @@
                                     <div class="p-8 text-center text-text-muted text-xs">No notifications at this time.</div>
                                 @endforelse
                             </div>
+
+                            <div x-show="notifTab === 'announcement'" x-cloak role="tabpanel" class="max-h-80 overflow-y-auto divide-y divide-border-subtle/60">
+                                @forelse($navAnnouncements as $ann)
+                                    @php
+                                        $annRead = in_array((int) $ann->id, $navAnnouncementReadIds, true);
+                                        $annBadge = match($ann->category) {
+                                            'policy_update' => 'bg-purple-100 text-purple-800 border-purple-200',
+                                            'maintenance'   => 'bg-amber-100 text-amber-800 border-amber-300',
+                                            'promotion'     => 'bg-emerald-100 text-emerald-800 border-emerald-200',
+                                            default         => 'bg-primary/10 text-primary border-primary/20',
+                                        };
+                                    @endphp
+                                    <div class="p-4 {{ $annRead ? 'bg-surface' : 'bg-brand-light/10' }}">
+                                        <div class="flex items-start justify-between gap-2">
+                                            <span class="px-2 py-0.5 rounded-full text-[9px] font-extrabold uppercase border {{ $annBadge }}">
+                                                {{ str_replace('_', ' ', $ann->category) }}
+                                            </span>
+                                            <span class="text-[10px] text-text-muted shrink-0">{{ \Carbon\Carbon::parse($ann->created_at)->diffForHumans() }}</span>
+                                        </div>
+                                        <h4 class="text-xs font-bold text-primary-dark mt-2 flex items-center gap-1.5">
+                                            @unless($annRead)
+                                                <span class="w-1.5 h-1.5 rounded-full bg-danger shrink-0"></span>
+                                            @endunless
+                                            {{ $ann->title }}
+                                        </h4>
+                                        <p class="text-xs text-text-main mt-1 leading-relaxed">{{ \Illuminate\Support\Str::limit(strip_tags((string) $ann->body), 110) }}</p>
+                                        <div class="mt-2 flex items-center justify-between gap-3">
+                                            <a href="{{ route('announcements.index') }}" class="text-[11px] font-bold text-primary hover:underline">Read more</a>
+                                            @unless($annRead)
+                                                <form method="POST" action="{{ route('announcements.mark-read', $ann->id) }}">
+                                                    @csrf
+                                                    <button type="submit" class="text-[10px] font-bold text-text-muted hover:text-primary cursor-pointer">Mark as read</button>
+                                                </form>
+                                            @endunless
+                                        </div>
+                                    </div>
+                                @empty
+                                    <div class="p-8 text-center text-text-muted text-xs">No announcements at this time.</div>
+                                @endforelse
+                            </div>
+                            <div x-show="notifTab === 'announcement'" x-cloak class="p-3 border-t border-border-subtle bg-surface-subtle text-center">
+                                <a href="{{ route('announcements.index') }}" class="text-xs font-bold text-primary-dark hover:underline">View all announcements &rarr;</a>
+                            </div>
                         </div>
                     </div>
                 @endif
 
                 @if(!auth()->check() || auth()->user()->role === 'Buyer')
                     <div
-                        x-data="{ cartOpen: false, cartTimer: null }"
-                        @mouseenter="clearTimeout(cartTimer); cartOpen = true"
-                        @mouseleave="cartTimer = setTimeout(() => { cartOpen = false }, 250)"
+                        x-data="navDropdown('cart', 'cartOpen', 250)"
+                        @mouseenter="enter()"
+                        @mouseleave="leave()"
                         class="relative flex items-center h-full"
                     >
                         <a href="{{ route('cart.index') }}" data-cart-icon class="relative flex items-center text-text-main hover:text-primary transition-colors" aria-label="Shopping Cart">
@@ -302,6 +343,59 @@
 
     <script>
         document.addEventListener('alpine:init', () => {
+            // Only one navbar icon dropdown (account / notifications / cart) may be open at a time.
+            // Hovering another icon while one is open does NOT open it; it opens only after the
+            // previous one has fully closed, and only if the pointer is still on that icon.
+            Alpine.store('navDropdown', { active: null });
+
+            Alpine.data('navDropdown', (name, key, delay = 250, desktopOnly = false, extra = {}) => {
+                const data = {
+                    ...extra,
+                    hovering: false,
+                    timer: null,
+                    enter() {
+                        if (desktopOnly && window.innerWidth < 768) return;
+                        this.hovering = true;
+                        clearTimeout(this.timer);
+                        const store = Alpine.store('navDropdown');
+                        if (store.active === null || store.active === name) store.active = name;
+                        // else: another dropdown is still open; init()'s watcher opens this one once it closes
+                    },
+                    leave() {
+                        if (desktopOnly && window.innerWidth < 768) return;
+                        this.hovering = false;
+                        clearTimeout(this.timer);
+                        this.timer = setTimeout(() => this.release(), delay);
+                    },
+                    release() {
+                        const store = Alpine.store('navDropdown');
+                        if (store.active === name) store.active = null;
+                    },
+                    close() {
+                        clearTimeout(this.timer);
+                        this.hovering = false; // don't let the watcher re-open it while the pointer is still over it
+                        this.release();
+                    },
+                    toggle() {
+                        const store = Alpine.store('navDropdown');
+                        if (store.active === name) this.close();
+                        else store.active = name;
+                    },
+                    init() {
+                        this.$watch('$store.navDropdown.active', (v) => {
+                            if (v === null && this.hovering) Alpine.store('navDropdown').active = name;
+                        });
+                    },
+                };
+                // Expose the open state under the name each template already uses (open / notifOpen / cartOpen)
+                Object.defineProperty(data, key, {
+                    get: () => Alpine.store('navDropdown').active === name,
+                    enumerable: true,
+                    configurable: true,
+                });
+                return data;
+            });
+
             Alpine.data('searchComponent', () => ({
                 query: new URLSearchParams(window.location.search).get('q') || '',
                 suggestions: [],

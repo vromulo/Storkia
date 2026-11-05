@@ -99,6 +99,8 @@
 
             <x-storefront.deals-trends :products="$products" />
 
+            <x-storefront.bundle-deals-card />
+
             @if($youMayAlsoLike->isNotEmpty())
                 <section class="space-y-4">
                     <div class="flex flex-col sm:flex-row sm:items-end justify-between gap-2 border-b border-border-subtle/80 pb-3">

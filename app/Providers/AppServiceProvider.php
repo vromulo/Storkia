@@ -80,30 +80,42 @@ class AppServiceProvider extends ServiceProvider
 
         View::composer('components.storefront.navbar', function ($view) {
             $unreadAnnouncementsCount = 0;
+            $navAnnouncements = collect();
+            $navAnnouncementReadIds = [];
             try {
                 if (Schema::hasTable('platform_announcements')) {
                     $annQuery = DB::table('platform_announcements')->where('is_active', true);
                     if (Schema::hasColumn('platform_announcements', 'target_audience')) {
                         $annQuery->whereIn('target_audience', ['all', 'buyers']);
                     }
-                    $activeIds = $annQuery->pluck('id')->map(fn ($id) => (int) $id)->all();
+                    $activeIds = (clone $annQuery)->pluck('id')->map(fn ($id) => (int) $id)->all();
                     if (! empty($activeIds)) {
                         if (Auth::check() && Schema::hasTable('buyer_announcement_reads')) {
-                            $readIds = DB::table('buyer_announcement_reads')
+                            $navAnnouncementReadIds = DB::table('buyer_announcement_reads')
                                 ->where('user_id', Auth::id())
                                 ->whereIn('announcement_id', $activeIds)
                                 ->pluck('announcement_id')
                                 ->map(fn ($id) => (int) $id)
                                 ->all();
-                            $unreadAnnouncementsCount = count(array_diff($activeIds, $readIds));
+                            $unreadAnnouncementsCount = count(array_diff($activeIds, $navAnnouncementReadIds));
                         } else {
                             $unreadAnnouncementsCount = count($activeIds);
+                        }
+
+                        if (Auth::check()) {
+                            $navAnnouncements = (clone $annQuery)
+                                ->orderByDesc('created_at')
+                                ->orderByDesc('id')
+                                ->limit(6)
+                                ->get();
                         }
                     }
                 }
             } catch (\Throwable $e) {
             }
             $view->with('unreadAnnouncementsCount', $unreadAnnouncementsCount);
+            $view->with('navAnnouncements', $navAnnouncements);
+            $view->with('navAnnouncementReadIds', $navAnnouncementReadIds);
         });
 
         View::composer('components.admin.sidebar', function ($view) {
