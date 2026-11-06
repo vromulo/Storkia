@@ -1,5 +1,5 @@
 @extends('buyer.account-settings', [
-    'pageTitle' => 'My Points / Coins',
+    'pageTitle' => 'My Coins',
     'pageSubtitle' => 'Earn Storkia Coins from daily games and seller SLA compensation, spin the daily wheel, and redeem vouchers for checkout.'
 ])
 

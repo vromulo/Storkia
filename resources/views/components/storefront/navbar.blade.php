@@ -13,7 +13,7 @@
                     <a href="{{ route('logistics.login') }}" class="text-surface hover:text-surface/80 font-medium hover:underline transition-colors">Join the Logistics Team</a>
                 </div>
                 <div class="flex items-center space-x-3 ml-auto">
-                    <a href="{{ route('announcements.index') }}" class="text-surface hover:text-surface/80 font-medium hover:underline transition-colors">Announcements &amp; Policies</a>
+                    <a href="{{ route('announcements.index') }}" class="text-surface hover:text-surface/80 font-medium hover:underline transition-colors">Announcements</a>
                 </div>
             </div>
         </div>
@@ -128,7 +128,7 @@
                                     <a href="{{ route('user.account-management') }}" class="block px-3 py-2 text-xs font-medium text-text-main rounded-lg hover:bg-surface-subtle hover:text-primary transition-colors">My Account</a>
                                     <a href="{{ route('user.orders') }}" class="block px-3 py-2 text-xs font-medium text-text-main rounded-lg hover:bg-surface-subtle hover:text-primary transition-colors">My Orders</a>
                                     <a href="{{ route('user.points') }}" class="flex items-center justify-between px-3 py-2 text-xs font-bold text-primary rounded-lg hover:bg-surface-subtle transition-colors">
-                                        <span>My Points / Coins</span>
+                                        <span>My Coins</span>
                                         <span class="px-1.5 py-0.5 rounded-full bg-brand-light/60 text-primary-dark text-[10px]">Spin</span>
                                     </a>
                                     <a href="{{ route('user.coupons') }}" class="block px-3 py-2 text-xs font-medium text-text-main rounded-lg hover:bg-surface-subtle hover:text-primary transition-colors">My Vouchers</a>

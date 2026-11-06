@@ -93,15 +93,12 @@
 
             <a href="{{ route('user.points') }}" class="py-2 px-1 rounded-xl hover:bg-surface-subtle transition-colors group flex flex-col items-center">
                 <div class="h-8 flex items-center justify-center gap-1 mb-1.5">
-                    <div class="w-5 h-5 rounded-full border-2 border-primary flex items-center justify-center font-bold text-[10px] text-primary transition-colors leading-none">
-                        S
-                    </div>
                     <span class="text-base sm:text-lg font-bold text-text-main group-hover:text-primary transition-colors leading-none">
                         {{ number_format($buyerCoinsBalance) }}
                     </span>
                 </div>
                 <span class="text-[11px] sm:text-xs font-normal text-text-main group-hover:text-primary transition-colors truncate w-full">
-                    Points / Coins
+                    Coins
                 </span>
             </a>
 
@@ -349,7 +346,7 @@
                     </a>
                     <a href="{{ route('user.points') }}" 
                        class="flex items-center justify-between px-3 py-2.5 rounded-xl font-medium text-text-main hover:bg-surface-subtle transition-colors">
-                        <span>My Points / Coins ({{ number_format($buyerCoinsBalance) }})</span>
+                        <span>My Coins ({{ number_format($buyerCoinsBalance) }})</span>
                         <svg class="w-3.5 h-3.5 text-text-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
                     </a>
                 </div>

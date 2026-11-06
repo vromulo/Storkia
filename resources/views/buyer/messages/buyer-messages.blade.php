@@ -127,16 +127,20 @@
 
                         <!-- Photo Attachment Inside Bubble -->
                         <template x-if="msg.attachment_url">
-                            <div class="rounded-2xl overflow-hidden border border-gray-200 bg-white p-1 shadow-xs max-w-xs">
-                                <img :src="msg.attachment_url"
+                            <div x-data="{ failed: false }"
+                                 class="rounded-2xl overflow-hidden border border-gray-200 bg-white p-1 shadow-xs max-w-xs">
+                                <img x-show="!failed"
+                                     :src="msg.attachment_url"
                                      @click="lightboxUrl = msg.attachment_url"
+                                     x-on:error="failed = true"
                                      class="max-h-56 w-auto rounded-xl object-contain cursor-zoom-in"
-                                     alt="Chat Attachment">
+                                     alt="">
+                                <div x-show="failed" x-cloak class="px-3 py-2 text-xs font-medium text-gray-400">Photo unavailable</div>
                             </div>
                         </template>
 
                         <!-- Text Message Bubble -->
-                        <template x-if="msg.message">
+                        <template x-if="msg.message && !(msg.attachment_url && msg.message === '[Sent a photo]')">
                             <div class="px-4 py-2.5 shadow-xs text-sm leading-relaxed break-words"
                                  :class="msg.user_id == authId ? 'bg-primary text-white rounded-2xl rounded-tr-sm' : 'bg-white text-gray-800 rounded-2xl rounded-tl-sm border border-gray-100'">
                                 <p x-text="msg.message" class="whitespace-pre-wrap"></p>

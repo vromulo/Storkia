@@ -181,7 +181,7 @@
                     </a>
                     <a href="{{ route('user.points') }}"
                        class="block px-3 py-2 rounded-lg font-medium transition-colors {{ request()->routeIs('user.points') ? 'bg-primary/10 text-primary font-bold' : 'text-text-muted hover:text-text-main hover:bg-surface-subtle' }}">
-                        My Points / Coins
+                        My Coins
                     </a>
                 </div>
             </div>

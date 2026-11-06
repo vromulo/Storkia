@@ -193,11 +193,11 @@
                     <strong class="text-primary-dark">Awaiting Seller Acceptance</strong>
                 </div>
                 <p class="text-text-muted">
-                    The seller has until <strong>{{ $sellerOrder->acceptance_deadline_at->format('M d, Y h:i A') }}</strong> ({{ $sellerOrder->acceptance_deadline_at->diffForHumans() }}) to accept your order. If they fail to respond in time, the order auto-cancels and you automatically earn <strong>+50 Storkia Coins</strong> in <a href="{{ route('user.points') }}" class="text-primary font-bold underline">My Points/Coins</a>!
+                    The seller has until <strong>{{ $sellerOrder->acceptance_deadline_at->format('M d, Y h:i A') }}</strong> ({{ $sellerOrder->acceptance_deadline_at->diffForHumans() }}) to accept your order. If they fail to respond in time, the order auto-cancels and you automatically earn <strong>+50 Storkia Coins</strong> in <a href="{{ route('user.points') }}" class="text-primary font-bold underline">My Coins</a>!
                 </p>
             </div>
             <a href="{{ route('user.points') }}" class="px-4 py-2 rounded-xl bg-primary/10 hover:bg-primary text-primary hover:text-white font-bold transition-colors shrink-0 self-start sm:self-auto">
-                View My Points/Coins &rarr;
+                View My Coins &rarr;
             </a>
         </div>
     @endif

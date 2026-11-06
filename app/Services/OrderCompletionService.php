@@ -237,7 +237,7 @@ class OrderCompletionService
                             'recipient'    => $locked->buyer,
                             'notification' => new OrderLifecycleNotification(
                                 title: "Order Auto-Cancelled & +{$coinsAwarded} Storkia Coins Credited",
-                                message: "Order #{$locked->seller_order_number} was automatically cancelled because the seller did not respond within 24 hours. You received +{$coinsAwarded} Storkia Coins in My Points/Coins as compensation, and any applied vouchers were restored!",
+                                message: "Order #{$locked->seller_order_number} was automatically cancelled because the seller did not respond within 24 hours. You received +{$coinsAwarded} Storkia Coins in My Coins as compensation, and any applied vouchers were restored!",
                                 type: 'warning',
                                 url: route('user.points'),
                                 orderId: $locked->order_id,
