@@ -5,6 +5,7 @@ use App\Http\Controllers\Seller\AuthController;
 use App\Http\Controllers\Seller\DashboardController;
 use App\Http\Controllers\Seller\OrderController;
 use App\Http\Controllers\Seller\ProductController;
+use App\Http\Controllers\Seller\ReturnRequestController;
 use App\Http\Controllers\Seller\StoreSettingsController;
 use App\Http\Controllers\Seller\SuperDealController;
 use App\Http\Controllers\Seller\VoucherController;
@@ -54,7 +55,14 @@ Route::middleware('throttle:120,1')->group(function () {
             Route::post('/orders/{sellerOrder}/ready-for-pickup', [OrderController::class, 'markReadyForPickup'])->name('orders.ready-for-pickup');
             Route::post('/orders/{sellerOrder}/report-suspicious-payment', [OrderController::class, 'reportSuspiciousPayment'])->name('orders.report-suspicious-payment');
             Route::post('/orders/{sellerOrder}/verify-online-payment', [OrderController::class, 'verifyOnlinePayment'])->name('orders.verify-online-payment');
-            Route::post('/orders/{sellerOrder}/respond-return', [OrderController::class, 'respondToReturnRequest'])->name('orders.respond-return');
+            // Old order-page form: now forwards to the Return & Refund response page.
+            Route::post('/orders/{sellerOrder}/respond-return', [ReturnRequestController::class, 'legacyRespond'])->name('orders.respond-return');
+
+            // Return & Refund (respond, confirm the returned parcel, deduction warning, return tracking)
+            Route::get('/returns/{returnRequest}', [ReturnRequestController::class, 'show'])->name('returns.show');
+            Route::post('/returns/{returnRequest}/respond', [ReturnRequestController::class, 'respond'])->middleware('throttle:20,1')->name('returns.respond');
+            Route::post('/returns/{returnRequest}/confirm-receipt', [ReturnRequestController::class, 'confirmReceipt'])->middleware('throttle:20,1')->name('returns.confirm-receipt');
+
             Route::post('/orders/{sellerOrder}/confirm-rts-received', [OrderController::class, 'confirmRtsReceived'])->name('orders.confirm-rts-received');
             Route::post('/orders/{sellerOrder}/submit-rts-claim', [OrderController::class, 'submitRtsClaim'])->name('orders.submit-rts-claim');
             Route::get('/orders/{sellerOrder}/shipping-label', [OrderController::class, 'shippingLabel'])->name('orders.shipping-label');

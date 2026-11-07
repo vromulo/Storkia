@@ -15,7 +15,9 @@
     $payMethod = $sellerOrder->effective_payment_method;
     $paymentSubmission = $sellerOrder->paymentSubmission;
     $extra = $sellerOrder->extra;
-    $evidencePhotos = is_array($extra?->dispute_evidence_photos) ? $extra->dispute_evidence_photos : [];
+    // Loaded before status_label is printed so a finished return shows "Returned & Refunded" / "Refunded (Item Kept by Buyer)".
+    $sellerOrder->loadMissing('returnRequest');
+    $returnRequest = $sellerOrder->returnRequest;
     $canBuyerCancel = $sellerOrder->canBuyerCancelPreShipment();
     $isRated = $sellerOrder->isRatedByBuyer();
     $isIdentityVerified = $isIdentityVerified ?? (auth()->user()?->identityVerification?->status === 'verified');
@@ -60,8 +62,8 @@
                 'completed'                 => 'Order Completed & Confirmed',
                 'cancelled'                 => 'Order Cancelled',
                 'rejected'                  => 'Order Auto-Rejected',
-                'disputed'                  => 'Return / Refund Dispute Opened',
-                'returned_to_seller'        => 'Returned to Seller (RTS)',
+                'disputed'                  => 'Return / Refund Request Update',
+                'returned_to_seller'        => $returnRequest ? 'Return / Refund Settled' : 'Returned to Seller (RTS)',
                 default                     => 'Status Updated: ' . ucwords(str_replace('_', ' ', (string) $hist->to_status)),
             };
 
@@ -95,46 +97,10 @@
 <script>
     window.storkiaBuyerOrderShowState = function () {
         return {
-            disputeModalOpen: false,
             cancelModalOpen: false,
             proofModalOpen: false,
             gcashScreenshotModalOpen: false,
-            evidencePreviewUrl: '',
-            evidenceModalOpen: false,
-            isSubmittingCancel: false,
-            isSubmittingDispute: false,
-            disputeFilesError: '',
-            selectedEvidenceNames: [],
-            refundMethod: 'GCASH',
-            refundPhone: '',
-            sanitizeRefundPhone() {
-                let digits = (this.refundPhone || '').replace(/\D/g, '');
-                if (digits.startsWith('63') && digits.length === 12) {
-                    digits = '0' + digits.slice(2);
-                } else if (digits.startsWith('9') && digits.length === 10) {
-                    digits = '0' + digits;
-                }
-                this.refundPhone = digits.slice(0, 11);
-            },
-            validateEvidenceFiles(event) {
-                this.disputeFilesError = '';
-                this.selectedEvidenceNames = [];
-                const files = Array.from(event.target.files || []);
-                if (files.length < 1 || files.length > 5) {
-                    this.disputeFilesError = 'Please select between 1 and 5 evidence photos.';
-                    event.target.value = '';
-                    return;
-                }
-                for (const f of files) {
-                    if (f.size > 5 * 1024 * 1024) {
-                        this.disputeFilesError = 'File "' + f.name + '" exceeds the 5MB limit.';
-                        event.target.value = '';
-                        this.selectedEvidenceNames = [];
-                        return;
-                    }
-                    this.selectedEvidenceNames.push(f.name);
-                }
-            }
+            isSubmittingCancel: false
         };
     };
 </script>
@@ -331,7 +297,7 @@
         </div>
     @endif
 
-    @if($sellerOrder->status === 'delivered' && !$sellerOrder->has_unresolved_dispute)
+    @if($sellerOrder->status === 'delivered' && !$sellerOrder->has_unresolved_dispute && !$returnRequest)
         <div class="p-5 rounded-2xl bg-blue-50 border border-blue-200 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div>
                 <div class="flex items-center gap-2">
@@ -357,11 +323,17 @@
                         Inspect Delivery Photo
                     </button>
                 @endif
-                <button type="button"
-                        @click.stop="disputeModalOpen = true"
-                        class="px-4 py-2.5 rounded-xl border border-red-300 bg-white hover:bg-red-50 text-red-600 text-xs font-bold transition-colors cursor-pointer">
-                    Request Return / Refund
-                </button>
+                @if($isIdentityVerified)
+                    <a href="{{ route('user.orders.return.create', $sellerOrder->id) }}"
+                       class="px-4 py-2.5 rounded-xl border border-red-300 bg-white hover:bg-red-50 text-red-600 text-xs font-bold transition-colors">
+                        Request Return / Refund
+                    </a>
+                @else
+                    <a href="{{ route('user.identity-verification') }}"
+                       class="px-4 py-2.5 rounded-xl border border-amber-300 bg-white hover:bg-amber-50 text-amber-900 text-xs font-bold transition-colors">
+                        Verify Valid ID to Request a Refund &rarr;
+                    </a>
+                @endif
                 <form action="{{ route('user.orders.confirm-receipt', $sellerOrder->id) }}" method="POST" class="m-0">
                     @csrf
                     <button type="submit" class="px-5 py-2.5 rounded-xl bg-green-600 hover:bg-green-700 text-white text-xs font-bold shadow-xs transition-colors cursor-pointer">
@@ -372,68 +344,66 @@
         </div>
     @endif
 
-    @if($sellerOrder->has_unresolved_dispute || $sellerOrder->status === 'disputed' || $extra?->seller_return_decision)
-        <div class="p-5 rounded-2xl bg-red-50 border border-red-200 space-y-3 text-xs">
-            <div class="flex flex-wrap items-center justify-between gap-2">
-                <h3 class="text-sm font-bold text-red-900">Return / Refund Dispute Status</h3>
-                @if($extra?->is_escalated_to_admin)
-                    <span class="px-2.5 py-0.5 rounded-full bg-red-200 text-red-950 font-extrabold uppercase text-[10px]">Escalated to Storkia Admin</span>
-                @elseif($extra?->seller_return_decision)
-                    <span class="px-2.5 py-0.5 rounded-full bg-white border border-red-300 text-red-900 font-extrabold uppercase text-[10px]">
-                        Seller Decision: {{ ucfirst($extra->seller_return_decision) }}
-                    </span>
-                @else
-                    <span class="px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-900 font-extrabold uppercase text-[10px]">Awaiting Seller Review</span>
-                @endif
-            </div>
+    @if($returnRequest)
+        @php
+            $rrStatus = $returnRequest->status;
+            $rrTone = match ($rrStatus) {
+                'refunded'                                 => 'bg-green-50 border-green-200 text-green-900',
+                'rejected', 'closed', 'rejected_by_seller' => 'bg-red-50 border-red-200 text-red-900',
+                'refund_pending'                           => 'bg-blue-50 border-blue-200 text-blue-900',
+                default                                    => 'bg-amber-50 border-amber-200 text-amber-900',
+            };
+            $rrBadge = match ($rrStatus) {
+                'refunded'                                 => 'bg-green-600 text-white',
+                'rejected', 'closed', 'rejected_by_seller' => 'bg-red-600 text-white',
+                'refund_pending'                           => 'bg-blue-600 text-white',
+                default                                    => 'bg-amber-500 text-white',
+            };
+            $rrHint = match ($rrStatus) {
+                'pending_seller_response'      => 'Waiting for the seller to respond (until ' . $returnRequest->seller_response_deadline_at?->format('M d, Y h:i A') . ').',
+                'rejected_by_seller'           => 'The seller declined your request. You can escalate it to Storkia Admin for a final decision.',
+                'escalated'                    => 'Storkia Admin is reviewing your case.',
+                'return_in_transit'            => 'Return approved. Keep the item packed and ready for the rider.',
+                'awaiting_seller_confirmation' => 'Your item reached the seller. Your refund follows once they confirm.',
+                'receipt_disputed'             => 'The returned item is under Storkia Admin review.',
+                'refund_pending'               => 'Your refund will be sent to your GCash.',
+                'refunded'                     => 'Your refund was sent to your GCash.',
+                default                        => 'This request has ended and the order completed without a refund.',
+            };
+            $rrLinkLabel = $rrStatus === 'rejected_by_seller' ? 'Review & Escalate' : 'View Status & Tracking';
+        @endphp
 
+        <div class="p-5 rounded-2xl border {{ $rrTone }} flex flex-col sm:flex-row sm:items-center justify-between gap-4 text-xs">
+            <div class="space-y-1.5">
+                <div class="flex flex-wrap items-center gap-2">
+                    <h3 class="text-sm font-bold">Return / Refund Request</h3>
+                    <span class="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase {{ $rrBadge }}">{{ $returnRequest->status_label }}</span>
+                </div>
+                <p class="font-semibold">
+                    {{ $returnRequest->request_number }} &bull; {{ $returnRequest->resolution_label }} &bull; ₱{{ number_format((float) $returnRequest->refund_amount, 2) }}
+                </p>
+                <p class="leading-relaxed">{{ $rrHint }}</p>
+            </div>
+            <a href="{{ route('user.returns.show', $returnRequest->id) }}"
+               class="px-4 py-2.5 rounded-xl bg-white border border-current font-bold text-center shrink-0 hover:opacity-80 transition-opacity">
+                {{ $rrLinkLabel }} &rarr;
+            </a>
+        </div>
+    @elseif($sellerOrder->has_unresolved_dispute || $sellerOrder->status === 'disputed' || $extra?->seller_return_decision)
+        {{-- Disputes opened before Return & Refund existed: shown read-only. --}}
+        <div class="p-5 rounded-2xl bg-red-50 border border-red-200 space-y-2 text-xs">
+            <h3 class="text-sm font-bold text-red-900">Return / Refund Dispute</h3>
             <p class="text-red-800">
                 Reported on {{ $sellerOrder->dispute_reported_at?->format('M d, Y h:i A') }}:
                 <em>"{{ $sellerOrder->dispute_reason }}"</em>
             </p>
-
-            @if($extra?->refund_method)
-                <div class="p-3 rounded-xl bg-white border border-red-200 flex flex-wrap items-center justify-between gap-2">
-                    <span>
-                        Refund Payout Method: <strong>{{ $extra->refund_method }}</strong>
-                        @if($extra->refund_account_number)
-                            ({{ $extra->refund_account_name }} &bull; <span class="font-mono">{{ $extra->refund_account_number }}</span>)
-                        @endif
-                    </span>
-                    <span class="font-bold text-primary">Refund Amount: ₱{{ number_format((float) ($extra->refund_amount ?: $sellerOrder->total_amount), 2) }}</span>
-                </div>
-            @endif
-
-            @if(!empty($evidencePhotos))
-                <div class="pt-1">
-                    <span class="text-[10px] font-bold uppercase text-red-900 block mb-1.5">Submitted Photo Evidence ({{ count($evidencePhotos) }})</span>
-                    <div class="flex flex-wrap items-center gap-2">
-                        @foreach($evidencePhotos as $photoPath)
-                            <button type="button"
-                                    @click.stop="evidencePreviewUrl = '{{ asset('storage/' . ltrim($photoPath, '/')) }}'; evidenceModalOpen = true"
-                                    class="w-16 h-16 rounded-xl overflow-hidden border border-red-200 bg-white p-0.5 cursor-pointer">
-                                <img src="{{ asset('storage/' . ltrim($photoPath, '/')) }}" alt="Dispute Evidence" class="w-full h-full object-cover rounded-lg">
-                            </button>
-                        @endforeach
-                    </div>
-                </div>
-            @endif
-
-            @if($extra?->seller_return_decision === 'rejected')
-                <div class="p-3.5 rounded-xl bg-white border border-red-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                    <div>
-                        <span class="font-bold text-danger block">Seller Declined Return Request:</span>
-                        <p class="text-text-main mt-0.5">"{{ $extra->seller_return_decision_reason ?? $extra->seller_return_Decision_reason }}"</p>
-                    </div>
-                    @if(!$extra->is_escalated_to_admin)
-                        <form action="{{ route('user.orders.escalate-dispute', $sellerOrder->id) }}" method="POST" class="m-0 shrink-0">
-                            @csrf
-                            <button type="submit" class="px-4 py-2 rounded-xl bg-danger text-white font-bold cursor-pointer">
-                                Escalate to Admin
-                            </button>
-                        </form>
+            @if($extra?->seller_return_decision)
+                <p class="text-red-900 font-semibold">
+                    Seller decision: {{ ucfirst($extra->seller_return_decision) }}
+                    @if($extra->seller_return_decision_reason)
+                        &mdash; "{{ $extra->seller_return_decision_reason }}"
                     @endif
-                </div>
+                </p>
             @endif
         </div>
     @endif
@@ -651,127 +621,6 @@
     </div>
 
     <template x-teleport="body">
-        <div x-show="disputeModalOpen"
-             x-cloak
-             class="fixed inset-0 z-[185] flex items-center justify-center p-4">
-            <div @click="disputeModalOpen = false"
-                 class="absolute inset-0 bg-black/60 backdrop-blur-xs cursor-pointer"></div>
-
-            <div @click.stop
-                 class="relative z-10 bg-surface rounded-3xl max-w-md w-full p-6 shadow-2xl border border-border-subtle space-y-4 max-h-[92vh] overflow-y-auto">
-                <div class="flex items-center justify-between pb-3 border-b border-border-subtle">
-                    <h3 class="text-base font-bold text-primary-dark">Request Return &amp; Refund</h3>
-                    <button type="button" @click="disputeModalOpen = false" class="p-1 text-text-muted hover:text-text-main cursor-pointer">&times;</button>
-                </div>
-
-                @if(!$isIdentityVerified)
-                    <div class="p-4 rounded-2xl bg-amber-50 border border-amber-300 space-y-3 text-xs">
-                        <div class="font-extrabold text-amber-950 text-sm">Valid ID Verification Required for Refunds</div>
-                        <p class="text-amber-900 leading-relaxed">
-                            To protect both buyers and merchants from fraudulent claims, Storkia requires an approved <strong>Valid Government ID</strong> on your account before submitting a Return &amp; Refund request.
-                        </p>
-                        <div class="pt-1 flex justify-end gap-2">
-                            <button type="button" @click="disputeModalOpen = false" class="px-4 py-2 rounded-xl bg-white border border-amber-300 text-amber-900 font-bold cursor-pointer">
-                                Close
-                            </button>
-                            <a href="{{ route('user.identity-verification') }}" class="px-4 py-2 rounded-xl bg-primary text-white font-bold shadow-xs">
-                                Verify Valid ID Now &rarr;
-                            </a>
-                        </div>
-                    </div>
-                @else
-                    <form action="{{ route('user.orders.report-dispute', $sellerOrder->id) }}"
-                          method="POST"
-                          enctype="multipart/form-data"
-                          @submit="if (isSubmittingDispute || disputeFilesError) { $event.preventDefault(); } else { isSubmittingDispute = true; }"
-                          class="space-y-4 text-xs">
-                        @csrf
-
-                        <div class="p-2.5 rounded-xl bg-green-50 border border-green-200 text-green-800 font-semibold flex items-center justify-between">
-                            <span>✓ Valid Government ID Verified</span>
-                            <span>Refundable: ₱{{ number_format((float) $sellerOrder->total_amount, 2) }}</span>
-                        </div>
-
-                        <div>
-                            <label class="block font-bold text-text-muted mb-1">Issue Category <span class="text-danger">*</span></label>
-                            <select name="dispute_reason_category" required class="w-full p-3 rounded-xl border border-border-subtle bg-surface font-semibold">
-                                <option value="Damaged item">Damaged item</option>
-                                <option value="Wrong item or variation received">Wrong item or variation received</option>
-                                <option value="Missing quantity / incomplete parcel">Missing quantity / incomplete parcel</option>
-                                <option value="Defective or not working">Defective or not working</option>
-                            </select>
-                        </div>
-
-                        <div>
-                            <label class="block font-bold text-text-muted mb-1">Refund Payout Destination <span class="text-danger">*</span></label>
-                            <div class="grid grid-cols-2 gap-2">
-                                <label class="p-2.5 rounded-xl border cursor-pointer flex items-center gap-2 font-bold"
-                                       :class="refundMethod === 'GCASH' ? 'border-blue-600 bg-blue-50 text-blue-900' : 'border-border-subtle'">
-                                    <input type="radio" name="refund_method" value="GCASH" x-model="refundMethod">
-                                    <span>GCash Refund</span>
-                                </label>
-                                <label class="p-2.5 rounded-xl border cursor-pointer flex items-center gap-2 font-bold"
-                                       :class="refundMethod === 'WALLET' ? 'border-primary bg-primary/5 text-primary-dark' : 'border-border-subtle'">
-                                    <input type="radio" name="refund_method" value="WALLET" x-model="refundMethod">
-                                    <span>Storkia Wallet</span>
-                                </label>
-                            </div>
-                        </div>
-
-                        <div x-show="refundMethod === 'GCASH'" class="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                            <div>
-                                <label class="block font-bold text-text-muted mb-1">GCash Account Name <span class="text-danger">*</span></label>
-                                <input type="text" name="refund_account_name" :required="refundMethod === 'GCASH'" placeholder="Juan Dela Cruz" class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface">
-                            </div>
-                            <div>
-                                <label class="block font-bold text-text-muted mb-1">GCash Mobile Number <span class="text-danger">*</span></label>
-                                <input type="text" name="refund_account_number" x-model="refundPhone" @input="sanitizeRefundPhone()" maxlength="11" :required="refundMethod === 'GCASH'" placeholder="09171234567" class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface font-mono">
-                            </div>
-                        </div>
-
-                        <div>
-                            <label class="block font-bold text-text-muted mb-1">Describe the Issue (10+ characters) <span class="text-danger">*</span></label>
-                            <textarea name="dispute_reason"
-                                      rows="3"
-                                      required
-                                      minlength="10"
-                                      maxlength="1000"
-                                      placeholder="Explain what went wrong..."
-                                      class="w-full p-3 rounded-xl border border-border-subtle outline-none focus:border-primary"></textarea>
-                        </div>
-
-                        <div>
-                            <label class="block font-bold text-text-muted mb-1">Upload 1 to 5 Evidence Photos (Max 5MB each) <span class="text-danger">*</span></label>
-                            <input type="file"
-                                   name="evidence_photos[]"
-                                   multiple
-                                   required
-                                   accept="image/jpeg,image/png,image/jpg,image/webp"
-                                   @change="validateEvidenceFiles($event)"
-                                   class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:bg-primary/10 file:text-primary file:font-bold cursor-pointer">
-                            <template x-if="disputeFilesError">
-                                <p class="text-danger font-bold mt-1" x-text="disputeFilesError"></p>
-                            </template>
-                        </div>
-
-                        <div class="flex justify-end gap-2">
-                            <button type="button" @click="disputeModalOpen = false" class="px-4 py-2 rounded-xl bg-surface-subtle text-text-muted font-bold cursor-pointer">
-                                Cancel
-                            </button>
-                            <button type="submit"
-                                    :disabled="isSubmittingDispute || !!disputeFilesError"
-                                    class="px-5 py-2 rounded-xl bg-danger text-white font-bold hover:opacity-90 cursor-pointer disabled:opacity-50">
-                                <span x-show="!isSubmittingDispute">Submit Return &amp; Refund</span>
-                                <span x-show="isSubmittingDispute" x-cloak>Submitting...</span>
-                            </button>
-                        </div>
-                    </form>
-                @endif
-            </div>
-        </div>
-    </template>
-
-    <template x-teleport="body">
         <div x-show="cancelModalOpen"
              x-cloak
              class="fixed inset-0 z-[185] flex items-center justify-center p-4">
@@ -910,23 +759,6 @@
             </div>
         </template>
     @endif
-
-    <template x-teleport="body">
-        <div x-show="evidenceModalOpen"
-             x-cloak
-             class="fixed inset-0 z-[190] flex items-center justify-center p-4">
-            <div @click="evidenceModalOpen = false" class="absolute inset-0 bg-black/75 backdrop-blur-xs cursor-pointer"></div>
-            <div @click.stop class="relative z-10 bg-surface rounded-3xl max-w-lg w-full p-6 shadow-2xl border border-border-subtle space-y-4">
-                <div class="flex items-center justify-between pb-3 border-b border-border-subtle">
-                    <h3 class="text-base font-bold text-primary-dark">Dispute Evidence Photo</h3>
-                    <button type="button" @click="evidenceModalOpen = false" class="p-1 text-text-muted hover:text-text-main cursor-pointer">&times;</button>
-                </div>
-                <div class="rounded-2xl overflow-hidden bg-surface-subtle border border-border-subtle flex items-center justify-center max-h-[65vh]">
-                    <img :src="evidencePreviewUrl" alt="Evidence Photo" class="max-h-[60vh] w-auto object-contain">
-                </div>
-            </div>
-        </div>
-    </template>
 
 </div>
 @endsection

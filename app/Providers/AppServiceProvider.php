@@ -15,6 +15,8 @@ use App\Models\LogisticsApplication;
 use App\Models\Message;
 use App\Models\OrderPaymentSubmission;
 use App\Models\Product;
+use App\Models\ReturnRequest;
+use App\Models\ReturnShipment;
 use App\Models\Rider;
 use App\Models\SellerApplication;
 use App\Models\SellerOrder;
@@ -23,6 +25,7 @@ use App\Models\Shipment;
 use App\Models\User;
 use App\Models\WithdrawalRequest;
 use App\Observers\AccountSecurityObserver;
+use App\Observers\ReturnRequestObserver;
 use App\Services\CourierMobileSchemaService;
 use App\Services\RiderMobileSchemaService;
 use App\Services\StorkSchemaBootstrapService;
@@ -75,6 +78,7 @@ class AppServiceProvider extends ServiceProvider
         Rider::observe(AccountSecurityObserver::class);
         Courier::observe(AccountSecurityObserver::class);
         BuyerAccountSanction::observe(AccountSecurityObserver::class);
+        ReturnRequest::observe(ReturnRequestObserver::class);
 
         $this->registerAdditiveStorefrontRoutes();
 
@@ -127,6 +131,7 @@ class AppServiceProvider extends ServiceProvider
                 'appeals'        => 0,
                 'compliance'     => 0,
                 'complaints'     => 0,
+                'returns'        => 0,
                 'commissions'    => 0,
             ];
 
@@ -155,15 +160,25 @@ class AppServiceProvider extends ServiceProvider
                 }
 
                 if (Schema::hasTable('seller_orders')) {
+                    // Orders handled by the Return & Refund system are counted under "returns" instead.
                     $unresolvedDisputes = SellerOrder::where(function ($q) {
                         $q->where('status', 'disputed')->orWhere('has_unresolved_dispute', true);
-                    })->count();
+                    })->whereDoesntHave('returnRequest')->count();
 
                     $pendingRtsClaims = Schema::hasTable('seller_rts_claims')
                         ? SellerRtsClaim::where('reimbursement_status', 'pending_admin_review')->count()
                         : 0;
 
                     $badges['complaints'] = $unresolvedDisputes + $pendingRtsClaims;
+                }
+
+                if (Schema::hasTable('return_requests')) {
+                    // Only what Admin must act on: decide an escalation or a disputed parcel, or pay a refund.
+                    $badges['returns'] = ReturnRequest::whereIn('status', [
+                        ReturnRequest::STATUS_ESCALATED,
+                        ReturnRequest::STATUS_RECEIPT_DISPUTED,
+                        ReturnRequest::STATUS_REFUND_PENDING,
+                    ])->count();
                 }
 
                 $pendingWithdrawals = Schema::hasTable('withdrawal_requests')
@@ -216,11 +231,26 @@ class AppServiceProvider extends ServiceProvider
                         $badges['orders_to_ship'] = SellerOrder::where('seller_profile_id', $profile->id)
                             ->where('status', 'ready_for_pickup')
                             ->count();
-                        $badges['orders_disputed'] = SellerOrder::where('seller_profile_id', $profile->id)
+
+                        // Older disputes, plus return requests that are waiting for the seller to act
+                        // (answer the request, or confirm the parcel that came back).
+                        $legacyDisputes = SellerOrder::where('seller_profile_id', $profile->id)
                             ->where(function ($q) {
                                 $q->where('status', 'disputed')->orWhere('has_unresolved_dispute', true);
                             })
+                            ->whereDoesntHave('returnRequest')
                             ->count();
+
+                        $returnsNeedingSeller = Schema::hasTable('return_requests')
+                            ? ReturnRequest::where('seller_profile_id', $profile->id)
+                                ->whereIn('status', [
+                                    ReturnRequest::STATUS_PENDING_SELLER_RESPONSE,
+                                    ReturnRequest::STATUS_AWAITING_SELLER_CONFIRM,
+                                ])
+                                ->count()
+                            : 0;
+
+                        $badges['orders_disputed'] = $legacyDisputes + $returnsNeedingSeller;
 
                         $badges['orders_total'] = $badges['orders_new']
                             + $badges['orders_pending']
@@ -260,13 +290,17 @@ class AppServiceProvider extends ServiceProvider
 
         View::composer('components.logistics.sidebar', function ($view) {
             $badges = [
-                'shipments_to_pickup'      => 0,
-                'shipments_in_transit_hub' => 0,
-                'shipments_at_hub'         => 0,
-                'shipments_failed'         => 0,
-                'shipments_action_total'   => 0,
-                'pending_remittances'      => 0,
-                'short_remittances'        => 0,
+                'shipments_to_pickup'       => 0,
+                'shipments_in_transit_hub'  => 0,
+                'shipments_at_hub'          => 0,
+                'shipments_failed'          => 0,
+                'shipments_action_total'    => 0,
+                'returns_to_assign_rider'   => 0,
+                'returns_to_receive'        => 0,
+                'returns_to_assign_courier' => 0,
+                'returns_action_total'      => 0,
+                'pending_remittances'       => 0,
+                'short_remittances'         => 0,
             ];
 
             try {
@@ -292,6 +326,25 @@ class AppServiceProvider extends ServiceProvider
                             + $badges['shipments_in_transit_hub']
                             + $badges['shipments_at_hub']
                             + $badges['shipments_failed'];
+                    }
+
+                    if (Schema::hasTable('return_shipments')) {
+                        $badges['returns_to_assign_rider'] = ReturnShipment::where('logistics_profile_id', $profile->id)
+                            ->whereIn('status', [
+                                ReturnShipment::STATUS_AWAITING_RIDER,
+                                ReturnShipment::STATUS_PICKUP_FAILED,
+                            ])
+                            ->count();
+                        $badges['returns_to_receive'] = ReturnShipment::where('logistics_profile_id', $profile->id)
+                            ->where('status', ReturnShipment::STATUS_PICKED_UP_FROM_BUYER)
+                            ->count();
+                        $badges['returns_to_assign_courier'] = ReturnShipment::where('logistics_profile_id', $profile->id)
+                            ->where('status', ReturnShipment::STATUS_RECEIVED_AT_HUB)
+                            ->count();
+
+                        $badges['returns_action_total'] = $badges['returns_to_assign_rider']
+                            + $badges['returns_to_receive']
+                            + $badges['returns_to_assign_courier'];
                     }
 
                     if (Schema::hasTable('cod_remittances')) {

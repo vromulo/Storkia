@@ -14,6 +14,7 @@ use App\Http\Controllers\Buyer\SearchController;
 use App\Http\Controllers\Buyer\AccountManagementController;
 use App\Http\Controllers\Buyer\AddressController;
 use App\Http\Controllers\Buyer\CartController;
+use App\Http\Controllers\Buyer\ReturnRequestController;
 use App\Http\Controllers\Buyer\CheckoutController;
 use App\Http\Controllers\Buyer\DeleteAccountController;
 use App\Http\Controllers\Buyer\OrderController;
@@ -133,8 +134,16 @@ Route::middleware('throttle:120,1')->group(function () {
                 Route::post('/orders/{sellerOrder}/switch-to-cod', [OrderController::class, 'switchToCod'])->name('orders.switch-to-cod');
                 Route::post('/orders/{sellerOrder}/cancel-flagged-payment', [OrderController::class, 'cancelFlaggedPaymentOrder'])->name('orders.cancel-flagged-payment');
                 Route::post('/orders/{sellerOrder}/confirm-receipt', [OrderController::class, 'confirmReceipt'])->name('orders.confirm-receipt');
-                Route::post('/orders/{sellerOrder}/report-dispute', [OrderController::class, 'reportDispute'])->name('orders.report-dispute');
-                Route::post('/orders/{sellerOrder}/escalate-dispute', [OrderController::class, 'escalateDispute'])->name('orders.escalate-dispute');
+                // Old order-page form: now forwards to the new Return & Refund request form.
+                Route::post('/orders/{sellerOrder}/report-dispute', [ReturnRequestController::class, 'legacyReport'])->name('orders.report-dispute');
+                // Old escalate button: now forwards to the return request's status page.
+                Route::post('/orders/{sellerOrder}/escalate-dispute', [ReturnRequestController::class, 'legacyEscalate'])->name('orders.escalate-dispute');
+
+                // Return & Refund (return/refund request, status + return tracking, escalation)
+                Route::get('/orders/{sellerOrder}/return', [ReturnRequestController::class, 'create'])->name('orders.return.create');
+                Route::post('/orders/{sellerOrder}/return', [ReturnRequestController::class, 'store'])->middleware('throttle:10,1')->name('orders.return.store');
+                Route::get('/returns/{returnRequest}', [ReturnRequestController::class, 'show'])->name('returns.show');
+                Route::post('/returns/{returnRequest}/escalate', [ReturnRequestController::class, 'escalate'])->middleware('throttle:10,1')->name('returns.escalate');
                 Route::get('/orders/{sellerOrder}/rate', [OrderController::class, 'showRatePage'])->name('orders.rate.show');
                 Route::post('/orders/{sellerOrder}/rate', [OrderController::class, 'submitRatings'])->name('orders.rate.submit');
                 Route::post('/orders/{sellerOrder}/buy-again', [OrderController::class, 'buyAgain'])->name('orders.buy-again');

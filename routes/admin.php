@@ -7,6 +7,7 @@ use App\Http\Controllers\Admin\ApplicationController;
 use App\Http\Controllers\Admin\AccountController;
 use App\Http\Controllers\Admin\ComplianceController;
 use App\Http\Controllers\Admin\ComplaintController;
+use App\Http\Controllers\Admin\ReturnRequestController;
 use App\Http\Controllers\Admin\DocumentController;
 use App\Http\Controllers\Admin\OrderFinanceController;
 use App\Http\Controllers\Admin\PlatformSettingsController;
@@ -64,6 +65,12 @@ Route::prefix('admin')->name('admin.')->group(function () {
         Route::get('/complaints', [ComplaintController::class, 'index'])->name('complaints.index');
         Route::post('/complaints/{sellerOrder}/resolve', [ComplaintController::class, 'resolveDispute'])->name('complaints.resolve');
         Route::post('/complaints/rts/{claim}/resolve', [ComplaintController::class, 'resolveRtsClaim'])->name('complaints.rts.resolve');
+
+        // Return & Refund: escalations, disputed returned parcels and the GCash refund payout queue
+        Route::get('/returns', [ReturnRequestController::class, 'index'])->name('returns.index');
+        Route::get('/returns/{returnRequest}', [ReturnRequestController::class, 'show'])->name('returns.show');
+        Route::post('/returns/{returnRequest}/resolve', [ReturnRequestController::class, 'resolve'])->middleware('throttle:30,1')->name('returns.resolve');
+        Route::post('/returns/{returnRequest}/refund-paid', [ReturnRequestController::class, 'markRefundPaid'])->middleware('throttle:30,1')->name('returns.refund-paid');
 
         Route::get('/commissions', [OrderFinanceController::class, 'index'])->name('commissions.index');
         Route::post('/commissions/vouchers', [OrderFinanceController::class, 'storePlatformVoucher'])->name('commissions.vouchers.store');

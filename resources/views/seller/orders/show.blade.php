@@ -63,7 +63,6 @@
         evidenceModalOpen: false,
         handoverMethod: 'courier_pickup',
         manifestConfirmed: false,
-        returnDecision: 'approved',
         openEvidenceModal(url) {
             this.evidencePreviewUrl = url;
             this.evidenceModalOpen = true;
@@ -341,7 +340,92 @@
         </div>
     @endif
 
-    @if($sellerOrder->status === 'disputed')
+    @php
+        $returnRequest = $sellerOrder->returnRequest;
+    @endphp
+
+    @if($returnRequest)
+        @php
+            $rrNeedsResponse = $returnRequest->isAwaitingSellerResponse();
+            $rrNeedsReceipt  = $returnRequest->status === \App\Models\ReturnRequest::STATUS_AWAITING_SELLER_CONFIRM;
+            $rrUrgent        = $rrNeedsResponse || $rrNeedsReceipt;
+            $rrDeadline      = $rrNeedsResponse
+                ? $returnRequest->seller_response_deadline_at
+                : ($rrNeedsReceipt ? $returnRequest->seller_receipt_deadline_at : null);
+            $rrShipment      = $returnRequest->returnShipment;
+        @endphp
+
+        <div class="p-6 rounded-3xl border-2 space-y-4 {{ $rrUrgent ? 'bg-red-50 border-red-200' : ($returnRequest->isTerminal() ? 'bg-surface border-border-subtle' : 'bg-amber-50 border-amber-200') }}">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                    <h2 class="text-base font-bold {{ $rrUrgent ? 'text-red-950' : 'text-primary-dark' }}">Return / Refund Request</h2>
+                    <p class="text-xs text-text-muted mt-0.5">
+                        {{ $returnRequest->request_number }}
+                        &bull; Requested {{ $returnRequest->created_at?->format('M d, Y h:i A') }}
+                    </p>
+                </div>
+                <span class="px-3 py-1 rounded-full bg-white border border-border-subtle text-text-main text-xs font-extrabold uppercase">
+                    {{ $returnRequest->status_label }}
+                </span>
+            </div>
+
+            <div class="p-4 rounded-2xl bg-white border border-border-subtle space-y-3 text-xs">
+                <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div>
+                        <span class="font-bold text-text-muted uppercase text-[10px] block">Reason</span>
+                        <p class="text-sm font-semibold text-text-main mt-0.5">{{ $returnRequest->reason_category }}</p>
+                    </div>
+                    <div>
+                        <span class="font-bold text-text-muted uppercase text-[10px] block">Buyer Wants</span>
+                        <p class="text-sm font-semibold text-text-main mt-0.5">{{ $returnRequest->resolution_label }}</p>
+                    </div>
+                    <div>
+                        <span class="font-bold text-text-muted uppercase text-[10px] block">Refund Amount</span>
+                        <p class="text-sm font-semibold text-text-main mt-0.5">₱{{ number_format((float) $returnRequest->refund_amount, 2) }}</p>
+                    </div>
+                </div>
+
+                <div>
+                    <span class="font-bold text-text-muted uppercase text-[10px] block">Buyer Explanation</span>
+                    <p class="text-sm font-semibold text-text-main mt-0.5">"{{ $returnRequest->reason }}"</p>
+                </div>
+
+                @if($rrShipment)
+                    <div>
+                        <span class="font-bold text-text-muted uppercase text-[10px] block">Return Parcel</span>
+                        <p class="text-sm font-semibold text-text-main mt-0.5">
+                            {{ $rrShipment->tracking_number }} &bull; {{ $rrShipment->status_label }}
+                        </p>
+                    </div>
+                @endif
+            </div>
+
+            @if($rrNeedsResponse)
+                <p class="text-xs text-red-900 font-semibold">
+                    Respond before {{ $rrDeadline?->format('M d, Y h:i A') }}, or the request is approved automatically.
+                    The exact amount that will be deducted from your wallet is shown before you approve anything.
+                </p>
+            @elseif($rrNeedsReceipt)
+                <p class="text-xs text-red-900 font-semibold">
+                    The returned parcel was delivered to you. Check it and confirm before {{ $rrDeadline?->format('M d, Y h:i A') }},
+                    or it is confirmed automatically.
+                </p>
+            @endif
+
+            <div class="flex justify-end">
+                <a href="{{ route('seller.returns.show', $returnRequest->id) }}"
+                   class="px-5 py-2.5 rounded-xl font-bold cursor-pointer {{ $rrUrgent ? 'bg-primary-dark hover:bg-text-main text-white' : 'bg-white border border-border-subtle text-primary-dark hover:border-primary' }}">
+                    @if($rrNeedsResponse)
+                        Review &amp; Respond
+                    @elseif($rrNeedsReceipt)
+                        Check Parcel &amp; Confirm Receipt
+                    @else
+                        View Return Details
+                    @endif
+                </a>
+            </div>
+        </div>
+    @elseif($sellerOrder->status === 'disputed')
         <div class="p-6 rounded-3xl bg-red-50 border-2 border-red-200 space-y-4">
             <div class="flex flex-wrap items-center justify-between gap-2">
                 <div>
@@ -384,40 +468,13 @@
                 @endif
             </div>
 
-            @if(!$extra?->seller_return_decision && !$extra?->is_escalated_to_admin)
-                <form action="{{ route('seller.orders.respond-return', $sellerOrder->id) }}" method="POST" class="p-4 rounded-2xl bg-white border border-red-200 space-y-4 text-xs">
-                    @csrf
-                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                        <label class="p-3 rounded-xl border cursor-pointer flex items-center gap-2 font-bold"
-                               :class="returnDecision === 'approved' ? 'border-green-600 bg-green-50 text-green-800' : 'border-border-subtle text-text-muted'">
-                            <input type="radio" name="decision" value="approved" x-model="returnDecision">
-                            <span>Approve Return &amp; Refund (Restores Stock)</span>
-                        </label>
-                        <label class="p-3 rounded-xl border cursor-pointer flex items-center gap-2 font-bold"
-                               :class="returnDecision === 'rejected' ? 'border-danger bg-red-50 text-danger' : 'border-border-subtle text-text-muted'">
-                            <input type="radio" name="decision" value="rejected" x-model="returnDecision">
-                            <span>Reject Return Request (Requires 10–300 Char Reason)</span>
-                        </label>
-                    </div>
-
-                    <div x-show="returnDecision === 'rejected'" x-cloak>
-                        <label class="block font-bold text-text-muted mb-1">Rejection Reason (10–300 characters) <span class="text-danger">*</span></label>
-                        <textarea name="reason"
-                                  rows="3"
-                                  minlength="10"
-                                  maxlength="300"
-                                  :required="returnDecision === 'rejected'"
-                                  placeholder="Explain clearly why the return request is declined..."
-                                  class="w-full p-3 rounded-xl border border-border-subtle outline-none focus:border-primary"></textarea>
-                    </div>
-
-                    <div class="flex justify-end">
-                        <button type="submit" class="px-5 py-2.5 rounded-xl bg-primary-dark hover:bg-text-main text-white font-bold cursor-pointer">
-                            Submit Return Decision
-                        </button>
-                    </div>
-                </form>
-            @endif
+            <div class="p-4 rounded-2xl bg-white border border-red-200 text-xs">
+                <span class="font-bold text-red-950 block">Handled by Storkia Admin</span>
+                <p class="text-red-800 mt-0.5 leading-relaxed">
+                    This dispute was opened before the Return &amp; Refund system and is handled by Storkia Admin.
+                    No action is needed from you on this page.
+                </p>
+            </div>
         </div>
     @endif
 

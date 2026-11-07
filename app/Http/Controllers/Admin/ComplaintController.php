@@ -41,6 +41,7 @@ class ComplaintController extends Controller
             'logisticsProfile',
             'items',
             'extra',
+            'returnRequest',
             'shipment.latestDeliveryProof',
             'payment',
         ])->where(function ($q) {
@@ -104,6 +105,16 @@ class ComplaintController extends Controller
 
     public function resolveDispute(Request $request, SellerOrder $sellerOrder)
     {
+        // Orders handled by the Return & Refund system must be decided there, so the refund,
+        // the wallets, the parcel and the stock all stay in step with the decision.
+        $sellerOrder->loadMissing('returnRequest');
+
+        if ($sellerOrder->returnRequest) {
+            return redirect()
+                ->route('admin.returns.show', $sellerOrder->returnRequest->id)
+                ->withErrors(['return' => "Order #{$sellerOrder->seller_order_number} uses the Return & Refund system. Decide it on this page so the refund, wallets and stock stay correct."]);
+        }
+
         $rawChoice = $request->input('decision', $request->input('resolution'));
         $request->merge(['decision' => $rawChoice]);
 

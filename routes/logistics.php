@@ -6,6 +6,7 @@ use App\Http\Controllers\Logistics\DashboardController;
 use App\Http\Controllers\Logistics\FinanceController;
 use App\Http\Controllers\Logistics\HubSettingsController;
 use App\Http\Controllers\Logistics\ShipmentController;
+use App\Http\Controllers\Logistics\ReturnShipmentController;
 use App\Http\Controllers\Logistics\CourierController;
 use App\Http\Controllers\Logistics\RiderApplicationController;
 use App\Http\Controllers\Logistics\BranchHubController;
@@ -33,6 +34,13 @@ Route::middleware('throttle:120,1')->group(function () {
             Route::post('/shipments/{shipment}/assign-rider', [ShipmentController::class, 'assignRider'])->name('shipments.assign-rider');
             Route::post('/shipments/{shipment}/resolve-failed', [ShipmentController::class, 'resolveFailedDelivery'])->name('shipments.resolve-failed');
             Route::post('/shipments/{shipment}/override-status', [ZonesAndExceptionsController::class, 'overrideShipmentStatus'])->name('shipments.override-status');
+
+            // Return & Refund: the parcel's trip back (Buyer -> Rider -> Hub -> Courier -> Seller)
+            Route::get('/returns', [ReturnShipmentController::class, 'index'])->name('returns.index');
+            Route::get('/returns/{returnShipment}', [ReturnShipmentController::class, 'show'])->name('returns.show');
+            Route::post('/returns/{returnShipment}/assign-rider', [ReturnShipmentController::class, 'assignRider'])->middleware('throttle:30,1')->name('returns.assign-rider');
+            Route::post('/returns/{returnShipment}/receive-at-hub', [ReturnShipmentController::class, 'receiveAtHub'])->middleware('throttle:30,1')->name('returns.receive-at-hub');
+            Route::post('/returns/{returnShipment}/assign-courier', [ReturnShipmentController::class, 'assignCourier'])->middleware('throttle:30,1')->name('returns.assign-courier');
 
             Route::get('/zones-exceptions', [ZonesAndExceptionsController::class, 'index'])->name('zones.index');
             Route::post('/zones-exceptions/rates', [ZonesAndExceptionsController::class, 'storeOrUpdateZoneRate'])->name('zones.rates.store');

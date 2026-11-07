@@ -154,6 +154,11 @@ class SellerOrder extends Model
         return $this->hasOne(SellerRtsClaim::class, 'seller_order_id');
     }
 
+    public function returnRequest(): HasOne
+    {
+        return $this->hasOne(ReturnRequest::class, 'seller_order_id');
+    }
+
     public function statusHistories(): HasMany
     {
         return $this->hasMany(OrderStatusHistory::class, 'seller_order_id')->latest('id');
@@ -209,8 +214,24 @@ class SellerOrder extends Model
             'completed'                 => $this->isRatedByBuyer() ? 'Completed (Rated)' : 'Completed (To Rate)',
             'rejected'                  => 'Rejected by Seller',
             'cancelled'                 => 'Cancelled',
-            'returned_to_seller'        => 'Returned to Seller',
+            'returned_to_seller'        => $this->returnedStatusLabel(),
             default                     => ucwords(str_replace('_', ' ', $this->status)),
         };
+    }
+
+    /**
+     * "returned_to_seller" is the terminal status for every finished return/refund.
+     * When the return request is loaded, say what actually happened. Orders with no
+     * return request (e.g. failed COD deliveries sent back) keep the original label.
+     */
+    protected function returnedStatusLabel(): string
+    {
+        if ($this->relationLoaded('returnRequest') && $this->returnRequest) {
+            return $this->returnRequest->isRefundOnly()
+                ? 'Refunded (Item Kept by Buyer)'
+                : 'Returned & Refunded';
+        }
+
+        return 'Returned to Seller';
     }
 }

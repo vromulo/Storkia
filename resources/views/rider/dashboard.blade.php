@@ -31,6 +31,22 @@
                 </div>
             </div>
             <div class="flex flex-wrap items-center gap-2">
+                @php
+                    $returnPickupCount = \Illuminate\Support\Facades\Schema::hasTable('return_shipments')
+                        ? \App\Models\ReturnShipment::where('current_rider_id', $rider->id)
+                            ->whereIn('status', [
+                                \App\Models\ReturnShipment::STATUS_RIDER_ASSIGNED,
+                                \App\Models\ReturnShipment::STATUS_PICKED_UP_FROM_BUYER,
+                            ])
+                            ->count()
+                        : 0;
+                @endphp
+                <a href="{{ route('rider.returns.index') }}" class="px-3.5 py-2 rounded-xl bg-purple-50 hover:bg-purple-100 text-purple-900 border border-purple-200 text-xs font-bold transition-colors">
+                    Return Pickups
+                    @if($returnPickupCount > 0)
+                        <span class="ml-1.5 px-1.5 py-0.5 rounded-full text-[10px] font-extrabold bg-red-500 text-white">{{ $returnPickupCount }}</span>
+                    @endif
+                </a>
                 <a href="{{ route('rider.report') }}" class="px-3.5 py-2 rounded-xl bg-primary hover:bg-primary-dark text-white text-xs font-bold transition-colors">
                     E-Wallet &amp; Withdrawals
                 </a>

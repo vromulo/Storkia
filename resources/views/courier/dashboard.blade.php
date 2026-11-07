@@ -24,6 +24,22 @@
                 </div>
             </div>
             <div class="flex flex-wrap items-center gap-2">
+                @php
+                    $returnDeliveryCount = \Illuminate\Support\Facades\Schema::hasTable('return_shipments')
+                        ? \App\Models\ReturnShipment::where('current_courier_id', $courier->id)
+                            ->whereIn('status', [
+                                \App\Models\ReturnShipment::STATUS_COURIER_ASSIGNED,
+                                \App\Models\ReturnShipment::STATUS_OUT_FOR_RETURN_DELIVERY,
+                            ])
+                            ->count()
+                        : 0;
+                @endphp
+                <a href="{{ route('courier.returns.index') }}" class="px-3.5 py-2 rounded-xl bg-purple-50 hover:bg-purple-100 text-purple-900 border border-purple-200 text-xs font-bold transition-colors">
+                    Return Deliveries
+                    @if($returnDeliveryCount > 0)
+                        <span class="ml-1.5 px-1.5 py-0.5 rounded-full text-[10px] font-extrabold bg-red-500 text-white">{{ $returnDeliveryCount }}</span>
+                    @endif
+                </a>
                 <a href="{{ route('courier.report') }}" class="px-3.5 py-2 rounded-xl bg-primary hover:bg-primary-dark text-white text-xs font-bold transition-colors">
                     E-Wallet &amp; Withdrawals (&#8369;{{ number_format((float) ($courierWallet->available_balance ?? 0), 2) }})
                 </a>

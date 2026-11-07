@@ -11,7 +11,11 @@
             </p>
         </div>
 
-        <div class="flex items-center gap-2">
+        <div class="flex flex-wrap items-center gap-2">
+            <a href="{{ route('admin.returns.index') }}"
+               class="px-4 py-2 rounded-2xl text-xs font-bold bg-primary hover:bg-primary-dark text-surface transition-colors">
+                Returns &amp; Refunds &rarr;
+            </a>
             @foreach(['unresolved' => 'Unresolved (' . $counts['unresolved'] . ')', 'resolved' => 'Resolved (' . $counts['resolved'] . ')', 'all' => 'All (' . $counts['all'] . ')'] as $key => $label)
                 <a href="{{ route('admin.complaints.index', ['status' => $key]) }}"
                    class="px-4 py-2 rounded-2xl text-xs font-bold border transition-all {{ $status === $key ? 'bg-primary-dark text-surface border-primary-dark' : 'bg-surface text-text-muted border-border-subtle hover:text-text-main' }}">
@@ -65,7 +69,21 @@
                         <p class="text-red-800 italic">"{{ $so->dispute_reason }}"</p>
                     </div>
 
-                    @if($so->has_unresolved_dispute)
+                    @if($so->returnRequest)
+                        <div class="p-4 rounded-2xl bg-blue-50 border border-blue-200 flex flex-wrap items-center justify-between gap-3 text-xs">
+                            <div>
+                                <span class="font-bold text-blue-900 block">Handled by the Return &amp; Refund system ({{ $so->returnRequest->request_number }})</span>
+                                <p class="text-blue-800 mt-0.5">
+                                    Status: <strong>{{ $so->returnRequest->status_label }}</strong>.
+                                    Decisions, refunds, wallets and stock for this order are managed on the Returns &amp; Refunds page.
+                                </p>
+                            </div>
+                            <a href="{{ route('admin.returns.show', $so->returnRequest->id) }}"
+                               class="px-4 py-2.5 rounded-xl bg-primary-dark hover:bg-text-main text-white text-xs font-bold transition-colors shrink-0">
+                                Open Return Request
+                            </a>
+                        </div>
+                    @elseif($so->has_unresolved_dispute)
                         <form action="{{ route('admin.complaints.resolve', $so->id) }}" method="POST" class="grid grid-cols-1 md:grid-cols-3 gap-3 items-end pt-2">
                             @csrf
                             <div>

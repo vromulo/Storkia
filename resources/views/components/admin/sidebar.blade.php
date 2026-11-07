@@ -7,6 +7,7 @@
         'appeals'        => 0,
         'compliance'     => 0,
         'complaints'     => 0,
+        'returns'        => 0,
         'commissions'    => 0,
     ];
 @endphp
@@ -216,6 +217,24 @@
                 </a>
             </div>
         </div>
+
+        @php $isReturnsActive = request()->is('admin/returns*') || request()->routeIs('admin.returns.*'); @endphp
+        <a href="{{ route('admin.returns.index') }}"
+           @click="activeDropdown = null"
+           class="flex items-center justify-between px-3 py-3 rounded-xl transition-all duration-200 font-medium group whitespace-nowrap text-sm cursor-pointer {{ $isReturnsActive ? 'bg-brand-light/60 text-primary font-bold shadow-xs' : 'text-text-muted hover:bg-brand-light/30 hover:text-primary' }}"
+           :title="!sidebarOpen ? 'Returns & Refunds' : ''">
+            <div class="flex items-center">
+                <svg class="w-6 h-6 flex-shrink-0 transition-colors {{ $isReturnsActive ? 'text-primary' : 'text-text-muted group-hover:text-primary' }}" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
+                </svg>
+                <span x-show="sidebarOpen" x-transition.opacity.duration.300ms class="ml-3">Returns &amp; Refunds</span>
+            </div>
+            @if(($badges['returns'] ?? 0) > 0)
+                <span class="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-red-500 text-white">
+                    {{ $badges['returns'] > 99 ? '99+' : $badges['returns'] }}
+                </span>
+            @endif
+        </a>
 
         @php $isCommissionsActive = request()->routeIs('admin.commissions.*'); @endphp
         <a href="{{ route('admin.commissions.index') }}"
