@@ -3,6 +3,13 @@
         $unreadAnnouncementsCount = $unreadAnnouncementsCount ?? 0;
         $navAnnouncements = $navAnnouncements ?? collect();
         $navAnnouncementReadIds = $navAnnouncementReadIds ?? [];
+
+        // Chat counters from ChatServiceProvider: 'messages' = unread direct chats,
+        // 'support' = unread Help Center replies, 'total' = both (shown on the account icon).
+        $chatBadges = $chatBadges ?? ['messages' => 0, 'support' => 0, 'total' => 0];
+        $navMessagesBadge = (int) ($chatBadges['messages'] ?? 0);
+        $navSupportBadge = (int) ($chatBadges['support'] ?? 0);
+        $navChatTotal = (int) ($chatBadges['total'] ?? 0);
     @endphp
     @guest
         <div class="hidden md:block py-1 text-xs bg-primary font-sans text-surface">
@@ -90,22 +97,31 @@
 
                     @auth
                         @if(auth()->user()->role === 'Buyer')
-                            <a href="{{ route('user.account') }}" class="flex items-center text-text-main hover:text-primary transition-colors cursor-pointer focus:outline-none" aria-label="Personal Center">
+                            <a href="{{ route('user.account') }}" class="relative flex items-center text-text-main hover:text-primary transition-colors cursor-pointer focus:outline-none" aria-label="Personal Center">
                                 <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
                                 </svg>
+                                @if($navChatTotal > 0)
+                                    <span class="absolute -top-1.5 -right-2 min-w-4 h-4 px-1 text-[10px] font-bold rounded-full flex items-center justify-center border border-surface bg-red-500 text-white">{{ $navChatTotal > 9 ? '9+' : $navChatTotal }}</span>
+                                @endif
                             </a>
                         @elseif(auth()->user()->role === 'Seller')
-                            <a href="{{ route('seller.seller-dashboard') }}" class="flex items-center text-text-main hover:text-primary transition-colors cursor-pointer focus:outline-none" title="Seller Portal">
+                            <a href="{{ route('seller.seller-dashboard') }}" class="relative flex items-center text-text-main hover:text-primary transition-colors cursor-pointer focus:outline-none" title="Seller Portal">
                                 <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
                                 </svg>
+                                @if($navChatTotal > 0)
+                                    <span class="absolute -top-1.5 -right-2 min-w-4 h-4 px-1 text-[10px] font-bold rounded-full flex items-center justify-center border border-surface bg-red-500 text-white">{{ $navChatTotal > 9 ? '9+' : $navChatTotal }}</span>
+                                @endif
                             </a>
                         @elseif(auth()->user()->role === 'Logistics')
-                            <a href="{{ route('logistics.logistics-dashboard') }}" class="flex items-center text-text-main hover:text-primary transition-colors cursor-pointer focus:outline-none" title="Logistics Operations">
+                            <a href="{{ route('logistics.logistics-dashboard') }}" class="relative flex items-center text-text-main hover:text-primary transition-colors cursor-pointer focus:outline-none" title="Logistics Operations">
                                 <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
                                 </svg>
+                                @if($navChatTotal > 0)
+                                    <span class="absolute -top-1.5 -right-2 min-w-4 h-4 px-1 text-[10px] font-bold rounded-full flex items-center justify-center border border-surface bg-red-500 text-white">{{ $navChatTotal > 9 ? '9+' : $navChatTotal }}</span>
+                                @endif
                             </a>
                         @endif
                     @endauth
@@ -132,14 +148,48 @@
                                         <span class="px-1.5 py-0.5 rounded-full bg-brand-light/60 text-primary-dark text-[10px]">Spin</span>
                                     </a>
                                     <a href="{{ route('user.coupons') }}" class="block px-3 py-2 text-xs font-medium text-text-main rounded-lg hover:bg-surface-subtle hover:text-primary transition-colors">My Vouchers</a>
-                                    <a href="{{ route('user.messages.buyer-messages') }}" class="block px-3 py-2 text-xs font-medium text-text-main rounded-lg hover:bg-surface-subtle hover:text-primary transition-colors">My Messages</a>
+                                    <a href="{{ route('user.messages.buyer-messages') }}" class="flex items-center justify-between px-3 py-2 text-xs font-medium text-text-main rounded-lg hover:bg-surface-subtle hover:text-primary transition-colors">
+                                        <span>My Messages</span>
+                                        @if($navMessagesBadge > 0)
+                                            <span class="min-w-4 h-4 px-1 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center">{{ $navMessagesBadge > 9 ? '9+' : $navMessagesBadge }}</span>
+                                        @endif
+                                    </a>
+                                    <a href="{{ route('user.help-center.index') }}" class="flex items-center justify-between px-3 py-2 text-xs font-medium text-text-main rounded-lg hover:bg-surface-subtle hover:text-primary transition-colors">
+                                        <span>Help Center</span>
+                                        @if($navSupportBadge > 0)
+                                            <span class="min-w-4 h-4 px-1 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center">{{ $navSupportBadge > 9 ? '9+' : $navSupportBadge }}</span>
+                                        @endif
+                                    </a>
                                     <a href="{{ route('user.wishlist') }}" class="block px-3 py-2 text-xs font-medium text-text-main rounded-lg hover:bg-surface-subtle hover:text-primary transition-colors">Wishlist</a>
                                 @elseif(auth()->user()->role === 'Seller')
                                     <a href="{{ route('seller.seller-dashboard') }}" class="block px-3 py-2 text-xs font-bold text-primary rounded-lg hover:bg-surface-subtle transition-colors">Seller Dashboard</a>
                                     <a href="{{ route('seller.products.index') }}" class="block px-3 py-2 text-xs font-medium text-text-main rounded-lg hover:bg-surface-subtle hover:text-primary transition-colors">Products Catalog</a>
-                                    <a href="{{ route('seller.messages.seller-messages') }}" class="block px-3 py-2 text-xs font-medium text-text-main rounded-lg hover:bg-surface-subtle hover:text-primary transition-colors">Customer Messages</a>
+                                    <a href="{{ route('seller.messages.seller-messages') }}" class="flex items-center justify-between px-3 py-2 text-xs font-medium text-text-main rounded-lg hover:bg-surface-subtle hover:text-primary transition-colors">
+                                        <span>Messages</span>
+                                        @if($navMessagesBadge > 0)
+                                            <span class="min-w-4 h-4 px-1 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center">{{ $navMessagesBadge > 9 ? '9+' : $navMessagesBadge }}</span>
+                                        @endif
+                                    </a>
+                                    <a href="{{ route('seller.help-center.index') }}" class="flex items-center justify-between px-3 py-2 text-xs font-medium text-text-main rounded-lg hover:bg-surface-subtle hover:text-primary transition-colors">
+                                        <span>Help Center</span>
+                                        @if($navSupportBadge > 0)
+                                            <span class="min-w-4 h-4 px-1 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center">{{ $navSupportBadge > 9 ? '9+' : $navSupportBadge }}</span>
+                                        @endif
+                                    </a>
                                 @elseif(auth()->user()->role === 'Logistics')
                                     <a href="{{ route('logistics.logistics-dashboard') }}" class="block px-3 py-2 text-xs font-bold text-primary rounded-lg hover:bg-surface-subtle transition-colors">Logistics Operations</a>
+                                    <a href="{{ route('logistics.messages.logistics-messages') }}" class="flex items-center justify-between px-3 py-2 text-xs font-medium text-text-main rounded-lg hover:bg-surface-subtle hover:text-primary transition-colors">
+                                        <span>Seller Messages</span>
+                                        @if($navMessagesBadge > 0)
+                                            <span class="min-w-4 h-4 px-1 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center">{{ $navMessagesBadge > 9 ? '9+' : $navMessagesBadge }}</span>
+                                        @endif
+                                    </a>
+                                    <a href="{{ route('logistics.help-center.index') }}" class="flex items-center justify-between px-3 py-2 text-xs font-medium text-text-main rounded-lg hover:bg-surface-subtle hover:text-primary transition-colors">
+                                        <span>Help Center</span>
+                                        @if($navSupportBadge > 0)
+                                            <span class="min-w-4 h-4 px-1 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center">{{ $navSupportBadge > 9 ? '9+' : $navSupportBadge }}</span>
+                                        @endif
+                                    </a>
                                 @endif
                                 <hr class="border-border-subtle my-1 mx-2">
                                 <form method="POST" action="{{ route('logout') }}" class="m-0">

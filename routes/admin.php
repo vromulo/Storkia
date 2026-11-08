@@ -8,7 +8,9 @@ use App\Http\Controllers\Admin\AccountController;
 use App\Http\Controllers\Admin\ComplianceController;
 use App\Http\Controllers\Admin\ComplaintController;
 use App\Http\Controllers\Admin\ReturnRequestController;
+use App\Http\Controllers\Admin\SellerReportController;
 use App\Http\Controllers\Admin\DocumentController;
+use App\Http\Controllers\Admin\HelpCenterController;
 use App\Http\Controllers\Admin\OrderFinanceController;
 use App\Http\Controllers\Admin\PlatformSettingsController;
 
@@ -65,6 +67,23 @@ Route::prefix('admin')->name('admin.')->group(function () {
         Route::get('/complaints', [ComplaintController::class, 'index'])->name('complaints.index');
         Route::post('/complaints/{sellerOrder}/resolve', [ComplaintController::class, 'resolveDispute'])->name('complaints.resolve');
         Route::post('/complaints/rts/{claim}/resolve', [ComplaintController::class, 'resolveRtsClaim'])->name('complaints.rts.resolve');
+
+        // Seller Reports: buyers' reports against seller accounts (review, dismiss, or warn / suspend / ban the seller)
+        Route::get('/seller-reports', [SellerReportController::class, 'index'])->name('seller-reports.index');
+        Route::get('/seller-reports/{report}', [SellerReportController::class, 'show'])->name('seller-reports.show');
+        Route::post('/seller-reports/{report}/start-review', [SellerReportController::class, 'startReview'])->middleware('throttle:30,1')->name('seller-reports.start-review');
+        Route::post('/seller-reports/{report}/dismiss', [SellerReportController::class, 'dismiss'])->middleware('throttle:30,1')->name('seller-reports.dismiss');
+        Route::post('/seller-reports/{report}/resolve', [SellerReportController::class, 'resolve'])->middleware('throttle:30,1')->name('seller-reports.resolve');
+
+        // Help Center inbox: members write in, the support team answers (admins never start a conversation)
+        Route::prefix('help-center')->name('help-center.')->group(function () {
+            Route::get('/', [HelpCenterController::class, 'index'])->name('index');
+            Route::get('/conversations', [HelpCenterController::class, 'conversations'])->name('conversations');
+            Route::get('/{conversation}/messages', [HelpCenterController::class, 'messages'])->whereNumber('conversation')->name('messages');
+            Route::post('/{conversation}/messages', [HelpCenterController::class, 'store'])->whereNumber('conversation')->middleware('throttle:60,1')->name('store');
+            Route::patch('/{conversation}/read', [HelpCenterController::class, 'markAsRead'])->whereNumber('conversation')->name('read');
+            Route::patch('/{conversation}/status', [HelpCenterController::class, 'updateStatus'])->whereNumber('conversation')->middleware('throttle:30,1')->name('status');
+        });
 
         // Return & Refund: escalations, disputed returned parcels and the GCash refund payout queue
         Route::get('/returns', [ReturnRequestController::class, 'index'])->name('returns.index');

@@ -216,6 +216,18 @@
                     </a>
                 </div>
             </div>
+
+            <!-- 5. My Reports (Direct Link) -->
+            <div>
+                <a href="{{ route('user.seller-reports') }}"
+                   class="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl font-semibold transition-colors {{ request()->routeIs('user.seller-reports') ? 'bg-primary/10 text-primary' : 'text-text-main hover:bg-surface-subtle' }}">
+                    <svg class="w-4.5 h-4.5 shrink-0 {{ request()->routeIs('user.seller-reports') ? 'text-primary' : 'text-text-muted' }}" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z" />
+                        <line x1="4" y1="22" x2="4" y2="15" />
+                    </svg>
+                    <span>My Reports</span>
+                </a>
+            </div>
         </nav>
     </div>
 

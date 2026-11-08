@@ -20,6 +20,7 @@ use App\Models\ReturnShipment;
 use App\Models\Rider;
 use App\Models\SellerApplication;
 use App\Models\SellerOrder;
+use App\Models\SellerReport;
 use App\Models\SellerRtsClaim;
 use App\Models\Shipment;
 use App\Models\User;
@@ -132,6 +133,7 @@ class AppServiceProvider extends ServiceProvider
                 'compliance'     => 0,
                 'complaints'     => 0,
                 'returns'        => 0,
+                'seller_reports' => 0,
                 'commissions'    => 0,
             ];
 
@@ -179,6 +181,11 @@ class AppServiceProvider extends ServiceProvider
                         ReturnRequest::STATUS_RECEIPT_DISPUTED,
                         ReturnRequest::STATUS_REFUND_PENDING,
                     ])->count();
+                }
+
+                if (Schema::hasTable('seller_reports')) {
+                    // Buyers' reports about sellers that no admin has opened yet.
+                    $badges['seller_reports'] = SellerReport::where('status', SellerReport::STATUS_PENDING)->count();
                 }
 
                 $pendingWithdrawals = Schema::hasTable('withdrawal_requests')

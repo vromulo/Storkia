@@ -827,6 +827,20 @@
                                class="inline-flex items-center gap-2 px-5 py-2.5 rounded-2xl text-xs sm:text-sm font-bold bg-surface hover:bg-surface-subtle text-text-main border border-border-subtle hover:border-primary/40 transition-all duration-300 shadow-2xs">
                                 <span>View Store</span>
                             </a>
+
+                            @if($seller && !$isOwnStore)
+                                <button type="button"
+                                        @click="$dispatch('open-report-seller', { sellerId: {{ $seller->id }}, sellerName: @js($seller->business_name) })"
+                                        title="Report this seller"
+                                        aria-label="Report this seller"
+                                        class="inline-flex items-center gap-2 px-4 py-2.5 rounded-2xl text-xs sm:text-sm font-bold bg-surface hover:bg-red-50 text-text-muted hover:text-danger border border-border-subtle hover:border-danger/40 transition-all duration-300 shadow-2xs cursor-pointer">
+                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                        <path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"></path>
+                                        <line x1="4" y1="22" x2="4" y2="15"></line>
+                                    </svg>
+                                    <span>Report Seller</span>
+                                </button>
+                            @endif
                         </div>
                     </div>
 
@@ -1056,5 +1070,7 @@
             <p class="text-text-muted text-xs font-medium leading-relaxed" x-text="toastMessage"></p>
         </div>
     </div>
+
+    <x-buyer.report-seller-modal />
 </div>
 @endsection

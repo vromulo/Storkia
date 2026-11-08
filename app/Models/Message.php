@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Support\Facades\Auth;
@@ -14,6 +15,7 @@ class Message extends Model
         'role',
         'message',
         'product_id',
+        'shipment_id',
         'attachment_path',
         'is_read',
     ];
@@ -38,6 +40,29 @@ class Message extends Model
         });
     }
 
+    /**
+     * Every message exchanged between two users, in either direction.
+     * The OR is grouped so it can be safely chained with other where() calls.
+     */
+    public function scopeBetween(Builder $query, int $userA, int $userB): Builder
+    {
+        return $query->where(function (Builder $outer) use ($userA, $userB) {
+            $outer->where(function (Builder $q) use ($userA, $userB) {
+                $q->where('user_id', $userA)->where('receiver_id', $userB);
+            })->orWhere(function (Builder $q) use ($userA, $userB) {
+                $q->where('user_id', $userB)->where('receiver_id', $userA);
+            });
+        });
+    }
+
+    /**
+     * Messages sent to $userId that have not been opened yet.
+     */
+    public function scopeUnreadFor(Builder $query, int $userId): Builder
+    {
+        return $query->where('receiver_id', $userId)->where('is_read', false);
+    }
+
     public function sender(): BelongsTo
     {
         return $this->belongsTo(User::class, 'user_id');
@@ -51,5 +76,10 @@ class Message extends Model
     public function product(): BelongsTo
     {
         return $this->belongsTo(Product::class, 'product_id')->withTrashed();
+    }
+
+    public function shipment(): BelongsTo
+    {
+        return $this->belongsTo(Shipment::class, 'shipment_id');
     }
 }

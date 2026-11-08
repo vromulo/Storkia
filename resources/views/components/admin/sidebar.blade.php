@@ -8,8 +8,13 @@
         'compliance'     => 0,
         'complaints'     => 0,
         'returns'        => 0,
+        'seller_reports' => 0,
         'commissions'    => 0,
     ];
+
+    // Help Center counter from ChatServiceProvider: conversations holding a member message nobody on the team has read yet.
+    $chatBadges = $chatBadges ?? ['messages' => 0, 'support' => 0, 'total' => 0];
+    $helpCenterBadge = (int) ($chatBadges['support'] ?? 0);
 @endphp
 
 <aside :class="sidebarOpen ? 'w-72' : 'w-20'" class="relative flex flex-col h-screen border-r border-border-subtle shadow-lg transition-all duration-300 ease-in-out bg-gradient-to-b from-surface via-surface to-brand-light/30 flex-shrink-0 z-40">
@@ -33,7 +38,7 @@
         activeDropdown: '{{ match(true) {
             request()->is('admin/applications*') || request()->routeIs('admin.applications.*') => 'applications',
             request()->is('admin/accounts*') || request()->routeIs('admin.accounts.*') => 'accounts',
-            request()->is('admin/complaints*') || request()->routeIs('admin.complaints.*') => 'complaints',
+            request()->is('admin/complaints*') || request()->routeIs('admin.complaints.*') || request()->is('admin/seller-reports*') || request()->routeIs('admin.seller-reports.*') => 'complaints',
             request()->is('admin/reports*') || request()->routeIs('admin.reports.*') => 'reports',
             default => null,
         } }}'
@@ -176,22 +181,26 @@
 
         @php
             $isComplaintsActive = request()->is('admin/complaints*') || request()->routeIs('admin.complaints.*');
+            $isSellerReportsActive = request()->is('admin/seller-reports*') || request()->routeIs('admin.seller-reports.*');
+            // The parent button is lit for either page; the Complaints sub-links only for the Complaints pages.
+            $isComplaintsGroupActive = $isComplaintsActive || $isSellerReportsActive;
+            $complaintsGroupBadge = (int) ($badges['complaints'] ?? 0) + (int) ($badges['seller_reports'] ?? 0);
             $currentComplaintStatus = request()->query('status', 'unresolved');
         @endphp
         <div>
             <button @click="if(!sidebarOpen) { sidebarOpen = true; activeDropdown = 'complaints'; } else { activeDropdown = activeDropdown === 'complaints' ? null : 'complaints'; }"
-                     class="flex items-center justify-between w-full px-3 py-3 rounded-xl transition-all duration-200 font-medium group whitespace-nowrap text-sm cursor-pointer {{ $isComplaintsActive ? 'text-primary font-bold bg-brand-light/20' : 'text-text-muted hover:bg-brand-light/30 hover:text-primary' }}"
+                     class="flex items-center justify-between w-full px-3 py-3 rounded-xl transition-all duration-200 font-medium group whitespace-nowrap text-sm cursor-pointer {{ $isComplaintsGroupActive ? 'text-primary font-bold bg-brand-light/20' : 'text-text-muted hover:bg-brand-light/30 hover:text-primary' }}"
                      :title="!sidebarOpen ? 'Complaints & Disputes' : ''">
                 <div class="flex items-center">
-                    <svg class="w-6 h-6 flex-shrink-0 transition-colors {{ $isComplaintsActive ? 'text-primary' : 'text-text-muted group-hover:text-primary' }}" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <svg class="w-6 h-6 flex-shrink-0 transition-colors {{ $isComplaintsGroupActive ? 'text-primary' : 'text-text-muted group-hover:text-primary' }}" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
                     </svg>
                     <span x-show="sidebarOpen" x-transition.opacity.duration.300ms class="ml-3">Complaints &amp; Disputes</span>
                 </div>
                 <div class="flex items-center gap-1.5">
-                    @if(($badges['complaints'] ?? 0) > 0)
+                    @if($complaintsGroupBadge > 0)
                         <span class="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-red-500 text-white">
-                            {{ $badges['complaints'] }}
+                            {{ $complaintsGroupBadge > 99 ? '99+' : $complaintsGroupBadge }}
                         </span>
                     @endif
                     <svg x-show="sidebarOpen" class="w-4 h-4 transition-transform duration-200 text-text-muted group-hover:text-primary" :class="{'rotate-180': activeDropdown === 'complaints'}" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -215,8 +224,33 @@
                    class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ $isComplaintsActive && $currentComplaintStatus === 'resolved' ? 'bg-primary/10 text-primary font-bold shadow-xs' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">
                     Resolved
                 </a>
+                <a href="{{ route('admin.seller-reports.index') }}"
+                   class="flex items-center justify-between px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ $isSellerReportsActive ? 'bg-primary/10 text-primary font-bold shadow-xs' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">
+                    <span>Seller Reports</span>
+                    @if(($badges['seller_reports'] ?? 0) > 0)
+                        <span class="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-red-100 text-danger">{{ $badges['seller_reports'] }}</span>
+                    @endif
+                </a>
             </div>
         </div>
+
+        @php $isHelpCenterActive = request()->is('admin/help-center*') || request()->routeIs('admin.help-center.*'); @endphp
+        <a href="{{ route('admin.help-center.index') }}"
+           @click="activeDropdown = null"
+           class="flex items-center justify-between px-3 py-3 rounded-xl transition-all duration-200 font-medium group whitespace-nowrap text-sm cursor-pointer {{ $isHelpCenterActive ? 'bg-brand-light/60 text-primary font-bold shadow-xs' : 'text-text-muted hover:bg-brand-light/30 hover:text-primary' }}"
+           :title="!sidebarOpen ? 'Help Center' : ''">
+            <div class="flex items-center">
+                <svg class="w-6 h-6 flex-shrink-0 transition-colors {{ $isHelpCenterActive ? 'text-primary' : 'text-text-muted group-hover:text-primary' }}" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 5.636l-3.536 3.536m0 5.656l3.536 3.536M9.172 9.172L5.636 5.636m3.536 9.192l-3.536 3.536M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-5 0a4 4 0 11-8 0 4 4 0 018 0z" />
+                </svg>
+                <span x-show="sidebarOpen" x-transition.opacity.duration.300ms class="ml-3">Help Center</span>
+            </div>
+            @if($helpCenterBadge > 0)
+                <span class="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-red-500 text-white">
+                    {{ $helpCenterBadge > 99 ? '99+' : $helpCenterBadge }}
+                </span>
+            @endif
+        </a>
 
         @php $isReturnsActive = request()->is('admin/returns*') || request()->routeIs('admin.returns.*'); @endphp
         <a href="{{ route('admin.returns.index') }}"

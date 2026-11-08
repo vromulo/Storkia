@@ -92,6 +92,11 @@ class SellerProfile extends Model
         return $this->hasMany(SellerSettlement::class, 'seller_profile_id');
     }
 
+    public function reports(): HasMany
+    {
+        return $this->hasMany(SellerReport::class, 'seller_profile_id');
+    }
+
     public function hasActiveGcashAccount(): bool
     {
         if ($this->gcash_blocked_for_arrears) {

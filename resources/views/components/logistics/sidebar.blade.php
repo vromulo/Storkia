@@ -31,6 +31,14 @@
     $isZonesRoute = request()->routeIs('logistics.zones*');
     $isFinanceRoute = request()->routeIs('logistics.finance*') || request()->routeIs('logistics.reports*');
     $isRatingsRoute = request()->routeIs('logistics.ratings*');
+    $isMessagesRoute = request()->routeIs('logistics.messages*');
+    $isHelpCenterRoute = request()->routeIs('logistics.help-center*');
+
+    // Chat counters from ChatServiceProvider: 'messages' = unread seller chats,
+    // 'support' = unread replies from the Storkia support team.
+    $chatBadges = $chatBadges ?? ['messages' => 0, 'support' => 0, 'total' => 0];
+    $messagesBadge = (int) ($chatBadges['messages'] ?? 0);
+    $supportBadge = (int) ($chatBadges['support'] ?? 0);
 @endphp
 
 <aside :class="sidebarOpen ? 'w-72' : 'w-20'" class="relative flex flex-col h-screen border-r border-border-subtle shadow-lg transition-all duration-300 ease-in-out bg-gradient-to-b from-surface via-surface to-brand-light/30 flex-shrink-0 z-40">
@@ -241,6 +249,23 @@
             <span x-show="sidebarOpen" x-transition.opacity.duration.300ms class="ml-3">Hub &amp; Rider Ratings</span>
         </a>
 
+        <a href="{{ route('logistics.messages.logistics-messages') }}"
+            @click="activeDropdown = null"
+            class="flex items-center justify-between px-3 py-3 rounded-xl transition-all duration-200 font-medium group whitespace-nowrap text-sm cursor-pointer {{ $isMessagesRoute ? 'text-primary font-bold bg-brand-light/60 shadow-xs' : 'text-text-muted hover:bg-brand-light/30 hover:text-primary' }}"
+            :title="!sidebarOpen ? 'Seller Messages' : ''">
+            <div class="flex items-center">
+                <svg class="w-6 h-6 flex-shrink-0 transition-colors {{ $isMessagesRoute ? 'text-primary' : 'text-text-muted group-hover:text-primary' }}" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
+                </svg>
+                <span x-show="sidebarOpen" x-transition.opacity.duration.300ms class="ml-3">Seller Messages</span>
+            </div>
+            @if($messagesBadge > 0)
+                <span class="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-red-500 text-white">
+                    {{ $messagesBadge > 99 ? '99+' : $messagesBadge }}
+                </span>
+            @endif
+        </a>
+
         @if($isMainLogistics)
         <a href="{{ route('logistics.hub-settings') }}"
             @click="activeDropdown = null"
@@ -254,6 +279,24 @@
         </a>
         @endif
         @endif
+
+        {{-- Outside the hub profile check on purpose: pending or rejected hubs can still contact support. --}}
+        <a href="{{ route('logistics.help-center.index') }}"
+            @click="activeDropdown = null"
+            class="flex items-center justify-between px-3 py-3 rounded-xl transition-all duration-200 font-medium group whitespace-nowrap text-sm cursor-pointer {{ $isHelpCenterRoute ? 'text-primary font-bold bg-brand-light/60 shadow-xs' : 'text-text-muted hover:bg-brand-light/30 hover:text-primary' }}"
+            :title="!sidebarOpen ? 'Help Center' : ''">
+            <div class="flex items-center">
+                <svg class="w-6 h-6 flex-shrink-0 transition-colors {{ $isHelpCenterRoute ? 'text-primary' : 'text-text-muted group-hover:text-primary' }}" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 5.636l-3.536 3.536m0 5.656l3.536 3.536M9.172 9.172L5.636 5.636m3.536 9.192l-3.536 3.536M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-5 0a4 4 0 11-8 0 4 4 0 018 0z" />
+                </svg>
+                <span x-show="sidebarOpen" x-transition.opacity.duration.300ms class="ml-3">Help Center</span>
+            </div>
+            @if($supportBadge > 0)
+                <span class="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-red-500 text-white">
+                    {{ $supportBadge > 99 ? '99+' : $supportBadge }}
+                </span>
+            @endif
+        </a>
     </nav>
 
     <div class="p-3 border-t border-border-subtle bg-surface/50 backdrop-blur-sm">

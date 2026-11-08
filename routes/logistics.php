@@ -5,6 +5,7 @@ use App\Http\Controllers\Logistics\AuthController;
 use App\Http\Controllers\Logistics\DashboardController;
 use App\Http\Controllers\Logistics\FinanceController;
 use App\Http\Controllers\Logistics\HubSettingsController;
+use App\Http\Controllers\Logistics\LogisticsMessageController;
 use App\Http\Controllers\Logistics\ShipmentController;
 use App\Http\Controllers\Logistics\ReturnShipmentController;
 use App\Http\Controllers\Logistics\CourierController;
@@ -12,6 +13,7 @@ use App\Http\Controllers\Logistics\RiderApplicationController;
 use App\Http\Controllers\Logistics\BranchHubController;
 use App\Http\Controllers\Logistics\EmployeeManagementController;
 use App\Http\Controllers\Logistics\ZonesAndExceptionsController;
+use App\Http\Controllers\Support\HelpCenterController;
 
 Route::middleware('throttle:120,1')->group(function () {
 
@@ -24,6 +26,15 @@ Route::middleware('throttle:120,1')->group(function () {
     Route::middleware(['auth', 'role:Logistics'])->group(function () {
         Route::get('/logistics/dashboard', [DashboardController::class, 'index'])->name('logistics.logistics-dashboard');
         Route::get('/logistics/reapply', [DashboardController::class, 'showReapply'])->name('logistics.reapply');
+
+        // Help Center: deliberately OUTSIDE "logistics.approved" so a pending, rejected or
+        // restricted hub can still reach the support team.
+        Route::prefix('logistics/help-center')->name('logistics.help-center.')->group(function () {
+            Route::get('/', [HelpCenterController::class, 'index'])->name('index');
+            Route::get('/messages', [HelpCenterController::class, 'messages'])->name('messages');
+            Route::post('/messages', [HelpCenterController::class, 'store'])->middleware('throttle:60,1')->name('store');
+            Route::patch('/read', [HelpCenterController::class, 'markAsRead'])->name('read');
+        });
 
         Route::prefix('logistics')->name('logistics.')->middleware('logistics.approved')->group(function () {
             Route::get('/shipments', [ShipmentController::class, 'index'])->name('shipments.index');
@@ -93,6 +104,14 @@ Route::middleware('throttle:120,1')->group(function () {
             Route::post('/hub-settings/password/request-otp', [HubSettingsController::class, 'requestPasswordOtp'])->name('hub-settings.request-password-otp');
             Route::post('/hub-settings/password/verify-otp', [HubSettingsController::class, 'verifyPasswordOtp'])->name('hub-settings.verify-password-otp');
             Route::patch('/hub-settings/password', [HubSettingsController::class, 'updatePassword'])->name('hub-settings.update-password');
+
+            // Logistics <-> Seller chat (the {contactId} name is part of the chat contract: see HandlesUserChat)
+            Route::get('/messages', [LogisticsMessageController::class, 'index'])->name('messages.logistics-messages');
+            Route::get('/messages/contacts', [LogisticsMessageController::class, 'fetchContacts'])->name('messages.contacts');
+            Route::get('/messages/fetch/{contactId}', [LogisticsMessageController::class, 'fetchMessages'])->whereNumber('contactId')->name('messages.fetch');
+            Route::post('/messages', [LogisticsMessageController::class, 'store'])->middleware('throttle:60,1')->name('messages.store');
+            Route::patch('/messages/{contactId}/read', [LogisticsMessageController::class, 'markAsRead'])->whereNumber('contactId')->name('messages.read');
+            Route::get('/messages/{contactId}/shipments', [LogisticsMessageController::class, 'shipments'])->whereNumber('contactId')->name('messages.shipments');
 
             Route::patch('/notifications/mark-all-read', function () {
                 auth()->user()->unreadNotifications->markAsRead();

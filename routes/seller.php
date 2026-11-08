@@ -6,9 +6,11 @@ use App\Http\Controllers\Seller\DashboardController;
 use App\Http\Controllers\Seller\OrderController;
 use App\Http\Controllers\Seller\ProductController;
 use App\Http\Controllers\Seller\ReturnRequestController;
+use App\Http\Controllers\Seller\SellerMessageController;
 use App\Http\Controllers\Seller\StoreSettingsController;
 use App\Http\Controllers\Seller\SuperDealController;
 use App\Http\Controllers\Seller\VoucherController;
+use App\Http\Controllers\Support\HelpCenterController;
 
 Route::middleware('throttle:120,1')->group(function () {
     Route::middleware(['guest', 'throttle:30,1'])->group(function () {
@@ -20,6 +22,15 @@ Route::middleware('throttle:120,1')->group(function () {
     Route::middleware(['auth', 'role:Seller'])->group(function () {
         Route::get('/seller/dashboard', [DashboardController::class, 'index'])->name('seller.seller-dashboard');
         Route::get('/seller/reapply', [DashboardController::class, 'showReapply'])->name('seller.reapply');
+
+        // Help Center: deliberately OUTSIDE "seller.approved" so a pending, rejected or
+        // restricted seller can still reach the support team.
+        Route::prefix('seller/help-center')->name('seller.help-center.')->group(function () {
+            Route::get('/', [HelpCenterController::class, 'index'])->name('index');
+            Route::get('/messages', [HelpCenterController::class, 'messages'])->name('messages');
+            Route::post('/messages', [HelpCenterController::class, 'store'])->middleware('throttle:60,1')->name('store');
+            Route::patch('/read', [HelpCenterController::class, 'markAsRead'])->name('read');
+        });
 
         Route::prefix('seller')->name('seller.')->middleware('seller.approved')->group(function () {
             Route::get('/products', [ProductController::class, 'index'])->name('products.index');
@@ -91,11 +102,13 @@ Route::middleware('throttle:120,1')->group(function () {
             Route::post('/store-settings/password/verify-otp', [StoreSettingsController::class, 'verifyPasswordOtp'])->name('store-settings.verify-password-otp');
             Route::patch('/store-settings/password', [StoreSettingsController::class, 'updatePassword'])->name('store-settings.update-password');
 
-            Route::get('/messages', [\App\Http\Controllers\Seller\SellerMessageController::class, 'index'])->name('messages.seller-messages');
-            Route::get('/messages/contacts', [\App\Http\Controllers\Seller\SellerMessageController::class, 'fetchContacts'])->name('messages.contacts');
-            Route::get('/messages/fetch/{userId}', [\App\Http\Controllers\Seller\SellerMessageController::class, 'fetchMessages'])->name('messages.fetch');
-            Route::post('/messages', [\App\Http\Controllers\Seller\SellerMessageController::class, 'store'])->name('messages.store');
-            Route::patch('/messages/{contactId}/read', [\App\Http\Controllers\Seller\SellerMessageController::class, 'markAsRead'])->name('messages.read');
+            // Seller <-> Buyer and Seller <-> Logistics chat (the {contactId} name is part of the chat contract: see HandlesUserChat)
+            Route::get('/messages', [SellerMessageController::class, 'index'])->name('messages.seller-messages');
+            Route::get('/messages/contacts', [SellerMessageController::class, 'fetchContacts'])->name('messages.contacts');
+            Route::get('/messages/fetch/{contactId}', [SellerMessageController::class, 'fetchMessages'])->whereNumber('contactId')->name('messages.fetch');
+            Route::post('/messages', [SellerMessageController::class, 'store'])->middleware('throttle:60,1')->name('messages.store');
+            Route::patch('/messages/{contactId}/read', [SellerMessageController::class, 'markAsRead'])->whereNumber('contactId')->name('messages.read');
+            Route::get('/messages/{contactId}/shipments', [SellerMessageController::class, 'shipments'])->whereNumber('contactId')->name('messages.shipments');
 
             Route::patch('/notifications/mark-all-read', function () {
                 auth()->user()->unreadNotifications->markAsRead();

@@ -5,6 +5,7 @@ use App\Http\Controllers\Buyer\AnnouncementController;
 use App\Http\Controllers\Buyer\AuthController;
 use App\Http\Controllers\Auth\PasswordResetController;
 use App\Http\Controllers\Buyer\BundleDealController;
+use App\Http\Controllers\Buyer\BuyerMessageController;
 use App\Http\Controllers\Buyer\HomeController;
 use App\Http\Controllers\Buyer\CategoryController;
 use App\Http\Controllers\Buyer\DealController;
@@ -21,8 +22,10 @@ use App\Http\Controllers\Buyer\OrderController;
 use App\Http\Controllers\Buyer\PointsRewardController;
 use App\Http\Controllers\Buyer\ReviewController;
 use App\Http\Controllers\Buyer\SellerController;
+use App\Http\Controllers\Buyer\SellerReportController;
 use App\Http\Controllers\Buyer\VoucherController;
 use App\Http\Controllers\Buyer\WishlistController;
+use App\Http\Controllers\Support\HelpCenterController;
 use App\Livewire\Buyer\IdentityVerificationFlow;
 use App\Http\Controllers\Buyer\ProfileController;
 
@@ -95,6 +98,14 @@ Route::middleware('throttle:120,1')->group(function () {
             Route::post('/checkout', [CheckoutController::class, 'store'])->middleware('throttle:20,1')->name('checkout.store');
             Route::get('/checkout/success/{order}', [CheckoutController::class, 'success'])->name('checkout.success');
 
+            // Report Seller: the shared report modal loads its context, then submits the report.
+            Route::get('/sellers/{seller}/report/context', [SellerReportController::class, 'context'])
+                ->middleware('throttle:30,1')
+                ->name('sellers.report.context');
+            Route::post('/sellers/{seller}/report', [SellerReportController::class, 'store'])
+                ->middleware('throttle:5,1')
+                ->name('sellers.report.store');
+
             Route::prefix('user')->name('user.')->group(function () {
                 Route::view('/account', 'buyer.option.account.personal-center')->name('account');
 
@@ -122,11 +133,18 @@ Route::middleware('throttle:120,1')->group(function () {
                 Route::get('/addresses/psgc/municipalities/{provinceCode}', [AddressController::class, 'getMunicipalities'])->name('addresses.psgc.municipalities');
                 Route::get('/addresses/psgc/barangays/{municipalityCode}', [AddressController::class, 'getBarangays'])->name('addresses.psgc.barangays');
 
-                Route::get('/messages', [\App\Http\Controllers\Buyer\BuyerMessageController::class, 'index'])->name('messages.buyer-messages');
-                Route::get('/messages/contacts', [\App\Http\Controllers\Buyer\BuyerMessageController::class, 'fetchContacts'])->name('messages.contacts');
-                Route::get('/messages/fetch/{userId}', [\App\Http\Controllers\Buyer\BuyerMessageController::class, 'fetchMessages'])->name('messages.fetch');
-                Route::post('/messages', [\App\Http\Controllers\Buyer\BuyerMessageController::class, 'store'])->middleware('throttle:60,1')->name('messages.store');
-                Route::patch('/messages/{contactId}/read', [\App\Http\Controllers\Buyer\BuyerMessageController::class, 'markAsRead'])->name('messages.read');
+                // Buyer <-> Seller chat (the {contactId} name is part of the chat contract: see HandlesUserChat)
+                Route::get('/messages', [BuyerMessageController::class, 'index'])->name('messages.buyer-messages');
+                Route::get('/messages/contacts', [BuyerMessageController::class, 'fetchContacts'])->name('messages.contacts');
+                Route::get('/messages/fetch/{contactId}', [BuyerMessageController::class, 'fetchMessages'])->whereNumber('contactId')->name('messages.fetch');
+                Route::post('/messages', [BuyerMessageController::class, 'store'])->middleware('throttle:60,1')->name('messages.store');
+                Route::patch('/messages/{contactId}/read', [BuyerMessageController::class, 'markAsRead'])->whereNumber('contactId')->name('messages.read');
+
+                // Help Center: the buyer's own conversation with the Storkia support team
+                Route::get('/help-center', [HelpCenterController::class, 'index'])->name('help-center.index');
+                Route::get('/help-center/messages', [HelpCenterController::class, 'messages'])->name('help-center.messages');
+                Route::post('/help-center/messages', [HelpCenterController::class, 'store'])->middleware('throttle:60,1')->name('help-center.store');
+                Route::patch('/help-center/read', [HelpCenterController::class, 'markAsRead'])->name('help-center.read');
 
                 Route::get('/orders', [OrderController::class, 'index'])->name('orders');
                 Route::get('/orders/{sellerOrder}', [OrderController::class, 'show'])->name('orders.show');
@@ -164,6 +182,7 @@ Route::middleware('throttle:120,1')->group(function () {
                 Route::redirect('/change-password', '/user/account-management')->name('change-password');
                 Route::get('/recently-viewed', [ProductController::class, 'recentlyViewed'])->name('recently-viewed');
                 Route::get('/following', [SellerController::class, 'followingList'])->name('following');
+                Route::get('/seller-reports', [SellerReportController::class, 'index'])->name('seller-reports');
             });
 
             Route::get('/identity-verification', IdentityVerificationFlow::class)->name('user.identity-verification');

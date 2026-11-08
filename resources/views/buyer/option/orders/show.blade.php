@@ -504,6 +504,19 @@
                     <span class="text-text-muted">Seller Store:</span>
                     <span class="font-bold text-text-main text-right">{{ $sellerOrder->sellerProfile->business_name ?? 'N/A' }}</span>
                 </div>
+                @if($sellerOrder->sellerProfile)
+                    <div class="flex justify-end -mt-0.5">
+                        <button type="button"
+                                @click.stop="$dispatch('open-report-seller', { sellerId: {{ $sellerOrder->sellerProfile->id }}, sellerName: @js($sellerOrder->sellerProfile->business_name), orderId: {{ $sellerOrder->id }} })"
+                                class="inline-flex items-center gap-1 text-[11px] font-bold text-text-muted hover:text-danger transition-colors cursor-pointer">
+                            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"></path>
+                                <line x1="4" y1="22" x2="4" y2="15"></line>
+                            </svg>
+                            <span>Report this seller</span>
+                        </button>
+                    </div>
+                @endif
                 <div class="flex justify-between gap-2">
                     <span class="text-text-muted">Logistics Provider:</span>
                     <span class="font-bold text-text-main text-right">{{ $sellerOrder->logisticsProfile->business_name ?? 'Awaiting Seller Selection' }}</span>
@@ -759,6 +772,8 @@
             </div>
         </template>
     @endif
+
+    <x-buyer.report-seller-modal />
 
 </div>
 @endsection

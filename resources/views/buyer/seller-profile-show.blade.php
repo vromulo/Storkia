@@ -86,7 +86,7 @@
                                 </p>
                             </div>
 
-                            <div class="flex items-center gap-2.5 sm:gap-3">
+                            <div class="flex flex-wrap items-center justify-center gap-2.5 sm:gap-3">
                                 @if($isOwnStore)
                                     <span class="px-5 py-2.5 rounded-2xl text-xs sm:text-sm font-bold bg-surface-subtle text-text-muted border border-border-subtle">
                                         Your Store (Cannot Follow Yourself)
@@ -114,6 +114,20 @@
                                         <span>Chat Now</span>
                                     </a>
                                 @endauth
+
+                                @unless($isOwnStore)
+                                    <button type="button"
+                                            @click="$dispatch('open-report-seller', { sellerId: {{ $seller->id }}, sellerName: @js($seller->business_name) })"
+                                            title="Report this store"
+                                            aria-label="Report this store"
+                                            class="inline-flex items-center gap-2 px-4 py-2.5 rounded-2xl text-xs sm:text-sm font-bold bg-surface hover:bg-red-50 text-text-muted hover:text-danger border border-border-subtle hover:border-danger/40 transition-all duration-300 shadow-2xs cursor-pointer">
+                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                            <path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"></path>
+                                            <line x1="4" y1="22" x2="4" y2="15"></line>
+                                        </svg>
+                                        <span>Report</span>
+                                    </button>
+                                @endunless
                             </div>
                         </div>
 
@@ -373,6 +387,8 @@
             </div>
         </div>
     </div>
+
+    <x-buyer.report-seller-modal />
 
     <script>
         document.addEventListener('alpine:init', () => {
