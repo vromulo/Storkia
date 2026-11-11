@@ -23,8 +23,6 @@ Route::middleware('throttle:120,1')->group(function () {
         Route::get('/seller/dashboard', [DashboardController::class, 'index'])->name('seller.seller-dashboard');
         Route::get('/seller/reapply', [DashboardController::class, 'showReapply'])->name('seller.reapply');
 
-        // Help Center: deliberately OUTSIDE "seller.approved" so a pending, rejected or
-        // restricted seller can still reach the support team.
         Route::prefix('seller/help-center')->name('seller.help-center.')->group(function () {
             Route::get('/', [HelpCenterController::class, 'index'])->name('index');
             Route::get('/messages', [HelpCenterController::class, 'messages'])->name('messages');
@@ -66,10 +64,9 @@ Route::middleware('throttle:120,1')->group(function () {
             Route::post('/orders/{sellerOrder}/ready-for-pickup', [OrderController::class, 'markReadyForPickup'])->name('orders.ready-for-pickup');
             Route::post('/orders/{sellerOrder}/report-suspicious-payment', [OrderController::class, 'reportSuspiciousPayment'])->name('orders.report-suspicious-payment');
             Route::post('/orders/{sellerOrder}/verify-online-payment', [OrderController::class, 'verifyOnlinePayment'])->name('orders.verify-online-payment');
-            // Old order-page form: now forwards to the Return & Refund response page.
+
             Route::post('/orders/{sellerOrder}/respond-return', [ReturnRequestController::class, 'legacyRespond'])->name('orders.respond-return');
 
-            // Return & Refund (respond, confirm the returned parcel, deduction warning, return tracking)
             Route::get('/returns/{returnRequest}', [ReturnRequestController::class, 'show'])->name('returns.show');
             Route::post('/returns/{returnRequest}/respond', [ReturnRequestController::class, 'respond'])->middleware('throttle:20,1')->name('returns.respond');
             Route::post('/returns/{returnRequest}/confirm-receipt', [ReturnRequestController::class, 'confirmReceipt'])->middleware('throttle:20,1')->name('returns.confirm-receipt');
@@ -83,8 +80,11 @@ Route::middleware('throttle:120,1')->group(function () {
             Route::get('/sales/formal-report', [OrderController::class, 'formalPdfReport'])->name('reports.formal-pdf');
             Route::post('/sales/payouts', [OrderController::class, 'requestPayout'])->name('payouts.store');
             Route::post('/sales/arrears-remittance', [OrderController::class, 'submitArrearsRemittance'])->name('arrears.remit');
+            Route::post('/sales/arrears-wallet-offset', [OrderController::class, 'settleArrearsFromWallet'])->name('arrears.wallet-offset');
+
             Route::get('/ratings', [OrderController::class, 'ratingsIndex'])->name('ratings.index');
             Route::post('/reviews/{review}/reply', [OrderController::class, 'replyToReview'])->name('reviews.reply');
+            Route::post('/questions/{question}/answer', [OrderController::class, 'answerProductQuestion'])->name('questions.answer');
 
             Route::get('/store-settings', [StoreSettingsController::class, 'index'])->name('store-settings');
             Route::patch('/store-settings/vacation', [SuperDealController::class, 'toggleVacationMode'])->name('store-settings.toggle-vacation');
@@ -102,7 +102,6 @@ Route::middleware('throttle:120,1')->group(function () {
             Route::post('/store-settings/password/verify-otp', [StoreSettingsController::class, 'verifyPasswordOtp'])->name('store-settings.verify-password-otp');
             Route::patch('/store-settings/password', [StoreSettingsController::class, 'updatePassword'])->name('store-settings.update-password');
 
-            // Seller <-> Buyer and Seller <-> Logistics chat (the {contactId} name is part of the chat contract: see HandlesUserChat)
             Route::get('/messages', [SellerMessageController::class, 'index'])->name('messages.seller-messages');
             Route::get('/messages/contacts', [SellerMessageController::class, 'fetchContacts'])->name('messages.contacts');
             Route::get('/messages/fetch/{contactId}', [SellerMessageController::class, 'fetchMessages'])->whereNumber('contactId')->name('messages.fetch');

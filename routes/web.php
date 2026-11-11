@@ -75,6 +75,18 @@ Route::middleware('throttle:120,1')->group(function () {
             ->middleware('throttle:30,1')
             ->name('sellers.follow');
 
+        Route::post('/product/{product}/restock-subscribe', [ProductController::class, 'subscribeRestock'])
+            ->middleware('throttle:30,1')
+            ->name('product.restock.subscribe');
+
+        Route::post('/product/{product}/questions', [ProductController::class, 'askQuestion'])
+            ->middleware('throttle:20,1')
+            ->name('product.questions.store');
+
+        Route::post('/user/reviews/{review}/helpful', [ProductController::class, 'toggleReviewHelpful'])
+            ->middleware('throttle:60,1')
+            ->name('user.reviews.helpful');
+
         Route::post('/bundles/{id}/add', [BundleDealController::class, 'addBundleToCart'])
             ->middleware('throttle:30,1')
             ->name('bundles.add');
@@ -98,7 +110,6 @@ Route::middleware('throttle:120,1')->group(function () {
             Route::post('/checkout', [CheckoutController::class, 'store'])->middleware('throttle:20,1')->name('checkout.store');
             Route::get('/checkout/success/{order}', [CheckoutController::class, 'success'])->name('checkout.success');
 
-            // Report Seller: the shared report modal loads its context, then submits the report.
             Route::get('/sellers/{seller}/report/context', [SellerReportController::class, 'context'])
                 ->middleware('throttle:30,1')
                 ->name('sellers.report.context');
@@ -108,7 +119,6 @@ Route::middleware('throttle:120,1')->group(function () {
 
             Route::prefix('user')->name('user.')->group(function () {
                 Route::view('/account', 'buyer.option.account.personal-center')->name('account');
-
                 Route::get('/profile', [ProfileController::class, 'index'])->name('profile');
                 Route::patch('/profile/username', [ProfileController::class, 'updateUsername'])->name('profile.update-username');
                 Route::post('/profile/avatar', [ProfileController::class, 'updateAvatar'])->name('profile.update-avatar');
@@ -133,14 +143,12 @@ Route::middleware('throttle:120,1')->group(function () {
                 Route::get('/addresses/psgc/municipalities/{provinceCode}', [AddressController::class, 'getMunicipalities'])->name('addresses.psgc.municipalities');
                 Route::get('/addresses/psgc/barangays/{municipalityCode}', [AddressController::class, 'getBarangays'])->name('addresses.psgc.barangays');
 
-                // Buyer <-> Seller chat (the {contactId} name is part of the chat contract: see HandlesUserChat)
                 Route::get('/messages', [BuyerMessageController::class, 'index'])->name('messages.buyer-messages');
                 Route::get('/messages/contacts', [BuyerMessageController::class, 'fetchContacts'])->name('messages.contacts');
                 Route::get('/messages/fetch/{contactId}', [BuyerMessageController::class, 'fetchMessages'])->whereNumber('contactId')->name('messages.fetch');
                 Route::post('/messages', [BuyerMessageController::class, 'store'])->middleware('throttle:60,1')->name('messages.store');
                 Route::patch('/messages/{contactId}/read', [BuyerMessageController::class, 'markAsRead'])->whereNumber('contactId')->name('messages.read');
 
-                // Help Center: the buyer's own conversation with the Storkia support team
                 Route::get('/help-center', [HelpCenterController::class, 'index'])->name('help-center.index');
                 Route::get('/help-center/messages', [HelpCenterController::class, 'messages'])->name('help-center.messages');
                 Route::post('/help-center/messages', [HelpCenterController::class, 'store'])->middleware('throttle:60,1')->name('help-center.store');
@@ -148,20 +156,22 @@ Route::middleware('throttle:120,1')->group(function () {
 
                 Route::get('/orders', [OrderController::class, 'index'])->name('orders');
                 Route::get('/orders/{sellerOrder}', [OrderController::class, 'show'])->name('orders.show');
+                Route::get('/orders/{sellerOrder}/invoice', [OrderController::class, 'downloadInvoice'])->name('orders.invoice');
+                Route::get('/orders/{sellerOrder}/live-tracking', [OrderController::class, 'liveTracking'])->name('orders.live-tracking');
+                Route::get('/orders/{sellerOrder}/delivery-chat', [OrderController::class, 'fetchDeliveryChat'])->name('orders.delivery-chat.fetch');
+                Route::post('/orders/{sellerOrder}/delivery-chat', [OrderController::class, 'sendDeliveryChat'])->middleware('throttle:60,1')->name('orders.delivery-chat.send');
                 Route::post('/orders/{sellerOrder}/cancel', [OrderController::class, 'cancelOrder'])->name('orders.cancel');
                 Route::post('/orders/{sellerOrder}/switch-to-cod', [OrderController::class, 'switchToCod'])->name('orders.switch-to-cod');
                 Route::post('/orders/{sellerOrder}/cancel-flagged-payment', [OrderController::class, 'cancelFlaggedPaymentOrder'])->name('orders.cancel-flagged-payment');
                 Route::post('/orders/{sellerOrder}/confirm-receipt', [OrderController::class, 'confirmReceipt'])->name('orders.confirm-receipt');
-                // Old order-page form: now forwards to the new Return & Refund request form.
                 Route::post('/orders/{sellerOrder}/report-dispute', [ReturnRequestController::class, 'legacyReport'])->name('orders.report-dispute');
-                // Old escalate button: now forwards to the return request's status page.
                 Route::post('/orders/{sellerOrder}/escalate-dispute', [ReturnRequestController::class, 'legacyEscalate'])->name('orders.escalate-dispute');
 
-                // Return & Refund (return/refund request, status + return tracking, escalation)
                 Route::get('/orders/{sellerOrder}/return', [ReturnRequestController::class, 'create'])->name('orders.return.create');
                 Route::post('/orders/{sellerOrder}/return', [ReturnRequestController::class, 'store'])->middleware('throttle:10,1')->name('orders.return.store');
                 Route::get('/returns/{returnRequest}', [ReturnRequestController::class, 'show'])->name('returns.show');
                 Route::post('/returns/{returnRequest}/escalate', [ReturnRequestController::class, 'escalate'])->middleware('throttle:10,1')->name('returns.escalate');
+
                 Route::get('/orders/{sellerOrder}/rate', [OrderController::class, 'showRatePage'])->name('orders.rate.show');
                 Route::post('/orders/{sellerOrder}/rate', [OrderController::class, 'submitRatings'])->name('orders.rate.submit');
                 Route::post('/orders/{sellerOrder}/buy-again', [OrderController::class, 'buyAgain'])->name('orders.buy-again');
@@ -171,6 +181,7 @@ Route::middleware('throttle:120,1')->group(function () {
                 Route::post('/coupons/claim', [VoucherController::class, 'claim'])->middleware('throttle:30,1')->name('coupons.claim');
 
                 Route::get('/points', [PointsRewardController::class, 'index'])->name('points');
+                Route::post('/points/wallet-topup', [PointsRewardController::class, 'topupWallet'])->middleware('throttle:15,1')->name('points.wallet-topup');
                 Route::post('/points/spin', [PointsRewardController::class, 'spin'])->middleware('throttle:30,1')->name('points.spin');
                 Route::post('/points/daily-chest', [PointsRewardController::class, 'openChest'])->middleware('throttle:30,1')->name('points.chest');
                 Route::post('/points/redeem', [PointsRewardController::class, 'redeemVoucher'])->middleware('throttle:30,1')->name('points.redeem');
@@ -200,13 +211,10 @@ Route::middleware('throttle:120,1')->group(function () {
             Route::get('/user/notifications/{id}/open', function ($id) {
                 $notification = auth()->user()->notifications()->findOrFail($id);
                 $notification->markAsRead();
-
                 $target = parse_url((string) ($notification->data['url'] ?? ''));
-
                 if ($target && (empty($target['host']) || $target['host'] === request()->getHost())) {
                     return redirect(($target['path'] ?? '/') . (isset($target['query']) ? '?' . $target['query'] : ''));
                 }
-
                 return redirect()->route('user.orders');
             })->name('user.notifications.open');
         });

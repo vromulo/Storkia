@@ -1,4 +1,5 @@
 import './session-guard';
+import storkiaLive from './common/live-dom-engine';
 import variantManager from './seller/variant-manager';
 import imageUploader from './seller/image-uploader';
 import productTableRow from './seller/product-table-row';
@@ -34,10 +35,10 @@ document.addEventListener('alpine:init', () => {
     Alpine.data('chatWindow', chatWindow);
 });
 
-/**
- * Echo exposes an expressive API for subscribing to channels and listening
- * for events that are broadcast by Laravel. Echo and event broadcasting
- * allow your team to quickly build robust real-time web applications.
- */
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => storkiaLive.init(), { once: true });
+} else {
+    storkiaLive.init();
+}
 
 import './echo';

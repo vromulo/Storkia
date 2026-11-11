@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\CommissionRecord;
+use App\Models\Courier;
 use App\Models\ReturnRequest;
 use App\Models\ReturnShipment;
 use App\Models\Rider;
@@ -15,33 +16,6 @@ use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use InvalidArgumentException;
 
-/**
- * All wallet movements for a refunded order live here.
- *
- * The rules (agreed for Storkia):
- *
- *   BUYER      is refunded in full (GCash, paid by Admin from the refund queue).
- *   SELLER     bears the refund: the pending earnings for the order are cancelled,
- *              and the seller is charged for what the platform still has to pay out.
- *   LOGISTICS, RIDER, COURIER
- *              are NOT affected: their pending escrow is released as if the order
- *              had completed, and the return-trip legs are paid in full.
- *   ADMIN      waives its own 10% product commission on a refunded order.
- *
- * Seller deduction =
- *     logistics shipping earning              (released to Logistics)
- *   + rider delivery earning                  (released to the Rider)
- *   + return-leg pay (Rider + Courier)        (only for Return & Refund)
- *   + the refund amount itself                (only when the buyer paid the seller
- *                                              directly via GCash, because the seller
- *                                              is holding that money)
- *
- * If the seller wallet cannot cover the deduction, the available balance goes
- * negative and the shortfall is tracked as arrears, exactly like the existing
- * arrears handling (see RoleWalletService / Seller arrears remittance).
- *
- * Every public method is idempotent, so it is safe to call again after a retry.
- */
 class ReturnRefundLedgerService
 {
     public const ENTRY_ESCROW_REVERSAL     = 'refund_escrow_reversal';
@@ -53,16 +27,8 @@ class ReturnRefundLedgerService
     public function __construct(
         protected RoleWalletService $roleWalletService,
         protected CommissionCalculatorService $commissionCalculator
-    ) {
-    }
+    ) {}
 
-    /**
-     * What the seller would be charged if this request were settled right now.
-     * Used to warn the seller before they approve. Return-leg pay is only known
-     * once the legs are completed, so it is included only when already paid.
-     *
-     * @return array<string, mixed>
-     */
     public function estimateSellerDeduction(SellerOrder $sellerOrder, ReturnRequest $request): array
     {
         $sellerOrder->loadMissing(['commissionRecord', 'payment']);
@@ -75,16 +41,6 @@ class ReturnRefundLedgerService
         );
     }
 
-    /**
-     * Apply every wallet change for a refund that has become due:
-     *   1. cancel the seller's pending earnings for the order,
-     *   2. release Logistics' pending earnings,
-     *   3. release the Rider's pending earnings,
-     *   4. charge the seller (may create arrears),
-     *   5. mark the commission record as refunded (admin commission waived).
-     *
-     * @return array<string, mixed> the settlement breakdown (also stored on the request)
-     */
     public function settleRefund(ReturnRequest $request): array
     {
         return DB::transaction(function () use ($request) {
@@ -107,10 +63,8 @@ class ReturnRefundLedgerService
             $forwardShipmentId = $sellerOrder->shipment?->id;
             $orderNumber = $sellerOrder->seller_order_number;
 
-            // 1. Seller: the sale never happened, so the pending earnings are cancelled.
             $escrowReversed = $this->reverseSellerPendingEscrow($sellerOrder, $method);
 
-            // 2. Logistics: shipping earnings are kept.
             $this->roleWalletService->releasePendingEscrowToAvailable(
                 ownerType: 'Logistics',
                 ownerId: (int) $sellerOrder->logistics_profile_id,
@@ -124,10 +78,32 @@ class ReturnRefundLedgerService
                 meta: ['return_request' => $locked->request_number]
             );
 
-            // 3. Rider: delivery earnings are kept.
+            if ($record->courier_id && $breakdown['courier_earning'] > 0) {
+                $alreadyPaidDirect = WalletTransaction::where('owner_type', 'Courier')
+                    ->where('owner_id', $record->courier_id)
+                    ->where('shipment_id', $forwardShipmentId)
+                    ->where('entry_type', 'first_mile_pickup_pay')
+                    ->exists();
+
+                if (! $alreadyPaidDirect) {
+                    $courier = Courier::find($record->courier_id);
+                    $this->roleWalletService->releasePendingEscrowToAvailable(
+                        ownerType: 'Courier',
+                        ownerId: (int) $record->courier_id,
+                        ownerName: $courier?->full_name ?? "Courier #{$record->courier_id}",
+                        amount: $breakdown['courier_earning'],
+                        sellerOrderId: (int) $sellerOrder->id,
+                        shipmentId: $forwardShipmentId,
+                        entryType: self::ENTRY_COMMISSION_RELEASED,
+                        paymentMethod: $method,
+                        description: "First-Mile pickup earnings kept for refunded Order #{$orderNumber} (not affected by the refund)",
+                        meta: ['return_request' => $locked->request_number]
+                    );
+                }
+            }
+
             if ($record->rider_id && $breakdown['rider_earning'] > 0) {
                 $rider = Rider::find($record->rider_id);
-
                 $this->roleWalletService->releasePendingEscrowToAvailable(
                     ownerType: 'Rider',
                     ownerId: (int) $record->rider_id,
@@ -142,7 +118,6 @@ class ReturnRefundLedgerService
                 );
             }
 
-            // 4. Seller pays for it.
             $this->debitSellerWallet(
                 sellerProfileId: (int) $sellerOrder->seller_profile_id,
                 sellerName: $sellerOrder->sellerProfile?->business_name ?? "Seller #{$sellerOrder->seller_profile_id}",
@@ -154,7 +129,6 @@ class ReturnRefundLedgerService
                 meta: $breakdown
             );
 
-            // 5. The order is no longer a sale: nothing is "settled" to the platform.
             $record->update([
                 'status'     => 'refunded',
                 'settled_at' => now(),
@@ -175,14 +149,6 @@ class ReturnRefundLedgerService
         });
     }
 
-    /**
-     * Pay one leg of the return trip straight to the driver's available balance.
-     *   $leg = 'rider'   : Buyer  -> Hub    (paid like a delivery)
-     *   $leg = 'courier' : Hub    -> Seller (paid like a pickup)
-     *
-     * The platform fronts this pay; it is recovered from the seller when the
-     * refund is settled (see settleRefund / composeDeduction).
-     */
     public function creditReturnLegPay(ReturnShipment $returnShipment, string $leg): ?WalletTransaction
     {
         if (! in_array($leg, ['rider', 'courier'], true)) {
@@ -207,7 +173,6 @@ class ReturnRefundLedgerService
             }
 
             $weight = (float) $locked->total_weight;
-
             $payInfo = $isRider
                 ? $this->commissionCalculator->calculateDistanceScaledDriverPay(
                     'delivery',
@@ -223,12 +188,10 @@ class ReturnRefundLedgerService
                 );
 
             $pay = round((float) ($payInfo['total_pay'] ?? 0), 2);
-
             $sellerOrder = $locked->sellerOrder()->with('payment')->first();
             $method = $sellerOrder?->effective_payment_method ?? 'COD';
 
             $transaction = null;
-
             if ($pay > 0) {
                 $transaction = $this->roleWalletService->creditAvailableDirect(
                     ownerType: $isRider ? 'Rider' : 'Courier',
@@ -254,11 +217,6 @@ class ReturnRefundLedgerService
         });
     }
 
-    // ------------------------------------------------------------------ internals
-
-    /**
-     * @return array<string, mixed>
-     */
     protected function composeDeduction(
         SellerOrder $sellerOrder,
         ?CommissionRecord $record,
@@ -266,21 +224,22 @@ class ReturnRefundLedgerService
         ?ReturnShipment $returnShipment
     ): array {
         $method = $sellerOrder->effective_payment_method;
-
         $logisticsEarning = round((float) ($record?->logistics_total_earning ?? 0), 2);
+        $courierEarning = ($record && $record->courier_id)
+            ? round((float) ($record->courier_commission_amount ?? 0), 2)
+            : 0.00;
         $riderEarning = ($record && $record->rider_id)
             ? round((float) ($record->rider_commission_amount ?? 0), 2)
             : 0.00;
         $returnRiderPay = round((float) ($returnShipment?->rider_pay ?? 0), 2);
         $returnCourierPay = round((float) ($returnShipment?->courier_pay ?? 0), 2);
 
-        // A direct-GCash buyer paid the seller, so the seller is holding the refund money.
         $gcashRecovery = $method === 'GCASH'
             ? round((float) $request->refund_amount, 2)
             : 0.00;
 
         $total = round(
-            $logisticsEarning + $riderEarning + $returnRiderPay + $returnCourierPay + $gcashRecovery,
+            $logisticsEarning + $courierEarning + $riderEarning + $returnRiderPay + $returnCourierPay + $gcashRecovery,
             2
         );
 
@@ -291,6 +250,7 @@ class ReturnRefundLedgerService
             'seller_net_cancelled'    => round((float) ($record?->seller_net_earning ?? 0), 2),
             'admin_commission_waived' => round((float) ($record?->admin_commission_amount ?? 0), 2),
             'logistics_earning'       => $logisticsEarning,
+            'courier_earning'         => $courierEarning,
             'rider_earning'           => $riderEarning,
             'return_rider_pay'        => $returnRiderPay,
             'return_courier_pay'      => $returnCourierPay,
@@ -306,12 +266,6 @@ class ReturnRefundLedgerService
         return $record ?: $this->roleWalletService->recordPendingEscrowOnDelivery($sellerOrder);
     }
 
-    /**
-     * Cancel the pending earnings credited to the seller when the parcel was delivered.
-     * Only what was actually credited is reversed.
-     *
-     * @return float the amount reversed
-     */
     protected function reverseSellerPendingEscrow(SellerOrder $sellerOrder, string $paymentMethod): float
     {
         $wallet = $this->roleWalletService->getOrCreateWallet(
@@ -338,13 +292,11 @@ class ReturnRefundLedgerService
             ->first();
 
         $amount = $pendingCredit ? round((float) $pendingCredit->amount, 2) : 0.00;
-
         if ($amount <= 0) {
             return 0.00;
         }
 
         $newPending = max(0.00, round((float) $locked->pending_balance - $amount, 2));
-
         $locked->update(['pending_balance' => $newPending]);
 
         if ($pendingCredit->status === 'pending') {
@@ -371,13 +323,6 @@ class ReturnRefundLedgerService
         return $amount;
     }
 
-    /**
-     * Charge the seller. The available balance may go negative; the shortfall is
-     * kept as arrears (arrears == the negative balance), the same invariant the
-     * existing arrears remittance relies on.
-     *
-     * @param  array<string, mixed>  $meta
-     */
     protected function debitSellerWallet(
         int $sellerProfileId,
         string $sellerName,
@@ -389,13 +334,11 @@ class ReturnRefundLedgerService
         array $meta = []
     ): ?WalletTransaction {
         $amount = round($amount, 2);
-
         if ($amount <= 0) {
             return null;
         }
 
         $wallet = $this->roleWalletService->getOrCreateWallet('Seller', $sellerProfileId, $sellerName);
-
         /** @var RoleWallet $locked */
         $locked = RoleWallet::where('id', $wallet->id)->lockForUpdate()->firstOrFail();
 
@@ -408,8 +351,17 @@ class ReturnRefundLedgerService
             return $existing;
         }
 
-        $newAvailable = round((float) $locked->available_balance - $amount, 2);
-        $newArrears = $newAvailable < 0 ? round(abs($newAvailable), 2) : 0.00;
+        $currentAvailable = round((float) $locked->available_balance, 2);
+        $currentArrears = round((float) ($locked->platform_commission_arrears ?? 0), 2);
+
+        if ($currentAvailable >= $amount) {
+            $newAvailable = round($currentAvailable - $amount, 2);
+            $newArrears = $currentArrears;
+        } else {
+            $shortfall = round($amount - max(0.0, $currentAvailable), 2);
+            $newAvailable = round($currentAvailable - $amount, 2);
+            $newArrears = round($currentArrears + $shortfall, 2);
+        }
 
         $locked->update([
             'available_balance'           => $newAvailable,

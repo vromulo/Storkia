@@ -7,32 +7,21 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Support\Str;
 
-/**
- * The physical trip of a returned parcel, the forward shipment in reverse:
- *
- *   Buyer --(Rider)--> Sorting Hub --(Courier)--> Seller
- *
- * Statuses move strictly in this order (pickup_failed loops back to a new
- * rider assignment until MAX_PICKUP_ATTEMPTS is reached):
- *
- *   awaiting_rider_assignment -> rider_assigned -> picked_up_from_buyer
- *   -> received_at_hub -> courier_assigned -> out_for_return_delivery
- *   -> delivered_to_seller
- */
 class ReturnShipment extends Model
 {
-    public const STATUS_AWAITING_RIDER           = 'awaiting_rider_assignment';
-    public const STATUS_RIDER_ASSIGNED           = 'rider_assigned';
-    public const STATUS_PICKED_UP_FROM_BUYER     = 'picked_up_from_buyer';
-    public const STATUS_PICKUP_FAILED            = 'pickup_failed';
-    public const STATUS_RECEIVED_AT_HUB          = 'received_at_hub';
-    public const STATUS_COURIER_ASSIGNED         = 'courier_assigned';
-    public const STATUS_OUT_FOR_RETURN_DELIVERY  = 'out_for_return_delivery';
-    public const STATUS_DELIVERED_TO_SELLER      = 'delivered_to_seller';
-    public const STATUS_CANCELLED                = 'cancelled';
+    public const STATUS_AWAITING_RIDER          = 'awaiting_rider_assignment';
+    public const STATUS_RIDER_ASSIGNED          = 'rider_assigned';
+    public const STATUS_PICKED_UP_FROM_BUYER    = 'picked_up_from_buyer';
+    public const STATUS_PICKUP_FAILED           = 'pickup_failed';
+    public const STATUS_RECEIVED_AT_HUB         = 'received_at_hub';
+    public const STATUS_COURIER_ASSIGNED        = 'courier_assigned';
+    public const STATUS_OUT_FOR_RETURN_DELIVERY = 'out_for_return_delivery';
+    public const STATUS_DELIVERY_FAILED         = 'delivery_failed';
+    public const STATUS_DELIVERED_TO_SELLER     = 'delivered_to_seller';
+    public const STATUS_CANCELLED               = 'cancelled';
 
-    /** After this many failed attempts to collect from the buyer, the return is closed. */
-    public const MAX_PICKUP_ATTEMPTS = 3;
+    public const MAX_PICKUP_ATTEMPTS   = 3;
+    public const MAX_DELIVERY_ATTEMPTS = 3;
 
     public const OPEN_STATUSES = [
         self::STATUS_AWAITING_RIDER,
@@ -42,6 +31,7 @@ class ReturnShipment extends Model
         self::STATUS_RECEIVED_AT_HUB,
         self::STATUS_COURIER_ASSIGNED,
         self::STATUS_OUT_FOR_RETURN_DELIVERY,
+        self::STATUS_DELIVERY_FAILED,
     ];
 
     protected $fillable = [
@@ -55,6 +45,7 @@ class ReturnShipment extends Model
         'status',
         'total_weight',
         'pickup_attempts_count',
+        'delivery_attempts_count',
         'pickup_address_snapshot',
         'hub_address_snapshot',
         'return_address_snapshot',
@@ -70,8 +61,10 @@ class ReturnShipment extends Model
         'picked_up_from_hub_at',
         'delivered_to_seller_at',
         'failed_at',
+        'delivery_failed_at',
         'cancelled_at',
         'pickup_failure_reason',
+        'delivery_failure_reason',
         'buyer_pickup_photo',
         'seller_delivery_photo',
     ];
@@ -81,6 +74,7 @@ class ReturnShipment extends Model
         return [
             'total_weight'            => 'decimal:3',
             'pickup_attempts_count'   => 'integer',
+            'delivery_attempts_count' => 'integer',
             'pickup_address_snapshot' => 'array',
             'hub_address_snapshot'    => 'array',
             'return_address_snapshot' => 'array',
@@ -95,11 +89,10 @@ class ReturnShipment extends Model
             'picked_up_from_hub_at'   => 'datetime',
             'delivered_to_seller_at'  => 'datetime',
             'failed_at'               => 'datetime',
+            'delivery_failed_at'      => 'datetime',
             'cancelled_at'            => 'datetime',
         ];
     }
-
-    // ------------------------------------------------------------------ relations
 
     public function returnRequest(): BelongsTo
     {
@@ -111,7 +104,6 @@ class ReturnShipment extends Model
         return $this->belongsTo(SellerOrder::class, 'seller_order_id');
     }
 
-    /** The original (forward) shipment this parcel came from. */
     public function shipment(): BelongsTo
     {
         return $this->belongsTo(Shipment::class, 'shipment_id');
@@ -144,8 +136,6 @@ class ReturnShipment extends Model
             ->orderBy('id', 'desc');
     }
 
-    // ------------------------------------------------------------------ helpers
-
     public static function generateTrackingNumber(): string
     {
         do {
@@ -165,15 +155,16 @@ class ReturnShipment extends Model
         return (int) $this->pickup_attempts_count < self::MAX_PICKUP_ATTEMPTS;
     }
 
+    public function hasDeliveryAttemptsLeft(): bool
+    {
+        return (int) ($this->delivery_attempts_count ?? 0) < self::MAX_DELIVERY_ATTEMPTS;
+    }
+
     public function getTotalReturnPayAttribute(): float
     {
         return round((float) $this->rider_pay + (float) $this->courier_pay, 2);
     }
 
-    /**
-     * Add one entry to the return timeline. Controllers and services call this
-     * instead of writing ReturnShipmentEvent rows by hand.
-     */
     public function recordEvent(
         string $title,
         ?string $description = null,
@@ -205,6 +196,7 @@ class ReturnShipment extends Model
             self::STATUS_RECEIVED_AT_HUB         => 'Received at Sorting Hub',
             self::STATUS_COURIER_ASSIGNED        => 'Courier Assigned for Return Delivery',
             self::STATUS_OUT_FOR_RETURN_DELIVERY => 'On the Way Back to Seller',
+            self::STATUS_DELIVERY_FAILED         => 'Return Delivery to Seller Failed',
             self::STATUS_DELIVERED_TO_SELLER     => 'Delivered to Seller',
             self::STATUS_CANCELLED               => 'Return Cancelled',
             default                              => ucwords(str_replace('_', ' ', (string) $this->status)),

@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\BuyerRewardTransaction;
 use App\Models\BuyerRewardWallet;
 use App\Models\BuyerVoucherClaim;
+use App\Models\OrderItemReview;
 use App\Models\SellerOrder;
 use App\Models\StorkVoucher;
 use Illuminate\Database\Schema\Blueprint;
@@ -16,6 +17,13 @@ use Illuminate\Validation\ValidationException;
 class BuyerRewardService
 {
     public const SLA_TIMEOUT_COMPENSATION_COINS = 50;
+    public const COINS_PER_PESO = 10;
+    public const COIN_TO_PESO_VALUE = 0.10;
+    public const MIN_CHECKOUT_REDEEMABLE_COINS = 10;
+    public const MAX_CHECKOUT_COIN_OFFSET_PERCENT = 25.00;
+    public const PESOS_PER_CASHBACK_COIN = 100.00;
+    public const TEXT_REVIEW_REWARD_COINS = 5;
+    public const PHOTO_REVIEW_REWARD_COINS = 10;
 
     public static function ensureTablesExist(): void
     {
@@ -35,8 +43,7 @@ class BuyerRewardService
                     $table->timestamp('last_daily_login_spin_at')->nullable()->index();
                     $table->timestamp('last_spin_played_at')->nullable()->index();
                     $table->timestamp('last_chest_opened_at')->nullable()->index();
-                    $table->timestamps();
-                });
+                    $table->timestamps();                 });
             }
 
             if (! Schema::hasTable('buyer_reward_transactions')) {
@@ -85,6 +92,373 @@ class BuyerRewardService
         );
     }
 
+    public function calculateMaxRedeemableCoinsForCheckout(int $buyerId, float $merchandiseNetSubtotal): array
+    {
+        $wallet = $this->getOrCreateWallet($buyerId);
+        $balance = max(0, (int) $wallet->coins_balance);
+        $cleanSubtotal = max(0.0, round($merchandiseNetSubtotal, 2));
+
+        if ($balance < self::MIN_CHECKOUT_REDEEMABLE_COINS || $cleanSubtotal <= 0.0) {
+            return [
+                'coins_balance'        => $balance,
+                'max_redeemable_coins' => 0,
+                'peso_discount'        => 0.00,
+            ];
+        }
+
+        $maxCapPesos = round($cleanSubtotal * (self::MAX_CHECKOUT_COIN_OFFSET_PERCENT / 100), 2);
+        $maxCapCoins = (int) floor(($maxCapPesos + 0.0001) * self::COINS_PER_PESO);
+        $maxSubtotalCoins = (int) floor(($cleanSubtotal + 0.0001) * self::COINS_PER_PESO);
+
+        $maxRedeemableCoins = (int) min($balance, $maxCapCoins, $maxSubtotalCoins);
+
+        if ($maxRedeemableCoins < self::MIN_CHECKOUT_REDEEMABLE_COINS) {
+            $maxRedeemableCoins = 0;
+        }
+
+        $pesoDiscount = round($maxRedeemableCoins * self::COIN_TO_PESO_VALUE, 2);
+
+        return [
+            'coins_balance'        => $balance,
+            'max_redeemable_coins' => $maxRedeemableCoins,
+            'peso_discount'        => $pesoDiscount,
+        ];
+    }
+
+    public function allocateCoinsAcrossPackages(int $totalCoinsToUse, array $eligibleSubtotals): array
+    {
+        $allocations = [];
+        foreach ($eligibleSubtotals as $key => $sub) {
+            $allocations[$key] = [
+                'coins_used'     => 0,
+                'coins_discount' => 0.00,
+            ];
+        }
+
+        if ($totalCoinsToUse <= 0 || empty($eligibleSubtotals)) {
+            return $allocations;
+        }
+
+        $cleanSubtotals = [];
+        $maxCoinsPerKey = [];
+        $totalEligibleSubtotal = 0.0;
+
+        foreach ($eligibleSubtotals as $key => $sub) {
+            $cleanSub = max(0.0, round((float) $sub, 2));
+            $cleanSubtotals[$key] = $cleanSub;
+            $maxCoinsPerKey[$key] = (int) floor(($cleanSub + 0.0001) * self::COINS_PER_PESO);
+            $totalEligibleSubtotal = round($totalEligibleSubtotal + $cleanSub, 2);
+        }
+
+        if ($totalEligibleSubtotal <= 0.0) {
+            return $allocations;
+        }
+
+        $totalMaxCapacity = array_sum($maxCoinsPerKey);
+        $effectiveTotalCoins = min($totalCoinsToUse, $totalMaxCapacity);
+
+        if ($effectiveTotalCoins <= 0) {
+            return $allocations;
+        }
+
+        $flooredCoins = [];
+        $remainders = [];
+        $allocatedSum = 0;
+
+        foreach ($cleanSubtotals as $key => $sub) {
+            if ($sub <= 0.0 || $maxCoinsPerKey[$key] <= 0) {
+                $flooredCoins[$key] = 0;
+                $remainders[$key] = 0.0;
+                continue;
+            }
+
+            $exactQuota = $effectiveTotalCoins * ($sub / $totalEligibleSubtotal);
+            $floorVal = (int) min($maxCoinsPerKey[$key], floor($exactQuota));
+            $flooredCoins[$key] = $floorVal;
+            $remainders[$key] = $exactQuota - $floorVal;
+            $allocatedSum += $floorVal;
+        }
+
+        $leftoverCoins = max(0, $effectiveTotalCoins - $allocatedSum);
+
+        if ($leftoverCoins > 0) {
+            $sortableKeys = array_keys($cleanSubtotals);
+            usort($sortableKeys, function ($a, $b) use ($remainders, $cleanSubtotals) {
+                $diff = $remainders[$b] <=> $remainders[$a];
+                if ($diff !== 0) {
+                    return $diff;
+                }
+                return $cleanSubtotals[$b] <=> $cleanSubtotals[$a];
+            });
+
+            while ($leftoverCoins > 0) {
+                $distributedInPass = false;
+                foreach ($sortableKeys as $k) {
+                    if ($leftoverCoins <= 0) {
+                        break;
+                    }
+                    if ($flooredCoins[$k] < $maxCoinsPerKey[$k]) {
+                        $flooredCoins[$k]++;
+                        $leftoverCoins--;
+                        $distributedInPass = true;
+                    }
+                }
+                if (! $distributedInPass) {
+                    break;
+                }
+            }
+        }
+
+        foreach ($flooredCoins as $key => $coins) {
+            $allocations[$key] = [
+                'coins_used'     => (int) $coins,
+                'coins_discount' => round($coins * self::COIN_TO_PESO_VALUE, 2),
+            ];
+        }
+
+        return $allocations;
+    }
+
+    public function redeemCoinsForCheckoutOrder(
+        int $buyerId,
+        int $coinsToSpend,
+        int $sellerOrderId,
+        string $sellerOrderNumber
+    ): ?BuyerRewardTransaction {
+        self::ensureTablesExist();
+
+        if ($coinsToSpend <= 0) {
+            return null;
+        }
+
+        return DB::transaction(function () use ($buyerId, $coinsToSpend, $sellerOrderId, $sellerOrderNumber) {
+            $wallet = $this->getOrCreateWallet($buyerId);
+            $locked = BuyerRewardWallet::where('id', $wallet->id)->lockForUpdate()->firstOrFail();
+
+            if ((int) $locked->coins_balance < $coinsToSpend) {
+                throw ValidationException::withMessages([
+                    'use_storkia_coins' => 'Insufficient Storkia Coins balance for this checkout.',
+                ]);
+            }
+
+            $newBalance = max(0, (int) $locked->coins_balance - $coinsToSpend);
+            $newSpent = (int) $locked->lifetime_coins_spent + $coinsToSpend;
+
+            $locked->update([
+                'coins_balance'        => $newBalance,
+                'lifetime_coins_spent' => $newSpent,
+            ]);
+
+            $pesoSaved = number_format($coinsToSpend * self::COIN_TO_PESO_VALUE, 2);
+
+            return BuyerRewardTransaction::create([
+                'buyer_id'            => $buyerId,
+                'reward_wallet_id'    => $locked->id,
+                'seller_order_id'     => $sellerOrderId,
+                'reference_code'      => $this->generateReference('CHK'),
+                'source_type'         => 'checkout_coin_redemption',
+                'reward_type'         => 'coins',
+                'coins_delta'         => -$coinsToSpend,
+                'spins_delta'         => 0,
+                'coins_balance_after' => $newBalance,
+                'spins_balance_after' => (int) $locked->spin_tickets,
+                'description'         => "Redeemed {$coinsToSpend} Storkia Coins (-₱{$pesoSaved}) on Order #{$sellerOrderNumber}",
+                'meta_snapshot'       => [
+                    'seller_order_id'     => $sellerOrderId,
+                    'seller_order_number' => $sellerOrderNumber,
+                    'coins_spent'         => $coinsToSpend,
+                    'peso_discount'       => round($coinsToSpend * self::COIN_TO_PESO_VALUE, 2),
+                ],
+            ]);
+        });
+    }
+
+    public function restoreCoinsForSellerOrder(SellerOrder $sellerOrder): ?BuyerRewardTransaction
+    {
+        self::ensureTablesExist();
+
+        $sellerOrder->loadMissing('extra');
+        $coinsUsed = (int) ($sellerOrder->extra?->coins_used ?? 0);
+        $buyerId = (int) $sellerOrder->buyer_id;
+
+        if ($coinsUsed <= 0 || $buyerId <= 0) {
+            return null;
+        }
+
+        return DB::transaction(function () use ($sellerOrder, $buyerId, $coinsUsed) {
+            $alreadyRestored = BuyerRewardTransaction::where('seller_order_id', $sellerOrder->id)
+                ->where('source_type', 'checkout_coin_refund')
+                ->exists();
+
+            if ($alreadyRestored) {
+                return null;
+            }
+
+            $wallet = $this->getOrCreateWallet($buyerId);
+            $locked = BuyerRewardWallet::where('id', $wallet->id)->lockForUpdate()->firstOrFail();
+
+            $newBalance = (int) $locked->coins_balance + $coinsUsed;
+            $newSpent = max(0, (int) $locked->lifetime_coins_spent - $coinsUsed);
+
+            $locked->update([
+                'coins_balance'        => $newBalance,
+                'lifetime_coins_spent' => $newSpent,
+            ]);
+
+            return BuyerRewardTransaction::create([
+                'buyer_id'            => $buyerId,
+                'reward_wallet_id'    => $locked->id,
+                'seller_order_id'     => $sellerOrder->id,
+                'reference_code'      => $this->generateReference('CRF'),
+                'source_type'         => 'checkout_coin_refund',
+                'reward_type'         => 'coins',
+                'coins_delta'         => $coinsUsed,
+                'spins_delta'         => 0,
+                'coins_balance_after' => $newBalance,
+                'spins_balance_after' => (int) $locked->spin_tickets,
+                'description'         => "Refunded +{$coinsUsed} Storkia Coins from cancelled/returned Order #{$sellerOrder->seller_order_number}",
+                'meta_snapshot'       => [
+                    'seller_order_number' => $sellerOrder->seller_order_number,
+                    'coins_restored'      => $coinsUsed,
+                ],
+            ]);
+        });
+    }
+
+    public function awardOrderCompletionCashbackCoins(SellerOrder $sellerOrder): ?BuyerRewardTransaction
+    {
+        self::ensureTablesExist();
+
+        $buyerId = (int) $sellerOrder->buyer_id;
+        if ($buyerId <= 0) {
+            return null;
+        }
+
+        $subtotal = max(0.0, (float) $sellerOrder->subtotal_amount);
+        if ($subtotal <= 0.0) {
+            return null;
+        }
+
+        $coinsEarned = max(1, (int) floor($subtotal / self::PESOS_PER_CASHBACK_COIN));
+
+        return DB::transaction(function () use ($sellerOrder, $buyerId, $coinsEarned) {
+            $alreadyAwarded = BuyerRewardTransaction::where('seller_order_id', $sellerOrder->id)
+                ->where('source_type', 'order_completion_cashback')
+                ->exists();
+
+            if ($alreadyAwarded) {
+                return null;
+            }
+
+            $wallet = $this->getOrCreateWallet($buyerId);
+            $locked = BuyerRewardWallet::where('id', $wallet->id)->lockForUpdate()->firstOrFail();
+
+            $newBalance = (int) $locked->coins_balance + $coinsEarned;
+            $newLifetime = (int) $locked->lifetime_coins_earned + $coinsEarned;
+
+            $locked->update([
+                'coins_balance'         => $newBalance,
+                'lifetime_coins_earned' => $newLifetime,
+            ]);
+
+            if ($sellerOrder->extra && Schema::hasColumn('seller_order_extras', 'coins_earned_on_completion')) {
+                $sellerOrder->extra->update([
+                    'coins_earned_on_completion' => $coinsEarned,
+                ]);
+            }
+
+            return BuyerRewardTransaction::create([
+                'buyer_id'            => $buyerId,
+                'reward_wallet_id'    => $locked->id,
+                'seller_order_id'     => $sellerOrder->id,
+                'reference_code'      => $this->generateReference('ORD'),
+                'source_type'         => 'order_completion_cashback',
+                'reward_type'         => 'coins',
+                'coins_delta'         => $coinsEarned,
+                'spins_delta'         => 0,
+                'coins_balance_after' => $newBalance,
+                'spins_balance_after' => (int) $locked->spin_tickets,
+                'description'         => "Order Completion Cashback for Order #{$sellerOrder->seller_order_number} (+{$coinsEarned} Storkia Coins)",
+                'meta_snapshot'       => [
+                    'seller_order_number' => $sellerOrder->seller_order_number,
+                    'subtotal_amount'     => (float) $sellerOrder->subtotal_amount,
+                    'coins_awarded'       => $coinsEarned,
+                ],
+            ]);
+        });
+    }
+
+    public function awardProductReviewCoins(OrderItemReview $review, bool $hasPhoto = false): ?BuyerRewardTransaction
+    {
+        self::ensureTablesExist();
+
+        $buyerId = (int) $review->buyer_id;
+        if ($buyerId <= 0) {
+            return null;
+        }
+
+        if (Schema::hasColumn('order_item_reviews', 'coins_rewarded') && (int) $review->coins_rewarded > 0) {
+            return null;
+        }
+
+        $hasText = trim((string) $review->review_text) !== '';
+        if (! $hasText && ! $hasPhoto) {
+            return null;
+        }
+
+        $coinsAwarded = $hasPhoto ? self::PHOTO_REVIEW_REWARD_COINS : self::TEXT_REVIEW_REWARD_COINS;
+
+        return DB::transaction(function () use ($review, $buyerId, $coinsAwarded, $hasPhoto) {
+            $lockedReview = OrderItemReview::where('id', $review->id)->lockForUpdate()->first();
+            if (! $lockedReview) {
+                return null;
+            }
+
+            if (Schema::hasColumn('order_item_reviews', 'coins_rewarded') && (int) $lockedReview->coins_rewarded > 0) {
+                return null;
+            }
+
+            $wallet = $this->getOrCreateWallet($buyerId);
+            $lockedWallet = BuyerRewardWallet::where('id', $wallet->id)->lockForUpdate()->firstOrFail();
+
+            $newBalance = (int) $lockedWallet->coins_balance + $coinsAwarded;
+            $newLifetime = (int) $lockedWallet->lifetime_coins_earned + $coinsAwarded;
+
+            $lockedWallet->update([
+                'coins_balance'         => $newBalance,
+                'lifetime_coins_earned' => $newLifetime,
+            ]);
+
+            if (Schema::hasColumn('order_item_reviews', 'coins_rewarded')) {
+                $lockedReview->update([
+                    'coins_rewarded' => $coinsAwarded,
+                ]);
+            }
+
+            $bonusType = $hasPhoto ? 'Photo Product Review Bonus' : 'Verified Product Review Bonus';
+
+            return BuyerRewardTransaction::create([
+                'buyer_id'            => $buyerId,
+                'reward_wallet_id'    => $lockedWallet->id,
+                'seller_order_id'     => $lockedReview->seller_order_id,
+                'reference_code'      => $this->generateReference('REV'),
+                'source_type'         => 'product_review_reward',
+                'reward_type'         => 'coins',
+                'coins_delta'         => $coinsAwarded,
+                'spins_delta'         => 0,
+                'coins_balance_after' => $newBalance,
+                'spins_balance_after' => (int) $lockedWallet->spin_tickets,
+                'description'         => "{$bonusType}: +{$coinsAwarded} Storkia Coins earned!",
+                'meta_snapshot'       => [
+                    'review_id'     => $lockedReview->id,
+                    'order_item_id' => $lockedReview->order_item_id,
+                    'product_id'    => $lockedReview->product_id,
+                    'has_photo'     => $hasPhoto,
+                ],
+            ]);
+        });
+    }
+
     public function grantDailyLoginSpinIfEligible(int $buyerId): array
     {
         self::ensureTablesExist();
@@ -101,7 +475,6 @@ class BuyerRewardService
             }
 
             $newSpins = (int) $locked->spin_tickets + 1;
-
             $locked->update([
                 'spin_tickets'             => $newSpins,
                 'last_daily_login_spin_at' => now(),
@@ -181,40 +554,40 @@ class BuyerRewardService
     {
         return [
             [
-                'index'       => 0,
-                'key'         => 'coins_5',
-                'label'       => '5 Coins',
-                'sub_label'   => 'Storkia Coins',
-                'type'        => 'coins',
-                'coins'       => 5,
-                'spins'       => 0,
-                'weight'      => 28,
-                'color'       => '#CF4173',
-                'text_color'  => '#FFFFFF',
+                'index'      => 0,
+                'key'        => 'coins_5',
+                'label'      => '5 Coins',
+                'sub_label'  => 'Storkia Coins',
+                'type'       => 'coins',
+                'coins'      => 5,
+                'spins'      => 0,
+                'weight'     => 28,
+                'color'      => '#CF4173',
+                'text_color' => '#FFFFFF',
             ],
             [
-                'index'       => 1,
-                'key'         => 'free_3_spins',
-                'label'       => 'Free 3 Spins',
-                'sub_label'   => '+3 Spin Attempts',
-                'type'        => 'spins',
-                'coins'       => 0,
-                'spins'       => 3,
-                'weight'      => 10,
-                'color'       => '#5D3140',
-                'text_color'  => '#F6D8BD',
+                'index'      => 1,
+                'key'        => 'free_3_spins',
+                'label'      => 'Free 3 Spins',
+                'sub_label'  => '+3 Spin Attempts',
+                'type'       => 'spins',
+                'coins'      => 0,
+                'spins'      => 3,
+                'weight'     => 10,
+                'color'      => '#5D3140',
+                'text_color' => '#F6D8BD',
             ],
             [
-                'index'       => 2,
-                'key'         => 'coins_15',
-                'label'       => '15 Coins',
-                'sub_label'   => 'Storkia Coins',
-                'type'        => 'coins',
-                'coins'       => 15,
-                'spins'       => 0,
-                'weight'      => 22,
-                'color'       => '#F39399',
-                'text_color'  => '#5D3140',
+                'index'      => 2,
+                'key'        => 'coins_15',
+                'label'      => '15 Coins',
+                'sub_label'  => 'Storkia Coins',
+                'type'       => 'coins',
+                'coins'      => 15,
+                'spins'      => 0,
+                'weight'     => 22,
+                'color'      => '#F39399',
+                'text_color' => '#5D3140',
             ],
             [
                 'index'       => 3,
@@ -230,23 +603,23 @@ class BuyerRewardService
                     'min_spend'      => 150.00,
                     'title'          => 'Spin Reward: ₱25 Free Shipping',
                 ],
-                'coins'       => 0,
-                'spins'       => 0,
-                'weight'      => 12,
-                'color'       => '#F6D8BD',
-                'text_color'  => '#5D3140',
+                'coins'      => 0,
+                'spins'      => 0,
+                'weight'     => 12,
+                'color'      => '#F6D8BD',
+                'text_color' => '#5D3140',
             ],
             [
-                'index'       => 4,
-                'key'         => 'coins_30',
-                'label'       => '30 Coins',
-                'sub_label'   => 'Storkia Coins',
-                'type'        => 'coins',
-                'coins'       => 30,
-                'spins'       => 0,
-                'weight'      => 12,
-                'color'       => '#CF4173',
-                'text_color'  => '#FFFFFF',
+                'index'      => 4,
+                'key'        => 'coins_30',
+                'label'      => '30 Coins',
+                'sub_label'  => 'Storkia Coins',
+                'type'       => 'coins',
+                'coins'      => 30,
+                'spins'      => 0,
+                'weight'     => 12,
+                'color'      => '#CF4173',
+                'text_color' => '#FFFFFF',
             ],
             [
                 'index'       => 5,
@@ -262,23 +635,23 @@ class BuyerRewardService
                     'min_spend'      => 250.00,
                     'title'          => 'Spin Reward: ₱40 Platform Discount',
                 ],
-                'coins'       => 0,
-                'spins'       => 0,
-                'weight'      => 7,
-                'color'       => '#5D3140',
-                'text_color'  => '#FFFFFF',
+                'coins'      => 0,
+                'spins'      => 0,
+                'weight'     => 7,
+                'color'      => '#5D3140',
+                'text_color' => '#FFFFFF',
             ],
             [
-                'index'       => 6,
-                'key'         => 'coins_60',
-                'label'       => '60 Coins',
-                'sub_label'   => 'Jackpot Coins',
-                'type'        => 'coins',
-                'coins'       => 60,
-                'spins'       => 0,
-                'weight'      => 5,
-                'color'       => '#F39399',
-                'text_color'  => '#5D3140',
+                'index'      => 6,
+                'key'        => 'coins_60',
+                'label'      => '60 Coins',
+                'sub_label'  => 'Jackpot Coins',
+                'type'       => 'coins',
+                'coins'      => 60,
+                'spins'      => 0,
+                'weight'     => 5,
+                'color'      => '#F39399',
+                'text_color' => '#5D3140',
             ],
             [
                 'index'       => 7,
@@ -294,11 +667,11 @@ class BuyerRewardService
                     'min_spend'      => 300.00,
                     'title'          => 'Spin Reward: 10% Off Platform Voucher',
                 ],
-                'coins'       => 0,
-                'spins'       => 0,
-                'weight'      => 4,
-                'color'       => '#F6D8BD',
-                'text_color'  => '#5D3140',
+                'coins'      => 0,
+                'spins'      => 0,
+                'weight'     => 4,
+                'color'      => '#F6D8BD',
+                'text_color' => '#5D3140',
             ],
         ];
     }
@@ -377,6 +750,7 @@ class BuyerRewardService
     public function spinWheel(int $buyerId): array
     {
         self::ensureTablesExist();
+
         $this->grantDailyLoginSpinIfEligible($buyerId);
 
         return DB::transaction(function () use ($buyerId) {
@@ -425,7 +799,7 @@ class BuyerRewardService
             ]);
 
             $desc = match ($winningSegment['type']) {
-                'spins'   => "Spin the Wheel: Won Free 3 Spins! (+3 Spin Attempts added)",
+                'spins'   => 'Spin the Wheel: Won Free 3 Spins! (+3 Spin Attempts added)',
                 'voucher' => "Spin the Wheel: Won {$winningSegment['label']} (Code: {$issuedVoucher?->code})",
                 default   => "Spin the Wheel: Won +{$coinsDelta} Storkia Coins!",
             };
@@ -481,7 +855,6 @@ class BuyerRewardService
             $locked = BuyerRewardWallet::where('id', $wallet->id)->lockForUpdate()->firstOrFail();
 
             if (! $locked->canOpenDailyChest()) {
-                $remainingSec = $locked->secondsUntilNextDailyChest();
                 throw ValidationException::withMessages([
                     'chest' => 'Your Daily Treasure Chest is cooling down. Please wait for the 24-hour timer to finish.',
                 ]);
@@ -489,25 +862,25 @@ class BuyerRewardService
 
             $chestStages = [
                 [
-                    'stage'        => 1,
-                    'label'        => 'Stage 1 Coin Pouch',
-                    'coins_options'=> [10, 12, 15],
-                    'weight'       => 68,
-                    'reward_image' => asset('game-assets/chest-for-reward-stage-1.png'),
+                    'stage'         => 1,
+                    'label'         => 'Stage 1 Coin Pouch',
+                    'coins_options' => [10, 12, 15],
+                    'weight'        => 68,
+                    'reward_image'  => asset('game-assets/chest-for-reward-stage-1.png'),
                 ],
                 [
-                    'stage'        => 2,
-                    'label'        => 'Stage 2 Treasure Stack',
-                    'coins_options'=> [25, 30, 35],
-                    'weight'       => 25,
-                    'reward_image' => asset('game-assets/chest-for-reward-stage-2.png'),
+                    'stage'         => 2,
+                    'label'         => 'Stage 2 Treasure Stack',
+                    'coins_options' => [25, 30, 35],
+                    'weight'        => 25,
+                    'reward_image'  => asset('game-assets/chest-for-reward-stage-2.png'),
                 ],
                 [
-                    'stage'        => 3,
-                    'label'        => 'Stage 3 Grand Jackpot Hoard',
-                    'coins_options'=> [55, 65, 80],
-                    'weight'       => 7,
-                    'reward_image' => asset('game-assets/chest-for-reward-stage-3.png'),
+                    'stage'         => 3,
+                    'label'         => 'Stage 3 Grand Jackpot Hoard',
+                    'coins_options' => [55, 65, 80],
+                    'weight'        => 7,
+                    'reward_image'  => asset('game-assets/chest-for-reward-stage-3.png'),
                 ],
             ];
 

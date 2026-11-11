@@ -33,8 +33,8 @@ class DashboardController extends Controller
         $period = (string) $request->query('period', '7d');
         $offset = max(0, (int) $request->query('offset', 0));
         $refDateInput = trim((string) $request->query('ref_date', '')) ?: null;
-
         $window = AdminDashboardHelper::resolvePeriodWindow($period, $offset, $refDateInput);
+
         $period = $window['period'];
         $offset = $window['offset'];
         $refDate = $window['refDate'];
@@ -74,7 +74,8 @@ class DashboardController extends Controller
             $walletAvailable = (float) $wallet->available_balance;
             $walletPendingEscrow = (float) $wallet->pending_balance;
 
-            $periodOrders = SellerOrder::where('seller_id', $user->id)
+            $periodOrders = SellerOrder::with('extra')
+                ->where('seller_id', $user->id)
                 ->whereBetween('created_at', [$startDate, $endDate])
                 ->get();
 
@@ -83,7 +84,7 @@ class DashboardController extends Controller
                 ->get();
 
             $validPeriodOrders = $periodOrders->whereNotIn('status', ['cancelled', 'rejected', 'returned_to_seller']);
-            $grossMerchandise = round((float) $validPeriodOrders->sum('subtotal_amount'), 2);
+            $grossMerchandise = round((float) $validPeriodOrders->sum(fn (SellerOrder $so) => $this->resolveSellerCommissionableSubtotal($so)), 2);
             $realizedNetSales = round((float) $periodCommissions->sum('seller_net_earning'), 2);
             $estimatedNetSales = $realizedNetSales > 0 ? $realizedNetSales : round($grossMerchandise * 0.90, 2);
 
@@ -146,12 +147,21 @@ class DashboardController extends Controller
         return view('seller.reapply', compact('latestApp'));
     }
 
+    protected function resolveSellerCommissionableSubtotal(SellerOrder $ord): float
+    {
+        $extra = $ord->extra;
+        if ($extra && (float) $extra->original_subtotal_amount > 0) {
+            return max(0.0, round((float) $extra->original_subtotal_amount - (float) $extra->store_voucher_discount, 2));
+        }
+
+        return max(0.0, round((float) $ord->subtotal_amount, 2));
+    }
+
     protected function buildSellerChartSeries(Carbon $startDate, Carbon $endDate, string $bucketMode, $orders, $commissions): array
     {
         $buckets = [];
 
         if ($bucketMode === 'hour') {
-            // 12 AM (00:00) to 11 PM (23:00)
             for ($h = 0; $h <= 23; $h++) {
                 $slotStart = $startDate->copy()->addHours($h);
                 $slotEnd = $slotStart->copy()->addHour()->subSecond();
@@ -204,7 +214,7 @@ class DashboardController extends Controller
                 if ($ts->betweenIncluded($b['start'], $b['end'])) {
                     $b['orders']++;
                     if (! in_array($ord->status, ['cancelled', 'rejected', 'returned_to_seller'], true)) {
-                        $sub = (float) $ord->subtotal_amount;
+                        $sub = $this->resolveSellerCommissionableSubtotal($ord);
                         $b['gross_sales'] = round($b['gross_sales'] + $sub, 2);
                         $b['revenue'] = round($b['revenue'] + ($sub * 0.90), 2);
                     }

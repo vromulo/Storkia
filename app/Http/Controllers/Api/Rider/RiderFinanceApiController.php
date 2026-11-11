@@ -40,13 +40,13 @@ class RiderFinanceApiController extends Controller
         /** @var Rider $rider */
         $rider = $request->user();
 
-        $unremittedCollections = CodCollection::with(['shipment', 'sellerOrder'])
+        $unremittedCollections = CodCollection::with(['shipment', 'sellerOrder', 'commissionRecord'])
             ->where('rider_id', $rider->id)
             ->where('status', 'collected')
             ->orderBy('collected_at', 'asc')
             ->get();
 
-        $recentCollections = CodCollection::with(['shipment', 'sellerOrder'])
+        $recentCollections = CodCollection::with(['shipment', 'sellerOrder', 'commissionRecord'])
             ->where('rider_id', $rider->id)
             ->orderByDesc('collected_at')
             ->limit(50)
@@ -102,7 +102,8 @@ class RiderFinanceApiController extends Controller
             'shortfall_reason'     => ['nullable', 'string', 'max:255'],
         ]);
 
-        $collections = CodCollection::where('rider_id', $rider->id)
+        $collections = CodCollection::with(['shipment', 'commissionRecord'])
+            ->where('rider_id', $rider->id)
             ->where('status', 'collected')
             ->orderBy('collected_at', 'asc')
             ->get();
@@ -148,13 +149,13 @@ class RiderFinanceApiController extends Controller
         ) {
             $totalSellerShare = round((float) $collections->sum(fn ($c) => round((float) $c->product_subtotal * 0.90, 2)), 2);
             $totalAdminComm = round((float) $collections->sum(fn ($c) => round((float) $c->product_subtotal * 0.10, 2)), 2);
-            $totalLogisticsFee = round((float) $collections->sum(fn ($c) => round((float) $c->shipping_fee * 0.90, 2)), 2);
-            $totalRiderComm = round((float) $collections->sum(fn ($c) => round((float) $c->shipping_fee * 0.10, 2)), 2);
-            $netRemitted = round(max(0, $actualRemitted - $totalRiderComm), 2);
+            $totalRiderComm = round((float) $collections->sum(fn (CodCollection $c) => WebRiderDeliveryController::resolveCollectionRiderCommission($c)), 2);
+            $totalLogisticsFee = round((float) $collections->sum(fn (CodCollection $c) => max(0.0, (float) $c->shipping_fee - WebRiderDeliveryController::resolveCollectionRiderCommission($c))), 2);
+            $netRemitted = $actualRemitted;
 
             $notesText = $isShort
                 ? "Shortfall ₱" . number_format($shortfallAmount, 2) . ": " . trim((string) $validated['shortfall_reason'])
-                : "Submitted by Rider {$rider->full_name} ({$collections->count()} COD collection(s)).";
+                : "100% Gross COD Cash remitted by Rider {$rider->full_name} ({$collections->count()} collection(s)).";
 
             $remittanceData = [
                 'remittance_reference'   => $remittanceRef,
@@ -187,6 +188,7 @@ class RiderFinanceApiController extends Controller
                 $remainingToAllocate = round($remainingToAllocate - $allocated, 2);
 
                 $colIsShort = $allocated + 0.009 < $colExpected;
+                $colRiderComm = WebRiderDeliveryController::resolveCollectionRiderCommission($col);
 
                 $col->update([
                     'remitted_amount'      => $allocated,
@@ -200,7 +202,7 @@ class RiderFinanceApiController extends Controller
                     'cod_remittance_id'       => $remittance->id,
                     'seller_order_id'         => $col->seller_order_id,
                     'collected_amount'        => $allocated,
-                    'rider_commission_amount' => round((float) $col->shipping_fee * 0.10, 2),
+                    'rider_commission_amount' => $colRiderComm,
                 ];
                 if (Schema::hasColumn('cod_remittance_items', 'amount')) {
                     $itemData['amount'] = $allocated;
@@ -234,7 +236,7 @@ class RiderFinanceApiController extends Controller
             'status'  => 'success',
             'message' => $isShort
                 ? "Short COD Remittance #{$remittanceRef} (₱" . number_format($actualRemitted, 2) . " of ₱" . number_format($totalExpected, 2) . ") submitted and flagged with ₱" . number_format($shortfallAmount, 2) . " shortfall for Logistics reconciliation."
-                : "COD Remittance Batch #{$remittanceRef} (₱" . number_format($actualRemitted, 2) . ") submitted to your Logistics Hub for verification!",
+                : "100% COD Remittance Batch #{$remittanceRef} (₱" . number_format($actualRemitted, 2) . ") submitted to your Logistics Hub! Your Rider Delivery Commission will be credited to your E-Wallet once Logistics remits to Admin and Admin verifies.",
             'data'    => $this->formatCodRemittance($createdRemittance),
         ]);
     }
@@ -247,7 +249,7 @@ class RiderFinanceApiController extends Controller
         /** @var Rider $rider */
         $rider = $request->user();
 
-        $codCollection = CodCollection::find($codCollectionId);
+        $codCollection = CodCollection::with(['shipment', 'commissionRecord'])->find($codCollectionId);
 
         if (! $codCollection || (int) $codCollection->rider_id !== (int) $rider->id) {
             return response()->json([
@@ -300,9 +302,9 @@ class RiderFinanceApiController extends Controller
 
             $sellerShare = round((float) $codCollection->product_subtotal * 0.90, 2);
             $adminComm = round((float) $codCollection->product_subtotal * 0.10, 2);
-            $logisticsFee = round((float) $codCollection->shipping_fee * 0.90, 2);
-            $riderComm = round((float) $codCollection->shipping_fee * 0.10, 2);
-            $netRemitted = round(max(0, $remitted - $riderComm), 2);
+            $riderComm = WebRiderDeliveryController::resolveCollectionRiderCommission($codCollection);
+            $logisticsFee = max(0.0, round((float) $codCollection->shipping_fee - $riderComm, 2));
+            $netRemitted = $remitted;
 
             $remittanceData = [
                 'remittance_reference'   => $remittanceRef,
@@ -313,7 +315,7 @@ class RiderFinanceApiController extends Controller
                 'net_remitted_amount'    => $netRemitted,
                 'status'                 => 'submitted',
                 'submitted_at'           => now(),
-                'notes'                  => $validated['shortfall_reason'] ?? "Single COD collection remittance ({$codCollection->collection_reference}).",
+                'notes'                  => $validated['shortfall_reason'] ?? "100% Gross COD collection remittance ({$codCollection->collection_reference}).",
             ];
 
             if (Schema::hasColumn('cod_remittances', 'total_seller_share')) {
@@ -361,7 +363,7 @@ class RiderFinanceApiController extends Controller
             'status'  => 'success',
             'message' => $isShort
                 ? 'Short COD remittance recorded and flagged for Logistics & Admin reconciliation.'
-                : 'Full COD remittance submitted to Logistics Hub for verification.',
+                : '100% Gross COD remittance submitted to Logistics Hub for verification.',
             'data'    => $this->formatCodRemittance($remittance),
         ]);
     }
@@ -428,6 +430,10 @@ class RiderFinanceApiController extends Controller
         $deliveredCount = $attemptsInPeriod->where('outcome', 'delivered')->count();
         $failedCount = $attemptsInPeriod->where('outcome', 'failed')->count();
 
+        $unremittedCodOnHand = round((float) CodCollection::where('rider_id', $rider->id)
+            ->where('status', 'collected')
+            ->sum('collected_amount'), 2);
+
         $withdrawalRequests = Schema::hasTable('withdrawal_requests')
             ? WithdrawalRequest::where('requester_type', 'Rider')
                 ->where('requester_id', (int) $rider->id)
@@ -444,12 +450,14 @@ class RiderFinanceApiController extends Controller
                     'to_date'   => $toDate,
                 ],
                 'wallet'              => [
-                    'id'                => (int) $riderWallet->id,
-                    'available_balance' => round((float) $riderWallet->available_balance, 2),
-                    'pending_balance'   => round((float) $riderWallet->pending_balance, 2),
-                    'total_earned'      => round((float) $riderWallet->total_earned, 2),
-                    'total_withdrawn'   => round((float) $riderWallet->total_withdrawn, 2),
-                    'last_credited_at'  => $riderWallet->last_credited_at?->toIso8601String(),
+                    'id'                     => (int) $riderWallet->id,
+                    'available_balance'      => round((float) $riderWallet->available_balance, 2),
+                    'pending_balance'        => round((float) $riderWallet->pending_balance, 2),
+                    'unremitted_cod_on_hand' => $unremittedCodOnHand,
+                    'can_withdraw'           => $unremittedCodOnHand <= 0.009 && (float) $riderWallet->available_balance >= 100.00,
+                    'total_earned'           => round((float) $riderWallet->total_earned, 2),
+                    'total_withdrawn'        => round((float) $riderWallet->total_withdrawn, 2),
+                    'last_credited_at'       => $riderWallet->last_credited_at?->toIso8601String(),
                 ],
                 'summary'             => [
                     'today_earnings'         => $todayEarnings,
@@ -668,6 +676,7 @@ class RiderFinanceApiController extends Controller
         $collected = round((float) $c->collected_amount, 2);
         $remitted = $c->remitted_amount !== null ? round((float) $c->remitted_amount, 2) : null;
         $shortfall = $remitted !== null ? max(0.0, round($expected - $remitted, 2)) : 0.00;
+        $riderCommission = WebRiderDeliveryController::resolveCollectionRiderCommission($c);
 
         return [
             'id'                   => (int) $c->id,
@@ -682,7 +691,7 @@ class RiderFinanceApiController extends Controller
             'shortfall_amount'     => $shortfall,
             'product_subtotal'     => round((float) $c->product_subtotal, 2),
             'shipping_fee'         => round((float) $c->shipping_fee, 2),
-            'rider_commission'     => round((float) $c->shipping_fee * 0.10, 2),
+            'rider_commission'     => $riderCommission,
             'status'               => (string) $c->status,
             'remittance_reference' => $c->remittance_reference,
             'notes'                => $c->notes,
@@ -699,7 +708,7 @@ class RiderFinanceApiController extends Controller
             'remittance_reference'   => (string) $r->remittance_reference,
             'total_collected_amount' => round((float) $r->total_collected_amount, 2),
             'total_rider_commission' => round((float) $r->total_rider_commission, 2),
-            'net_remitted_amount'    => round((float) $r->net_remitted_amount, 2),
+            'net_remitted_amount'    => round((float) $r->total_collected_amount, 2),
             'status'                 => (string) $r->status,
             'notes'                  => $r->notes,
             'submitted_at'           => $r->submitted_at?->toIso8601String(),

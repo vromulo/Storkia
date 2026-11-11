@@ -9,6 +9,7 @@ use App\Models\LogisticsProfile;
 use App\Models\OrderItemReview;
 use App\Models\OrderServiceRating;
 use App\Models\OrderStatusHistory;
+use App\Models\ProductQuestion;
 use App\Models\SellerOrder;
 use App\Models\SellerOrderExtra;
 use App\Models\SellerProfile;
@@ -18,7 +19,9 @@ use App\Models\Shipment;
 use App\Models\ShipmentTracking;
 use App\Models\WalletTransaction;
 use App\Models\WithdrawalRequest;
+use App\Notifications\OrderLifecycleNotification;
 use App\Services\BuyerOrderNotificationService;
+use App\Services\BuyerRewardService;
 use App\Services\FormalReportService;
 use App\Services\InventoryStockService;
 use App\Services\OrderCompletionService;
@@ -43,8 +46,11 @@ class OrderController extends Controller
         protected VoucherService $voucherService,
         protected RoleWalletService $roleWalletService,
         protected FormalReportService $formalReportService,
-        protected BuyerOrderNotificationService $buyerNotifications
-    ) {}
+        protected BuyerOrderNotificationService $buyerNotifications,
+        protected ?BuyerRewardService $buyerRewardService = null
+    ) {
+        $this->buyerRewardService = $buyerRewardService ?? app(BuyerRewardService::class);
+    }
 
     public function index(Request $request)
     {
@@ -121,7 +127,6 @@ class OrderController extends Controller
     public function show(Request $request, SellerOrder $sellerOrder)
     {
         $user = $request->user();
-
         if ((int) $sellerOrder->seller_id !== (int) $user->id) {
             abort(403);
         }
@@ -254,6 +259,7 @@ class OrderController extends Controller
     public function ratingsIndex(Request $request)
     {
         StorkSchemaBootstrapService::ensureTablesExist();
+
         $user = $request->user();
         $profile = $user->sellerProfile;
 
@@ -266,14 +272,13 @@ class OrderController extends Controller
 
         $itemReviews = collect();
         if (Schema::hasTable('order_item_reviews')) {
-            $itemQuery = OrderItemReview::with(['buyer', 'product', 'sellerOrder'])
+            $itemQuery = OrderItemReview::with(['buyer', 'product', 'sellerOrder', 'orderItem'])
                 ->where('seller_profile_id', $profile->id)
                 ->orderByDesc('created_at');
 
             if ($starFilter >= 1 && $starFilter <= 5) {
                 $itemQuery->where('rating', $starFilter);
             }
-
             $itemReviews = $itemQuery->paginate(15, ['*'], 'prod_page')->withQueryString();
         }
 
@@ -286,8 +291,17 @@ class OrderController extends Controller
             if ($starFilter >= 1 && $starFilter <= 5) {
                 $srvQuery->where('seller_service_rating', $starFilter);
             }
-
             $serviceRatings = $srvQuery->paginate(15, ['*'], 'srv_page')->withQueryString();
+        }
+
+        $productQuestions = collect();
+        if (Schema::hasTable('product_questions')) {
+            $productQuestions = ProductQuestion::with(['buyer', 'product', 'answeredBy'])
+                ->where('seller_profile_id', $profile->id)
+                ->orderByRaw('CASE WHEN answer IS NULL THEN 0 ELSE 1 END')
+                ->orderByDesc('created_at')
+                ->paginate(15, ['*'], 'qna_page')
+                ->withQueryString();
         }
 
         return view('seller.ratings.index', compact(
@@ -295,8 +309,44 @@ class OrderController extends Controller
             'activeTab',
             'starFilter',
             'itemReviews',
-            'serviceRatings'
+            'serviceRatings',
+            'productQuestions'
         ));
+    }
+
+    public function answerProductQuestion(Request $request, ProductQuestion $question)
+    {
+        StorkSchemaBootstrapService::ensureTablesExist();
+
+        $user = $request->user();
+        $profile = $user->sellerProfile;
+
+        if (! $profile || (int) $question->seller_profile_id !== (int) $profile->id) {
+            abort(403, 'You can only answer questions on your own store products.');
+        }
+
+        $validated = $request->validate([
+            'answer' => ['required', 'string', 'min:2', 'max:1000'],
+        ]);
+
+        $question->update([
+            'answer'              => trim($validated['answer']),
+            'answered_by_user_id' => $user->id,
+            'answered_at'         => now(),
+        ]);
+
+        try {
+            $question->loadMissing(['buyer', 'product']);
+            $question->buyer?->notify(new OrderLifecycleNotification(
+                title: 'Seller Answered Your Product Question',
+                message: "{$profile->business_name} replied to your question on \"" . ($question->product->name ?? 'Product') . '".',
+                type: 'success',
+                url: route('product.show', $question->product_id)
+            ));
+        } catch (\Throwable $e) {
+        }
+
+        return back()->with('success', 'Your answer has been published on the product page.');
     }
 
     public function confirmRtsReceived(Request $request, SellerOrder $sellerOrder)
@@ -450,11 +500,11 @@ class OrderController extends Controller
                 'to_status'       => $locked->status,
                 'actor_type'      => 'Seller',
                 'actor_id'        => $user->id,
-                'remarks'         => "Seller verified Buyer's GCash payment (Ref #{$submission->reference_number}).",
+                'remarks'         => "Seller verified Buyer's online payment (Ref #{$submission->reference_number}).",
             ]);
         });
 
-        return back()->with('success', 'GCash online payment verified successfully.');
+        return back()->with('success', 'Online payment verified successfully.');
     }
 
     public function reportSuspiciousPayment(Request $request, SellerOrder $sellerOrder)
@@ -553,6 +603,12 @@ class OrderController extends Controller
                     'collected_at' => $locked->payment->collected_at ?? now(),
                 ]);
                 $locked->payment_status = 'paid';
+            } elseif (strtoupper((string) ($locked->payment?->method ?? '')) === 'WALLET') {
+                $locked->payment?->update([
+                    'status'       => 'paid',
+                    'collected_at' => $locked->payment->collected_at ?? now(),
+                ]);
+                $locked->payment_status = 'paid';
             }
 
             $locked->update([
@@ -599,7 +655,7 @@ class OrderController extends Controller
         ]);
 
         DB::transaction(function () use ($sellerOrder, $user, $validated) {
-            $locked = SellerOrder::with(['order', 'payment', 'extra'])->where('id', $sellerOrder->id)->lockForUpdate()->firstOrFail();
+            $locked = SellerOrder::with(['order', 'payment', 'extra', 'buyer'])->where('id', $sellerOrder->id)->lockForUpdate()->firstOrFail();
 
             if ($locked->status !== 'disputed' || ! $locked->has_unresolved_dispute) {
                 throw ValidationException::withMessages([
@@ -615,11 +671,19 @@ class OrderController extends Controller
             if ($validated['decision'] === 'approved') {
                 $extra->update([
                     'seller_return_decision'        => 'approved',
-                    'seller_return_Decision_reason' => $validated['reason'] ? trim($validated['reason']) : 'Return & refund approved by seller.',
+                    'seller_return_decision_reason' => $validated['reason'] ? trim($validated['reason']) : 'Return & refund approved by seller.',
                     'seller_return_responded_at'    => now(),
                     'refund_status'                 => 'refund_released',
                     'refund_released_at'            => now(),
                 ]);
+
+                $this->roleWalletService->refundBuyerWalletForOrder(
+                    $locked,
+                    (float) $locked->total_amount,
+                    'Seller-Approved Return & Refund'
+                );
+                $this->buyerRewardService?->restoreCoinsForSellerOrder($locked);
+                $this->voucherService->restoreVouchersForSellerOrder($locked);
 
                 $locked->update([
                     'status'                 => 'returned_to_seller',
@@ -640,14 +704,14 @@ class OrderController extends Controller
                     'to_status'       => 'returned_to_seller',
                     'actor_type'      => 'Seller',
                     'actor_id'        => $user->id,
-                    'remarks'         => 'Seller approved buyer return/refund request. Stock will restore once Seller confirms physical receipt of returned item.',
+                    'remarks'         => 'Seller approved buyer return/refund request. Refund credited to Buyer E-Wallet and redeemed Storkia Coins restored.',
                 ]);
 
                 $this->orderCompletionService->syncParentOrderStatus($locked->order);
             } else {
                 $extra->update([
                     'seller_return_decision'        => 'rejected',
-                    'seller_return_Decision_reason' => trim((string) $validated['reason']),
+                    'seller_return_decision_reason' => trim((string) $validated['reason']),
                     'seller_return_responded_at'    => now(),
                 ]);
 
@@ -702,7 +766,7 @@ class OrderController extends Controller
         $packageCount = (int) ($validated['package_count'] ?? 1);
 
         $shipment = DB::transaction(function () use ($sellerOrder, $user, $logisticsProfile, $selectedHub, $handoverMethod, $packageCount) {
-            $locked = SellerOrder::with(['order', 'items', 'payment'])->where('id', $sellerOrder->id)->lockForUpdate()->firstOrFail();
+            $locked = SellerOrder::with(['order', 'items', 'payment', 'extra'])->where('id', $sellerOrder->id)->lockForUpdate()->firstOrFail();
 
             if (! in_array($locked->status, ['accepted', 'preparing'], true) || $locked->shipment()->exists()) {
                 throw ValidationException::withMessages([
@@ -736,9 +800,10 @@ class OrderController extends Controller
                 ? 'awaiting_seller_drop_off'
                 : 'pickup_requested';
 
-            $isPrepaidGcash = strtoupper((string) ($locked->payment?->method ?? 'COD')) === 'GCASH'
+            $payMethod = strtoupper((string) ($locked->payment?->method ?? 'COD'));
+            $isPrepaid = in_array($payMethod, ['GCASH', 'WALLET'], true)
                 && in_array($locked->payment_status, ['submitted', 'paid', 'verified'], true);
-            $codToCollect = $isPrepaidGcash ? 0.00 : (float) $locked->total_amount;
+            $codToCollect = $isPrepaid ? 0.00 : (float) $locked->total_amount;
 
             $newShipment = Shipment::create([
                 'tracking_number'           => $this->generateUniqueTrackingNumber(),
@@ -837,6 +902,7 @@ class OrderController extends Controller
     public function settlements(Request $request)
     {
         StorkSchemaBootstrapService::ensureTablesExist();
+
         $user = $request->user();
         $profile = $user->sellerProfile;
 
@@ -860,7 +926,6 @@ class OrderController extends Controller
         $toDate = $request->query('to_date', now()->toDateString());
         $start = Carbon::parse($fromDate)->startOfDay();
         $end = Carbon::parse($toDate)->endOfDay();
-
         if ($end->lt($start)) {
             [$start, $end] = [$end->copy()->startOfDay(), $start->copy()->endOfDay()];
         }
@@ -957,7 +1022,7 @@ class OrderController extends Controller
             'idempotency_key'  => ['nullable', 'string', 'max:64'],
         ]);
 
-        $this->roleWalletService->requestSellerPayout(
+        $withdrawal = $this->roleWalletService->requestSellerPayout(
             sellerProfileId: (int) $profile->id,
             sellerName: (string) $profile->business_name,
             amount: (float) $validated['requested_amount'],
@@ -967,7 +1032,31 @@ class OrderController extends Controller
             idempotencyKey: $validated['idempotency_key'] ?? null
         );
 
-        return back()->with('success', 'Payout withdrawal request of ₱' . number_format((float) $validated['requested_amount'], 2) . ' via GCash submitted! Your Available E-Wallet Balance has been updated.');
+        return back()->with('success', 'Payout withdrawal request of ₱' . number_format((float) $withdrawal->requested_amount, 2) . ' via GCash submitted! Your Available E-Wallet Balance has been updated.');
+    }
+
+    public function settleArrearsFromWallet(Request $request)
+    {
+        $user = $request->user();
+        $profile = $user->sellerProfile;
+
+        if (! $profile) {
+            abort(403);
+        }
+
+        $result = $this->roleWalletService->settleSellerArrearsFromAvailableBalance(
+            sellerProfileId: (int) $profile->id,
+            sellerName: (string) $profile->business_name
+        );
+
+        $offsetFormatted = number_format((float) $result['offset_amount'], 2);
+        $remainingFormatted = number_format((float) $result['remaining_arrears'], 2);
+
+        $msg = (float) $result['remaining_arrears'] <= 0.0
+            ? "Successfully settled ₱{$offsetFormatted} of platform commission arrears directly from your Available Seller E-Wallet! Your arrears balance is now ₱0.00."
+            : "Offset ₱{$offsetFormatted} of platform commission arrears from your Available Seller E-Wallet. Remaining arrears: ₱{$remainingFormatted}.";
+
+        return back()->with('success', $msg);
     }
 
     public function submitArrearsRemittance(Request $request)
@@ -1005,7 +1094,7 @@ class OrderController extends Controller
             ]);
 
             $newAvailable = round((float) $wallet->available_balance + $remitAmount, 2);
-            $newArrears = $newAvailable < 0 ? abs($newAvailable) : 0.00;
+            $newArrears = max(0.00, round((float) $wallet->platform_commission_arrears - $remitAmount, 2));
 
             $wallet->update([
                 'available_balance'           => $newAvailable,
@@ -1027,7 +1116,7 @@ class OrderController extends Controller
                 'pending_balance_after'   => (float) $wallet->pending_balance,
                 'available_balance_after' => $newAvailable,
                 'status'                  => 'completed',
-                'description'             => "Seller remitted ₱" . number_format($remitAmount, 2) . " via GCash (Ref #{$validated['gcash_reference_number']}) to clear Direct-GCash platform commission arrears.",
+                'description'             => "Seller remitted ₱" . number_format($remitAmount, 2) . " via GCash (Ref #{$validated['gcash_reference_number']}) to clear platform commission arrears.",
             ]);
         });
 
@@ -1037,6 +1126,7 @@ class OrderController extends Controller
     public function formalPdfReport(Request $request)
     {
         $profile = $request->user()->sellerProfile;
+
         $report = $this->formalReportService->buildRoleReportPayload(
             role: 'Seller',
             entityId: (int) $profile->id,
@@ -1096,7 +1186,6 @@ class OrderController extends Controller
             if ($hub->is_main_hub) {
                 $score += 10;
             }
-
             return $score;
         })->values();
 

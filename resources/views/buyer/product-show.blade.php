@@ -39,7 +39,6 @@
     $isStoreOnVacation = (bool) ($seller?->is_on_vacation ?? false);
     $perBuyerLimit = (int) ($product->per_buyer_limit ?? 0);
 
-    // Countdown runs to the end of the schedule the seller set for this Super Deal.
     $dealEndsAtMs = (($dealPricing['type'] ?? null) === 'super_deal' && !empty($dealPricing['ends_at']))
         ? \Carbon\Carbon::parse($dealPricing['ends_at'])->timestamp * 1000
         : null;
@@ -59,9 +58,19 @@
     $isOwnStore = $isOwnStore ?? false;
     $isFollowingStore = $isFollowingStore ?? false;
     $isWishlisted = $isWishlisted ?? false;
+    $upvotedReviewIds = $upvotedReviewIds ?? [];
+    $hasRestockSubscription = $hasRestockSubscription ?? false;
+    $productQuestions = $productQuestions ?? collect();
     $storeVouchers = $storeVouchers ?? collect();
     $claimedVoucherIds = $claimedVoucherIds ?? [];
     $recommendedProducts = $recommendedProducts ?? collect();
+
+    $initialHelpfulCounts = [];
+    $initialUpvotedMap = [];
+    foreach ($productReviews as $rv) {
+        $initialHelpfulCounts[$rv->id] = (int) ($rv->helpful_count ?? 0);
+        $initialUpvotedMap[$rv->id] = in_array((int) $rv->id, $upvotedReviewIds, true);
+    }
 
     $productCardComponent = view()->exists('components.storefront.seller-product-card')
         ? 'storefront.seller-product-card'
@@ -83,278 +92,421 @@
         'label' => $product->name,
         'url'   => null,
     ];
+
+    $productShowConfig = [
+        'hasVariants'         => isset($product->variants['items']) && count($product->variants['items']) > 0,
+        'variantTitle'        => (string) ($product->variants['title'] ?? 'variation'),
+        'subVariantTitle'     => (string) ($product->variants['sub_title'] ?? 'sub-variation'),
+        'isStoreOnVacation'   => $isStoreOnVacation,
+        'perBuyerLimit'       => $perBuyerLimit,
+        'isWishlisted'        => (bool) $isWishlisted,
+        'restockSubscribed'   => (bool) $hasRestockSubscription,
+        'helpfulCounts'       => $initialHelpfulCounts,
+        'upvotedMap'          => $initialUpvotedMap,
+        'basePrice'           => (float) ($product->price ?? 0),
+        'discount'            => (float) ($product->discount ?? 0),
+        'dealType'            => (string) ($dealPricing['type'] ?? 'regular'),
+        'dealLabel'           => (string) ($dealPricing['label'] ?? ''),
+        'dealFixedPrice'      => $dealPricing['deal_price'] !== null ? (float) $dealPricing['deal_price'] : null,
+        'dealPercent'         => (float) ($dealPricing['deal_percent'] ?? 0),
+        'dealUnitsLeft'       => $dealPricing['units_left'] !== null ? (int) $dealPricing['units_left'] : null,
+        'dealEndsAtMs'        => $dealEndsAtMs !== null ? (int) $dealEndsAtMs : null,
+        'serverNowMs'         => (int) (now()->timestamp * 1000),
+        'totalStock'          => (int) $totalStock,
+        'galleryImages'       => $mainPictureUrls,
+        'firstPic'            => $firstPic,
+        'loginUrl'            => route('login'),
+        'wishlistToggleUrl'   => url('/user/wishlist/toggle/' . $product->id),
+        'restockSubscribeUrl' => route('product.restock.subscribe', $product->id),
+        'csrfToken'           => csrf_token(),
+    ];
 @endphp
 
-<div x-data="{
-    selectedMain: null,
-    selectedSub: null,
-    selectedMainName: '',
-    selectedSubName: '',
-    hasVariants: {{ isset($product->variants['items']) && count($product->variants['items']) > 0 ? 'true' : 'false' }},
-    hasSubVariants: false,
-    isStoreOnVacation: {{ $isStoreOnVacation ? 'true' : 'false' }},
-    perBuyerLimit: {{ $perBuyerLimit }},
-    isWishlisted: {{ $isWishlisted ? 'true' : 'false' }},
-    isTogglingWishlist: false,
-    isAddingToCart: false,
-    toastMessage: '',
-    toastType: 'danger',
-    showToast: false,
-    basePrice: {{ (float) ($product->price ?? 0) }},
-    discount: {{ (float) ($product->discount ?? 0) }},
-    dealType: '{{ $dealPricing['type'] }}',
-    dealLabel: '{{ $dealPricing['label'] ?? '' }}',
-    dealFixedPrice: {{ $dealPricing['deal_price'] !== null ? (float) $dealPricing['deal_price'] : 'null' }},
-    dealPercent: {{ (float) ($dealPricing['deal_percent'] ?? 0) }},
-    dealUnitsLeft: {{ $dealPricing['units_left'] !== null ? (int) $dealPricing['units_left'] : 'null' }},
-    dealEndsAtMs: {{ $dealEndsAtMs !== null ? (int) $dealEndsAtMs : 'null' }},
-    dealClockOffsetMs: {{ now()->timestamp * 1000 }} - Date.now(),
-    dealCountdown: '',
-    dealTimer: null,
-    totalStock: {{ (int) $totalStock }},
-    activePrice: {{ (float) ($product->price ?? 0) }},
-    activeStock: {{ (int) $totalStock }},
-    galleryImages: @js($mainPictureUrls),
-    activeGalleryIndex: 0,
-    isViewingVariantImage: false,
-    mainImage: '{{ $firstPic }}',
-    defaultImage: '{{ $firstPic }}',
-    quantity: 1,
-    imageModalOpen: false,
+<script>
+    window.storkiaProductShowState = function (cfg) {
+        return {
+            selectedMain: null,
+            selectedSub: null,
+            selectedMainName: '',
+            selectedSubName: '',
+            hasVariants: Boolean(cfg.hasVariants),
+            hasSubVariants: false,
+            isStoreOnVacation: Boolean(cfg.isStoreOnVacation),
+            perBuyerLimit: Number(cfg.perBuyerLimit || 0),
+            isWishlisted: Boolean(cfg.isWishlisted),
+            isTogglingWishlist: false,
+            isAddingToCart: false,
+            restockSubscribed: Boolean(cfg.restockSubscribed),
+            isSubscribingRestock: false,
+            helpfulCounts: cfg.helpfulCounts || {},
+            upvotedMap: cfg.upvotedMap || {},
+            toastMessage: '',
+            toastType: 'danger',
+            showToast: false,
+            basePrice: Number(cfg.basePrice || 0),
+            discount: Number(cfg.discount || 0),
+            dealType: cfg.dealType || 'regular',
+            dealLabel: cfg.dealLabel || '',
+            dealFixedPrice: cfg.dealFixedPrice !== null ? Number(cfg.dealFixedPrice) : null,
+            dealPercent: Number(cfg.dealPercent || 0),
+            dealUnitsLeft: cfg.dealUnitsLeft !== null ? Number(cfg.dealUnitsLeft) : null,
+            dealEndsAtMs: cfg.dealEndsAtMs !== null ? Number(cfg.dealEndsAtMs) : null,
+            dealClockOffsetMs: Number(cfg.serverNowMs || Date.now()) - Date.now(),
+            dealCountdown: '',
+            dealTimer: null,
+            totalStock: Number(cfg.totalStock || 0),
+            activePrice: Number(cfg.basePrice || 0),
+            activeStock: Number(cfg.totalStock || 0),
+            galleryImages: Array.isArray(cfg.galleryImages) ? cfg.galleryImages : [],
+            activeGalleryIndex: 0,
+            isViewingVariantImage: false,
+            mainImage: cfg.firstPic || '',
+            defaultImage: cfg.firstPic || '',
+            quantity: 1,
+            imageModalOpen: false,
 
-    get maxAllowedQuantity() {
-        if (this.perBuyerLimit > 0) {
-            return Math.min(this.activeStock, this.perBuyerLimit);
-        }
-        return this.activeStock;
-    },
-
-    get discountedPrice() {
-        const price = this.activePrice;
-        let result = price;
-        if (this.dealType === 'super_deal' || this.dealType === 'store_sale') {
-            if (this.dealFixedPrice !== null) {
-                result = Math.min(price, this.dealFixedPrice);
-            } else if (this.dealPercent > 0) {
-                result = price * (1 - (this.dealPercent / 100));
-            } else if (this.discount > 0) {
-                result = price * (1 - (this.discount / 100));
-            }
-        } else if (this.discount > 0) {
-            result = price * (1 - (this.discount / 100));
-        }
-        return Math.round(result * 100) / 100;
-    },
-
-    get discountPercentShown() {
-        if (this.activePrice <= 0 || this.discountedPrice >= this.activePrice) return 0;
-        return Math.max(1, Math.round((1 - (this.discountedPrice / this.activePrice)) * 100));
-    },
-
-    startDealCountdown() {
-        if (!this.dealEndsAtMs) return;
-        const pad = (n) => String(n).padStart(2, '0');
-        const tick = () => {
-            const diff = Math.max(0, Math.floor((this.dealEndsAtMs - (Date.now() + this.dealClockOffsetMs)) / 1000));
-            const d = Math.floor(diff / 86400);
-            this.dealCountdown = (d > 0 ? d + 'd ' : '') + pad(Math.floor((diff % 86400) / 3600)) + ':' + pad(Math.floor((diff % 3600) / 60)) + ':' + pad(diff % 60);
-            if (diff === 0) {
-                clearInterval(this.dealTimer);
-                setTimeout(() => window.location.reload(), 2000);
-            }
-        };
-        tick();
-        this.dealTimer = setInterval(tick, 1000);
-    },
-
-    formatMoney(value) {
-        return Number(value).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    },
-
-    setMainGalleryImage(index) {
-        if (!this.galleryImages.length || index < 0 || index >= this.galleryImages.length) return;
-        this.activeGalleryIndex = index;
-        this.mainImage = this.galleryImages[index];
-        this.isViewingVariantImage = false;
-    },
-
-    prevGalleryImage() {
-        if (this.galleryImages.length <= 1) return;
-        const nextIdx = (this.activeGalleryIndex - 1 + this.galleryImages.length) % this.galleryImages.length;
-        this.setMainGalleryImage(nextIdx);
-    },
-
-    nextGalleryImage() {
-        if (this.galleryImages.length <= 1) return;
-        const nextIdx = (this.activeGalleryIndex + 1) % this.galleryImages.length;
-        this.setMainGalleryImage(nextIdx);
-    },
-
-    setVariantImage(imgUrl) {
-        if (!imgUrl) return;
-        this.mainImage = imgUrl;
-        this.isViewingVariantImage = true;
-    },
-
-    resetToCoverImage() {
-        this.activeGalleryIndex = 0;
-        this.mainImage = this.defaultImage;
-        this.isViewingVariantImage = false;
-    },
-
-    triggerToast(msg, type = 'danger') {
-        this.toastMessage = msg;
-        this.toastType = type;
-        this.showToast = true;
-        setTimeout(() => this.showToast = false, 4000);
-    },
-
-    async toggleWishlist(isAuth) {
-        if (!isAuth) {
-            window.location.href = '{{ route('login') }}';
-            return;
-        }
-        if (this.isTogglingWishlist) return;
-        this.isTogglingWishlist = true;
-        try {
-            const res = await fetch('/user/wishlist/toggle/{{ $product->id }}', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Accept': 'application/json',
-                    'X-CSRF-TOKEN': '{{ csrf_token() }}'
+            get maxAllowedQuantity() {
+                if (this.perBuyerLimit > 0) {
+                    return Math.min(this.activeStock, this.perBuyerLimit);
                 }
-            });
-            const data = await res.json();
-            if (res.ok && data.success) {
-                this.isWishlisted = data.wishlisted;
-                this.triggerToast(data.message, 'success');
-            }
-        } catch (e) {
-            this.triggerToast('Unable to update wishlist right now.');
-        } finally {
-            this.isTogglingWishlist = false;
-        }
-    },
+                return this.activeStock;
+            },
 
-    validateAndSubmit(isAuth, isBuyNow = false) {
-        if (this.isStoreOnVacation) {
-            this.triggerToast('This store is currently on vacation and is temporarily not accepting orders.');
-            return;
-        }
-        if (this.activeStock <= 0) {
-            this.triggerToast('This product or selected variation is currently out of stock.');
-            return;
-        }
-        if (this.hasVariants && !this.selectedMainName) {
-            this.triggerToast('Please select a {{ addslashes($product->variants['title'] ?? 'variation') }} first.');
-            return;
-        }
-        if (this.hasSubVariants && !this.selectedSubName) {
-            this.triggerToast('Please select a {{ addslashes($product->variants['sub_title'] ?? 'sub-variation') }} too.');
-            return;
-        }
-        const parsedQty = Number(this.quantity);
-        if (!Number.isInteger(parsedQty) || parsedQty < 1) {
-            this.triggerToast('Please enter a valid whole number quantity of at least 1.');
-            return;
-        }
-        if (this.perBuyerLimit > 0 && parsedQty > this.perBuyerLimit) {
-            this.triggerToast('Purchase limit reached: You can buy at most ' + this.perBuyerLimit + ' unit(s) of this item.');
-            return;
-        }
-        if (parsedQty > this.activeStock) {
-            this.triggerToast('Only ' + this.activeStock + ' piece(s) available in stock.');
-            return;
-        }
-        if (!isAuth) {
-            window.location.href = '{{ route('login') }}';
-            return;
-        }
-        if (isBuyNow) {
-            this.$refs.buyNowForm.submit();
-        } else {
-            this.addToCart();
-        }
-    },
-
-    async refreshNavbarCartDropdown(data = {}) {
-        if (data.dropdown_html) {
-            const wrapper = document.querySelector('[data-cart-dropdown-wrapper]');
-            if (wrapper) {
-                wrapper.innerHTML = data.dropdown_html;
-                if (window.Alpine) {
-                    window.Alpine.initTree(wrapper);
+            get discountedPrice() {
+                const price = this.activePrice;
+                let result = price;
+                if (this.dealType === 'super_deal' || this.dealType === 'store_sale') {
+                    if (this.dealFixedPrice !== null) {
+                        result = Math.min(price, this.dealFixedPrice);
+                    } else if (this.dealPercent > 0) {
+                        result = price * (1 - (this.dealPercent / 100));
+                    } else if (this.discount > 0) {
+                        result = price * (1 - (this.discount / 100));
+                    }
+                } else if (this.discount > 0) {
+                    result = price * (1 - (this.discount / 100));
                 }
-                return;
-            }
-        }
-        try {
-            const pageRes = await fetch(window.location.href, {
-                headers: { 'X-Requested-With': 'XMLHttpRequest' },
-                credentials: 'same-origin'
-            });
-            if (pageRes.ok) {
-                const htmlText = await pageRes.text();
-                const parser = new DOMParser();
-                const doc = parser.parseFromString(htmlText, 'text/html');
-                const freshDropdown = doc.querySelector('[data-cart-dropdown-wrapper]') || doc.querySelector('[data-cart-icon]')?.parentElement;
-                const currentDropdown = document.querySelector('[data-cart-dropdown-wrapper]') || document.querySelector('[data-cart-icon]')?.parentElement;
-                if (freshDropdown && currentDropdown) {
-                    const freshPanel = freshDropdown.querySelector('[x-show=cartOpen]') || freshDropdown.lastElementChild;
-                    const currentPanel = currentDropdown.querySelector('[x-show=cartOpen]') || currentDropdown.lastElementChild;
-                    if (freshPanel && currentPanel && freshPanel !== currentDropdown.querySelector('[data-cart-icon]')) {
-                        currentPanel.replaceWith(freshPanel);
-                        if (window.Alpine) {
-                            window.Alpine.initTree(currentDropdown);
-                        }
+                return Math.round(result * 100) / 100;
+            },
+
+            get discountPercentShown() {
+                if (this.activePrice <= 0 || this.discountedPrice >= this.activePrice) return 0;
+                return Math.max(1, Math.round((1 - (this.discountedPrice / this.activePrice)) * 100));
+            },
+
+            startDealCountdown() {
+                if (!this.dealEndsAtMs) return;
+                const pad = (n) => String(n).padStart(2, '0');
+                const tick = () => {
+                    const diff = Math.max(0, Math.floor((this.dealEndsAtMs - (Date.now() + this.dealClockOffsetMs)) / 1000));
+                    const d = Math.floor(diff / 86400);
+                    this.dealCountdown = (d > 0 ? d + 'd ' : '') + pad(Math.floor((diff % 86400) / 3600)) + ':' + pad(Math.floor((diff % 3600) / 60)) + ':' + pad(diff % 60);
+                    if (diff === 0) {
+                        clearInterval(this.dealTimer);
+                        setTimeout(() => window.location.reload(), 2000);
+                    }
+                };
+                tick();
+                this.dealTimer = setInterval(tick, 1000);
+            },
+
+            formatMoney(value) {
+                return Number(value).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+            },
+
+            setMainGalleryImage(index) {
+                if (!this.galleryImages.length || index < 0 || index >= this.galleryImages.length) return;
+                this.activeGalleryIndex = index;
+                this.mainImage = this.galleryImages[index];
+                this.isViewingVariantImage = false;
+            },
+
+            prevGalleryImage() {
+                if (this.galleryImages.length <= 1) return;
+                const nextIdx = (this.activeGalleryIndex - 1 + this.galleryImages.length) % this.galleryImages.length;
+                this.setMainGalleryImage(nextIdx);
+            },
+
+            nextGalleryImage() {
+                if (this.galleryImages.length <= 1) return;
+                const nextIdx = (this.activeGalleryIndex + 1) % this.galleryImages.length;
+                this.setMainGalleryImage(nextIdx);
+            },
+
+            setVariantImage(imgUrl) {
+                if (!imgUrl) return;
+                this.mainImage = imgUrl;
+                this.isViewingVariantImage = true;
+            },
+
+            resetToCoverImage() {
+                this.activeGalleryIndex = 0;
+                this.mainImage = this.defaultImage;
+                this.isViewingVariantImage = false;
+            },
+
+            selectMainVariantOption(vIndex, vName, hasSubs, itemPrice, itemStock, variantImageUrl) {
+                if (this.selectedMain === vIndex) {
+                    this.selectedMain = null;
+                    this.selectedSub = null;
+                    this.selectedMainName = '';
+                    this.selectedSubName = '';
+                    this.hasSubVariants = false;
+                    this.activePrice = this.basePrice;
+                    this.activeStock = this.totalStock;
+                    this.resetToCoverImage();
+                } else {
+                    this.selectedMain = vIndex;
+                    this.selectedSub = null;
+                    this.selectedMainName = vName;
+                    this.selectedSubName = '';
+                    this.hasSubVariants = Boolean(hasSubs);
+                    this.activePrice = Number(itemPrice);
+                    this.activeStock = Number(itemStock);
+                    if (variantImageUrl) {
+                        this.setVariantImage(variantImageUrl);
+                    } else {
+                        this.setMainGalleryImage(this.activeGalleryIndex);
                     }
                 }
-            }
-        } catch (err) {}
-    },
+                this.quantity = 1;
+            },
 
-    async addToCart() {
-        if (this.isAddingToCart) return;
-        this.isAddingToCart = true;
-        const form = this.$refs.addToCartForm;
-        const button = this.$refs.addToCartBtn;
-        try {
-            const response = await fetch(form.action, {
-                method: 'POST',
-                headers: {
-                    'Accept': 'application/json',
-                    'X-Requested-With': 'XMLHttpRequest',
-                    'X-CSRF-TOKEN': form.querySelector('input[name=_token]').value
-                },
-                body: new FormData(form),
-                credentials: 'same-origin'
-            });
-            if (response.redirected && /\/login/.test(response.url)) {
-                window.location.href = '{{ route('login') }}';
-                return;
+            selectSubVariantOption(sIndex, sName, subPrice, subStock, parentPrice, parentStock, parentVariantImageUrl) {
+                if (this.selectedSub === sIndex) {
+                    this.selectedSub = null;
+                    this.selectedSubName = '';
+                    this.activePrice = Number(parentPrice);
+                    this.activeStock = Number(parentStock);
+                    if (parentVariantImageUrl) {
+                        this.setVariantImage(parentVariantImageUrl);
+                    }
+                } else {
+                    this.selectedSub = sIndex;
+                    this.selectedSubName = sName;
+                    this.activePrice = Number(subPrice);
+                    this.activeStock = Number(subStock);
+                }
+                this.quantity = 1;
+            },
+
+            triggerToast(msg, type = 'danger') {
+                this.toastMessage = msg;
+                this.toastType = type;
+                this.showToast = true;
+                setTimeout(() => this.showToast = false, 4000);
+            },
+
+            async toggleWishlist(isAuth) {
+                if (!isAuth) {
+                    window.location.href = cfg.loginUrl;
+                    return;
+                }
+                if (this.isTogglingWishlist) return;
+                this.isTogglingWishlist = true;
+                try {
+                    const res = await fetch(cfg.wishlistToggleUrl, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Accept': 'application/json',
+                            'X-CSRF-TOKEN': cfg.csrfToken
+                        }
+                    });
+                    const data = await res.json();
+                    if (res.ok && data.success) {
+                        this.isWishlisted = data.wishlisted;
+                        this.triggerToast(data.message, 'success');
+                    }
+                } catch (e) {
+                    this.triggerToast('Unable to update wishlist right now.');
+                } finally {
+                    this.isTogglingWishlist = false;
+                }
+            },
+
+            async subscribeBackInStock(isAuth) {
+                if (!isAuth) {
+                    window.location.href = cfg.loginUrl;
+                    return;
+                }
+                if (this.isSubscribingRestock) return;
+                this.isSubscribingRestock = true;
+                try {
+                    const res = await fetch(cfg.restockSubscribeUrl, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Accept': 'application/json',
+                            'X-Requested-With': 'XMLHttpRequest',
+                            'X-CSRF-TOKEN': cfg.csrfToken
+                        },
+                        body: JSON.stringify({
+                            variant_name: this.selectedMainName || null,
+                            sub_variant_name: this.selectedSubName || null
+                        })
+                    });
+                    const data = await res.json();
+                    if (res.ok && data.success) {
+                        this.restockSubscribed = true;
+                        this.triggerToast(data.message, 'success');
+                    } else {
+                        this.triggerToast(data.message || 'Could not subscribe right now.');
+                    }
+                } catch (e) {
+                    this.triggerToast('Unable to subscribe to restock alerts right now.');
+                } finally {
+                    this.isSubscribingRestock = false;
+                }
+            },
+
+            async toggleReviewHelpful(reviewId, isAuth) {
+                if (!isAuth) {
+                    window.location.href = cfg.loginUrl;
+                    return;
+                }
+                try {
+                    const res = await fetch(`/user/reviews/${reviewId}/helpful`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Accept': 'application/json',
+                            'X-Requested-With': 'XMLHttpRequest',
+                            'X-CSRF-TOKEN': cfg.csrfToken
+                        }
+                    });
+                    const data = await res.json();
+                    if (res.ok && data.success) {
+                        this.upvotedMap[reviewId] = Boolean(data.upvoted);
+                        this.helpfulCounts[reviewId] = Number(data.helpful_count || 0);
+                    }
+                } catch (e) {}
+            },
+
+            validateAndSubmit(isAuth, isBuyNow = false) {
+                if (this.isStoreOnVacation) {
+                    this.triggerToast('This store is currently on vacation and is temporarily not accepting orders.');
+                    return;
+                }
+                if (this.activeStock <= 0) {
+                    this.triggerToast('This product or selected variation is currently out of stock.');
+                    return;
+                }
+                if (this.hasVariants && !this.selectedMainName) {
+                    this.triggerToast('Please select a ' + cfg.variantTitle + ' first.');
+                    return;
+                }
+                if (this.hasSubVariants && !this.selectedSubName) {
+                    this.triggerToast('Please select a ' + cfg.subVariantTitle + ' too.');
+                    return;
+                }
+                const parsedQty = Number(this.quantity);
+                if (!Number.isInteger(parsedQty) || parsedQty < 1) {
+                    this.triggerToast('Please enter a valid whole number quantity of at least 1.');
+                    return;
+                }
+                if (this.perBuyerLimit > 0 && parsedQty > this.perBuyerLimit) {
+                    this.triggerToast('Purchase limit reached: You can buy at most ' + this.perBuyerLimit + ' unit(s) of this item.');
+                    return;
+                }
+                if (parsedQty > this.activeStock) {
+                    this.triggerToast('Only ' + this.activeStock + ' piece(s) available in stock.');
+                    return;
+                }
+                if (!isAuth) {
+                    window.location.href = cfg.loginUrl;
+                    return;
+                }
+                if (isBuyNow) {
+                    this.$refs.buyNowForm.submit();
+                } else {
+                    this.addToCart();
+                }
+            },
+
+            async refreshNavbarCartDropdown(data = {}) {
+                if (data.dropdown_html) {
+                    const wrapper = document.querySelector('[data-cart-dropdown-wrapper]');
+                    if (wrapper) {
+                        wrapper.innerHTML = data.dropdown_html;
+                        if (window.Alpine) {
+                            window.Alpine.initTree(wrapper);
+                        }
+                        return;
+                    }
+                }
+                try {
+                    const pageRes = await fetch(window.location.href, {
+                        headers: { 'X-Requested-With': 'XMLHttpRequest' },
+                        credentials: 'same-origin'
+                    });
+                    if (pageRes.ok) {
+                        const htmlText = await pageRes.text();
+                        const parser = new DOMParser();
+                        const doc = parser.parseFromString(htmlText, 'text/html');
+                        const freshDropdown = doc.querySelector('[data-cart-dropdown-wrapper]') || doc.querySelector('[data-cart-icon]')?.parentElement;
+                        const currentDropdown = document.querySelector('[data-cart-dropdown-wrapper]') || doc.querySelector('[data-cart-icon]')?.parentElement;
+                        if (freshDropdown && currentDropdown) {
+                            const freshPanel = freshDropdown.querySelector('[x-show=cartOpen]') || freshDropdown.lastElementChild;
+                            const currentPanel = currentDropdown.querySelector('[x-show=cartOpen]') || currentDropdown.lastElementChild;
+                            if (freshPanel && currentPanel && freshPanel !== currentDropdown.querySelector('[data-cart-icon]')) {
+                                currentPanel.replaceWith(freshPanel);
+                                if (window.Alpine) {
+                                    window.Alpine.initTree(currentDropdown);
+                                }
+                            }
+                        }
+                    }
+                } catch (err) {}
+            },
+
+            async addToCart() {
+                if (this.isAddingToCart) return;
+                this.isAddingToCart = true;
+                const form = this.$refs.addToCartForm;
+                const button = this.$refs.addToCartBtn;
+                try {
+                    const response = await fetch(form.action, {
+                        method: 'POST',
+                        headers: {
+                            'Accept': 'application/json',
+                            'X-Requested-With': 'XMLHttpRequest',
+                            'X-CSRF-TOKEN': form.querySelector('input[name=_token]').value
+                        },
+                        body: new FormData(form),
+                        credentials: 'same-origin'
+                    });
+                    if (response.redirected && /\/login/.test(response.url)) {
+                        window.location.href = cfg.loginUrl;
+                        return;
+                    }
+                    const isJson = (response.headers.get('content-type') || '').includes('application/json');
+                    const data = isJson ? await response.json().catch(() => ({})) : {};
+                    if (!response.ok || data.success === false) {
+                        const firstError = data.errors ? Object.values(data.errors)[0]?.[0] : null;
+                        this.triggerToast(firstError || data.message || 'Unable to add this item to your cart right now.');
+                        return;
+                    }
+                    const count = Number.isFinite(Number(data.cart_count))
+                        ? Number(data.cart_count)
+                        : window.getCartBadgeCount() + 1;
+                    await window.flyToCart({ source: button, imageUrl: this.mainImage });
+                    window.setCartBadge(count);
+                    await this.refreshNavbarCartDropdown(data);
+                    window.dispatchEvent(new CustomEvent('cart:updated', { detail: data }));
+                } catch (e) {
+                    this.triggerToast('Unable to add this item to your cart right now.');
+                } finally {
+                    this.isAddingToCart = false;
+                }
             }
-            const isJson = (response.headers.get('content-type') || '').includes('application/json');
-            const data = isJson ? await response.json().catch(() => ({})) : {};
-            if (!response.ok || data.success === false) {
-                const firstError = data.errors ? Object.values(data.errors)[0]?.[0] : null;
-                this.triggerToast(firstError || data.message || 'Unable to add this item to your cart right now.');
-                return;
-            }
-            const count = Number.isFinite(Number(data.cart_count))
-                ? Number(data.cart_count)
-                : window.getCartBadgeCount() + 1;
-            await window.flyToCart({ source: button, imageUrl: this.mainImage });
-            window.setCartBadge(count);
-            await this.refreshNavbarCartDropdown(data);
-            window.dispatchEvent(new CustomEvent('cart:updated', { detail: data }));
-        } catch (e) {
-            this.triggerToast('Unable to add this item to your cart right now.');
-        } finally {
-            this.isAddingToCart = false;
-        }
-    }
-}" x-init="startDealCountdown()" class="bg-surface-subtle font-sans antialiased text-text-main min-h-screen pb-16 relative overflow-x-hidden">
+        };
+    };
+</script>
+
+<div x-data="storkiaProductShowState(@js($productShowConfig))"
+     x-init="startDealCountdown()"
+     class="bg-surface-subtle font-sans antialiased text-text-main min-h-screen pb-16 relative overflow-x-hidden">
 
     <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-6 sm:pt-8 space-y-6">
         <x-ui.breadcrumbs :items="$breadcrumbItems" />
@@ -384,7 +536,6 @@
 
         <div class="bg-white rounded-3xl shadow-sm border border-border-subtle/80 overflow-hidden p-5 sm:p-8 lg:p-10">
             <div class="grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-10">
-                <!-- Left Column: Main Product Gallery (1 to 10 Main Pictures Only) -->
                 <div class="lg:col-span-5 flex flex-col">
                     <div class="aspect-square bg-surface rounded-2xl overflow-hidden border border-border-subtle/70 flex items-center justify-center group relative cursor-zoom-in shadow-2xs"
                          x-on:click="if(mainImage) imageModalOpen = true">
@@ -408,7 +559,6 @@
                             </span>
                         @endif
 
-                        <!-- Lower-Right Variant Image Indicator / Gallery Counter Badge -->
                         <div class="absolute bottom-3 right-3 z-10 flex items-center justify-end gap-2">
                             <template x-if="isViewingVariantImage">
                                 <button type="button"
@@ -471,7 +621,6 @@
                     @endif
                 </div>
 
-                <!-- Right Column: Product Details & Variant Selection -->
                 <div class="lg:col-span-7 flex flex-col justify-between">
                     <div>
                         <div class="flex items-start justify-between gap-3 mb-3">
@@ -493,6 +642,10 @@
                                 <span class="text-text-muted font-semibold hover:text-primary transition-colors">
                                     {{ number_format($productReviews->count()) }} {{ Str::plural('Rating', $productReviews->count()) }}
                                 </span>
+                            </a>
+                            <span class="text-border-subtle">|</span>
+                            <a href="#product-qna-section" class="text-text-muted font-semibold hover:text-primary transition-colors">
+                                {{ number_format($productQuestions->count()) }} {{ Str::plural('Question', $productQuestions->count()) }}
                             </a>
                             <span class="text-border-subtle">|</span>
                             <span class="text-text-muted font-semibold">{{ number_format($totalSoldUnits) }} Sold</span>
@@ -587,43 +740,23 @@
                                                     ? collect($item['subs'])->reject(fn($s) => !empty($s['is_archived']) || ($s['status'] ?? 'Approved') === 'Disapproved')->sum('stock')
                                                     : (int) ($item['stock'] ?? 0);
                                                 $variantImageUrl = (!empty($item['image'])) ? asset('storage/' . $item['image']) : '';
+                                                $inactiveBtnClass = ($itemStock <= 0 && !$hasSubs)
+                                                    ? 'border-border-subtle text-gray-400 bg-gray-50 line-through cursor-pointer'
+                                                    : 'border-border-subtle text-text-main hover:border-primary/50 hover:text-primary bg-surface font-medium cursor-pointer';
                                             @endphp
                                             <button type="button"
-                                                @if($itemStock <= 0 && !$hasSubs) disabled @endif
-                                                x-on:click="
-                                                    if (selectedMain === {{ $vIndex }}) {
-                                                        selectedMain = null;
-                                                        selectedSub = null;
-                                                        selectedMainName = '';
-                                                        selectedSubName = '';
-                                                        hasSubVariants = false;
-                                                        activePrice = basePrice;
-                                                        activeStock = totalStock;
-                                                        resetToCoverImage();
-                                                    } else {
-                                                        selectedMain = {{ $vIndex }};
-                                                        selectedSub = null;
-                                                        selectedMainName = '{{ addslashes($item['name'] ?? '') }}';
-                                                        selectedSubName = '';
-                                                        hasSubVariants = {{ $hasSubs ? 'true' : 'false' }};
-                                                        activePrice = {{ (float) ($item['price'] ?? $product->price) }};
-                                                        activeStock = {{ (int) $itemStock }};
-                                                        @if($variantImageUrl !== '')
-                                                            setVariantImage('{{ $variantImageUrl }}');
-                                                        @else
-                                                            setMainGalleryImage(activeGalleryIndex);
-                                                        @endif
-                                                    }
-                                                    quantity = 1;
-                                                "
+                                                x-on:click="selectMainVariantOption({{ $vIndex }}, '{{ addslashes($item['name'] ?? '') }}', {{ $hasSubs ? 'true' : 'false' }}, {{ (float) ($item['price'] ?? $product->price) }}, {{ (int) $itemStock }}, '{{ addslashes($variantImageUrl) }}')"
                                                 :class="selectedMain === {{ $vIndex }}
                                                     ? 'border-primary text-primary bg-primary/10 ring-2 ring-primary/20 font-bold'
-                                                    : '{{ $itemStock <= 0 && !$hasSubs ? 'border-border-subtle text-gray-300 bg-gray-50 line-through cursor-not-allowed' : 'border-border-subtle text-text-main hover:border-primary/50 hover:text-primary bg-surface font-medium cursor-pointer' }}'"
+                                                    : '{{ $inactiveBtnClass }}'"
                                                 class="px-3.5 py-2 border rounded-xl focus:outline-none transition-all text-sm inline-flex items-center gap-2">
                                                 @if($variantImageUrl !== '')
                                                     <img src="{{ $variantImageUrl }}" alt="{{ $item['name'] ?? 'Variant' }}" class="w-6 h-6 rounded-md object-cover border border-border-subtle shrink-0 pointer-events-none">
                                                 @endif
                                                 <span>{{ $item['name'] ?? 'Unnamed' }}</span>
+                                                @if($itemStock <= 0 && !$hasSubs)
+                                                    <span class="text-[10px] text-danger font-bold">(Out)</span>
+                                                @endif
                                             </button>
                                         @endforeach
                                     </div>
@@ -634,6 +767,7 @@
                                         @php
                                             $parentStock = collect($item['subs'])->reject(fn($s) => !empty($s['is_archived']) || ($s['status'] ?? 'Approved') === 'Disapproved')->sum('stock');
                                             $parentVariantImageUrl = (!empty($item['image'])) ? asset('storage/' . $item['image']) : '';
+                                            $parentPriceVal = (float) ($item['price'] ?? $product->price);
                                         @endphp
                                         <div x-show="selectedMain === {{ $vIndex }}" style="display: none;" x-cloak>
                                             <h3 class="text-xs font-bold uppercase tracking-wider text-text-muted mb-2.5">
@@ -646,34 +780,20 @@
                                                             continue;
                                                         }
                                                         $subStock = (int) ($sub['stock'] ?? 0);
+                                                        $subPriceVal = (float) ($sub['price'] ?? ($item['price'] ?? $product->price));
+                                                        $subInactiveClass = $subStock <= 0
+                                                            ? 'border-border-subtle text-gray-400 bg-gray-50 line-through cursor-pointer'
+                                                            : 'border-border-subtle text-text-main hover:border-primary/50 hover:text-primary bg-surface font-medium cursor-pointer';
                                                     @endphp
                                                     <button type="button"
-                                                        @if($subStock <= 0) disabled @endif
-                                                        x-on:click="
-                                                            if ({{ $subStock }} <= 0) return;
-                                                            if (selectedSub === {{ $sIndex }}) {
-                                                                selectedSub = null;
-                                                                selectedSubName = '';
-                                                                activePrice = {{ (float) ($item['price'] ?? $product->price) }};
-                                                                activeStock = {{ (int) $parentStock }};
-                                                                @if($parentVariantImageUrl !== '')
-                                                                    setVariantImage('{{ $parentVariantImageUrl }}');
-                                                                @endif
-                                                            } else {
-                                                                selectedSub = {{ $sIndex }};
-                                                                selectedSubName = '{{ addslashes($sub['name'] ?? '') }}';
-                                                                activePrice = {{ (float) ($sub['price'] ?? ($item['price'] ?? $product->price)) }};
-                                                                activeStock = {{ $subStock }};
-                                                            }
-                                                            quantity = 1;
-                                                        "
+                                                        x-on:click="selectSubVariantOption({{ $sIndex }}, '{{ addslashes($sub['name'] ?? '') }}', {{ $subPriceVal }}, {{ $subStock }}, {{ $parentPriceVal }}, {{ (int) $parentStock }}, '{{ addslashes($parentVariantImageUrl) }}')"
                                                         :class="selectedSub === {{ $sIndex }}
                                                             ? 'border-primary text-primary bg-primary/10 ring-2 ring-primary/20 font-bold'
-                                                            : '{{ $subStock <= 0 ? 'border-border-subtle text-gray-300 bg-gray-50 line-through cursor-not-allowed' : 'border-border-subtle text-text-main hover:border-primary/50 hover:text-primary bg-surface font-medium cursor-pointer' }}'"
+                                                            : '{{ $subInactiveClass }}'"
                                                         class="px-4 py-2.5 border rounded-xl focus:outline-none transition-all text-sm">
                                                         {{ $sub['name'] ?? 'Unnamed' }}
                                                         @if($subStock <= 0)
-                                                            <span class="text-[10px] ml-1">(Out)</span>
+                                                            <span class="text-[10px] text-danger font-bold ml-1">(Out)</span>
                                                         @endif
                                                     </button>
                                                 @endforeach
@@ -702,6 +822,16 @@
                             <span class="text-xs sm:text-sm font-semibold px-3 py-1 rounded-full"
                                   :class="activeStock > 5 ? 'bg-surface-subtle text-text-muted' : 'bg-danger/10 text-danger'"
                                   x-text="activeStock > 0 ? (activeStock + ' pieces available') : 'Sold out'"></span>
+
+                            <template x-if="activeStock <= 0">
+                                <button type="button"
+                                        @click="subscribeBackInStock({{ auth()->check() ? 'true' : 'false' }})"
+                                        :disabled="isSubscribingRestock || restockSubscribed"
+                                        :class="restockSubscribed ? 'bg-emerald-100 text-emerald-800 border-emerald-300' : 'bg-primary-dark hover:bg-primary text-white border-primary-dark cursor-pointer'"
+                                        class="px-4 py-2 rounded-xl border text-xs font-extrabold transition-colors">
+                                    <span x-text="restockSubscribed ? '✓ Back-in-Stock Alert Active' : (isSubscribingRestock ? 'Subscribing...' : 'Notify Me When Back in Stock')"></span>
+                                </button>
+                            </template>
                         </div>
                     </div>
 
@@ -942,25 +1072,41 @@
                 @else
                     <div class="divide-y divide-border-subtle/60 px-2">
                         @foreach($productReviews as $rev)
+                            @php
+                                $purchasedVariant = $rev->purchased_variant_label
+                                    ?: ($rev->orderItem ? implode(' / ', array_filter([$rev->orderItem->variant_name, $rev->orderItem->sub_variant_name])) : null);
+                                $photosList = is_array($rev->review_photos) && !empty($rev->review_photos)
+                                    ? $rev->review_photos
+                                    : ($rev->review_photo_path ? [$rev->review_photo_path] : []);
+                            @endphp
                             <div class="py-4 space-y-2.5 text-xs">
-                                <div class="flex items-center justify-between">
-                                    <div class="font-bold text-text-main">
-                                        {{ $rev->buyer?->first_name ? substr($rev->buyer->first_name, 0, 1) . '***' : 'Verified Buyer' }}
-                                        <span class="text-amber-500 ml-2">{{ str_repeat('★', (int) $rev->rating) }}{{ str_repeat('☆', max(0, 5 - (int) $rev->rating)) }}</span>
+                                <div class="flex flex-wrap items-center justify-between gap-2">
+                                    <div class="flex flex-wrap items-center gap-2 font-bold text-text-main">
+                                        <span>{{ $rev->buyer?->first_name ? substr($rev->buyer->first_name, 0, 1) . '***' : 'Verified Buyer' }}</span>
+                                        <span class="text-amber-500">{{ str_repeat('★', (int) $rev->rating) }}{{ str_repeat('☆', max(0, 5 - (int) $rev->rating)) }}</span>
+                                        @if($purchasedVariant)
+                                            <span class="px-2 py-0.5 rounded-full bg-brand-light/50 text-primary-dark text-[10px] font-bold border border-border-subtle">
+                                                Purchased: {{ $purchasedVariant }}
+                                            </span>
+                                        @endif
                                         @if($rev->edited_at)
-                                            <span class="text-[10px] text-text-muted font-normal ml-1">(Edited)</span>
+                                            <span class="text-[10px] text-text-muted font-normal">(Edited)</span>
                                         @endif
                                     </div>
-                                    <span class="text-[11px] text-text-muted">{{ $rev->created_at?->format('M d, Y') }}</span>
+                                    <div class="flex items-center gap-3">
+                                        <span class="text-[11px] text-text-muted">{{ $rev->created_at?->format('M d, Y') }}</span>
+                                        <button type="button"
+                                                @click="toggleReviewHelpful({{ $rev->id }}, {{ auth()->check() ? 'true' : 'false' }})"
+                                                :class="upvotedMap[{{ $rev->id }}] ? 'bg-primary text-white border-primary' : 'bg-surface-subtle text-text-muted border-border-subtle hover:text-primary'"
+                                                class="px-2.5 py-1 rounded-xl border text-[11px] font-bold transition-colors cursor-pointer inline-flex items-center gap-1">
+                                            <span>Helpful</span>
+                                            <span class="font-mono" x-text="'(' + (helpfulCounts[{{ $rev->id }}] || 0) + ')'"></span>
+                                        </button>
+                                    </div>
                                 </div>
                                 @if($rev->review_text)
                                     <p class="text-text-main leading-relaxed">{{ $rev->review_text }}</p>
                                 @endif
-                                @php
-                                    $photosList = is_array($rev->review_photos) && !empty($rev->review_photos)
-                                        ? $rev->review_photos
-                                        : ($rev->review_photo_path ? [$rev->review_photo_path] : []);
-                                @endphp
                                 @if(!empty($photosList))
                                     <div class="flex flex-wrap gap-2 pt-1">
                                         @foreach($photosList as $rPhoto)
@@ -975,6 +1121,69 @@
                                         </span>
                                         <p class="text-text-main leading-relaxed">{{ $rev->seller_reply }}</p>
                                     </div>
+                                @endif
+                            </div>
+                        @endforeach
+                    </div>
+                @endif
+            </div>
+
+            <div id="product-qna-section" class="pt-4 border-t border-border-subtle/70 space-y-4">
+                <div class="bg-surface-subtle px-5 py-3.5 rounded-2xl border border-border-subtle/60 flex flex-wrap items-center justify-between gap-2">
+                    <h2 class="font-extrabold text-text-main uppercase text-xs tracking-wider">
+                        Buyer Product Q&amp;A ({{ $productQuestions->count() }})
+                    </h2>
+                    <span class="text-[11px] text-text-muted">Ask the seller a public question about this item</span>
+                </div>
+
+                @auth
+                    @if(!$isOwnStore)
+                        <form action="{{ route('product.questions.store', $product->id) }}" method="POST" class="flex flex-col sm:flex-row gap-2.5 px-2">
+                            @csrf
+                            <input type="text"
+                                   name="question"
+                                   required
+                                   minlength="5"
+                                   maxlength="500"
+                                   placeholder="Ask a question about size, material, compatibility, or stock..."
+                                   class="flex-1 p-3 rounded-2xl border border-border-subtle bg-surface text-xs outline-none focus:border-primary">
+                            <button type="submit"
+                                    class="px-5 py-3 rounded-2xl bg-primary-dark hover:bg-primary text-white text-xs font-extrabold transition-colors cursor-pointer shrink-0">
+                                Post Question
+                            </button>
+                        </form>
+                    @endif
+                @else
+                    <div class="px-2 text-xs text-text-muted">
+                        Please <a href="{{ route('login') }}" class="text-primary font-bold underline">sign in</a> to ask a question about this product.
+                    </div>
+                @endauth
+
+                @if($productQuestions->isEmpty())
+                    <p class="text-xs text-text-muted px-2 py-2">No questions asked yet. Be the first to ask the seller!</p>
+                @else
+                    <div class="divide-y divide-border-subtle/60 px-2 text-xs">
+                        @foreach($productQuestions as $pq)
+                            <div class="py-3.5 space-y-2">
+                                <div class="flex items-start justify-between gap-2">
+                                    <div class="font-bold text-text-main">
+                                        <span class="px-2 py-0.5 rounded bg-primary/10 text-primary font-extrabold text-[10px] mr-1.5">Q</span>
+                                        {{ $pq->question }}
+                                    </div>
+                                    <span class="text-[11px] text-text-muted shrink-0">
+                                        {{ $pq->buyer?->first_name ? substr($pq->buyer->first_name, 0, 1) . '***' : 'Buyer' }} &bull; {{ $pq->created_at?->format('M d, Y') }}
+                                    </span>
+                                </div>
+                                @if($pq->answer)
+                                    <div class="p-3 rounded-2xl bg-brand-light/25 border border-border-subtle space-y-1 ml-4">
+                                        <div class="flex items-center justify-between text-[10px]">
+                                            <strong class="text-primary-dark uppercase">A: {{ $seller->business_name ?? 'Official Store' }}</strong>
+                                            <span class="text-text-muted">{{ $pq->answered_at?->format('M d, Y') }}</span>
+                                        </div>
+                                        <p class="text-text-main leading-relaxed">{{ $pq->answer }}</p>
+                                    </div>
+                                @else
+                                    <p class="text-[11px] text-text-muted italic ml-6">Waiting for seller response...</p>
                                 @endif
                             </div>
                         @endforeach
@@ -1003,7 +1212,6 @@
         @endif
     </div>
 
-    <!-- Full-Screen Product Image Lightbox Modal with Visible Close Button & Lower-Right Counter -->
     <div x-show="imageModalOpen"
          x-cloak
          x-transition.opacity

@@ -10,28 +10,9 @@ use App\Models\Rider;
 use App\Notifications\OrderLifecycleNotification;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Validation\ValidationException;
 
-/**
- * The physical trip of a returned parcel:
- *
- *   Buyer --(Rider)--> Sorting Hub --(Courier)--> Seller
- *
- *   logistics  assignRider()           awaiting_rider_assignment | pickup_failed -> rider_assigned
- *   rider      riderConfirmPickup()    rider_assigned          -> picked_up_from_buyer
- *   rider      riderReportPickupFailed() rider_assigned        -> pickup_failed (3 strikes closes the request)
- *   logistics  receiveAtHub()          picked_up_from_buyer    -> received_at_hub   (Rider leg is paid)
- *   logistics  assignCourier()         received_at_hub         -> courier_assigned
- *   courier    courierStartDelivery()  courier_assigned        -> out_for_return_delivery
- *   courier    courierConfirmDelivered() out_for_return_delivery -> delivered_to_seller (Courier leg is paid)
- *
- * Money rules (see ReturnRefundLedgerService): each driver leg is paid in full to the
- * driver the moment it is completed, and the platform recovers that cost from the
- * seller when the refund is settled. Rider and Courier are never out of pocket.
- *
- * Every public method is one database transaction. Notifications, and the hand-back to
- * ReturnRefundService, run only AFTER the transaction commits.
- */
 class ReturnShipmentService
 {
     public function __construct(
@@ -41,15 +22,6 @@ class ReturnShipmentService
     ) {
     }
 
-    // ================================================================== eligibility (Logistics screens)
-
-    /**
-     * Riders who may collect this parcel from the buyer: same hub municipality as the buyer
-     * (or the sorting hub itself). Riders who also cover the buyer's barangay are preferred.
-     *
-     * @param  Collection<int, Rider>  $riders  loaded with currentHubAssignment.hub and barangayCoverages
-     * @return Collection<int, Rider>
-     */
     public function eligibleRiders(ReturnShipment $returnShipment, Collection $riders): Collection
     {
         $municipalityMatches = $riders
@@ -57,7 +29,6 @@ class ReturnShipmentService
             ->values();
 
         $buyerBarangay = $this->addressService->normalizeName($returnShipment->pickup_address_snapshot['barangay'] ?? '');
-
         if ($buyerBarangay === '') {
             return $municipalityMatches;
         }
@@ -71,21 +42,12 @@ class ReturnShipmentService
         return $barangayMatches->isNotEmpty() ? $barangayMatches : $municipalityMatches;
     }
 
-    /**
-     * Couriers who may carry this parcel from the sorting hub to the seller: the courier's
-     * registered hub is the parcel's hub (same rule as the forward first-mile pickup).
-     *
-     * @param  Collection<int, Courier>  $couriers  loaded with currentHubAssignment.hub
-     * @return Collection<int, Courier>
-     */
     public function eligibleCouriers(ReturnShipment $returnShipment, Collection $couriers): Collection
     {
         return $couriers
             ->filter(fn (Courier $courier) => $this->courierServesHub($courier, $returnShipment))
             ->values();
     }
-
-    // ================================================================== logistics
 
     public function assignRider(ReturnShipment $returnShipment, int $riderId, int $logisticsProfileId, int $assignedByUserId, ?string $notes = null): ReturnShipment
     {
@@ -127,7 +89,6 @@ class ReturnShipmentService
             ]);
 
             $note = $notes !== null && trim($notes) !== '' ? ' Note: ' . trim($notes) : '';
-
             $locked->recordEvent(
                 'Rider Assigned for Return Pickup',
                 "Rider {$rider->full_name} ({$rider->vehicle_type} - {$rider->plate_number}) will collect the parcel from the buyer.{$note}",
@@ -138,7 +99,6 @@ class ReturnShipmentService
             );
 
             $order = $locked->sellerOrder;
-
             $this->queue(
                 $pending,
                 $rider,
@@ -149,7 +109,6 @@ class ReturnShipmentService
                 $this->url('rider.returns.index'),
                 $locked
             );
-
             $this->queue(
                 $pending,
                 $order?->buyer,
@@ -166,10 +125,6 @@ class ReturnShipmentService
         return $returnShipment->fresh(['rider', 'courier']);
     }
 
-    /**
-     * The sorting hub has physically received the parcel from the Rider.
-     * The Rider's leg is paid here.
-     */
     public function receiveAtHub(ReturnShipment $returnShipment, int $logisticsProfileId, int $verifiedByUserId, ?string $notes = null): ReturnShipment
     {
         $pending = [];
@@ -189,12 +144,10 @@ class ReturnShipmentService
                 'hub_verified_by'   => $verifiedByUserId,
             ]);
 
-            // Wallet first, so a failure rolls the whole step back.
             $this->ledger->creditReturnLegPay($locked, 'rider');
 
             $hubName = $locked->hub_address_snapshot['hub_name'] ?? ($locked->hub_address_snapshot['name'] ?? 'the sorting hub');
             $note = $notes !== null && trim($notes) !== '' ? ' Note: ' . trim($notes) : '';
-
             $locked->recordEvent(
                 'Received at Sorting Hub',
                 "The returned parcel was checked and received at {$hubName}.{$note}",
@@ -205,7 +158,6 @@ class ReturnShipmentService
             );
 
             $order = $locked->sellerOrder;
-
             $this->queue(
                 $pending,
                 $order?->buyer,
@@ -215,7 +167,6 @@ class ReturnShipmentService
                 $this->url('user.orders.show', $order?->id),
                 $locked
             );
-
             $this->queue(
                 $pending,
                 $order?->seller,
@@ -243,6 +194,7 @@ class ReturnShipmentService
 
             if (! in_array($locked->status, [
                 ReturnShipment::STATUS_RECEIVED_AT_HUB,
+                ReturnShipment::STATUS_DELIVERY_FAILED,
                 ReturnShipment::STATUS_COURIER_ASSIGNED,
             ], true)) {
                 $this->fail('A courier can only be assigned after the parcel was received at the hub, and before it leaves for the seller.');
@@ -265,20 +217,23 @@ class ReturnShipmentService
 
             $previousCourierId = $locked->current_courier_id ? (int) $locked->current_courier_id : null;
 
-            $locked->update([
+            $updates = [
                 'current_courier_id'  => $courier->id,
                 'status'              => ReturnShipment::STATUS_COURIER_ASSIGNED,
                 'courier_assigned_at' => now(),
-            ]);
+            ];
+            if (Schema::hasColumn('return_shipments', 'delivery_failure_reason')) {
+                $updates['delivery_failure_reason'] = null;
+            }
+
+            $locked->update($updates);
 
             $courier->update(['status' => 'on_delivery']);
-
             if ($previousCourierId && $previousCourierId !== (int) $courier->id) {
                 $this->releaseCourier($previousCourierId, (int) $locked->id);
             }
 
             $note = $notes !== null && trim($notes) !== '' ? ' Note: ' . trim($notes) : '';
-
             $locked->recordEvent(
                 'Courier Assigned for Return Delivery',
                 "Courier {$courier->full_name} ({$courier->vehicle_type} - {$courier->plate_number}) will bring the parcel back to the seller.{$note}",
@@ -289,7 +244,6 @@ class ReturnShipmentService
             );
 
             $order = $locked->sellerOrder;
-
             $this->queue(
                 $pending,
                 $courier,
@@ -300,7 +254,6 @@ class ReturnShipmentService
                 $this->url('courier.returns.index'),
                 $locked
             );
-
             $this->queue(
                 $pending,
                 $order?->seller,
@@ -316,8 +269,6 @@ class ReturnShipmentService
 
         return $returnShipment->fresh(['rider', 'courier']);
     }
-
-    // ================================================================== rider
 
     public function riderConfirmPickup(ReturnShipment $returnShipment, Rider $rider, string $photoPath, ?string $notes = null): ReturnShipment
     {
@@ -339,7 +290,6 @@ class ReturnShipmentService
             ]);
 
             $note = $notes !== null && trim($notes) !== '' ? ' Note: ' . trim($notes) : '';
-
             $locked->recordEvent(
                 'Picked Up From Buyer',
                 "Rider {$rider->full_name} collected the parcel from the buyer and is heading to the sorting hub.{$note}",
@@ -350,7 +300,6 @@ class ReturnShipmentService
             );
 
             $order = $locked->sellerOrder;
-
             $this->queue(
                 $pending,
                 $order?->buyer,
@@ -360,7 +309,6 @@ class ReturnShipmentService
                 $this->url('user.orders.show', $order?->id),
                 $locked
             );
-
             $this->queue(
                 $pending,
                 $order?->seller,
@@ -370,7 +318,6 @@ class ReturnShipmentService
                 $this->url('seller.returns.show', $locked->return_request_id),
                 $locked
             );
-
             $this->queue(
                 $pending,
                 $order?->logisticsProfile?->user,
@@ -387,11 +334,6 @@ class ReturnShipmentService
         return $returnShipment->fresh(['rider', 'courier']);
     }
 
-    /**
-     * The rider could not collect the parcel (buyer unreachable, not at home, refused to hand it over...).
-     * After ReturnShipment::MAX_PICKUP_ATTEMPTS failures the return is closed without a refund and the
-     * order completes normally.
-     */
     public function riderReportPickupFailed(ReturnShipment $returnShipment, Rider $rider, string $reason, ?string $notes = null): ReturnShipment
     {
         $pending = [];
@@ -424,7 +366,6 @@ class ReturnShipmentService
             ]);
 
             $max = ReturnShipment::MAX_PICKUP_ATTEMPTS;
-
             $locked->recordEvent(
                 "Return Pickup Failed (Attempt {$attempts} of {$max})",
                 "Rider {$rider->full_name} could not collect the parcel: {$full}",
@@ -439,7 +380,6 @@ class ReturnShipmentService
 
             if ($attempts >= $max) {
                 $closeMessage = "The rider could not collect the returned parcel after {$max} attempts, so the return request was closed without a refund.";
-
                 return;
             }
 
@@ -452,7 +392,6 @@ class ReturnShipmentService
                 $this->url('user.orders.show', $order?->id),
                 $locked
             );
-
             $this->queue(
                 $pending,
                 $order?->logisticsProfile?->user,
@@ -468,7 +407,6 @@ class ReturnShipmentService
 
         if ($closeMessage !== null && $requestId !== null) {
             $request = ReturnRequest::find($requestId);
-
             if ($request) {
                 $this->returnRefundService->closeWithoutRefund(
                     $request,
@@ -482,8 +420,6 @@ class ReturnShipmentService
 
         return $returnShipment->fresh(['rider', 'courier']);
     }
-
-    // ================================================================== courier
 
     public function courierStartDelivery(ReturnShipment $returnShipment, Courier $courier): ReturnShipment
     {
@@ -513,7 +449,6 @@ class ReturnShipmentService
             );
 
             $order = $locked->sellerOrder;
-
             $this->queue(
                 $pending,
                 $order?->seller,
@@ -530,13 +465,76 @@ class ReturnShipmentService
         return $returnShipment->fresh(['rider', 'courier']);
     }
 
-    /**
-     * The parcel reached the seller. The Courier's leg is paid here, and the request moves on to
-     * "waiting for the seller to confirm receipt" (ReturnRefundService::markReturnDelivered).
-     *
-     * Safe to repeat: if the shipment was already delivered but the hand-back failed, a second call
-     * only repeats the hand-back.
-     */
+    public function courierReportDeliveryFailed(ReturnShipment $returnShipment, Courier $courier, string $reason, ?string $notes = null): ReturnShipment
+    {
+        $pending = [];
+
+        DB::transaction(function () use ($returnShipment, $courier, $reason, $notes, &$pending) {
+            $locked = $this->lockShipment($returnShipment->id);
+            $this->assertCourier($locked, $courier);
+            $this->assertRequestInTransit($locked);
+
+            if ($locked->status !== ReturnShipment::STATUS_OUT_FOR_RETURN_DELIVERY) {
+                $this->fail('Only a return parcel currently out for delivery to the seller can be marked as failed.');
+            }
+
+            $reason = trim($reason);
+            if (mb_strlen($reason) < 5) {
+                $this->fail('Please explain why the parcel could not be handed over to the seller (at least 5 characters).');
+            }
+
+            $attempts = (int) ($locked->delivery_attempts_count ?? 0) + 1;
+            $full = trim($reason . ($notes !== null && trim($notes) !== '' ? ' - ' . trim($notes) : ''));
+
+            $updates = [
+                'status'             => ReturnShipment::STATUS_DELIVERY_FAILED,
+                'current_courier_id' => null,
+            ];
+            if (Schema::hasColumn('return_shipments', 'delivery_attempts_count')) {
+                $updates['delivery_attempts_count'] = $attempts;
+                $updates['delivery_failure_reason'] = mb_substr($full, 0, 150);
+                $updates['delivery_failed_at'] = now();
+            }
+
+            $locked->update($updates);
+            $this->releaseCourier((int) $courier->id, (int) $locked->id);
+
+            $max = ReturnShipment::MAX_DELIVERY_ATTEMPTS;
+            $locked->recordEvent(
+                "Return Delivery to Seller Unsuccessful (Attempt {$attempts} of {$max})",
+                "Courier {$courier->full_name} could not hand over the returned parcel to the seller ({$full}). Parcel returned to the sorting hub for re-dispatch.",
+                $this->place($locked->return_address_snapshot),
+                'Courier',
+                (int) $courier->id,
+                ReturnShipment::STATUS_DELIVERY_FAILED
+            );
+
+            $order = $locked->sellerOrder;
+            $this->queue(
+                $pending,
+                $order?->seller,
+                'Return Delivery Attempt Unsuccessful',
+                "Our courier attempted to deliver the returned parcel for Order #{$order?->seller_order_number} ({$locked->tracking_number}), but could not complete the handover ({$full}). Logistics will schedule another delivery attempt.",
+                'warning',
+                $this->url('seller.returns.show', $locked->return_request_id),
+                $locked
+            );
+            $this->queue(
+                $pending,
+                $order?->logisticsProfile?->user,
+                'Return Delivery to Seller Failed: Reassign Courier',
+                "Courier {$courier->full_name} could not deliver return {$locked->tracking_number} to the seller ({$full}). Please assign a courier for redelivery.",
+                'danger',
+                $this->url('logistics.returns.show', $locked->id),
+                $locked
+            );
+        });
+
+        $this->runAfterCommit($pending);
+
+        return $returnShipment->fresh(['rider', 'courier']);
+    }
+
     public function courierConfirmDelivered(ReturnShipment $returnShipment, Courier $courier, string $photoPath, ?string $notes = null): ReturnShipment
     {
         DB::transaction(function () use ($returnShipment, $courier, $photoPath, $notes) {
@@ -559,13 +557,11 @@ class ReturnShipmentService
                 'seller_delivery_photo'  => $photoPath,
             ]);
 
-            // Wallet first, so a failure rolls the whole step back.
             $this->ledger->creditReturnLegPay($locked, 'courier');
 
             $this->releaseCourier((int) $courier->id, (int) $locked->id);
 
             $note = $notes !== null && trim($notes) !== '' ? ' Note: ' . trim($notes) : '';
-
             $locked->recordEvent(
                 'Delivered to Seller',
                 "Courier {$courier->full_name} handed the returned parcel to the seller.{$note}",
@@ -576,17 +572,13 @@ class ReturnShipmentService
             );
         });
 
-        // Seller is asked to confirm receipt; the refund waits for that confirmation.
         $request = ReturnRequest::find($returnShipment->return_request_id);
-
         if ($request) {
             $this->returnRefundService->markReturnDelivered($request);
         }
 
         return $returnShipment->fresh(['rider', 'courier']);
     }
-
-    // ================================================================== helpers
 
     protected function lockShipment(int $id): ReturnShipment
     {
@@ -630,7 +622,6 @@ class ReturnShipmentService
     protected function riderCoversReturn(Rider $rider, ReturnShipment $returnShipment): bool
     {
         $hub = $rider->assigned_hub;
-
         if (! $hub) {
             return false;
         }
@@ -648,7 +639,6 @@ class ReturnShipmentService
     protected function courierServesHub(Courier $courier, ReturnShipment $returnShipment): bool
     {
         $hub = $courier->assigned_hub;
-
         if (! $hub) {
             return false;
         }
@@ -660,14 +650,9 @@ class ReturnShipmentService
             || ($hubMunicipality !== '' && $this->addressService->normalizeName($hub->municipality) === $hubMunicipality);
     }
 
-    /**
-     * Put a courier back to "active" when nothing else keeps them busy
-     * (first-mile pickups, or another return delivery).
-     */
     protected function releaseCourier(int $courierId, int $exceptReturnShipmentId): void
     {
         $courier = Courier::find($courierId);
-
         if (! $courier || $courier->status !== 'on_delivery') {
             return;
         }
@@ -689,13 +674,9 @@ class ReturnShipmentService
         }
     }
 
-    /**
-     * @param  array<string, mixed>|null  $snapshot
-     */
     protected function place(?array $snapshot): string
     {
         $snapshot = (array) $snapshot;
-
         $parts = array_filter([
             $snapshot['barangay'] ?? null,
             $snapshot['municipality'] ?? null,
@@ -710,11 +691,6 @@ class ReturnShipmentService
         throw ValidationException::withMessages(['return' => $message]);
     }
 
-    // ------------------------------------------------------------------ notifications
-
-    /**
-     * @param  array<int, array{0: object, 1: OrderLifecycleNotification}>  $pending
-     */
     protected function queue(array &$pending, ?object $recipient, string $title, string $message, string $type, ?string $url, ReturnShipment $returnShipment): void
     {
         if (! $recipient) {
@@ -737,11 +713,6 @@ class ReturnShipmentService
         ];
     }
 
-    /**
-     * Runs once the transaction has committed. A failed notification must never undo a real parcel movement.
-     *
-     * @param  array<int, array{0: object, 1: OrderLifecycleNotification}>  $pending
-     */
     protected function runAfterCommit(array $pending): void
     {
         foreach ($pending as [$recipient, $notification]) {
@@ -752,9 +723,6 @@ class ReturnShipmentService
         }
     }
 
-    /**
-     * Route URL, or null if that screen does not exist (yet).
-     */
     protected function url(string $routeName, mixed $parameter = null): ?string
     {
         try {

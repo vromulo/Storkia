@@ -6,7 +6,6 @@ use App\Http\Controllers\Controller;
 use App\Models\Cart;
 use App\Models\Order;
 use App\Models\OrderItem;
-use App\Models\OrderPaymentSubmission;
 use App\Models\OrderStatusHistory;
 use App\Models\Payment;
 use App\Models\Product;
@@ -16,19 +15,19 @@ use App\Models\SellerProfile;
 use App\Models\StorkVoucher;
 use App\Notifications\OrderLifecycleNotification;
 use App\Services\BuyerCancellationGuardService;
+use App\Services\BuyerRewardService;
 use App\Services\InventoryStockService;
+use App\Services\RoleWalletService;
 use App\Services\ShippingCalculatorService;
+use App\Services\StorkSchemaBootstrapService;
+use App\Services\SuperDealPricingService;
 use App\Services\VoucherService;
-use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
-use Intervention\Image\Drivers\Gd\Driver;
-use Intervention\Image\Encoders\WebpEncoder;
-use Intervention\Image\ImageManager;
 
 class CheckoutController extends Controller
 {
@@ -36,25 +35,82 @@ class CheckoutController extends Controller
         protected InventoryStockService $inventoryStockService,
         protected ShippingCalculatorService $shippingCalculatorService,
         protected VoucherService $voucherService,
-        protected BuyerCancellationGuardService $cancellationGuardService
+        protected BuyerCancellationGuardService $cancellationGuardService,
+        protected SuperDealPricingService $superDealPricingService,
+        protected RoleWalletService $roleWalletService,
+        protected BuyerRewardService $buyerRewardService
     ) {}
+
+    protected function resolvePlatformGcashSettings(): ?array
+    {
+        if (! Schema::hasTable('platform_gcash_settings')) {
+            return null;
+        }
+
+        $platGcash = DB::table('platform_gcash_settings')
+            ->where('is_active', true)
+            ->orderByDesc('id')
+            ->first();
+
+        if ($platGcash && ! empty($platGcash->account_name) && ! empty($platGcash->gcash_number)) {
+            return [
+                'account_name'  => $platGcash->account_name,
+                'gcash_number'  => $platGcash->gcash_number,
+                'qr_image_path' => $platGcash->qr_image_path,
+                'qr_image_url'  => ! empty($platGcash->qr_image_path) ? asset('storage/' . $platGcash->qr_image_path) : null,
+                'is_active'     => (bool) $platGcash->is_active,
+                'instructions'  => $platGcash->instructions ?? null,
+            ];
+        }
+
+        return null;
+    }
+
+    protected function assertPerBuyerLimitNotExceeded(int $buyerId, Product $product, int $checkoutQuantity): void
+    {
+        if (! Schema::hasColumn('products', 'per_buyer_limit')) {
+            return;
+        }
+
+        $limit = (int) ($product->per_buyer_limit ?? 0);
+        if ($limit <= 0) {
+            return;
+        }
+
+        $previouslyPurchased = (int) OrderItem::where('product_id', $product->id)
+            ->whereHas('sellerOrder', function ($q) use ($buyerId) {
+                $q->where('buyer_id', $buyerId)
+                  ->whereNotIn('status', ['cancelled', 'rejected', 'returned_to_seller']);
+            })
+            ->sum('quantity');
+
+        if (($previouslyPurchased + $checkoutQuantity) > $limit) {
+            throw ValidationException::withMessages([
+                'quantity' => "Purchase limit reached for \"{$product->name}\": Maximum {$limit} unit(s) allowed per buyer across orders.",
+            ]);
+        }
+    }
 
     public function preview(Request $request): JsonResponse
     {
+        StorkSchemaBootstrapService::ensureTablesExist();
+
         $validated = $request->validate([
-            'mode'                    => ['required', 'in:cart,buy_now'],
-            'address_id'              => ['nullable', 'integer', 'exists:user_addresses,id'],
-            'cart_ids'                => ['required_if:mode,cart', 'array'],
-            'cart_ids.*'              => ['integer'],
-            'store_vouchers'          => ['nullable', 'array'],
-            'store_vouchers.*'        => ['nullable', 'string', 'max:25'],
-            'platform_voucher_code'   => ['nullable', 'string', 'max:25'],
-            'shipping_voucher_code'   => ['nullable', 'string', 'max:25'],
-            'voucher_code'            => ['nullable', 'string', 'max:25'],
-            'product_id'              => ['required_if:mode,buy_now', 'integer', 'exists:products,id'],
-            'quantity'                => ['required_if:mode,buy_now', 'integer', 'min:1', 'max:1000000'],
-            'variant'                 => ['nullable', 'string'],
-            'sub_variant'             => ['nullable', 'string'],
+            'mode'                  => ['required', 'in:cart,buy_now'],
+            'address_id'            => ['nullable', 'integer', 'exists:user_addresses,id'],
+            'cart_ids'              => ['required_if:mode,cart', 'array'],
+            'cart_ids.*'            => ['integer'],
+            'store_vouchers'        => ['nullable', 'array'],
+            'store_vouchers.*'      => ['nullable', 'string', 'max:25'],
+            'platform_voucher_code' => ['nullable', 'string', 'max:25'],
+            'shipping_voucher_code' => ['nullable', 'string', 'max:25'],
+            'voucher_code'          => ['nullable', 'string', 'max:25'],
+            'use_storkia_coins'     => ['nullable', 'boolean'],
+            'coins_to_use'          => ['nullable', 'integer', 'min:0'],
+            'product_id'            => ['required_if:mode,buy_now', 'integer', 'exists:products,id'],
+            'quantity'              => ['required_if:mode,buy_now', 'integer', 'min:1', 'max:1000000'],
+            'variant'               => ['nullable', 'string'],
+            'sub_variant'           => ['nullable', 'string'],
         ]);
 
         $user = $request->user();
@@ -92,6 +148,9 @@ class CheckoutController extends Controller
             }
         }
 
+        $useStorkiaCoins = $request->boolean('use_storkia_coins');
+        $requestedCoinsToUse = isset($validated['coins_to_use']) ? (int) $validated['coins_to_use'] : null;
+
         $checkoutSummary = $this->buildGroupedSellerPreview(
             rawLineItems: $rawLineItems,
             selectedAddress: $selectedAddress,
@@ -99,8 +158,12 @@ class CheckoutController extends Controller
             storeVoucherCodes: $storeVouchers,
             platformVoucherCode: $platformVoucherCode,
             shippingVoucherCode: $shippingVoucherCode,
-            strictVoucherErrors: false
+            useStorkiaCoins: $useStorkiaCoins,
+            strictVoucherErrors: false,
+            requestedCoinsToUse: $requestedCoinsToUse
         );
+
+        $buyerWallet = $this->roleWalletService->getOrCreateBuyerWallet($user);
 
         $availableVouchers = $this->voucherService->getBuyerAvailableVouchers((int) $user->id)
             ->map(function (StorkVoucher $v) {
@@ -117,12 +180,23 @@ class CheckoutController extends Controller
                 'addresses'                 => $addresses,
                 'selected_address'          => $selectedAddress,
                 'is_address_serviceable'    => $checkoutSummary['is_address_serviceable'],
+                'buyer_wallet_balance'      => round((float) $buyerWallet->available_balance, 2),
+                'platform_gcash'            => $this->resolvePlatformGcashSettings(),
                 'seller_packages'           => $checkoutSummary['seller_packages'],
                 'overall_subtotal'          => $checkoutSummary['overall_subtotal'],
                 'overall_shipping'          => $checkoutSummary['overall_shipping'],
                 'overall_store_discount'    => $checkoutSummary['overall_store_discount'],
                 'overall_platform_discount' => $checkoutSummary['overall_platform_discount'],
                 'overall_shipping_discount' => $checkoutSummary['overall_shipping_discount'],
+                'overall_coins_used'        => $checkoutSummary['overall_coins_used'],
+                'overall_coins_discount'    => $checkoutSummary['overall_coins_discount'],
+                'max_redeemable_coins'      => $checkoutSummary['max_redeemable_coins'],
+                'max_redeemable_discount'   => $checkoutSummary['max_redeemable_discount'],
+                'coin_to_peso_value'        => BuyerRewardService::COIN_TO_PESO_VALUE,
+                'coins_per_peso'            => BuyerRewardService::COINS_PER_PESO,
+                'min_redeemable_coins'      => BuyerRewardService::MIN_CHECKOUT_REDEEMABLE_COINS,
+                'buyer_coins_balance'       => $checkoutSummary['buyer_coins_balance'],
+                'use_storkia_coins'         => $useStorkiaCoins,
                 'overall_net_subtotal'      => $checkoutSummary['overall_net_subtotal'],
                 'overall_net_shipping'      => $checkoutSummary['overall_net_shipping'],
                 'overall_total'             => $checkoutSummary['overall_total'],
@@ -148,38 +222,39 @@ class CheckoutController extends Controller
 
     public function store(Request $request): JsonResponse
     {
+        StorkSchemaBootstrapService::ensureTablesExist();
+
         $this->normalizeMultipartArrays($request, [
             'cart_ids',
             'seller_notes',
             'store_voucher_codes',
             'payment_methods',
-            'gcash_sender_number',
-            'gcash_paid_at',
-            'gcash_reference_number',
-            'gcash_reference_code',
         ]);
 
         $validated = $request->validate([
-            'user_address_id'        => ['required', 'integer', 'exists:user_addresses,id'],
-            'mode'                   => ['required', 'in:cart,buy_now'],
-            'cart_ids'               => ['required_if:mode,cart', 'array'],
-            'cart_ids.*'             => ['integer'],
-            'idempotency_key'        => ['required', 'string', 'max:64'],
-            'price_signature'        => ['nullable', 'string'],
-            'seller_notes'           => ['nullable', 'array'],
-            'seller_notes.*'         => ['nullable', 'string', 'max:200'],
-            'store_voucher_codes'    => ['nullable', 'array'],
-            'store_voucher_codes.*'  => ['nullable', 'string', 'max:25'],
-            'platform_voucher_code'  => ['nullable', 'string', 'max:25'],
-            'shipping_voucher_code'  => ['nullable', 'string', 'max:25'],
-            'payment_methods'        => ['nullable', 'array'],
-            'payment_methods.*'      => ['required', 'in:COD,GCASH'],
-            'product_id'             => ['required_if:mode,buy_now', 'integer', 'exists:products,id'],
-            'quantity'               => ['required_if:mode,buy_now', 'integer', 'min:1', 'max:1000000'],
-            'variant'                => ['nullable', 'string'],
-            'sub_variant'            => ['nullable', 'string'],
+            'user_address_id'       => ['required', 'integer', 'exists:user_addresses,id'],
+            'mode'                  => ['required', 'in:cart,buy_now'],
+            'cart_ids'              => ['required_if:mode,cart', 'array'],
+            'cart_ids.*'            => ['integer'],
+            'idempotency_key'       => ['required', 'string', 'max:64'],
+            'price_signature'       => ['nullable', 'string'],
+            'seller_notes'          => ['nullable', 'array'],
+            'seller_notes.*'        => ['nullable', 'string', 'max:200'],
+            'store_voucher_codes'   => ['nullable', 'array'],
+            'store_voucher_codes.*' => ['nullable', 'string', 'max:25'],
+            'platform_voucher_code' => ['nullable', 'string', 'max:25'],
+            'shipping_voucher_code' => ['nullable', 'string', 'max:25'],
+            'use_storkia_coins'     => ['nullable', 'boolean'],
+            'coins_to_use'          => ['nullable', 'integer', 'min:0'],
+            'payment_methods'       => ['nullable', 'array'],
+            'payment_methods.*'     => ['required', 'in:COD,WALLET'],
+            'product_id'            => ['required_if:mode,buy_now', 'integer', 'exists:products,id'],
+            'quantity'              => ['required_if:mode,buy_now', 'integer', 'min:1', 'max:1000000'],
+            'variant'               => ['nullable', 'string'],
+            'sub_variant'           => ['nullable', 'string'],
         ], [
             'user_address_id.required' => 'Please select a delivery address.',
+            'payment_methods.*.in'     => 'Please select either Cash on Delivery (COD) or Storkia E-Wallet (WALLET).',
             'seller_notes.*.max'       => 'Note to seller cannot exceed 200 characters.',
         ]);
 
@@ -231,7 +306,8 @@ class CheckoutController extends Controller
                     $sigKey = $this->buildLineSignatureKey(
                         $line['product']->id,
                         $line['variant_name'],
-                        $line['sub_variant_name']
+                        $line['sub_variant_name'],
+                        $line['pricing_label'] ?? 'Regular'
                     );
                     if (isset($expectedPrices[$sigKey])) {
                         $expectedUnit = round((float) $expectedPrices[$sigKey], 2);
@@ -289,108 +365,39 @@ class CheckoutController extends Controller
                 storeVoucherCodes: (array) ($validated['store_voucher_codes'] ?? []),
                 platformVoucherCode: (string) ($validated['platform_voucher_code'] ?? ''),
                 shippingVoucherCode: (string) ($validated['shipping_voucher_code'] ?? ''),
-                strictVoucherErrors: true
+                useStorkiaCoins: $request->boolean('use_storkia_coins'),
+                strictVoucherErrors: true,
+                requestedCoinsToUse: isset($validated['coins_to_use']) ? (int) $validated['coins_to_use'] : null
             );
 
             $paymentMethodsInput = (array) ($validated['payment_methods'] ?? []);
-            $seenRefNumbers = [];
-            $preparedGcashData = [];
+            $totalWalletRequired = 0.00;
 
             foreach ($preview['seller_packages'] as $pkg) {
                 /** @var SellerProfile $sellerProfile */
                 $sellerProfile = $pkg['seller_profile_model'];
                 $spId = (int) $sellerProfile->id;
-                $chosenMethod = strtoupper((string) ($paymentMethodsInput[$spId] ?? 'COD'));
+                $chosenMethod = strtoupper((string) ($paymentMethodsInput[$spId] ?? ($paymentMethodsInput[(string) $spId] ?? 'COD')));
 
-                if (! in_array($chosenMethod, ['COD', 'GCASH'], true)) {
+                if (! in_array($chosenMethod, ['COD', 'WALLET'], true)) {
                     throw ValidationException::withMessages([
-                        'payment_methods' => "Please select a valid payment method for {$sellerProfile->business_name}.",
+                        'payment_methods' => "Please select a valid payment method (COD or WALLET) for {$sellerProfile->business_name}.",
                     ]);
                 }
 
-                if ($chosenMethod === 'GCASH') {
-                    $gcashAcc = $sellerProfile->gcashAccount;
-                    if (! $gcashAcc || ! $gcashAcc->isCompliantForCheckout()) {
-                        throw ValidationException::withMessages([
-                            'payment_methods' => "Online Payment (GCash) is not enabled for {$sellerProfile->business_name}. Please select Cash on Delivery (COD).",
-                        ]);
-                    }
+                if ($chosenMethod === 'WALLET') {
+                    $totalWalletRequired = round($totalWalletRequired + (float) $pkg['total'], 2);
+                }
+            }
 
-                    $rawSender = preg_replace('/\D/', '', (string) ($request->input("gcash_sender_number.{$spId}") ?? ''));
-                    if (str_starts_with($rawSender, '63') && strlen($rawSender) === 12) {
-                        $rawSender = '0' . substr($rawSender, 2);
-                    } elseif (strlen($rawSender) === 10 && str_starts_with($rawSender, '9')) {
-                        $rawSender = '0' . $rawSender;
-                    }
-
-                    if (! preg_match('/^09\d{9}$/', $rawSender)) {
-                        throw ValidationException::withMessages([
-                            "gcash_sender_number.{$spId}" => "Please enter a valid 11-digit Sender GCash mobile number for {$sellerProfile->business_name}.",
-                        ]);
-                    }
-
-                    $paidAtRaw = trim((string) ($request->input("gcash_paid_at.{$spId}") ?? ''));
-                    if ($paidAtRaw === '') {
-                        throw ValidationException::withMessages([
-                            "gcash_paid_at.{$spId}" => "Please enter the GCash payment date and time for {$sellerProfile->business_name}.",
-                        ]);
-                    }
-
-                    try {
-                        $paidAt = Carbon::parse($paidAtRaw);
-                    } catch (\Throwable $e) {
-                        throw ValidationException::withMessages([
-                            "gcash_paid_at.{$spId}" => "Invalid GCash payment date and time for {$sellerProfile->business_name}.",
-                        ]);
-                    }
-
-                    $refNumber = strtoupper(trim((string) ($request->input("gcash_reference_number.{$spId}") ?? '')));
-                    $refCode = strtoupper(trim((string) ($request->input("gcash_reference_code.{$spId}") ?? '')));
-
-                    if (strlen($refNumber) < 4 || strlen($refNumber) > 80) {
-                        throw ValidationException::withMessages([
-                            "gcash_reference_number.{$spId}" => "Please enter a valid GCash Reference Number (4–80 characters) for {$sellerProfile->business_name}.",
-                        ]);
-                    }
-
-                    if (strlen($refCode) < 2 || strlen($refCode) > 80) {
-                        throw ValidationException::withMessages([
-                            "gcash_reference_code.{$spId}" => "Please enter the GCash Reference Code for {$sellerProfile->business_name}.",
-                        ]);
-                    }
-
-                    if (
-                        in_array($refNumber, $seenRefNumbers, true)
-                        || OrderPaymentSubmission::whereRaw('UPPER(TRIM(reference_number)) = ?', [$refNumber])->exists()
-                    ) {
-                        throw ValidationException::withMessages([
-                            "gcash_reference_number.{$spId}" => "GCash Reference Number \"{$refNumber}\" has already been used. Each online payment must have a unique reference number.",
-                        ]);
-                    }
-                    $seenRefNumbers[] = $refNumber;
-
-                    $file = $request->file("gcash_screenshot.{$spId}") ?? $request->file("gcash_screenshot_{$spId}");
-                    if (! $file) {
-                        throw ValidationException::withMessages([
-                            "gcash_screenshot.{$spId}" => "Please upload your GCash payment screenshot for {$sellerProfile->business_name}.",
-                        ]);
-                    }
-
-                    if (! $file->isValid() || $file->getSize() > 5 * 1024 * 1024) {
-                        throw ValidationException::withMessages([
-                            "gcash_screenshot.{$spId}" => "The GCash payment screenshot for {$sellerProfile->business_name} must be a valid image under 5MB.",
-                        ]);
-                    }
-
-                    $preparedGcashData[$spId] = [
-                        'seller_gcash_name'   => $gcashAcc->account_name,
-                        'seller_gcash_number' => $gcashAcc->gcash_number,
-                        'sender_gcash_number' => $rawSender,
-                        'paid_at'             => $paidAt,
-                        'reference_number'    => $refNumber,
-                        'reference_code'      => $refCode,
-                        'screenshot_file'     => $file,
-                    ];
+            if ($totalWalletRequired > 0) {
+                $buyerWallet = $this->roleWalletService->getOrCreateBuyerWallet($user);
+                $availableBalance = round((float) $buyerWallet->available_balance, 2);
+                if ($availableBalance + 0.0001 < $totalWalletRequired) {
+                    $shortfall = round($totalWalletRequired - $availableBalance, 2);
+                    throw ValidationException::withMessages([
+                        'payment_methods' => 'Insufficient Storkia E-Wallet balance (Available: ₱' . number_format($availableBalance, 2) . ', Required: ₱' . number_format($totalWalletRequired, 2) . '). Please top up ₱' . number_format($shortfall, 2) . ' via GCash or switch to Cash on Delivery (COD).',
+                    ]);
                 }
             }
 
@@ -401,30 +408,45 @@ class CheckoutController extends Controller
                     $line['sub_variant_name'],
                     $line['quantity']
                 );
+
+                if (! empty($line['super_deal_id']) && Schema::hasTable('super_deals')) {
+                    DB::table('super_deals')
+                        ->where('id', (int) $line['super_deal_id'])
+                        ->increment('sold_quantity', (int) $line['quantity']);
+                }
             }
 
             $resolvedMethods = [];
             foreach ($preview['seller_packages'] as $pkg) {
                 $spId = (int) $pkg['seller_profile_model']->id;
-                $resolvedMethods[] = strtoupper((string) ($paymentMethodsInput[$spId] ?? 'COD'));
+                $resolvedMethods[] = strtoupper((string) ($paymentMethodsInput[$spId] ?? ($paymentMethodsInput[(string) $spId] ?? 'COD')));
             }
             $parentMethod = count(array_unique($resolvedMethods)) === 1
                 ? ($resolvedMethods[0] ?? 'COD')
                 : 'MIXED';
+            $allWallet = $parentMethod === 'WALLET';
 
-            $parentOrder = Order::create([
+            $orderCreatePayload = [
                 'order_number'       => $this->generateUniqueOrderNumber(),
                 'buyer_id'           => $user->id,
                 'user_address_id'    => $selectedAddress->id,
                 'address_snapshot'   => $deliverySnapshot,
                 'payment_method'     => $parentMethod,
-                'payment_status'     => 'unpaid',
+                'payment_status'     => $allWallet ? 'paid' : 'unpaid',
                 'status'             => 'pending',
                 'subtotal_amount'    => $preview['overall_net_subtotal'],
                 'shipping_fee_total' => $preview['overall_net_shipping'],
                 'total_amount'       => $preview['overall_total'],
                 'idempotency_key'    => $validated['idempotency_key'],
-            ]);
+            ];
+
+            if (Schema::hasColumn('orders', 'coins_used_total')) {
+                $orderCreatePayload['coins_used_total'] = (int) $preview['overall_coins_used'];
+                $orderCreatePayload['coins_discount_total'] = (float) $preview['overall_coins_discount'];
+                $orderCreatePayload['wallet_paid_total'] = $totalWalletRequired;
+            }
+
+            $parentOrder = Order::create($orderCreatePayload);
 
             $platformVoucherConsumed = false;
             $shippingVoucherConsumed = false;
@@ -433,8 +455,9 @@ class CheckoutController extends Controller
                 /** @var SellerProfile $sellerProfile */
                 $sellerProfile = $pkg['seller_profile_model'];
                 $spId = (int) $sellerProfile->id;
-                $chosenMethod = strtoupper((string) ($paymentMethodsInput[$spId] ?? 'COD'));
-                $buyerNote = trim((string) ($validated['seller_notes'][$spId] ?? ''));
+                $chosenMethod = strtoupper((string) ($paymentMethodsInput[$spId] ?? ($paymentMethodsInput[(string) $spId] ?? 'COD')));
+                $isWalletPaid = $chosenMethod === 'WALLET';
+                $buyerNote = trim((string) ($validated['seller_notes'][$spId] ?? ($validated['seller_notes'][(string) $spId] ?? '')));
 
                 $pickupSnapshot = [
                     'business_name' => $sellerProfile->business_name,
@@ -455,7 +478,7 @@ class CheckoutController extends Controller
                     'seller_profile_id'         => $sellerProfile->id,
                     'logistics_profile_id'      => null,
                     'status'                    => 'pending_seller_acceptance',
-                    'payment_status'            => $chosenMethod === 'GCASH' ? 'submitted' : 'unpaid',
+                    'payment_status'            => $isWalletPaid ? 'paid' : 'unpaid',
                     'subtotal_amount'           => $pkg['net_subtotal'],
                     'shipping_fee'              => $pkg['net_shipping_fee'],
                     'total_amount'              => $pkg['total'],
@@ -469,11 +492,15 @@ class CheckoutController extends Controller
                 ]);
 
                 foreach ($pkg['raw_items'] as $itemData) {
+                    $labelSuffix = ! empty($itemData['pricing_label']) && $itemData['pricing_label'] !== 'Regular' && $itemData['pricing_label'] !== 'Regular Price'
+                        ? ' [' . $itemData['pricing_label'] . ']'
+                        : '';
+
                     OrderItem::create([
                         'order_id'              => $parentOrder->id,
                         'seller_order_id'       => $sellerOrder->id,
                         'product_id'            => $itemData['product']->id,
-                        'product_name'          => $itemData['product']->name,
+                        'product_name'          => $itemData['product']->name . $labelSuffix,
                         'product_image'         => $itemData['image_path'],
                         'variant_id'            => $itemData['variant_id'],
                         'variant_name'          => $itemData['variant_name'],
@@ -489,71 +516,79 @@ class CheckoutController extends Controller
                     ]);
                 }
 
-                $paymentRecord = Payment::create([
+                $walletTx = null;
+                if ($isWalletPaid && (float) $pkg['total'] > 0) {
+                    $walletTx = $this->roleWalletService->debitBuyerWalletForCheckout(
+                        buyer: $user,
+                        amount: (float) $pkg['total'],
+                        sellerOrderId: (int) $sellerOrder->id,
+                        sellerOrderNumber: $sellerOrder->seller_order_number
+                    );
+                }
+
+                Payment::create([
                     'order_id'          => $parentOrder->id,
                     'seller_order_id'   => $sellerOrder->id,
-                    'payment_reference' => $chosenMethod === 'GCASH'
-                        ? $preparedGcashData[$spId]['reference_number']
-                        : ('PAY-' . strtoupper(Str::random(10))),
+                    'payment_reference' => $walletTx?->transaction_reference ?? ('PAY-' . strtoupper(Str::random(10))),
                     'method'            => $chosenMethod,
-                    'status'            => $chosenMethod === 'GCASH' ? 'submitted' : 'unpaid',
+                    'status'            => $isWalletPaid ? 'paid' : 'unpaid',
                     'product_subtotal'  => $pkg['net_subtotal'],
                     'shipping_fee'      => $pkg['net_shipping_fee'],
                     'total_amount'      => $pkg['total'],
+                    'collected_at'      => $isWalletPaid ? now() : null,
                 ]);
 
                 /** @var StorkVoucher|null $storeVoucherModel */
                 $storeVoucherModel = $pkg['store_voucher_model'];
+                $pkgCoinsUsed = (int) ($pkg['coins_used'] ?? 0);
+                $pkgCoinsDiscount = (float) ($pkg['coins_discount'] ?? 0.0);
 
-                SellerOrderExtra::create([
+                if ($pkgCoinsUsed > 0) {
+                    $this->buyerRewardService->redeemCoinsForCheckoutOrder(
+                        buyerId: (int) $user->id,
+                        coinsToSpend: $pkgCoinsUsed,
+                        sellerOrderId: (int) $sellerOrder->id,
+                        sellerOrderNumber: $sellerOrder->seller_order_number
+                    );
+                }
+
+                $extraPayload = [
                     'order_id'                  => $parentOrder->id,
                     'seller_order_id'           => $sellerOrder->id,
                     'buyer_note'                => $buyerNote !== '' ? substr($buyerNote, 0, 200) : null,
                     'store_voucher_id'          => $storeVoucherModel?->id,
                     'store_voucher_code'        => $storeVoucherModel?->code,
-                    'store_voucher_discount'    => $pkg['store_discount'],
+                    'store_voucher_discount'    => round($pkg['store_discount'] + ($pkg['bundle_discount'] ?? 0), 2),
                     'platform_voucher_id'       => $pkg['platform_discount'] > 0 ? $preview['applied_platform_voucher']?->id : null,
                     'platform_voucher_code'     => $pkg['platform_discount'] > 0 ? $preview['applied_platform_voucher']?->code : null,
-                    'platform_voucher_discount' => $pkg['platform_discount'],
+                    'platform_voucher_discount' => round($pkg['platform_discount'], 2),
                     'shipping_voucher_id'       => $pkg['shipping_discount'] > 0 ? $preview['applied_shipping_voucher']?->id : null,
                     'shipping_voucher_code'     => $pkg['shipping_discount'] > 0 ? $preview['applied_shipping_voucher']?->code : null,
                     'shipping_voucher_discount' => $pkg['shipping_discount'],
                     'original_subtotal_amount'  => $pkg['subtotal'],
                     'original_shipping_fee'     => $pkg['shipping']['shipping_fee'],
-                ]);
+                ];
+
+                if (Schema::hasColumn('seller_order_extras', 'coins_used')) {
+                    $extraPayload['coins_used'] = $pkgCoinsUsed;
+                    $extraPayload['coins_discount_amount'] = $pkgCoinsDiscount;
+                    $extraPayload['wallet_paid_amount'] = $isWalletPaid ? (float) $pkg['total'] : 0.00;
+                }
+
+                SellerOrderExtra::create($extraPayload);
 
                 if ($storeVoucherModel) {
                     $this->voucherService->consumeVoucher($storeVoucherModel, (int) $user->id, $sellerOrder->id);
                 }
+
                 if (! $platformVoucherConsumed && $pkg['platform_discount'] > 0 && $preview['applied_platform_voucher']) {
                     $this->voucherService->consumeVoucher($preview['applied_platform_voucher'], (int) $user->id, $sellerOrder->id);
                     $platformVoucherConsumed = true;
                 }
+
                 if (! $shippingVoucherConsumed && $pkg['shipping_discount'] > 0 && $preview['applied_shipping_voucher']) {
                     $this->voucherService->consumeVoucher($preview['applied_shipping_voucher'], (int) $user->id, $sellerOrder->id);
                     $shippingVoucherConsumed = true;
-                }
-
-                if ($chosenMethod === 'GCASH' && isset($preparedGcashData[$spId])) {
-                    $gData = $preparedGcashData[$spId];
-                    $webpPath = $this->convertScreenshotToWebp($gData['screenshot_file'], 'gcash_payment_screenshots');
-
-                    OrderPaymentSubmission::create([
-                        'order_id'            => $parentOrder->id,
-                        'seller_order_id'     => $sellerOrder->id,
-                        'payment_id'          => $paymentRecord->id,
-                        'buyer_id'            => $user->id,
-                        'seller_profile_id'   => $sellerProfile->id,
-                        'seller_gcash_name'   => $gData['seller_gcash_name'],
-                        'seller_gcash_number' => $gData['seller_gcash_number'],
-                        'sender_gcash_number' => $gData['sender_gcash_number'],
-                        'paid_at'             => $gData['paid_at'],
-                        'reference_number'    => $gData['reference_number'],
-                        'reference_code'      => $gData['reference_code'],
-                        'screenshot_path'     => $webpPath,
-                        'submitted_amount'    => $pkg['total'],
-                        'status'              => 'submitted',
-                    ]);
                 }
 
                 OrderStatusHistory::create([
@@ -563,8 +598,8 @@ class CheckoutController extends Controller
                     'to_status'       => 'pending_seller_acceptance',
                     'actor_type'      => 'Buyer',
                     'actor_id'        => $user->id,
-                    'remarks'         => $chosenMethod === 'GCASH'
-                        ? "Order placed via Online Payment (GCash Ref #{$preparedGcashData[$spId]['reference_number']}). Waiting for seller review and acceptance within 24 hours."
+                    'remarks'         => $isWalletPaid
+                        ? "Order placed and paid immediately via Storkia E-Wallet (Ref #{$walletTx?->transaction_reference}). Waiting for seller acceptance within 24 hours."
                         : 'Order placed via Cash on Delivery (COD). Waiting for seller acceptance within 24 hours.',
                 ]);
 
@@ -572,13 +607,12 @@ class CheckoutController extends Controller
                     $notificationsToDispatch[] = [
                         'recipient'    => $sellerProfile->user,
                         'notification' => new OrderLifecycleNotification(
-                            title: 'New Order Received (' . $chosenMethod . ')',
+                            title: 'New Order Received (' . ($isWalletPaid ? 'Storkia E-Wallet Paid' : 'COD') . ')',
                             message: "Order #{$sellerOrder->seller_order_number} (₱" . number_format((float) $sellerOrder->total_amount, 2) . " via {$chosenMethod}) requires your review within 24 hours.",
                             type: 'info',
                             url: route('seller.orders.show', $sellerOrder->id),
                             orderId: $parentOrder->id,
-                            sellerOrderId: $sellerOrder->id
-                        ),
+                            sellerOrderId: $sellerOrder->id                         ),
                     ];
                 }
             }
@@ -644,24 +678,9 @@ class CheckoutController extends Controller
         }
     }
 
-    protected function convertScreenshotToWebp($file, string $folder): string
+    protected function buildLineSignatureKey(int $productId, ?string $variantName, ?string $subVariantName, string $pricingLabel = 'Regular'): string
     {
-        $filename = uniqid('gcash_') . '_' . time() . '.webp';
-        $path = $folder . '/' . $filename;
-
-        $manager = ImageManager::usingDriver(Driver::class);
-        $image = $manager->decode($file->getRealPath());
-        $image->scaleDown(width: 1200, height: 1200);
-        $encoded = $image->encode(new WebpEncoder(quality: 85));
-
-        Storage::disk('public')->put($path, $encoded->toString());
-
-        return $path;
-    }
-
-    protected function buildLineSignatureKey(int $productId, ?string $variantName, ?string $subVariantName): string
-    {
-        return $productId . ':' . strtolower(trim((string) $variantName)) . ':' . strtolower(trim((string) $subVariantName));
+        return $productId . ':' . strtolower(trim((string) $variantName)) . ':' . strtolower(trim((string) $subVariantName)) . ':' . strtolower(trim($pricingLabel));
     }
 
     protected function collectCheckoutLineItems(array $validated, $user): array
@@ -669,19 +688,15 @@ class CheckoutController extends Controller
         $lineItems = [];
 
         if ($validated['mode'] === 'buy_now') {
-            $product = Product::with(['approval', 'sellerProfile', 'user.sellerProfile.gcashAccount'])
+            $product = Product::with(['approval', 'sellerProfile', 'user.sellerProfile'])
                 ->find($validated['product_id']);
-            $sellerProfile = $product?->user?->sellerProfile ?? $product?->sellerProfile;
 
+            $sellerProfile = $product?->user?->sellerProfile ?? $product?->sellerProfile;
             if (! $product || ! $sellerProfile) {
                 return [];
             }
 
-            if ((bool) ($sellerProfile->is_on_vacation ?? false)) {
-                throw ValidationException::withMessages([
-                    'vacation' => "{$sellerProfile->business_name} is currently on vacation and not accepting orders.",
-                ]);
-            }
+            $this->superDealPricingService->assertStoreNotOnVacation($sellerProfile);
 
             $resolved = $this->inventoryStockService->resolveProductSelection(
                 $product,
@@ -690,12 +705,8 @@ class CheckoutController extends Controller
             );
 
             $qty = max(1, (int) ($validated['quantity'] ?? 1));
-            $perBuyerLimit = (int) ($product->per_buyer_limit ?? 0);
-            if ($perBuyerLimit > 0 && $qty > $perBuyerLimit) {
-                throw ValidationException::withMessages([
-                    'quantity' => "You can purchase at most {$perBuyerLimit} unit(s) of \"{$product->name}\".",
-                ]);
-            }
+
+            $this->assertPerBuyerLimitNotExceeded((int) $user->id, $product, $qty);
 
             if ($resolved['available_stock'] < $qty) {
                 throw ValidationException::withMessages([
@@ -703,12 +714,24 @@ class CheckoutController extends Controller
                 ]);
             }
 
-            $lineItems[] = $this->formatLineItem(null, $product, $sellerProfile, $resolved, $qty);
+            $splitLines = $this->superDealPricingService->buildSplitCheckoutLines(
+                product: $product,
+                requestedQty: $qty,
+                baseUnitPrice: (float) $resolved['unit_price'],
+                unitWeight: (float) $resolved['unit_weight'],
+                variantName: $resolved['variant_name'],
+                subVariantName: $resolved['sub_variant_name'],
+                imagePath: $resolved['image_path']
+            );
+
+            foreach ($splitLines as $sLine) {
+                $lineItems[] = $this->formatSplitLineItem(null, $product, $sellerProfile, $resolved, $sLine);
+            }
 
             return $lineItems;
         }
 
-        $cartRecords = Cart::with(['product.approval', 'product.sellerProfile', 'product.user.sellerProfile.gcashAccount'])
+        $cartRecords = Cart::with(['product.approval', 'product.sellerProfile', 'product.user.sellerProfile'])
             ->where('user_id', $user->id)
             ->whereIn('id', array_map('intval', (array) ($validated['cart_ids'] ?? [])))
             ->orderBy('id', 'asc')
@@ -721,11 +744,7 @@ class CheckoutController extends Controller
                 continue;
             }
 
-            if ((bool) ($sellerProfile->is_on_vacation ?? false)) {
-                throw ValidationException::withMessages([
-                    'vacation' => "{$sellerProfile->business_name} is currently on vacation and not accepting orders.",
-                ]);
-            }
+            $this->superDealPricingService->assertStoreNotOnVacation($sellerProfile);
 
             $resolved = $this->inventoryStockService->resolveProductSelection(
                 $product,
@@ -734,12 +753,8 @@ class CheckoutController extends Controller
             );
 
             $qty = max(1, (int) $cartItem->quantity);
-            $perBuyerLimit = (int) ($product->per_buyer_limit ?? 0);
-            if ($perBuyerLimit > 0 && $qty > $perBuyerLimit) {
-                throw ValidationException::withMessages([
-                    'quantity' => "You can purchase at most {$perBuyerLimit} unit(s) of \"{$product->name}\".",
-                ]);
-            }
+
+            $this->assertPerBuyerLimitNotExceeded((int) $user->id, $product, $qty);
 
             if ($resolved['available_stock'] < $qty) {
                 throw ValidationException::withMessages([
@@ -747,31 +762,47 @@ class CheckoutController extends Controller
                 ]);
             }
 
-            $lineItems[] = $this->formatLineItem($cartItem->id, $product, $sellerProfile, $resolved, $qty);
+            $splitLines = $this->superDealPricingService->buildSplitCheckoutLines(
+                product: $product,
+                requestedQty: $qty,
+                baseUnitPrice: (float) $resolved['unit_price'],
+                unitWeight: (float) $resolved['unit_weight'],
+                variantName: $resolved['variant_name'],
+                subVariantName: $resolved['sub_variant_name'],
+                imagePath: $resolved['image_path']
+            );
+
+            foreach ($splitLines as $sLine) {
+                $lineItems[] = $this->formatSplitLineItem($cartItem->id, $product, $sellerProfile, $resolved, $sLine);
+            }
         }
 
         return $lineItems;
     }
 
-    protected function formatLineItem($cartId, Product $product, SellerProfile $sellerProfile, array $resolved, int $qty): array
+    protected function formatSplitLineItem($cartId, Product $product, SellerProfile $sellerProfile, array $resolved, array $sLine): array
     {
         return [
             'cart_id'               => $cartId,
             'product'               => $product,
             'seller_profile'        => $sellerProfile,
-            'quantity'              => $qty,
+            'quantity'              => $sLine['quantity'],
             'variant_id'            => $resolved['variant_id'],
-            'variant_name'          => $resolved['variant_name'],
+            'variant_name'          => $sLine['variant_name'],
             'sub_variant_id'        => $resolved['sub_variant_id'],
-            'sub_variant_name'      => $resolved['sub_variant_name'],
-            'unit_price'            => $resolved['unit_price'],
-            'discount_percent'      => $resolved['discount_percent'],
-            'discounted_unit_price' => $resolved['discounted_unit_price'],
-            'unit_weight'           => $resolved['unit_weight'],
+            'sub_variant_name'      => $sLine['sub_variant_name'],
+            'unit_price'            => $sLine['original_unit_price'],
+            'discount_percent'      => $sLine['original_unit_price'] > 0
+                ? round((1 - ($sLine['discounted_unit_price'] / $sLine['original_unit_price'])) * 100, 2)
+                : 0,
+            'discounted_unit_price' => $sLine['discounted_unit_price'],
+            'unit_weight'           => $sLine['unit_weight'],
             'available_stock'       => $resolved['available_stock'],
-            'image_path'            => $resolved['image_path'],
-            'line_total'            => round($resolved['discounted_unit_price'] * $qty, 2),
-            'line_weight'           => round($resolved['unit_weight'] * $qty, 3),
+            'image_path'            => $sLine['image_path'],
+            'line_total'            => $sLine['line_total'],
+            'line_weight'           => $sLine['line_weight'],
+            'super_deal_id'         => $sLine['super_deal_id'],
+            'pricing_label'         => $sLine['pricing_label'],
         ];
     }
 
@@ -782,7 +813,9 @@ class CheckoutController extends Controller
         array $storeVoucherCodes = [],
         string $platformVoucherCode = '',
         string $shippingVoucherCode = '',
-        bool $strictVoucherErrors = false
+        bool $useStorkiaCoins = false,
+        bool $strictVoucherErrors = false,
+        ?int $requestedCoinsToUse = null
     ): array {
         $grouped = [];
         $cartIds = [];
@@ -798,7 +831,8 @@ class CheckoutController extends Controller
             $sigKey = $this->buildLineSignatureKey(
                 $line['product']->id,
                 $line['variant_name'],
-                $line['sub_variant_name']
+                $line['sub_variant_name'],
+                $line['pricing_label'] ?? 'Regular'
             );
             $priceMap[$sigKey] = round((float) $line['discounted_unit_price'], 2);
 
@@ -819,6 +853,8 @@ class CheckoutController extends Controller
 
         $buyerProvince = $selectedAddress->province ?? '';
         $buyerMunicipality = $selectedAddress->municipality ?? '';
+        $buyerBarangay = $selectedAddress->barangay ?? '';
+
         $isAddressServiceable = $selectedAddress
             ? $this->shippingCalculatorService->isAddressServiceable($buyerProvince, $buyerMunicipality)
             : false;
@@ -832,15 +868,37 @@ class CheckoutController extends Controller
         foreach ($grouped as $sellerProfileId => $package) {
             /** @var SellerProfile $sellerProfile */
             $sellerProfile = $package['seller_profile'];
-            $sellerProfile->loadMissing('gcashAccount');
 
             $shipping = $this->shippingCalculatorService->calculateForSellerOrder(
                 sellerProvince: $sellerProfile->province ?? '',
                 sellerMunicipality: $sellerProfile->municipality ?? '',
                 buyerProvince: $buyerProvince,
                 buyerMunicipality: $buyerMunicipality,
-                totalWeightKg: $package['total_weight']
+                totalWeightKg: $package['total_weight'],
+                sellerBarangay: $sellerProfile->barangay ?? '',
+                buyerBarangay: $buyerBarangay
             );
+
+            if ($selectedAddress && isset($shipping['is_serviceable']) && $shipping['is_serviceable'] === false) {
+                $isAddressServiceable = false;
+                $reasonMsg = $shipping['unserviceable_reason']
+                    ?: "Shipping from {$sellerProfile->business_name} ({$sellerProfile->province}) to {$buyerProvince} is currently unavailable because no registered Storkia Logistics Partner covers both islands.";
+                if ($strictVoucherErrors) {
+                    throw ValidationException::withMessages([
+                        'address' => $reasonMsg,
+                    ]);
+                }
+                if (! in_array($reasonMsg, $voucherNotices, true)) {
+                    $voucherNotices[] = $reasonMsg;
+                }
+            }
+
+            $bundleResult = $this->superDealPricingService->calculateStoreBundleDiscount(
+                sellerProfileId: (int) $sellerProfile->id,
+                packageLines: $package['items']
+            );
+            $bundleDiscount = (float) ($bundleResult['bundle_discount'] ?? 0.0);
+            $subtotalAfterBundle = max(0.0, round($package['subtotal'] - $bundleDiscount, 2));
 
             $appliedStoreVoucher = null;
             $storeDiscount = 0.0;
@@ -862,7 +920,7 @@ class CheckoutController extends Controller
                             buyerId: $buyerId,
                             sellerProfileId: (int) $sellerProfile->id,
                             packageItems: $package['items'],
-                            packageSubtotal: (float) $package['subtotal']
+                            packageSubtotal: $subtotalAfterBundle
                         );
                         $appliedStoreVoucher = $candidate;
                     } catch (ValidationException $e) {
@@ -875,13 +933,11 @@ class CheckoutController extends Controller
                 }
             }
 
+            $combinedSellerFundedDiscount = round($bundleDiscount + $storeDiscount, 2);
+
             $overallSubtotal = round($overallSubtotal + $package['subtotal'], 2);
             $overallShipping = round($overallShipping + $shipping['shipping_fee'], 2);
-            $overallStoreDiscount = round($overallStoreDiscount + $storeDiscount, 2);
-
-            $gcashAccount = $sellerProfile->gcashAccount;
-            $gcashBlocked = (bool) ($sellerProfile->gcash_blocked_for_arrears ?? false);
-            $gcashEnabled = ! $gcashBlocked && $gcashAccount !== null && $gcashAccount->isCompliantForCheckout();
+            $overallStoreDiscount = round($overallStoreDiscount + $combinedSellerFundedDiscount, 2);
 
             $serializedItems = array_map(function (array $line) {
                 return [
@@ -904,23 +960,19 @@ class CheckoutController extends Controller
                     'image_path'            => $line['image_path'],
                     'line_total'            => $line['line_total'],
                     'line_weight'           => $line['line_weight'],
+                    'pricing_label'         => $line['pricing_label'] ?? 'Regular',
                 ];
             }, $package['items']);
 
             $sellerPackages[] = [
                 'seller_profile_model' => $sellerProfile,
                 'seller_profile'       => $sellerProfile->toArray(),
-                'gcash_enabled'        => $gcashEnabled,
-                'gcash_account'        => $gcashEnabled ? [
-                    'id'            => $gcashAccount->id,
-                    'account_name'  => $gcashAccount->account_name,
-                    'gcash_number'  => $gcashAccount->gcash_number,
-                    'qr_image_path' => $gcashAccount->qr_image_path,
-                    'qr_image_url'  => $gcashAccount->qr_image_url,
-                ] : null,
+                'wallet_enabled'       => true,
                 'raw_items'            => $package['items'],
                 'items'                => $serializedItems,
                 'subtotal'             => $package['subtotal'],
+                'bundle_discount'      => $bundleDiscount,
+                'bundle_title'         => $bundleResult['bundle_title'],
                 'store_voucher_model'  => $appliedStoreVoucher,
                 'store_voucher'        => $appliedStoreVoucher ? array_merge($appliedStoreVoucher->toArray(), [
                     'badge_label' => $appliedStoreVoucher->badge_label,
@@ -928,11 +980,13 @@ class CheckoutController extends Controller
                 'store_discount'       => $storeDiscount,
                 'platform_discount'    => 0.0,
                 'shipping_discount'    => 0.0,
-                'net_subtotal'         => max(0.0, round($package['subtotal'] - $storeDiscount, 2)),
+                'coins_used'           => 0,
+                'coins_discount'       => 0.0,
+                'net_subtotal'         => max(0.0, round($package['subtotal'] - $combinedSellerFundedDiscount, 2)),
                 'total_weight'         => $package['total_weight'],
                 'shipping'             => $shipping,
                 'net_shipping_fee'     => $shipping['shipping_fee'],
-                'total'                => round(max(0.0, $package['subtotal'] - $storeDiscount) + $shipping['shipping_fee'], 2),
+                'total'                => round(max(0.0, $package['subtotal'] - $combinedSellerFundedDiscount) + $shipping['shipping_fee'], 2),
             ];
         }
 
@@ -941,10 +995,12 @@ class CheckoutController extends Controller
         $appliedPlatformVoucher = null;
         $overallPlatformDiscount = 0.0;
         $normPlatCode = strtoupper(trim($platformVoucherCode));
+
         if ($normPlatCode !== '') {
             $platCandidate = StorkVoucher::whereRaw('UPPER(TRIM(code)) = ?', [$normPlatCode])
                 ->where('scope', 'platform')
                 ->first();
+
             if (! $platCandidate) {
                 if ($strictVoucherErrors) {
                     throw ValidationException::withMessages([
@@ -975,10 +1031,12 @@ class CheckoutController extends Controller
         $appliedShippingVoucher = null;
         $overallShippingDiscount = 0.0;
         $normShipCode = strtoupper(trim($shippingVoucherCode));
+
         if ($normShipCode !== '') {
             $shipCandidate = StorkVoucher::whereRaw('UPPER(TRIM(code)) = ?', [$normShipCode])
                 ->where('scope', 'shipping')
                 ->first();
+
             if (! $shipCandidate) {
                 if ($strictVoucherErrors) {
                     throw ValidationException::withMessages([
@@ -1008,6 +1066,7 @@ class CheckoutController extends Controller
         $remainingPlatDiscount = $overallPlatformDiscount;
         $remainingShipDiscount = $overallShippingDiscount;
         $pkgCount = count($sellerPackages);
+        $eligibleSubtotalsByIdx = [];
 
         foreach ($sellerPackages as $idx => &$pkg) {
             $isLast = ($idx === $pkgCount - 1);
@@ -1028,12 +1087,43 @@ class CheckoutController extends Controller
                 $remainingShipDiscount = max(0.0, round($remainingShipDiscount - $pkg['shipping_discount'], 2));
             }
 
-            $pkg['net_subtotal'] = max(0.0, round($pkg['subtotal'] - $pkg['store_discount'] - $pkg['platform_discount'], 2));
+            $pkgSubAfterPlat = max(0.0, round($pkg['subtotal'] - $pkg['bundle_discount'] - $pkg['store_discount'] - $pkg['platform_discount'], 2));
+            $eligibleSubtotalsByIdx[$idx] = $pkgSubAfterPlat;
+        }
+        unset($pkg);
+
+        $subtotalAfterPlatformVouchers = max(0.0, round(array_sum($eligibleSubtotalsByIdx), 2));
+        $coinAllowance = $this->buyerRewardService->calculateMaxRedeemableCoinsForCheckout($buyerId, $subtotalAfterPlatformVouchers);
+        $maxRedeemableCoins = (int) $coinAllowance['max_redeemable_coins'];
+        $maxRedeemableDiscount = (float) $coinAllowance['peso_discount'];
+        $buyerCoinsBalance = (int) $coinAllowance['coins_balance'];
+
+        $targetCoinsToUse = 0;
+        if ($useStorkiaCoins && $maxRedeemableCoins >= BuyerRewardService::MIN_CHECKOUT_REDEEMABLE_COINS) {
+            if ($requestedCoinsToUse !== null && $requestedCoinsToUse > 0) {
+                $targetCoinsToUse = $requestedCoinsToUse < BuyerRewardService::MIN_CHECKOUT_REDEEMABLE_COINS
+                    ? BuyerRewardService::MIN_CHECKOUT_REDEEMABLE_COINS
+                    : min($requestedCoinsToUse, $maxRedeemableCoins);
+            } else {
+                $targetCoinsToUse = $maxRedeemableCoins;
+            }
+        }
+
+        $coinAllocations = $this->buyerRewardService->allocateCoinsAcrossPackages($targetCoinsToUse, $eligibleSubtotalsByIdx);
+
+        foreach ($sellerPackages as $idx => &$pkg) {
+            $alloc = $coinAllocations[$idx] ?? ['coins_used' => 0, 'coins_discount' => 0.00];
+            $pkg['coins_used'] = (int) $alloc['coins_used'];
+            $pkg['coins_discount'] = (float) $alloc['coins_discount'];
+
+            $pkg['net_subtotal'] = max(0.0, round($pkg['subtotal'] - $pkg['bundle_discount'] - $pkg['store_discount'] - $pkg['platform_discount'] - $pkg['coins_discount'], 2));
             $pkg['net_shipping_fee'] = max(0.0, round($pkg['shipping']['shipping_fee'] - $pkg['shipping_discount'], 2));
             $pkg['total'] = round($pkg['net_subtotal'] + $pkg['net_shipping_fee'], 2);
         }
         unset($pkg);
 
+        $overallCoinsUsed = (int) collect($sellerPackages)->sum('coins_used');
+        $overallCoinsDiscount = round((float) collect($sellerPackages)->sum('coins_discount'), 2);
         $overallNetSubtotal = round((float) collect($sellerPackages)->sum('net_subtotal'), 2);
         $overallNetShipping = round((float) collect($sellerPackages)->sum('net_shipping_fee'), 2);
         $overallTotal = round($overallNetSubtotal + $overallNetShipping, 2);
@@ -1046,6 +1136,11 @@ class CheckoutController extends Controller
             'overall_store_discount'    => $overallStoreDiscount,
             'overall_platform_discount' => $overallPlatformDiscount,
             'overall_shipping_discount' => $overallShippingDiscount,
+            'overall_coins_used'        => $overallCoinsUsed,
+            'overall_coins_discount'    => $overallCoinsDiscount,
+            'max_redeemable_coins'      => $maxRedeemableCoins,
+            'max_redeemable_discount'   => $maxRedeemableDiscount,
+            'buyer_coins_balance'       => $buyerCoinsBalance,
             'overall_net_subtotal'      => $overallNetSubtotal,
             'overall_net_shipping'      => $overallNetShipping,
             'overall_total'             => $overallTotal,

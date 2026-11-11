@@ -13,6 +13,7 @@ class CodCollection extends Model
         'shipment_id',
         'seller_order_id',
         'delivery_assignment_id',
+        'logistics_admin_remittance_id',
         'logistics_profile_id',
         'rider_id',
         'expected_amount',
@@ -21,25 +22,31 @@ class CodCollection extends Model
         'product_subtotal',
         'shipping_fee',
         'status',
+        'admin_remittance_status',
         'remittance_reference',
         'notes',
         'collected_at',
         'remitted_at',
         'verified_at',
         'verified_by',
+        'admin_remitted_at',
+        'admin_verified_at',
+        'admin_verified_by_admin_id',
     ];
 
     protected function casts(): array
     {
         return [
-            'expected_amount'  => 'decimal:2',
-            'collected_amount' => 'decimal:2',
-            'remitted_amount'  => 'decimal:2',
-            'product_subtotal' => 'decimal:2',
-            'shipping_fee'     => 'decimal:2',
-            'collected_at'     => 'datetime',
-            'remitted_at'      => 'datetime',
-            'verified_at'      => 'datetime',
+            'expected_amount'   => 'decimal:2',
+            'collected_amount'  => 'decimal:2',
+            'remitted_amount'   => 'decimal:2',
+            'product_subtotal'  => 'decimal:2',
+            'shipping_fee'      => 'decimal:2',
+            'collected_at'      => 'datetime',
+            'remitted_at'       => 'datetime',
+            'verified_at'       => 'datetime',
+            'admin_remitted_at' => 'datetime',
+            'admin_verified_at' => 'datetime',
         ];
     }
 
@@ -56,6 +63,11 @@ class CodCollection extends Model
     public function deliveryAssignment(): BelongsTo
     {
         return $this->belongsTo(DeliveryAssignment::class, 'delivery_assignment_id');
+    }
+
+    public function logisticsAdminRemittance(): BelongsTo
+    {
+        return $this->belongsTo(LogisticsAdminRemittance::class, 'logistics_admin_remittance_id');
     }
 
     public function logisticsProfile(): BelongsTo

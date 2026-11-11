@@ -19,7 +19,7 @@ use Illuminate\Support\Str;
 
 class StorkSchemaBootstrapService
 {
-    protected const SCHEMA_VERSION_CACHE_KEY = 'storkia_additive_schema_v10_ready';
+    protected const SCHEMA_VERSION_CACHE_KEY = 'storkia_additive_schema_v15_ready';
 
     public static function ensureTablesExist(): void
     {
@@ -29,10 +29,24 @@ class StorkSchemaBootstrapService
             && Schema::hasTable('bundle_deals')
             && Schema::hasTable('withdrawal_requests')
             && Schema::hasTable('platform_gcash_settings')
+            && Schema::hasTable('logistics_admin_remittances')
+            && Schema::hasTable('logistics_admin_remittance_items')
+            && Schema::hasTable('buyer_wallet_topups')
+            && Schema::hasTable('product_review_upvotes')
+            && Schema::hasTable('product_restock_subscriptions')
+            && Schema::hasTable('product_questions')
+            && Schema::hasTable('delivery_chat_messages')
             && Schema::hasColumn('cod_collections', 'remitted_amount')
+            && Schema::hasColumn('cod_collections', 'admin_remittance_status')
+            && Schema::hasColumn('commission_records', 'courier_commission_amount')
+            && Schema::hasColumn('role_wallets', 'unremitted_cod_balance')
             && Schema::hasColumn('couriers', 'avatar_path')
             && Schema::hasColumn('riders', 'avatar_path')
             && Schema::hasColumn('seller_order_extras', 'seller_return_decision_reason')
+            && Schema::hasColumn('seller_order_extras', 'coins_used')
+            && Schema::hasColumn('super_deals', 'variant_name')
+            && Schema::hasColumn('bundle_deals', 'free_gift_variant_name')
+            && Schema::hasColumn('return_shipments', 'delivery_attempts_count')
         ) {
             return;
         }
@@ -59,21 +73,28 @@ class StorkSchemaBootstrapService
             self::createRoleWalletsTable();
             self::upgradeRoleWalletsColumns();
             self::createWalletTransactionsTable();
+            self::createBuyerWalletTopupsTable();
             self::createBuyerAccountSanctionsTable();
             self::createBuyerBanAppealsTable();
             self::createSellerRtsClaimsTable();
             self::createOrderItemReviewsTable();
             self::upgradeOrderItemReviewsColumns();
+            self::createProductReviewUpvotesTable();
+            self::createProductRestockSubscriptionsTable();
+            self::createProductQuestionsTable();
             self::createOrderServiceRatingsTable();
             self::createSellerStoreFollowsTable();
             self::createPlatformAuditLogsTable();
             self::createSellerPayoutRequestsTable();
             self::createWithdrawalRequestsTables();
             self::createSellerCommissionRemittancesTable();
+            self::createLogisticsAdminRemittancesTables();
             self::createBuyerWishlistsTable();
             self::createSearchLogsTable();
             self::createSuperDealsTable();
+            self::upgradeSuperDealsAndBundlesColumns();
             self::createBundleDealsTable();
+            self::upgradeSuperDealsAndBundlesColumns();
             self::createLogisticsShippingRatesTable();
             self::createPlatformAnnouncementsTable();
             self::upgradePlatformAnnouncementsAndReadsTables();
@@ -81,6 +102,10 @@ class StorkSchemaBootstrapService
             self::upgradeOperationalProfilesAndProductsColumns();
             self::upgradeCodCollectionsAndDeliveryProofsColumns();
             self::upgradeCommissionRecordsNullableColumns();
+            self::upgradeOrdersAndReturnShipmentsColumns();
+            self::createDeliveryChatMessagesTable();
+            RiderMobileSchemaService::ensureTablesExist();
+            CourierMobileSchemaService::ensureTablesExist();
             self::backfillMainHubsAndPackages();
             self::seedDefaultVouchers();
 
@@ -416,6 +441,10 @@ class StorkSchemaBootstrapService
             $table->foreignId('shipping_voucher_id')->nullable()->constrained('stork_vouchers')->nullOnDelete();
             $table->string('shipping_voucher_code', 20)->nullable();
             $table->decimal('shipping_voucher_discount', 12, 2)->default(0);
+            $table->unsignedBigInteger('coins_used')->default(0);
+            $table->decimal('coins_discount_amount', 12, 2)->default(0.00);
+            $table->unsignedBigInteger('coins_earned_on_completion')->default(0);
+            $table->decimal('wallet_paid_amount', 12, 2)->default(0.00);
             $table->decimal('original_subtotal_amount', 12, 2)->default(0);
             $table->decimal('original_shipping_fee', 12, 2)->default(0);
             $table->string('buyer_cancel_reason', 150)->nullable();
@@ -424,7 +453,6 @@ class StorkSchemaBootstrapService
             $table->json('dispute_evidence_photos')->nullable();
             $table->string('dispute_reason_category', 120)->nullable();
             $table->string('seller_return_decision', 30)->nullable();
-            $table->text('seller_return_Decision_reason')->nullable();
             $table->text('seller_return_decision_reason')->nullable();
             $table->timestamp('seller_return_responded_at')->nullable();
             $table->boolean('is_escalated_to_admin')->default(false);
@@ -456,6 +484,12 @@ class StorkSchemaBootstrapService
             }
             if (! Schema::hasColumn('seller_order_extras', 'seller_return_decision_reason')) {
                 $table->text('seller_return_decision_reason')->nullable()->after('seller_return_decision');
+            }
+            if (! Schema::hasColumn('seller_order_extras', 'coins_used')) {
+                $table->unsignedBigInteger('coins_used')->default(0)->after('shipping_voucher_discount');
+                $table->decimal('coins_discount_amount', 12, 2)->default(0.00)->after('coins_used');
+                $table->unsignedBigInteger('coins_earned_on_completion')->default(0)->after('coins_discount_amount');
+                $table->decimal('wallet_paid_amount', 12, 2)->default(0.00)->after('coins_earned_on_completion');
             }
         });
     }
@@ -496,6 +530,7 @@ class StorkSchemaBootstrapService
             $table->decimal('pending_balance', 14, 2)->default(0.00);
             $table->decimal('available_balance', 14, 2)->default(0.00);
             $table->decimal('platform_commission_arrears', 14, 2)->default(0.00);
+            $table->decimal('unremitted_cod_balance', 14, 2)->default(0.00);
             $table->decimal('total_earned', 14, 2)->default(0.00);
             $table->decimal('total_withdrawn', 14, 2)->default(0.00);
             $table->timestamp('last_credited_at')->nullable();
@@ -514,6 +549,9 @@ class StorkSchemaBootstrapService
         Schema::table('role_wallets', function (Blueprint $table) {
             if (! Schema::hasColumn('role_wallets', 'platform_commission_arrears')) {
                 $table->decimal('platform_commission_arrears', 14, 2)->default(0.00)->after('available_balance');
+            }
+            if (! Schema::hasColumn('role_wallets', 'unremitted_cod_balance')) {
+                $table->decimal('unremitted_cod_balance', 14, 2)->default(0.00)->after('platform_commission_arrears');
             }
         });
     }
@@ -543,6 +581,46 @@ class StorkSchemaBootstrapService
             $table->timestamps();
 
             $table->index(['seller_order_id', 'owner_type', 'entry_type'], 'wt_order_owner_entry_idx');
+        });
+    }
+
+    protected static function createBuyerWalletTopupsTable(): void
+    {
+        if (Schema::hasTable('buyer_wallet_topups')) {
+            return;
+        }
+
+        Schema::create('buyer_wallet_topups', function (Blueprint $table) {
+            $table->id();
+            $table->string('topup_reference', 50)->unique();
+            $table->unsignedBigInteger('buyer_id');
+            $table->unsignedBigInteger('role_wallet_id');
+            $table->string('admin_gcash_name', 120)->nullable();
+            $table->string('admin_gcash_number', 30)->nullable();
+            $table->string('sender_account_name', 120);
+            $table->string('sender_account_number', 30)->nullable();
+            $table->string('reference_number', 80)->unique();
+            $table->string('screenshot_path');
+            $table->decimal('approved_amount', 14, 2)->nullable();
+            $table->string('status', 30)->default('pending_verification')->index();
+            $table->unsignedBigInteger('reviewed_by_admin_id')->nullable();
+            $table->text('admin_remarks')->nullable();
+            $table->text('rejection_reason')->nullable();
+            $table->timestamp('reviewed_at')->nullable();
+            $table->unsignedBigInteger('wallet_transaction_id')->nullable();
+            $table->timestamps();
+
+            $table->foreign('buyer_id', 'bwt_buyer_id_fk')
+                ->references('id')
+                ->on('users')
+                ->cascadeOnDelete();
+
+            $table->foreign('role_wallet_id', 'bwt_wallet_id_fk')
+                ->references('id')
+                ->on('role_wallets')
+                ->cascadeOnDelete();
+
+            $table->index(['buyer_id', 'status'], 'bwt_buyer_status_idx');
         });
     }
 
@@ -637,6 +715,7 @@ class StorkSchemaBootstrapService
             $table->foreignId('seller_profile_id')->constrained('seller_profiles')->cascadeOnDelete();
             $table->foreignId('buyer_id')->constrained('users')->cascadeOnDelete();
             $table->unsignedTinyInteger('rating')->default(5);
+            $table->string('purchased_variant_label', 180)->nullable();
             $table->text('review_text')->nullable();
             $table->string('review_photo_path')->nullable();
             $table->json('review_photos')->nullable();
@@ -646,6 +725,8 @@ class StorkSchemaBootstrapService
             $table->timestamp('seller_replied_at')->nullable();
             $table->unsignedTinyInteger('seller_reply_edit_count')->default(0);
             $table->timestamp('seller_reply_edited_at')->nullable();
+            $table->unsignedInteger('helpful_count')->default(0);
+            $table->unsignedInteger('coins_rewarded')->default(0);
             $table->timestamps();
 
             $table->index(['seller_order_id', 'buyer_id']);
@@ -667,6 +748,114 @@ class StorkSchemaBootstrapService
                 $table->unsignedTinyInteger('seller_reply_edit_count')->default(0)->after('seller_replied_at');
                 $table->timestamp('seller_reply_edited_at')->nullable()->after('seller_reply_edit_count');
             }
+            if (! Schema::hasColumn('order_item_reviews', 'purchased_variant_label')) {
+                $table->string('purchased_variant_label', 180)->nullable()->after('rating');
+            }
+            if (! Schema::hasColumn('order_item_reviews', 'helpful_count')) {
+                $table->unsignedInteger('helpful_count')->default(0)->after('seller_reply_edited_at');
+            }
+            if (! Schema::hasColumn('order_item_reviews', 'coins_rewarded')) {
+                $table->unsignedInteger('coins_rewarded')->default(0)->after('helpful_count');
+            }
+        });
+    }
+
+    protected static function createProductReviewUpvotesTable(): void
+    {
+        if (Schema::hasTable('product_review_upvotes')) {
+            return;
+        }
+
+        Schema::create('product_review_upvotes', function (Blueprint $table) {
+            $table->id();
+            $table->unsignedBigInteger('review_id');
+            $table->unsignedBigInteger('user_id');
+            $table->timestamps();
+
+            $table->foreign('review_id', 'pru_review_id_fk')
+                ->references('id')
+                ->on('order_item_reviews')
+                ->cascadeOnDelete();
+
+            $table->foreign('user_id', 'pru_user_id_fk')
+                ->references('id')
+                ->on('users')
+                ->cascadeOnDelete();
+
+            $table->unique(['review_id', 'user_id'], 'pru_review_user_unq');
+        });
+    }
+
+    protected static function createProductRestockSubscriptionsTable(): void
+    {
+        if (Schema::hasTable('product_restock_subscriptions')) {
+            return;
+        }
+
+        Schema::create('product_restock_subscriptions', function (Blueprint $table) {
+            $table->id();
+            $table->unsignedBigInteger('product_id');
+            $table->unsignedBigInteger('user_id');
+            $table->string('variant_name', 100)->nullable();
+            $table->string('sub_variant_name', 100)->nullable();
+            $table->string('status', 25)->default('active')->index();
+            $table->timestamp('notified_at')->nullable();
+            $table->timestamps();
+
+            $table->foreign('product_id', 'prs_prod_id_fk')
+                ->references('id')
+                ->on('products')
+                ->cascadeOnDelete();
+
+            $table->foreign('user_id', 'prs_user_id_fk')
+                ->references('id')
+                ->on('users')
+                ->cascadeOnDelete();
+
+            $table->index(['product_id', 'status'], 'prs_prod_status_idx');
+            $table->index(['user_id', 'product_id'], 'prs_user_prod_idx');
+        });
+    }
+
+    protected static function createProductQuestionsTable(): void
+    {
+        if (Schema::hasTable('product_questions')) {
+            return;
+        }
+
+        Schema::create('product_questions', function (Blueprint $table) {
+            $table->id();
+            $table->unsignedBigInteger('product_id');
+            $table->unsignedBigInteger('seller_profile_id');
+            $table->unsignedBigInteger('buyer_id');
+            $table->text('question');
+            $table->text('answer')->nullable();
+            $table->unsignedBigInteger('answered_by_user_id')->nullable();
+            $table->timestamp('answered_at')->nullable();
+            $table->boolean('is_visible')->default(true)->index();
+            $table->timestamps();
+
+            $table->foreign('product_id', 'pq_prod_id_fk')
+                ->references('id')
+                ->on('products')
+                ->cascadeOnDelete();
+
+            $table->foreign('seller_profile_id', 'pq_seller_prof_fk')
+                ->references('id')
+                ->on('seller_profiles')
+                ->cascadeOnDelete();
+
+            $table->foreign('buyer_id', 'pq_buyer_id_fk')
+                ->references('id')
+                ->on('users')
+                ->cascadeOnDelete();
+
+            $table->foreign('answered_by_user_id', 'pq_ans_user_fk')
+                ->references('id')
+                ->on('users')
+                ->nullOnDelete();
+
+            $table->index(['product_id', 'is_visible'], 'pq_prod_vis_idx');
         });
     }
 
@@ -871,6 +1060,107 @@ class StorkSchemaBootstrapService
         });
     }
 
+    protected static function createLogisticsAdminRemittancesTables(): void
+    {
+        if (! Schema::hasTable('logistics_admin_remittances')) {
+            Schema::create('logistics_admin_remittances', function (Blueprint $table) {
+                $table->id();
+                $table->string('remittance_reference', 50)->unique();
+                $table->unsignedBigInteger('logistics_profile_id');
+                $table->unsignedBigInteger('submitted_by_user_id')->nullable();
+                $table->decimal('total_cod_amount', 14, 2)->default(0.00);
+                $table->decimal('total_product_subtotal', 14, 2)->default(0.00);
+                $table->decimal('total_shipping_fee', 14, 2)->default(0.00);
+                $table->decimal('total_admin_commission', 14, 2)->default(0.00);
+                $table->decimal('total_seller_net', 14, 2)->default(0.00);
+                $table->decimal('total_logistics_earning', 14, 2)->default(0.00);
+                $table->decimal('total_courier_commission', 14, 2)->default(0.00);
+                $table->decimal('total_rider_commission', 14, 2)->default(0.00);
+                $table->string('payout_method', 25)->default('GCASH');
+                $table->string('admin_gcash_name', 120)->nullable();
+                $table->string('admin_gcash_number', 30)->nullable();
+                $table->string('sender_account_name', 120);
+                $table->string('sender_account_number', 30);
+                $table->string('gcash_reference_number', 80)->unique();
+                $table->string('proof_image_path')->nullable();
+                $table->string('status', 30)->default('pending_verification')->index();
+                $table->unsignedBigInteger('reviewed_by_admin_id')->nullable();
+                $table->text('admin_remarks')->nullable();
+                $table->text('rejection_reason')->nullable();
+                $table->timestamp('submitted_at')->index();
+                $table->timestamp('verified_at')->nullable();
+                $table->timestamp('rejected_at')->nullable();
+                $table->timestamps();
+
+                $table->foreign('logistics_profile_id', 'lar_log_prof_fk')
+                    ->references('id')
+                    ->on('logistics_profiles')
+                    ->cascadeOnDelete();
+
+                $table->foreign('submitted_by_user_id', 'lar_sub_user_fk')
+                    ->references('id')
+                    ->on('users')
+                    ->nullOnDelete();
+
+                $table->index(['logistics_profile_id', 'status'], 'lar_logistics_status_idx');
+            });
+        }
+
+        if (! Schema::hasTable('logistics_admin_remittance_items')) {
+            Schema::create('logistics_admin_remittance_items', function (Blueprint $table) {
+                $table->id();
+                $table->unsignedBigInteger('logistics_admin_remittance_id');
+                $table->unsignedBigInteger('cod_collection_id');
+                $table->unsignedBigInteger('cod_remittance_id')->nullable();
+                $table->unsignedBigInteger('seller_order_id');
+                $table->unsignedBigInteger('shipment_id')->nullable();
+                $table->unsignedBigInteger('commission_record_id')->nullable();
+                $table->decimal('cod_amount', 14, 2)->default(0.00);
+                $table->decimal('product_subtotal', 14, 2)->default(0.00);
+                $table->decimal('shipping_fee', 14, 2)->default(0.00);
+                $table->decimal('admin_commission_amount', 14, 2)->default(0.00);
+                $table->decimal('seller_net_earning', 14, 2)->default(0.00);
+                $table->decimal('logistics_earning', 14, 2)->default(0.00);
+                $table->decimal('courier_commission_amount', 14, 2)->default(0.00);
+                $table->decimal('rider_commission_amount', 14, 2)->default(0.00);
+                $table->timestamps();
+
+                $table->foreign('logistics_admin_remittance_id', 'lari_lar_id_fk')
+                    ->references('id')
+                    ->on('logistics_admin_remittances')
+                    ->cascadeOnDelete();
+
+                $table->foreign('cod_collection_id', 'lari_cod_col_fk')
+                    ->references('id')
+                    ->on('cod_collections')
+                    ->cascadeOnDelete();
+
+                $table->foreign('cod_remittance_id', 'lari_cod_rem_fk')
+                    ->references('id')
+                    ->on('cod_remittances')
+                    ->nullOnDelete();
+
+                $table->foreign('seller_order_id', 'lari_so_id_fk')
+                    ->references('id')
+                    ->on('seller_orders')
+                    ->cascadeOnDelete();
+
+                $table->foreign('shipment_id', 'lari_ship_id_fk')
+                    ->references('id')
+                    ->on('shipments')
+                    ->nullOnDelete();
+
+                $table->foreign('commission_record_id', 'lari_comm_rec_fk')
+                    ->references('id')
+                    ->on('commission_records')
+                    ->nullOnDelete();
+
+                $table->index(['logistics_admin_remittance_id', 'cod_collection_id'], 'lari_remit_col_idx');
+                $table->index(['seller_order_id'], 'lari_seller_order_idx');
+            });
+        }
+    }
+
     protected static function createBuyerWishlistsTable(): void
     {
         if (Schema::hasTable('buyer_wishlists')) {
@@ -919,6 +1209,8 @@ class StorkSchemaBootstrapService
             $table->id();
             $table->foreignId('seller_profile_id')->constrained('seller_profiles')->cascadeOnDelete();
             $table->foreignId('product_id')->constrained('products')->cascadeOnDelete();
+            $table->string('variant_name', 100)->nullable();
+            $table->string('sub_variant_name', 100)->nullable();
             $table->string('deal_type', 25)->default('super_deal')->index();
             $table->string('title', 120)->nullable();
             $table->decimal('deal_price', 12, 2)->nullable();
@@ -948,12 +1240,39 @@ class StorkSchemaBootstrapService
             $table->unsignedSmallInteger('required_quantity')->default(3);
             $table->decimal('discount_percentage', 5, 2)->nullable();
             $table->foreignId('free_gift_product_id')->nullable()->constrained('products')->nullOnDelete();
+            $table->string('free_gift_variant_name', 100)->nullable();
+            $table->string('free_gift_sub_variant_name', 100)->nullable();
             $table->json('applicable_product_ids');
             $table->timestamp('starts_at');
             $table->timestamp('ends_at');
             $table->string('status', 25)->default('active')->index();
             $table->timestamps();
         });
+    }
+
+    protected static function upgradeSuperDealsAndBundlesColumns(): void
+    {
+        if (Schema::hasTable('super_deals')) {
+            Schema::table('super_deals', function (Blueprint $table) {
+                if (! Schema::hasColumn('super_deals', 'variant_name')) {
+                    $table->string('variant_name', 100)->nullable()->after('product_id');
+                }
+                if (! Schema::hasColumn('super_deals', 'sub_variant_name')) {
+                    $table->string('sub_variant_name', 100)->nullable()->after('variant_name');
+                }
+            });
+        }
+
+        if (Schema::hasTable('bundle_deals')) {
+            Schema::table('bundle_deals', function (Blueprint $table) {
+                if (! Schema::hasColumn('bundle_deals', 'free_gift_variant_name')) {
+                    $table->string('free_gift_variant_name', 100)->nullable()->after('free_gift_product_id');
+                }
+                if (! Schema::hasColumn('bundle_deals', 'free_gift_sub_variant_name')) {
+                    $table->string('free_gift_sub_variant_name', 100)->nullable()->after('free_gift_variant_name');
+                }
+            });
+        }
     }
 
     protected static function createLogisticsShippingRatesTable(): void
@@ -1121,6 +1440,21 @@ class StorkSchemaBootstrapService
                 if (! Schema::hasColumn('cod_collections', 'notes')) {
                     $table->text('notes')->nullable()->after('remittance_reference');
                 }
+                if (! Schema::hasColumn('cod_collections', 'logistics_admin_remittance_id')) {
+                    $table->unsignedBigInteger('logistics_admin_remittance_id')->nullable()->index()->after('delivery_assignment_id');
+                }
+                if (! Schema::hasColumn('cod_collections', 'admin_remittance_status')) {
+                    $table->string('admin_remittance_status', 30)->default('unremitted')->index()->after('status');
+                }
+                if (! Schema::hasColumn('cod_collections', 'admin_remitted_at')) {
+                    $table->timestamp('admin_remitted_at')->nullable()->after('verified_at');
+                }
+                if (! Schema::hasColumn('cod_collections', 'admin_verified_at')) {
+                    $table->timestamp('admin_verified_at')->nullable()->after('admin_remitted_at');
+                }
+                if (! Schema::hasColumn('cod_collections', 'admin_verified_by_admin_id')) {
+                    $table->unsignedBigInteger('admin_verified_by_admin_id')->nullable()->after('admin_verified_at');
+                }
             });
 
             DB::table('cod_collections')
@@ -1155,9 +1489,113 @@ class StorkSchemaBootstrapService
                 $table->unsignedBigInteger('cod_collection_id')->nullable()->change();
                 $table->unsignedBigInteger('logistics_profile_id')->nullable()->change();
                 $table->unsignedBigInteger('rider_id')->nullable()->change();
+
+                if (! Schema::hasColumn('commission_records', 'courier_id')) {
+                    $table->unsignedBigInteger('courier_id')->nullable()->after('logistics_profile_id');
+                    $table->foreign('courier_id', 'cr_courier_id_fk')
+                        ->references('id')
+                        ->on('couriers')
+                        ->nullOnDelete();
+                }
+                if (! Schema::hasColumn('commission_records', 'courier_commission_rate')) {
+                    $table->decimal('courier_commission_rate', 5, 2)->default(0.00)->after('logistics_commission_amount');
+                }
+                if (! Schema::hasColumn('commission_records', 'courier_commission_amount')) {
+                    $table->decimal('courier_commission_amount', 12, 2)->default(0.00)->after('courier_commission_rate');
+                }
+                if (! Schema::hasColumn('commission_records', 'operational_fare_fee')) {
+                    $table->decimal('operational_fare_fee', 12, 2)->default(0.00)->after('shipping_fee');
+                }
+                if (! Schema::hasColumn('commission_records', 'cod_remittance_stage')) {
+                    $table->string('cod_remittance_stage', 35)->default('awaiting_rider')->index()->after('status');
+                }
+                if (! Schema::hasColumn('commission_records', 'logistics_admin_remittance_id')) {
+                    $table->unsignedBigInteger('logistics_admin_remittance_id')->nullable()->index()->after('cod_collection_id');
+                }
             });
         } catch (\Throwable $e) {
         }
+    }
+
+    protected static function upgradeOrdersAndReturnShipmentsColumns(): void
+    {
+        if (Schema::hasTable('orders')) {
+            Schema::table('orders', function (Blueprint $table) {
+                if (! Schema::hasColumn('orders', 'coins_used_total')) {
+                    $table->unsignedBigInteger('coins_used_total')->default(0)->after('shipping_fee_total');
+                    $table->decimal('coins_discount_total', 12, 2)->default(0.00)->after('coins_used_total');
+                    $table->decimal('wallet_paid_total', 12, 2)->default(0.00)->after('coins_discount_total');
+                }
+            });
+        }
+
+        if (Schema::hasTable('return_requests')) {
+            Schema::table('return_requests', function (Blueprint $table) {
+                if (! Schema::hasColumn('return_requests', 'refund_payout_method')) {
+                    $table->string('refund_payout_method', 25)->default('WALLET')->after('refund_amount');
+                }
+            });
+        }
+
+        if (Schema::hasTable('return_shipments')) {
+            Schema::table('return_shipments', function (Blueprint $table) {
+                if (! Schema::hasColumn('return_shipments', 'delivery_attempts_count')) {
+                    $table->unsignedTinyInteger('delivery_attempts_count')->default(0)->after('pickup_attempts_count');
+                    $table->string('delivery_failure_reason', 150)->nullable()->after('pickup_failure_reason');
+                    $table->timestamp('delivery_failed_at')->nullable()->after('failed_at');
+                }
+            });
+        }
+    }
+
+    protected static function createDeliveryChatMessagesTable(): void
+    {
+        if (Schema::hasTable('delivery_chat_messages')) {
+            return;
+        }
+
+        Schema::create('delivery_chat_messages', function (Blueprint $table) {
+            $table->id();
+            $table->unsignedBigInteger('shipment_id');
+            $table->unsignedBigInteger('seller_order_id');
+            $table->unsignedBigInteger('delivery_assignment_id')->nullable();
+            $table->unsignedBigInteger('buyer_id');
+            $table->unsignedBigInteger('rider_id');
+            $table->string('sender_type', 15);
+            $table->string('message', 1000);
+            $table->string('attachment_path')->nullable();
+            $table->boolean('is_read')->default(false);
+            $table->timestamp('read_at')->nullable();
+            $table->timestamps();
+
+            $table->foreign('shipment_id', 'dcm_ship_id_fk')
+                ->references('id')
+                ->on('shipments')
+                ->cascadeOnDelete();
+
+            $table->foreign('seller_order_id', 'dcm_so_id_fk')
+                ->references('id')
+                ->on('seller_orders')
+                ->cascadeOnDelete();
+
+            $table->foreign('delivery_assignment_id', 'dcm_deliv_asg_fk')
+                ->references('id')
+                ->on('delivery_assignments')
+                ->nullOnDelete();
+
+            $table->foreign('buyer_id', 'dcm_buyer_id_fk')
+                ->references('id')
+                ->on('users')
+                ->cascadeOnDelete();
+
+            $table->foreign('rider_id', 'dcm_rider_id_fk')
+                ->references('id')
+                ->on('riders')
+                ->cascadeOnDelete();
+
+            $table->index(['shipment_id', 'id'], 'dcm_ship_msg_idx');
+            $table->index(['seller_order_id', 'is_read'], 'dcm_so_unread_idx');
+        });
     }
 
     public static function backfillMainHubsAndPackages(): void

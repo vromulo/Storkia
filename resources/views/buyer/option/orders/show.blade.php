@@ -1,6 +1,6 @@
 @extends('buyer.account-settings', [
     'pageTitle' => 'Order #' . $sellerOrder->seller_order_number,
-    'pageSubtitle' => 'Detailed shipment tracking, payment proof, cancellation controls, and order timeline.'
+    'pageSubtitle' => 'Live driver GPS map tracking, in-app rider chat, official E-Invoice, and full order timeline.'
 ])
 
 @section('option-content')
@@ -15,13 +15,14 @@
     $payMethod = $sellerOrder->effective_payment_method;
     $paymentSubmission = $sellerOrder->paymentSubmission;
     $extra = $sellerOrder->extra;
-    // Loaded before status_label is printed so a finished return shows "Returned & Refunded" / "Refunded (Item Kept by Buyer)".
     $sellerOrder->loadMissing('returnRequest');
     $returnRequest = $sellerOrder->returnRequest;
     $canBuyerCancel = $sellerOrder->canBuyerCancelPreShipment();
     $isRated = $sellerOrder->isRatedByBuyer();
     $isIdentityVerified = $isIdentityVerified ?? (auth()->user()?->identityVerification?->status === 'verified');
     $proofImageUrl = $latestProof ? route('user.orders.proof-image', $latestProof->id) : '';
+    $deliveryChatMessages = $deliveryChatMessages ?? collect();
+    $isRiderChatOpenable = $shipment && $shipment->current_rider_id && in_array($shipment->status, ['rider_assigned', 'out_for_delivery', 'delivery_failed'], true);
 
     $stepRank = match($sellerOrder->status) {
         'pending_seller_acceptance', 'pending_buyer_response' => 1,
@@ -94,18 +95,183 @@
         ->values();
 @endphp
 
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
 <script>
     window.storkiaBuyerOrderShowState = function () {
         return {
             cancelModalOpen: false,
             proofModalOpen: false,
             gcashScreenshotModalOpen: false,
-            isSubmittingCancel: false
+            riderChatModalOpen: false,
+            isSubmittingCancel: false,
+            liveMap: null,
+            driverMarker: null,
+            destMarker: null,
+            hubMarker: null,
+            routeLine: null,
+            liveTrackingData: null,
+            isPollingMap: false,
+            chatMessages: @js($deliveryChatMessages->map(fn ($m) => [
+                'id'          => (int) $m->id,
+                'sender_type' => $m->sender_type,
+                'message'     => $m->message,
+                'created_at'  => $m->created_at?->timezone('Asia/Manila')->format('M d, h:i A'),
+            ])->values()),
+            chatInput: '',
+            isSendingChat: false,
+            canSendChat: {{ $isRiderChatOpenable ? 'true' : 'false' }},
+
+            initOrderShowPage() {
+                @if($shipment)
+                    this.fetchLiveTracking();
+                    setInterval(() => {
+                        this.fetchLiveTracking();
+                    }, 12000);
+                @endif
+            },
+
+            async fetchLiveTracking() {
+                if (this.isPollingMap) return;
+                this.isPollingMap = true;
+                try {
+                    const res = await fetch('{{ route('user.orders.live-tracking', $sellerOrder->id) }}', {
+                        headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' }
+                    });
+                    const json = await res.json();
+                    if (res.ok && json.success && json.data && json.data.has_shipment) {
+                        this.liveTrackingData = json.data;
+                        this.$nextTick(() => {
+                            this.renderOrUpdateMap(json.data);
+                        });
+                    }
+                } catch (e) {
+                } finally {
+                    this.isPollingMap = false;
+                }
+            },
+
+            renderOrUpdateMap(data) {
+                const container = document.getElementById('storkia-buyer-live-map');
+                if (!container || typeof L === 'undefined') return;
+
+                const destLat = Number(data.destination?.latitude || 14.2786);
+                const destLng = Number(data.destination?.longitude || 121.4162);
+                const hubLat = Number(data.sorting_hub?.latitude || destLat);
+                const hubLng = Number(data.sorting_hub?.longitude || destLng);
+                const drvLat = data.driver ? Number(data.driver.latitude) : hubLat;
+                const drvLng = data.driver ? Number(data.driver.longitude) : hubLng;
+
+                if (!this.liveMap) {
+                    this.liveMap = L.map(container).setView([drvLat, drvLng], 13);
+                    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                        maxZoom: 19,
+                        attribution: '&copy; OpenStreetMap'
+                    }).addTo(this.liveMap);
+                }
+
+                if (this.destMarker) {
+                    this.destMarker.setLatLng([destLat, destLng]);
+                } else {
+                    this.destMarker = L.circleMarker([destLat, destLng], {
+                        radius: 8,
+                        fillColor: '#16A34A',
+                        color: '#FFFFFF',
+                        weight: 2,
+                        fillOpacity: 1
+                    }).addTo(this.liveMap).bindPopup('Delivery Destination: ' + (data.destination?.recipient || 'Buyer'));
+                }
+
+                if (this.hubMarker) {
+                    this.hubMarker.setLatLng([hubLat, hubLng]);
+                } else {
+                    this.hubMarker = L.circleMarker([hubLat, hubLng], {
+                        radius: 7,
+                        fillColor: '#5D3140',
+                        color: '#FFFFFF',
+                        weight: 2,
+                        fillOpacity: 0.9
+                    }).addTo(this.liveMap).bindPopup('Sorting Hub: ' + (data.sorting_hub?.name || 'Logistics Hub'));
+                }
+
+                if (data.driver) {
+                    if (this.driverMarker) {
+                        this.driverMarker.setLatLng([drvLat, drvLng]);
+                    } else {
+                        this.driverMarker = L.circleMarker([drvLat, drvLng], {
+                            radius: 9,
+                            fillColor: '#CF4173',
+                            color: '#FFFFFF',
+                            weight: 3,
+                            fillOpacity: 1
+                        }).addTo(this.liveMap).bindPopup(data.driver.role + ': ' + data.driver.name + ' (' + data.driver.plate_number + ')');
+                    }
+
+                    const targetLat = data.driver.role === 'Courier' ? hubLat : destLat;
+                    const targetLng = data.driver.role === 'Courier' ? hubLng : destLng;
+
+                    if (this.routeLine) {
+                        this.routeLine.setLatLngs([[drvLat, drvLng], [targetLat, targetLng]]);
+                    } else {
+                        this.routeLine = L.polyline([[drvLat, drvLng], [targetLat, targetLng]], {
+                            color: '#CF4173',
+                            weight: 3,
+                            dashArray: '6, 6'
+                        }).addTo(this.liveMap);
+                    }
+                }
+            },
+
+            async openRiderChat() {
+                this.riderChatModalOpen = true;
+                await this.refreshRiderChat();
+            },
+
+            async refreshRiderChat() {
+                try {
+                    const res = await fetch('{{ route('user.orders.delivery-chat.fetch', $sellerOrder->id) }}', {
+                        headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' }
+                    });
+                    const data = await res.json();
+                    if (res.ok && data.success) {
+                        this.chatMessages = data.messages || [];
+                        this.canSendChat = Boolean(data.can_send);
+                    }
+                } catch (e) {}
+            },
+
+            async sendRiderChatMessage() {
+                const text = (this.chatInput || '').trim();
+                if (!text || this.isSendingChat || !this.canSendChat) return;
+                this.isSendingChat = true;
+                try {
+                    const res = await fetch('{{ route('user.orders.delivery-chat.send', $sellerOrder->id) }}', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Accept': 'application/json',
+                            'X-Requested-With': 'XMLHttpRequest',
+                            'X-CSRF-TOKEN': '{{ csrf_token() }}'
+                        },
+                        body: JSON.stringify({ message: text })
+                    });
+                    const data = await res.json();
+                    if (res.ok && data.success && data.data) {
+                        this.chatMessages.push(data.data);
+                        this.chatInput = '';
+                    }
+                } catch (e) {
+                } finally {
+                    this.isSendingChat = false;
+                }
+            }
         };
     };
 </script>
 
 <div x-data="storkiaBuyerOrderShowState()"
+     x-init="initOrderShowPage()"
      class="space-y-6 select-none w-full min-w-0 max-w-full overflow-x-hidden">
 
     <div class="flex flex-wrap items-center justify-between gap-3">
@@ -117,6 +283,23 @@
         </a>
 
         <div class="flex flex-wrap items-center gap-2">
+            <a href="{{ route('user.orders.invoice', $sellerOrder->id) }}"
+               target="_blank"
+               class="px-3.5 py-1 rounded-full text-xs font-bold bg-surface border border-border-subtle hover:border-primary text-primary-dark shadow-2xs transition-colors inline-flex items-center gap-1.5">
+                <svg class="w-3.5 h-3.5 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+                <span>Official E-Invoice (PDF)</span>
+            </a>
+
+            @if($shipment && $shipment->currentRider)
+                <button type="button"
+                        @click.stop="openRiderChat()"
+                        class="px-3.5 py-1 rounded-full text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs transition-colors cursor-pointer inline-flex items-center gap-1.5">
+                    <span>Chat with Rider ({{ $shipment->currentRider->first_name }})</span>
+                </button>
+            @endif
+
             @if($latestProof)
                 <button type="button"
                         @click.stop="proofModalOpen = true"
@@ -128,7 +311,8 @@
                     <span>Inspect Delivery Photo</span>
                 </button>
             @endif
-            <span class="px-2.5 py-1 rounded-full text-[11px] font-bold uppercase {{ $payMethod === 'GCASH' ? 'bg-blue-100 text-blue-800 border border-blue-200' : 'bg-surface-subtle text-text-main border border-border-subtle' }}">
+
+            <span class="px-2.5 py-1 rounded-full text-[11px] font-bold uppercase {{ $payMethod === 'WALLET' ? 'bg-emerald-100 text-emerald-800 border border-emerald-200' : ($payMethod === 'GCASH' ? 'bg-blue-100 text-blue-800 border border-blue-200' : 'bg-surface-subtle text-text-main border border-border-subtle') }}">
                 {{ $payMethod }} ({{ strtoupper($sellerOrder->payment_status) }})
             </span>
             <span class="px-3 py-1 rounded-full text-xs font-bold {{ $sellerOrder->status === 'pending_buyer_response' ? 'bg-amber-100 text-amber-800 border border-amber-300' : 'bg-brand-light/50 text-primary-dark border border-border-subtle' }}">
@@ -168,14 +352,52 @@
         </div>
     @endif
 
+    @if($shipment && in_array($shipment->status, ['courier_assigned', 'picked_up_from_seller', 'in_transit_to_hub', 'received_at_hub', 'rider_assigned', 'out_for_delivery', 'delivery_failed'], true))
+        <div class="bg-surface rounded-3xl border border-border-subtle p-5 sm:p-6 shadow-xs space-y-4">
+            <div class="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                    <div class="flex items-center gap-2">
+                        <span class="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-ping"></span>
+                        <span class="text-[10px] font-extrabold uppercase tracking-wider text-primary">Live GPS Parcel &amp; Driver Map</span>
+                    </div>
+                    <h3 class="text-base font-bold text-primary-dark mt-0.5">
+                        Real-Time Route Tracking (<span class="font-mono">{{ $shipment->tracking_number }}</span>)
+                    </h3>
+                </div>
+
+                <div class="flex flex-wrap items-center gap-2 text-xs">
+                    <template x-if="liveTrackingData && liveTrackingData.driver">
+                        <div class="px-3 py-1.5 rounded-xl bg-surface-subtle border border-border-subtle flex items-center gap-2">
+                            <span class="font-bold text-primary-dark" x-text="liveTrackingData.driver.role + ': ' + liveTrackingData.driver.name"></span>
+                            <span class="font-mono text-[11px] text-text-muted" x-text="'(' + liveTrackingData.driver.plate_number + ')'"></span>
+                        </div>
+                    </template>
+                    <template x-if="liveTrackingData && liveTrackingData.eta_minutes">
+                        <span class="px-3 py-1.5 rounded-xl bg-primary text-white font-bold text-xs"
+                              x-text="'Est. ' + liveTrackingData.eta_minutes + ' min away'"></span>
+                    </template>
+                    @if($shipment->currentRider)
+                        <button type="button"
+                                @click="openRiderChat()"
+                                class="px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs cursor-pointer">
+                            Message Rider
+                        </button>
+                    @endif
+                </div>
+            </div>
+
+            <div id="storkia-buyer-live-map" class="w-full h-72 rounded-2xl border border-border-subtle overflow-hidden z-10"></div>
+        </div>
+    @endif
+
     @if($sellerOrder->status === 'completed')
         <div class="p-5 rounded-3xl {{ $isRated ? 'bg-green-50 border-2 border-green-200' : 'bg-amber-50 border-2 border-amber-300' }} flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div>
                 @if(!$isRated)
-                    <span class="px-2.5 py-0.5 rounded-full bg-amber-200 text-amber-950 text-[10px] font-extrabold uppercase">Next Step: Rate Your Order</span>
+                    <span class="px-2.5 py-0.5 rounded-full bg-amber-200 text-amber-950 text-[10px] font-extrabold uppercase">Next Step: Rate Your Order (+Up to 10 Coins/Item)</span>
                     <h3 class="text-base font-bold text-amber-950 mt-1">Order Received! Rate Product, Condition, Seller, Logistics &amp; Rider</h3>
                     <p class="text-xs text-amber-900 mt-0.5">
-                        Leave your 5-point rating to help the community and unlock the <strong>Buy Again</strong> button for this order.
+                        Leave your 5-point rating to earn <strong>+5 to +10 Storkia Coins per item</strong> and unlock the <strong>Buy Again</strong> button.
                     </p>
                 @else
                     <span class="px-2.5 py-0.5 rounded-full bg-green-200 text-green-900 text-[10px] font-extrabold uppercase">Order Completed &amp; Rated ({{ number_format((float) $sellerOrder->serviceRating->overall_average_rating, 1) }} ★)</span>
@@ -187,6 +409,11 @@
             </div>
 
             <div class="flex flex-wrap items-center gap-2 shrink-0">
+                <a href="{{ route('user.orders.invoice', $sellerOrder->id) }}"
+                   target="_blank"
+                   class="px-4 py-3 rounded-2xl bg-white border border-border-subtle hover:border-primary text-primary-dark text-xs font-bold shadow-2xs transition-colors">
+                    Download E-Invoice
+                </a>
                 @if($latestProof)
                     <button type="button"
                             @click.stop="proofModalOpen = true"
@@ -197,7 +424,7 @@
                 @if(!$isRated)
                     <a href="{{ route('user.orders.rate.show', $sellerOrder->id) }}"
                        class="inline-flex items-center gap-2 px-5 py-3 rounded-2xl bg-amber-500 hover:bg-amber-600 text-white text-xs font-extrabold shadow-sm transition-colors">
-                        ★ To Rate Order &amp; Services
+                        ★ Rate &amp; Earn Coins
                     </a>
                 @else
                     <form action="{{ route('user.orders.buy-again', $sellerOrder->id) }}" method="POST" class="m-0">
@@ -233,24 +460,8 @@
 
             <div class="p-4 rounded-2xl bg-white border border-amber-200 space-y-2 text-xs">
                 <p class="text-amber-950 font-semibold">
-                    Seller Report Reason: <em class="text-danger">"{{ $paymentSubmission?->suspicious_reason ?? 'Submitted GCash payment details could not be verified.' }}"</em>
+                    Seller Report Reason: <em class="text-danger">"{{ $paymentSubmission?->suspicious_reason ?? 'Submitted payment details could not be verified.' }}"</em>
                 </p>
-                @if($paymentSubmission)
-                    <div class="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-2 border-t border-amber-100 text-[11px]">
-                        <div>
-                            <span class="text-text-muted">Previous Sender GCash #:</span>
-                            <strong class="font-mono text-text-main block">{{ $paymentSubmission->sender_gcash_number }}</strong>
-                        </div>
-                        <div>
-                            <span class="text-text-muted">Previous Reference # / Code:</span>
-                            <strong class="font-mono text-primary-dark block">{{ $paymentSubmission->reference_number }} ({{ $paymentSubmission->reference_code }})</strong>
-                        </div>
-                        <div>
-                            <span class="text-text-muted">Date &amp; Time Submitted:</span>
-                            <strong class="text-text-main block">{{ $paymentSubmission->paid_at?->format('M d, Y h:i A') }}</strong>
-                        </div>
-                    </div>
-                @endif
             </div>
 
             <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1">
@@ -285,7 +496,7 @@
             <div>
                 <span class="font-bold text-text-main">Need to cancel this order before shipment?</span>
                 <p class="text-text-muted mt-0.5">
-                    Orders can be cancelled before the Seller marks the package Ready for Pickup.
+                    Orders can be cancelled before the Seller marks the package Ready for Pickup. Any E-Wallet payment or Storkia Coins used will be refunded immediately.
                     (Remaining 7-day buyer cancellation quota: <strong>{{ $cancellationQuota['remaining_buyer'] }} of {{ $cancellationQuota['limit_by_buyer'] }}</strong>)
                 </p>
             </div>
@@ -366,8 +577,8 @@
                 'return_in_transit'            => 'Return approved. Keep the item packed and ready for the rider.',
                 'awaiting_seller_confirmation' => 'Your item reached the seller. Your refund follows once they confirm.',
                 'receipt_disputed'             => 'The returned item is under Storkia Admin review.',
-                'refund_pending'               => 'Your refund will be sent to your GCash.',
-                'refunded'                     => 'Your refund was sent to your GCash.',
+                'refund_pending'               => 'Your refund is queued for payout.',
+                'refunded'                     => $returnRequest->isWalletRefund() ? 'Your refund was credited instantly to your Storkia E-Wallet.' : 'Your refund was sent to your GCash.',
                 default                        => 'This request has ended and the order completed without a refund.',
             };
             $rrLinkLabel = $rrStatus === 'rejected_by_seller' ? 'Review & Escalate' : 'View Status & Tracking';
@@ -390,7 +601,6 @@
             </a>
         </div>
     @elseif($sellerOrder->has_unresolved_dispute || $sellerOrder->status === 'disputed' || $extra?->seller_return_decision)
-        {{-- Disputes opened before Return & Refund existed: shown read-only. --}}
         <div class="p-5 rounded-2xl bg-red-50 border border-red-200 space-y-2 text-xs">
             <h3 class="text-sm font-bold text-red-900">Return / Refund Dispute</h3>
             <p class="text-red-800">
@@ -408,7 +618,6 @@
         </div>
     @endif
 
-    <!-- Order & Shipment Tracking Progress Stepper + Chronological Timeline -->
     <div class="bg-surface rounded-2xl border border-border-subtle p-5 sm:p-6 shadow-xs space-y-6">
         <div class="flex flex-wrap items-center justify-between gap-2 pb-4 border-b border-border-subtle">
             <div>
@@ -423,11 +632,11 @@
                 </p>
             </div>
             @if($shipment && $shipment->currentRider)
-                <div class="px-3 py-1.5 rounded-xl bg-surface-subtle border border-border-subtle text-xs">
+                <div class="px-3 py-1.5 rounded-xl bg-surface-subtle border border-border-subtle text-xs flex items-center gap-2">
                     <span class="text-text-muted">Assigned Rider:</span>
-                    <strong class="text-text-main ml-1">{{ $shipment->currentRider->full_name }}</strong>
+                    <strong class="text-text-main">{{ $shipment->currentRider->full_name }}</strong>
                     @if($shipment->currentRider->plate_number)
-                        <span class="font-mono text-[11px] text-primary-dark ml-1">({{ $shipment->currentRider->plate_number }})</span>
+                        <span class="font-mono text-[11px] text-primary-dark">({{ $shipment->currentRider->plate_number }})</span>
                     @endif
                 </div>
             @endif
@@ -549,22 +758,16 @@
             </div>
 
             <div class="pt-2 border-t border-border-subtle flex flex-wrap items-center justify-between gap-2">
-                @if($paymentSubmission)
-                    <button type="button"
-                            @click.stop="gcashScreenshotModalOpen = true"
-                            class="px-3 py-1.5 rounded-xl bg-blue-50 text-blue-800 hover:bg-blue-600 hover:text-white text-xs font-bold transition-colors cursor-pointer">
-                        View GCash Receipt (WebP)
-                    </button>
-                @endif
+                <a href="{{ route('user.orders.invoice', $sellerOrder->id) }}"
+                   target="_blank"
+                   class="px-3 py-1.5 rounded-xl bg-surface-subtle hover:bg-brand-light/50 border border-border-subtle text-primary-dark text-xs font-bold transition-colors">
+                    Print Official E-Invoice
+                </a>
 
                 @if($latestProof)
                     <button type="button"
                             @click.stop="proofModalOpen = true"
                             class="px-3.5 py-1.5 rounded-xl bg-primary/15 text-primary-dark hover:bg-primary hover:text-white text-xs font-bold transition-colors cursor-pointer inline-flex items-center gap-1.5">
-                        <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                            <path stroke-linecap="round" stroke-linejoin="round" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
-                            <path stroke-linecap="round" stroke-linejoin="round" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
-                        </svg>
                         <span>Inspect Delivery Photo</span>
                     </button>
                 @endif
@@ -603,14 +806,36 @@
         <div class="p-4 sm:px-5 bg-surface-subtle/40 border-t border-border-subtle space-y-1.5 text-xs sm:text-sm">
             @if($extra && (float) $extra->store_voucher_discount > 0)
                 <div class="flex justify-between text-green-700 font-bold">
-                    <span>Store Voucher ({{ $extra->store_voucher_code }}):</span>
+                    <span>Store Voucher / Bundle Discount:</span>
                     <span>-₱{{ number_format((float) $extra->store_voucher_discount, 2) }}</span>
                 </div>
             @endif
-            @if($extra && (float) $extra->platform_voucher_discount > 0)
+            @if($extra && (float) ($extra->coins_discount_amount ?? 0) > 0)
+                <div class="flex justify-between text-primary font-bold">
+                    <span>Storkia Coins Redeemed ({{ (int) $extra->coins_used }} Coins):</span>
+                    <span>-₱{{ number_format((float) $extra->coins_discount_amount, 2) }}</span>
+                </div>
+            @endif
+            @php
+                $platVoucherOnly = 0.0;
+                if ($extra && !empty($extra->platform_voucher_code)) {
+                    $rawPlat = (float) ($extra->platform_voucher_discount ?? 0);
+                    $coinsDisc = (float) ($extra->coins_discount_amount ?? 0);
+                    $origSub = (float) ($extra->original_subtotal_amount ?? 0);
+                    $storeDisc = (float) ($extra->store_voucher_discount ?? 0);
+                    $netSub = (float) $sellerOrder->subtotal_amount;
+
+                    if ($origSub > 0 && abs(round($origSub - $storeDisc - $rawPlat - $coinsDisc, 2) - round($netSub, 2)) < 0.02) {
+                        $platVoucherOnly = round($rawPlat, 2);
+                    } else {
+                        $platVoucherOnly = max(0.0, round($rawPlat - $coinsDisc, 2));
+                    }
+                }
+            @endphp
+            @if($platVoucherOnly > 0)
                 <div class="flex justify-between text-purple-700 font-bold">
                     <span>Platform Voucher ({{ $extra->platform_voucher_code }}):</span>
-                    <span>-₱{{ number_format((float) $extra->platform_voucher_discount, 2) }}</span>
+                    <span>-₱{{ number_format($platVoucherOnly, 2) }}</span>
                 </div>
             @endif
             <div class="flex justify-between text-text-muted">
@@ -632,6 +857,60 @@
             </div>
         </div>
     </div>
+
+    <template x-teleport="body">
+        <div x-show="riderChatModalOpen"
+             x-cloak
+             class="fixed inset-0 z-[200] flex items-center justify-center p-4">
+            <div @click="riderChatModalOpen = false" class="absolute inset-0 bg-black/60 backdrop-blur-xs cursor-pointer"></div>
+            <div @click.stop class="relative z-10 bg-surface rounded-3xl max-w-md w-full p-5 shadow-2xl border border-border-subtle flex flex-col h-[500px]">
+                <div class="flex items-center justify-between pb-3 border-b border-border-subtle">
+                    <div>
+                        <span class="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-extrabold uppercase">Last-Mile Delivery Chat</span>
+                        <h3 class="text-sm font-bold text-primary-dark mt-0.5">
+                            Rider: {{ $shipment?->currentRider?->full_name ?? 'Assigned Rider' }}
+                        </h3>
+                    </div>
+                    <button type="button" @click="riderChatModalOpen = false" class="p-1 text-text-muted hover:text-text-main cursor-pointer text-lg font-bold">&times;</button>
+                </div>
+
+                <div class="flex-1 overflow-y-auto p-3 space-y-2.5 bg-surface-subtle/50 rounded-2xl my-3 text-xs">
+                    <template x-if="chatMessages.length === 0">
+                        <p class="text-center text-text-muted py-12">Send delivery instructions or landmarks to your assigned Rider.</p>
+                    </template>
+                    <template x-for="msg in chatMessages" :key="msg.id">
+                        <div :class="msg.sender_type === 'buyer' ? 'flex justify-end' : 'flex justify-start'">
+                            <div :class="msg.sender_type === 'buyer' ? 'bg-primary text-white' : 'bg-white border border-border-subtle text-text-main'"
+                                 class="max-w-[80%] px-3.5 py-2 rounded-2xl shadow-2xs space-y-0.5">
+                                <p class="leading-relaxed" x-text="msg.message"></p>
+                                <span class="block text-[9px] opacity-75 text-right" x-text="msg.created_at"></span>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+
+                <template x-if="canSendChat">
+                    <form @submit.prevent="sendRiderChatMessage()" class="flex items-center gap-2">
+                        <input type="text"
+                               x-model="chatInput"
+                               maxlength="1000"
+                               placeholder="Type delivery landmark or note..."
+                               class="flex-1 p-2.5 rounded-xl border border-border-subtle bg-surface text-xs outline-none focus:border-primary">
+                        <button type="submit"
+                                :disabled="isSendingChat || !chatInput.trim()"
+                                class="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold cursor-pointer disabled:opacity-50">
+                            Send
+                        </button>
+                    </form>
+                </template>
+                <template x-if="!canSendChat">
+                    <div class="text-center text-[11px] text-text-muted py-2">
+                        Delivery chat closes automatically once the parcel is delivered.
+                    </div>
+                </template>
+            </div>
+        </div>
+    </template>
 
     <template x-teleport="body">
         <div x-show="cancelModalOpen"
@@ -718,23 +997,6 @@
                                 @endif
                             </strong>
                         </div>
-                        @if($latestProof->latitude && $latestProof->longitude)
-                            <div class="sm:col-span-2">
-                                <span class="text-text-muted block">GPS Delivery Coordinates:</span>
-                                <span class="font-mono text-[11px] font-semibold text-text-main">
-                                    {{ $latestProof->latitude }}, {{ $latestProof->longitude }}
-                                    @if($latestProof->location_accuracy)
-                                        (&plusmn;{{ number_format((float) $latestProof->location_accuracy, 1) }}m)
-                                    @endif
-                                </span>
-                            </div>
-                        @endif
-                        @if($latestProof->notes)
-                            <div class="sm:col-span-2">
-                                <span class="text-text-muted block">Rider Handover Notes:</span>
-                                <p class="text-text-main italic">"{{ $latestProof->notes }}"</p>
-                            </div>
-                        @endif
                     </div>
 
                     <div class="flex items-center justify-between pt-2 border-t border-border-subtle text-xs">
@@ -754,26 +1016,6 @@
         </template>
     @endif
 
-    @if($paymentSubmission)
-        <template x-teleport="body">
-            <div x-show="gcashScreenshotModalOpen"
-                 x-cloak
-                 class="fixed inset-0 z-[190] flex items-center justify-center p-4">
-                <div @click="gcashScreenshotModalOpen = false" class="absolute inset-0 bg-black/75 backdrop-blur-xs cursor-pointer"></div>
-                <div @click.stop class="relative z-10 bg-surface rounded-3xl max-w-lg w-full p-6 shadow-2xl border border-border-subtle space-y-4">
-                    <div class="flex items-center justify-between pb-3 border-b border-border-subtle">
-                        <h3 class="text-base font-bold text-primary-dark">Submitted GCash Screenshot (WebP)</h3>
-                        <button type="button" @click="gcashScreenshotModalOpen = false" class="p-1 text-text-muted hover:text-text-main cursor-pointer">&times;</button>
-                    </div>
-                    <div class="rounded-2xl overflow-hidden bg-surface-subtle border border-border-subtle flex items-center justify-center max-h-[65vh]">
-                        <img src="{{ $paymentSubmission->screenshot_url }}" alt="GCash Payment Proof" class="max-h-[60vh] w-auto object-contain">
-                    </div>
-                </div>
-            </div>
-        </template>
-    @endif
-
     <x-buyer.report-seller-modal />
-
 </div>
 @endsection

@@ -15,8 +15,7 @@
 </head>
 <body class="m-0 p-0 h-screen w-screen font-sans antialiased text-text-main overflow-hidden bg-gradient-to-b from-surface via-surface to-brand-light/30 relative">
     <x-ui.preloader />
-    
-    <!-- Mobile Restricted View -->
+
     <div class="mobile-view absolute inset-0 bg-surface/80 backdrop-blur-md z-40"></div>
     <div class="mobile-view flex-col items-center justify-center h-screen w-screen px-4 sm:px-6 py-8 z-50 relative overflow-y-auto">
         <div class="bg-surface/95 backdrop-blur-xl rounded-3xl shadow-2xl shadow-black/10 border border-border-subtle w-full max-w-md p-6 sm:p-8 text-center flex flex-col items-center">
@@ -33,7 +32,7 @@
                     <span class="text-text-muted">Please log in from a computer to access this dashboard interface.</span>
                 </p>
             </div>
-            <form method="POST" action="{{ route('logout') }}" class="w-full">
+            <form method="POST" action="{{ route('logout') }}" data-no-live class="w-full">
                 @csrf
                 <button type="submit" class="w-full flex items-center justify-center px-6 py-4 bg-red-500 text-white text-lg font-bold rounded-2xl shadow-md hover:bg-red-600 transition-all duration-200 cursor-pointer active:scale-95">
                     Logout
@@ -42,16 +41,13 @@
         </div>
     </div>
 
-    <!-- Alpine Dashboard Shell -->
     <div x-data="{ sidebarOpen: localStorage.getItem('sellerSidebarOpen') !== 'false' }"
          x-init="$watch('sidebarOpen', val => localStorage.setItem('sellerSidebarOpen', val))"
          class="desktop-view h-screen w-full relative">
-        
+
         <x-seller.sidebar />
 
-        <!-- Portal View Wrapper with Top Navigation Bar -->
         <div class="flex-1 flex flex-col h-screen overflow-hidden">
-            <!-- Global Top Header Bar -->
             <header x-data="{
                         headerStoreName: @js(auth()->user()->sellerProfile?->business_name ?? 'Seller Portal'),
                         headerOwnerName: @js(trim((auth()->user()->first_name ?? '') . ' ' . (auth()->user()->last_name ?? ''))),
@@ -72,10 +68,9 @@
                         $recentNotifications = auth()->user()->notifications()->take(6)->get();
                     @endphp
 
-                    <!-- Notification Center Dropdown -->
-                    <div x-data="{ notifOpen: false }" @click.away="notifOpen = false" class="relative">
-                        <button type="button" 
-                                @click="notifOpen = !notifOpen" 
+                    <div data-live-notifications x-data="{ notifOpen: false }" @click.away="notifOpen = false" class="relative">
+                        <button type="button"
+                                @click="notifOpen = !notifOpen"
                                 class="p-2.5 rounded-xl bg-surface-subtle hover:bg-brand-light/30 text-text-muted hover:text-primary transition-colors relative cursor-pointer focus:outline-none">
                             <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
@@ -87,9 +82,8 @@
                             @endif
                         </button>
 
-                        <!-- Notification Dropdown Panel -->
-                        <div x-show="notifOpen" 
-                             x-cloak 
+                        <div x-show="notifOpen"
+                             x-cloak
                              x-transition:enter="transition ease-out duration-150"
                              x-transition:enter-start="opacity-0 scale-95 -translate-y-1"
                              x-transition:enter-end="opacity-100 scale-100 translate-y-0"
@@ -97,7 +91,7 @@
                              x-transition:leave-start="opacity-100 scale-100 translate-y-0"
                              x-transition:leave-end="opacity-0 scale-95 -translate-y-1"
                              class="absolute right-0 mt-3 w-80 sm:w-96 bg-surface border border-border-subtle rounded-2xl shadow-2xl z-50 overflow-hidden">
-                            
+
                             <div class="p-4 border-b border-border-subtle flex items-center justify-between bg-surface-subtle">
                                 <span class="font-bold text-sm text-primary-dark">Notifications</span>
                                 @if($unreadCount > 0)
@@ -144,7 +138,6 @@
                         </div>
                     </div>
 
-                    <!-- Store Profile Badge -->
                     <a href="{{ auth()->user()->sellerProfile ? route('seller.store-settings') : route('seller.seller-dashboard') }}"
                        class="flex items-center gap-3 pl-2 border-l border-border-subtle group cursor-pointer">
                         <div class="w-9 h-9 rounded-full bg-primary/10 text-primary font-bold text-xs flex items-center justify-center border border-primary/20 overflow-hidden shrink-0">
@@ -163,14 +156,15 @@
                 </div>
             </header>
 
-            <!-- Scrollable Content Socket -->
-            <main class="flex-1 overflow-y-auto custom-scrollbar relative"
+            <main id="storkia-main-scroll"
+                  class="flex-1 overflow-y-auto custom-scrollbar relative"
                   x-data="{ showContent: false }"
-                  x-init="setTimeout(() => showContent = true, 50)">
-                <div class="p-8 lg:p-12"
+                  x-init="setTimeout(() => showContent = true, 20)">
+                <div id="storkia-main-content"
+                     class="p-8 lg:p-12"
                      x-show="showContent"
-                     x-transition:enter="transition ease-out duration-500"
-                     x-transition:enter-start="opacity-0 translate-y-4"
+                     x-transition:enter="transition ease-out duration-300"
+                     x-transition:enter-start="opacity-0 translate-y-2"
                      x-transition:enter-end="opacity-100 translate-y-0"
                      x-cloak>
                     @yield('content')

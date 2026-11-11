@@ -2,66 +2,105 @@
 
 namespace App\Services;
 
+use App\Models\LogisticsHub;
+use App\Models\LogisticsProfile;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 
 class ShippingCalculatorService
 {
-    public const BASE_SAME_MUNICIPALITY = 45.00;
-    public const BASE_SAME_PROVINCE = 65.00;
-    public const BASE_DIFFERENT_PROVINCE = 100.00;
-    public const EXCESS_WEIGHT_THRESHOLD_KG = 1.00;
-    public const EXCESS_RATE_PER_KG = 10.00;
+    public const BASE_FEE_SAME_BARANGAY     = 35.00;
+    public const BASE_FEE_SAME_MUNICIPALITY = 45.00;
+    public const BASE_FEE_SAME_PROVINCE     = 58.00;
+    public const BASE_FEE_INTER_PROVINCE    = 75.00;
+    public const BASE_FEE_INTER_ISLAND      = 120.00;
 
-    protected const UNSERVICEABLE_PROVINCES = [
-        'batanes',
-    ];
+    public const EXTRA_WEIGHT_FEE_PER_KG        = 10.00;
+    public const EXTRA_WEIGHT_FEE_INTER_ISLAND  = 15.00;
 
-    protected const UNSERVICEABLE_MUNICIPALITIES = [
-        'itbayat',
-        'basco',
-        'sabtang',
-        'ivana',
-        'mahatao',
-        'uyugan',
-        'kalayaan',
-    ];
+    public function __construct(
+        protected AddressService $addressService
+    ) {}
 
-    public function isAddressServiceable(?string $buyerProvince, ?string $buyerMunicipality): bool
+    public function isAddressServiceable(?string $province, ?string $municipality = null): bool
     {
-        $normProv = $this->normalizeLocation($buyerProvince);
-        $normMun = $this->normalizeLocation($buyerMunicipality);
-
-        if ($normProv === '' || $normMun === '') {
+        $normProv = $this->addressService->normalizeName($province);
+        if ($normProv === '') {
             return false;
         }
 
-        if (in_array($normProv, self::UNSERVICEABLE_PROVINCES, true)) {
-            return false;
-        }
+        if (Schema::hasTable('logistics_zone_rates')) {
+            $blockedZone = DB::table('logistics_zone_rates')
+                ->whereRaw('LOWER(TRIM(province)) = ?', [strtolower(trim((string) $province))])
+                ->where('is_serviceable', false)
+                ->exists();
 
-        if (in_array($normMun, self::UNSERVICEABLE_MUNICIPALITIES, true)) {
-            return false;
-        }
-
-        if (Schema::hasTable('logistics_shipping_rates')) {
-            try {
-                $blockedZone = DB::table('logistics_shipping_rates')
-                    ->where('is_serviceable', false)
-                    ->get()
-                    ->first(function ($row) use ($normProv, $normMun) {
-                        $dest = $this->normalizeLocation($row->destination_region ?? '');
-                        return $dest !== '' && ($dest === $normProv || $dest === $normMun);
-                    });
-
-                if ($blockedZone) {
-                    return false;
-                }
-            } catch (\Throwable $e) {
+            if ($blockedZone) {
+                return false;
             }
         }
 
-        return true;
+        $hasLogisticsProfiles = Schema::hasTable('logistics_profiles') && LogisticsProfile::count() > 0;
+        if (! $hasLogisticsProfiles) {
+            return true;
+        }
+
+        $buyerIsland = $this->resolveIslandGroup($province);
+
+        $hubProvinces = collect();
+        if (Schema::hasTable('logistics_hubs')) {
+            $hubProvinces = LogisticsHub::where('status', 'active')->pluck('province');
+        }
+        $mainProvinces = LogisticsProfile::pluck('province');
+        $allCoveredProvinces = $hubProvinces->merge($mainProvinces)->filter()->unique();
+
+        if ($allCoveredProvinces->isEmpty()) {
+            return true;
+        }
+
+        foreach ($allCoveredProvinces as $coveredProv) {
+            if ($this->resolveIslandGroup($coveredProv) === $buyerIsland) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    public function isRouteServiceable(
+        ?string $sellerProvince,
+        ?string $sellerMunicipality,
+        ?string $buyerProvince,
+        ?string $buyerMunicipality
+    ): array {
+        if (! $this->isAddressServiceable($buyerProvince, $buyerMunicipality)) {
+            return [
+                'is_serviceable' => false,
+                'reason'         => "Delivery to {$buyerMunicipality}, {$buyerProvince} is currently outside our active Storkia Logistics Hub coverage.",
+            ];
+        }
+
+        $sellerIsland = $this->resolveIslandGroup($sellerProvince);
+        $buyerIsland = $this->resolveIslandGroup($buyerProvince);
+
+        if ($sellerIsland !== $buyerIsland) {
+            $hasBridgingLogistics = $this->hasInPlatformInterIslandBridge($sellerIsland, $buyerIsland);
+
+            if (! $hasBridgingLogistics) {
+                $sGroup = ucfirst($sellerIsland);
+                $bGroup = ucfirst($buyerIsland);
+
+                return [
+                    'is_serviceable' => false,
+                    'reason'         => "Cross-island shipping from {$sellerProvince} ({$sGroup}) to {$buyerProvince} ({$bGroup}) is unavailable because no registered Storkia Logistics Partner operates verified sorting hubs on both islands.",
+                ];
+            }
+        }
+
+        return [
+            'is_serviceable' => true,
+            'reason'         => null,
+        ];
     }
 
     public function calculateForSellerOrder(
@@ -69,127 +108,161 @@ class ShippingCalculatorService
         string $sellerMunicipality,
         string $buyerProvince,
         string $buyerMunicipality,
-        float $totalWeightKg
+        float $totalWeightKg,
+        string $sellerBarangay = '',
+        string $buyerBarangay = ''
     ): array {
-        $normSellerProv = $this->normalizeLocation($sellerProvince);
-        $normSellerMun = $this->normalizeLocation($sellerMunicipality);
-        $normBuyerProv = $this->normalizeLocation($buyerProvince);
-        $normBuyerMun = $this->normalizeLocation($buyerMunicipality);
+        $normSellerProv = $this->addressService->normalizeName($sellerProvince);
+        $normBuyerProv = $this->addressService->normalizeName($buyerProvince);
+        $normSellerMun = $this->addressService->normalizeName($sellerMunicipality);
+        $normBuyerMun = $this->addressService->normalizeName($buyerMunicipality);
+        $normSellerBrgy = $this->addressService->normalizeName($sellerBarangay);
+        $normBuyerBrgy = $this->addressService->normalizeName($buyerBarangay);
 
-        $isServiceable = $this->isAddressServiceable($buyerProvince, $buyerMunicipality);
+        $sellerIsland = $this->resolveIslandGroup($sellerProvince);
+        $buyerIsland = $this->resolveIslandGroup($buyerProvince);
 
-        if ($normSellerProv !== '' && $normSellerProv === $normBuyerProv) {
+        $routeCheck = $this->isRouteServiceable($sellerProvince, $sellerMunicipality, $buyerProvince, $buyerMunicipality);
+
+        if ($sellerIsland !== $buyerIsland) {
+            $tier = 'inter_island';
+            $tierLabel = 'Inter-Island (' . ucfirst($sellerIsland) . ' to ' . ucfirst($buyerIsland) . ')';
+            $baseFee = self::BASE_FEE_INTER_ISLAND;
+            $perExtraKgRate = self::EXTRA_WEIGHT_FEE_INTER_ISLAND;
+        } elseif ($normSellerProv !== '' && $normSellerProv === $normBuyerProv) {
             if ($normSellerMun !== '' && $normSellerMun === $normBuyerMun) {
-                $baseFee = self::BASE_SAME_MUNICIPALITY;
-                $tier = 'same_municipality';
-                $tierLabel = 'Same Municipality';
+                if ($normSellerBrgy !== '' && $normSellerBrgy === $normBuyerBrgy) {
+                    $tier = 'same_barangay';
+                    $tierLabel = 'Same Barangay (Local)';
+                    $baseFee = self::BASE_FEE_SAME_BARANGAY;
+                } else {
+                    $tier = 'same_municipality';
+                    $tierLabel = 'Same Municipality / City';
+                    $baseFee = self::BASE_FEE_SAME_MUNICIPALITY;
+                }
             } else {
-                $baseFee = self::BASE_SAME_PROVINCE;
                 $tier = 'same_province';
                 $tierLabel = 'Same Province';
+                $baseFee = self::BASE_FEE_SAME_PROVINCE;
             }
+            $perExtraKgRate = self::EXTRA_WEIGHT_FEE_PER_KG;
         } else {
-            $baseFee = self::BASE_DIFFERENT_PROVINCE;
             $tier = 'inter_province';
-            $tierLabel = 'Provincial / Inter-Province';
+            $tierLabel = 'Provincial / Regional (' . ucfirst($buyerIsland) . ')';
+            $baseFee = self::BASE_FEE_INTER_PROVINCE;
+            $perExtraKgRate = self::EXTRA_WEIGHT_FEE_PER_KG;
         }
 
-        $excessRatePerKg = self::EXCESS_RATE_PER_KG;
+        if (Schema::hasTable('logistics_zone_rates') && $buyerProvince !== '') {
+            $customZone = DB::table('logistics_zone_rates')
+                ->whereRaw('LOWER(TRIM(province)) = ?', [strtolower(trim($buyerProvince))])
+                ->where(function ($q) use ($buyerMunicipality) {
+                    $q->whereNull('municipality')
+                      ->orWhere('municipality', '')
+                      ->orWhereRaw('LOWER(TRIM(municipality)) = ?', [strtolower(trim($buyerMunicipality))]);
+                })
+                ->where('is_serviceable', true)
+                ->orderByRaw('CASE WHEN municipality IS NOT NULL AND municipality != "" THEN 0 ELSE 1 END')
+                ->first();
 
-        $matchedRate = $this->findConfiguredZoneRate($normSellerProv, $normSellerMun, $normBuyerProv, $normBuyerMun, $tier);
-        if ($matchedRate) {
-            if (! (bool) $matchedRate->is_serviceable) {
-                $isServiceable = false;
-            }
-            if ((float) $matchedRate->first_kg_rate > 0) {
-                $baseFee = round((float) $matchedRate->first_kg_rate, 2);
-            }
-            if ((float) $matchedRate->additional_kg_rate >= 0) {
-                $excessRatePerKg = round((float) $matchedRate->additional_kg_rate, 2);
-            }
-            if (! empty($matchedRate->zone_name)) {
-                $tierLabel = (string) $matchedRate->zone_name;
+            if ($customZone && (float) ($customZone->base_rate_1kg ?? 0) > 0) {
+                $baseFee = min(round((float) $customZone->base_rate_1kg, 2), self::BASE_FEE_INTER_ISLAND);
+                if ((float) ($customZone->per_extra_kg_rate ?? 0) > 0) {
+                    $perExtraKgRate = min(round((float) $customZone->per_extra_kg_rate, 2), self::EXTRA_WEIGHT_FEE_INTER_ISLAND);
+                }
             }
         }
 
-        $normalizedWeight = max(0.01, round($totalWeightKg, 3));
-        $rawExcess = max(0.0, round($normalizedWeight - self::EXCESS_WEIGHT_THRESHOLD_KG, 3));
-        $chargeableExcessKg = $rawExcess > 0.0 ? (float) ceil($rawExcess) : 0.0;
-        $weightFee = round($chargeableExcessKg * $excessRatePerKg, 2);
-        $shippingFee = round($baseFee + $weightFee, 2);
+        $chargeableKg = max(1, (int) ceil(max(0.01, $totalWeightKg)));
+        $extraWeightKg = max(0, $chargeableKg - 1);
+        $weightSurcharge = round($extraWeightKg * $perExtraKgRate, 2);
+        $totalShippingFee = round($baseFee + $weightSurcharge, 2);
 
         return [
-            'is_serviceable'       => $isServiceable,
             'tier'                 => $tier,
             'tier_label'           => $tierLabel,
             'base_fee'             => $baseFee,
-            'total_weight'         => $normalizedWeight,
-            'excess_weight'        => $rawExcess,
-            'chargeable_excess_kg' => $chargeableExcessKg,
-            'weight_fee'           => $weightFee,
-            'shipping_fee'         => $shippingFee,
+            'chargeable_weight_kg' => $chargeableKg,
+            'extra_weight_kg'      => $extraWeightKg,
+            'per_extra_kg_rate'    => $perExtraKgRate,
+            'weight_surcharge'     => $weightSurcharge,
+            'shipping_fee'         => $totalShippingFee,
+            'seller_island_group'  => $sellerIsland,
+            'buyer_island_group'   => $buyerIsland,
+            'is_serviceable'       => (bool) $routeCheck['is_serviceable'],
+            'unserviceable_reason' => $routeCheck['reason'],
         ];
     }
 
-    protected function findConfiguredZoneRate(
-        string $normSellerProv,
-        string $normSellerMun,
-        string $normBuyerProv,
-        string $normBuyerMun,
-        string $tier
-    ): ?object {
-        if (! Schema::hasTable('logistics_shipping_rates')) {
-            return null;
+    protected function hasInPlatformInterIslandBridge(string $sellerIsland, string $buyerIsland): bool
+    {
+        if (! Schema::hasTable('logistics_profiles')) {
+            return false;
         }
 
-        try {
-            $rates = DB::table('logistics_shipping_rates')->orderByDesc('id')->get();
-            if ($rates->isEmpty()) {
-                return null;
-            }
+        $profiles = LogisticsProfile::with(['hubs' => fn ($q) => $q->where('status', 'active')])->get();
 
-            foreach ($rates as $rate) {
-                $orig = $this->normalizeLocation($rate->origin_region ?? '');
-                $dest = $this->normalizeLocation($rate->destination_region ?? '');
+        foreach ($profiles as $profile) {
+            $islandsCovered = [$this->resolveIslandGroup($profile->province)];
 
-                $originMatches = $orig !== '' && ($orig === $normSellerMun || $orig === $normSellerProv || ($this->isNcrAlias($orig) && $this->isNcrAlias($normSellerProv)));
-                $destMatches = $dest !== '' && ($dest === $normBuyerMun || $dest === $normBuyerProv || ($this->isNcrAlias($dest) && $this->isNcrAlias($normBuyerProv)));
-
-                if ($originMatches && $destMatches) {
-                    return $rate;
+            foreach ($profile->hubs as $hub) {
+                if (! empty($hub->province)) {
+                    $islandsCovered[] = $this->resolveIslandGroup($hub->province);
                 }
             }
 
-            foreach ($rates as $rate) {
-                $code = strtolower(trim((string) ($rate->zone_code ?? '')));
-                if ($tier === 'same_municipality' && str_contains($code, 'local')) {
-                    return $rate;
-                }
-                if ($tier === 'same_province' && str_contains($code, 'prov')) {
-                    return $rate;
-                }
+            $islandsCovered = array_unique(array_filter($islandsCovered));
+
+            if (in_array($sellerIsland, $islandsCovered, true) && in_array($buyerIsland, $islandsCovered, true)) {
+                return true;
             }
-        } catch (\Throwable $e) {
         }
 
-        return null;
+        return false;
     }
 
-    protected function isNcrAlias(string $normalized): bool
+    public function resolveIslandGroup(?string $provinceName): string
     {
-        return in_array($normalized, ['ncr', 'metro manila', 'national capital region', 'manila'], true);
-    }
-
-    protected function normalizeLocation(?string $name): string
-    {
-        if (! $name) {
-            return '';
+        $norm = $this->addressService->normalizeName($provinceName);
+        if ($norm === '') {
+            return 'luzon';
         }
 
-        $cleaned = strtolower(trim($name));
-        $cleaned = preg_replace('/\b(city of|municipality of|province of)\b/', '', $cleaned);
-        $cleaned = preg_replace('/\s+/', ' ', $cleaned);
+        $visayasProvinces = [
+            'aklan', 'antique', 'capiz', 'guimaras', 'iloilo', 'negros occidental',
+            'bohol', 'cebu', 'negros oriental', 'siquijor',
+            'biliran', 'eastern samar', 'leyte', 'northern samar', 'samar', 'western samar', 'southern leyte',
+        ];
 
-        return trim((string) $cleaned);
+        $mindanaoProvinces = [
+            'zamboanga del norte', 'zamboanga del sur', 'zamboanga sibugay', 'zamboanga',
+            'bukidnon', 'camiguin', 'lanao del norte', 'misamis occidental', 'misamis oriental', 'cagayan de oro',
+            'davao de oro', 'compostela valley', 'davao del norte', 'davao del sur', 'davao occidental', 'davao oriental', 'davao',
+            'cotabato', 'north cotabato', 'sarangani', 'south cotabato', 'sultan kudarat', 'general santos',
+            'agusan del norte', 'agusan del sur', 'dinagat islands', 'surigao del norte', 'surigao del sur', 'butuan',
+            'basilan', 'lanao del sur', 'maguindanao', 'maguindanao del norte', 'maguindanao del sur', 'sulu', 'tawi tawi',
+        ];
+
+        foreach ($visayasProvinces as $vp) {
+            if ($norm === $vp || str_contains($norm, $vp)) {
+                return 'visayas';
+            }
+        }
+
+        foreach ($mindanaoProvinces as $mp) {
+            if ($norm === $mp || str_contains($norm, $mp)) {
+                return 'mindanao';
+            }
+        }
+
+        $resolved = $this->addressService->resolveProvinceByName((string) $provinceName);
+        if ($resolved && ! empty($resolved['islandGroupCode'])) {
+            $ig = strtolower(trim((string) $resolved['islandGroupCode']));
+            if (in_array($ig, ['luzon', 'visayas', 'mindanao'], true)) {
+                return $ig;
+            }
+        }
+
+        return 'luzon';
     }
 }

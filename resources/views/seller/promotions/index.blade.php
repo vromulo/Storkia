@@ -5,20 +5,93 @@
     $isOnVacation = (bool) ($profile->is_on_vacation ?? false);
     $deals = $deals ?? collect();
     $bundles = $bundles ?? collect();
+
+    $productVariantsMap = [];
+    foreach ($products as $prod) {
+        $raw = $prod->raw_variants;
+        $vars = [];
+        if (is_array($raw) && !empty($raw['items']) && is_array($raw['items'])) {
+            foreach ($raw['items'] as $vItem) {
+                if (!empty($vItem['is_archived']) || ($vItem['status'] ?? 'Approved') !== 'Approved') {
+                    continue;
+                }
+                $subs = [];
+                if (!empty($vItem['subs']) && is_array($vItem['subs'])) {
+                    foreach ($vItem['subs'] as $sItem) {
+                        if (!empty($sItem['is_archived']) || ($sItem['status'] ?? 'Approved') !== 'Approved') {
+                            continue;
+                        }
+                        $subs[] = [
+                            'name'  => $sItem['name'] ?? '',
+                            'price' => (float) ($sItem['price'] ?? $vItem['price'] ?? $prod->price ?? 0),
+                            'stock' => (int) ($sItem['stock'] ?? 0),
+                        ];
+                    }
+                }
+                $vars[] = [
+                    'name'  => $vItem['name'] ?? '',
+                    'price' => (float) ($vItem['price'] ?? $prod->price ?? 0),
+                    'stock' => (int) ($vItem['stock'] ?? 0),
+                    'subs'  => $subs,
+                ];
+            }
+        }
+        $productVariantsMap[$prod->id] = $vars;
+    }
+    $firstProductId = (string) ($products->first()?->id ?? '');
+
+    $promotionsConfig = [
+        'dealType'              => (string) old('deal_type', 'super_deal'),
+        'bundleType'            => (string) old('bundle_type', 'percentage_off'),
+        'selectedDealProductId' => (string) old('product_id', $firstProductId),
+        'selectedDealVariant'   => (string) old('variant_name', ''),
+        'selectedDealSubVariant'=> (string) old('sub_variant_name', ''),
+        'selectedGiftProductId' => (string) old('free_gift_product_id', $firstProductId),
+        'selectedGiftVariant'   => (string) old('free_gift_variant_name', ''),
+        'selectedGiftSubVariant'=> (string) old('free_gift_sub_variant_name', ''),
+        'variantsByProduct'     => $productVariantsMap,
+    ];
 @endphp
 
-<div x-data="{
-    dealType: @js(old('deal_type', 'super_deal')),
-    bundleType: @js(old('bundle_type', 'percentage_off')),
-    isSubmittingDeal: false,
-    isSubmittingBundle: false
-}" class="max-w-7xl mx-auto space-y-8 select-none">
+<script>
+    window.storkiaPromotionsState = function (cfg) {
+        return {
+            dealType: cfg.dealType || 'super_deal',
+            bundleType: cfg.bundleType || 'percentage_off',
+            selectedDealProductId: cfg.selectedDealProductId || '',
+            selectedDealVariant: cfg.selectedDealVariant || '',
+            selectedDealSubVariant: cfg.selectedDealSubVariant || '',
+            selectedGiftProductId: cfg.selectedGiftProductId || '',
+            selectedGiftVariant: cfg.selectedGiftVariant || '',
+            selectedGiftSubVariant: cfg.selectedGiftSubVariant || '',
+            variantsByProduct: cfg.variantsByProduct || {},
+            isSubmittingDeal: false,
+            isSubmittingBundle: false,
+            get dealVariants() {
+                return this.variantsByProduct[this.selectedDealProductId] || [];
+            },
+            get dealSubVariants() {
+                const found = this.dealVariants.find(v => v.name === this.selectedDealVariant);
+                return found ? (found.subs || []) : [];
+            },
+            get giftVariants() {
+                return this.variantsByProduct[this.selectedGiftProductId] || [];
+            },
+            get giftSubVariants() {
+                const found = this.giftVariants.find(v => v.name === this.selectedGiftVariant);
+                return found ? (found.subs || []) : [];
+            }
+        };
+    };
+</script>
+
+<div x-data="storkiaPromotionsState(@js($promotionsConfig))" class="max-w-7xl mx-auto space-y-8 select-none">
 
     <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
         <div>
             <h1 class="text-3xl font-bold text-primary-dark">Super Deals, Store Sales, Bundles &amp; Vacation Mode</h1>
             <p class="text-sm text-text-muted mt-1">
-                Schedule fixed-slot <strong>Super Deals</strong> (connected to the Home Page Super Deals container), run Store Sales, create Bundle Deals, or toggle Store Vacation Mode.
+                Schedule fixed-slot <strong>Super Deals</strong> (connected to the Home Page Super Deals container), run Store Sales, create Variant-Aware Bundle Deals, or toggle Store Vacation Mode.
             </p>
         </div>
 
@@ -52,7 +125,7 @@
             <div class="border-b border-border-subtle pb-3">
                 <h2 class="text-base font-bold text-primary-dark">1. Create Super Deal Slot or Scheduled Store Sale</h2>
                 <p class="text-xs text-text-muted">
-                    When a product is in both a Store Sale and a Super Deal, the Super Deal price wins while Super Deal stock lasts; any extra units in the same order are split onto a separate line at the Store Sale price.
+                    Scope a deal to an entire product or a specific variant/sub-variant. Super Deal price wins while Super Deal slot stock lasts.
                 </p>
             </div>
 
@@ -66,43 +139,64 @@
                     <label class="p-3 rounded-xl border cursor-pointer font-bold flex items-center gap-2"
                            :class="dealType === 'super_deal' ? 'border-primary bg-primary/5 text-primary-dark' : 'border-border-subtle'">
                         <input type="radio" name="deal_type" value="super_deal" x-model="dealType">
-                        <span>⚡ Super Deal (Time Slot)</span>
+                        <span>Super Deal (Time Slot)</span>
                     </label>
                     <label class="p-3 rounded-xl border cursor-pointer font-bold flex items-center gap-2"
                            :class="dealType === 'store_sale' ? 'border-primary bg-primary/5 text-primary-dark' : 'border-border-subtle'">
                         <input type="radio" name="deal_type" value="store_sale" x-model="dealType">
-                        <span>🏷️ Scheduled Store Sale</span>
+                        <span>Scheduled Store Sale</span>
                     </label>
                 </div>
 
                 <div>
                     <label class="block font-bold text-text-muted uppercase mb-1">Select Product <span class="text-danger">*</span></label>
-                    <select name="product_id" required class="w-full p-3 rounded-xl border border-border-subtle bg-surface font-semibold">
+                    <select name="product_id"
+                            x-model="selectedDealProductId"
+                            @change="selectedDealVariant = ''; selectedDealSubVariant = '';"
+                            required
+                            class="w-full p-3 rounded-xl border border-border-subtle bg-surface font-semibold">
                         @foreach($products as $prod)
-                            <option value="{{ $prod->id }}" {{ (int) old('product_id') === (int) $prod->id ? 'selected' : '' }}>
+                            <option value="{{ $prod->id }}">
                                 {{ $prod->name }} — Orig: ₱{{ number_format((float) $prod->price, 2) }} (Stock: {{ $prod->stock_quantity }})
                             </option>
                         @endforeach
                     </select>
-                    @error('product_id')
-                        <p class="text-danger text-[11px] font-bold mt-1">{{ $message }}</p>
-                    @enderror
+                </div>
+
+                <div x-show="dealVariants.length > 0" x-cloak class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                        <label class="block font-bold text-text-muted uppercase mb-1">Target Variant (Optional)</label>
+                        <select name="variant_name"
+                                x-model="selectedDealVariant"
+                                @change="selectedDealSubVariant = ''"
+                                class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface font-semibold">
+                            <option value="">All Variants</option>
+                            <template x-for="v in dealVariants" :key="v.name">
+                                <option :value="v.name" x-text="v.name + ' (\u20B1' + Number(v.price).toFixed(2) + ' \u2022 Stock: ' + v.stock + ')'"></option>
+                            </template>
+                        </select>
+                    </div>
+                    <div x-show="dealSubVariants.length > 0" x-cloak>
+                        <label class="block font-bold text-text-muted uppercase mb-1">Target Sub-Variant (Optional)</label>
+                        <select name="sub_variant_name"
+                                x-model="selectedDealSubVariant"
+                                class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface font-semibold">
+                            <option value="">All Sub-Variants</option>
+                            <template x-for="sv in dealSubVariants" :key="sv.name">
+                                <option :value="sv.name" x-text="sv.name + ' (\u20B1' + Number(sv.price).toFixed(2) + ' \u2022 Stock: ' + sv.stock + ')'"></option>
+                            </template>
+                        </select>
+                    </div>
                 </div>
 
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
                         <label class="block font-bold text-text-muted uppercase mb-1">Discount % (1–99%) <span class="text-danger">*</span></label>
-                        <input type="number" min="1" max="99" step="1" name="discount_percentage" value="{{ old('discount_percentage', 20) }}" placeholder="e.g. 20" required class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface font-bold">
-                        @error('discount_percentage')
-                            <p class="text-danger text-[11px] font-bold mt-1">{{ $message }}</p>
-                        @enderror
+                        <input type="number" min="1" max="99" step="1" name="discount_percentage" value="{{ old('discount_percentage', 20) }}" required class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface font-bold">
                     </div>
                     <div x-show="dealType === 'super_deal'">
                         <label class="block font-bold text-text-muted uppercase mb-1">Super Deal Qty <span class="text-danger">*</span></label>
                         <input type="number" min="1" name="flash_quantity" :required="dealType === 'super_deal'" value="{{ old('flash_quantity', 3) }}" class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface font-bold">
-                        @error('flash_quantity')
-                            <p class="text-danger text-[11px] font-bold mt-1">{{ $message }}</p>
-                        @enderror
                     </div>
                 </div>
 
@@ -110,16 +204,10 @@
                     <div>
                         <label class="block font-bold text-text-muted uppercase mb-1">Start Date &amp; Time <span class="text-danger">*</span></label>
                         <input type="datetime-local" name="starts_at" value="{{ old('starts_at', now()->format('Y-m-d\TH:i')) }}" min="{{ now()->subMinutes(5)->format('Y-m-d\TH:i') }}" required class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface">
-                        @error('starts_at')
-                            <p class="text-danger text-[11px] font-bold mt-1">{{ $message }}</p>
-                        @enderror
                     </div>
                     <div>
                         <label class="block font-bold text-text-muted uppercase mb-1">End Date &amp; Time <span class="text-danger">*</span></label>
                         <input type="datetime-local" name="ends_at" value="{{ old('ends_at', now()->addHours(4)->format('Y-m-d\TH:i')) }}" required class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface">
-                        @error('ends_at')
-                            <p class="text-danger text-[11px] font-bold mt-1">{{ $message }}</p>
-                        @enderror
                     </div>
                 </div>
 
@@ -137,7 +225,7 @@
         <div class="lg:col-span-6 bg-surface rounded-3xl border border-border-subtle p-6 shadow-xs space-y-4">
             <div class="border-b border-border-subtle pb-3">
                 <h2 class="text-base font-bold text-primary-dark">2. Create Bundle Deal (Multi-Item % Off or Buy X Get Y Free)</h2>
-                <p class="text-xs text-text-muted">Seller-funded bundle promotions discoverable on the Buyer Bundle Deals page and applied automatically at checkout.</p>
+                <p class="text-xs text-text-muted">Seller-funded bundle promotions with variant-level Free Gift selection applied automatically at checkout.</p>
             </div>
 
             <form action="{{ route('seller.promotions.bundles.store') }}"
@@ -150,9 +238,6 @@
                     <div>
                         <label class="block font-bold text-text-muted uppercase mb-1">Bundle Title <span class="text-danger">*</span></label>
                         <input type="text" name="title" value="{{ old('title') }}" required minlength="3" maxlength="120" placeholder="e.g. Buy 3 Get 15% Off Bundle" class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface font-bold">
-                        @error('title')
-                            <p class="text-danger text-[11px] font-bold mt-1">{{ $message }}</p>
-                        @enderror
                     </div>
                     <div>
                         <label class="block font-bold text-text-muted uppercase mb-1">Bundle Mechanic <span class="text-danger">*</span></label>
@@ -167,20 +252,48 @@
                     <div>
                         <label class="block font-bold text-text-muted uppercase mb-1">Required Quantity (X) <span class="text-danger">*</span></label>
                         <input type="number" name="required_quantity" value="{{ old('required_quantity', 3) }}" min="2" max="20" required class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface font-bold">
-                        @error('required_quantity')
-                            <p class="text-danger text-[11px] font-bold mt-1">{{ $message }}</p>
-                        @enderror
                     </div>
+
                     <div x-show="bundleType === 'percentage_off'">
                         <label class="block font-bold text-text-muted uppercase mb-1">Bundle Discount % <span class="text-danger">*</span></label>
                         <input type="number" step="0.1" min="1" max="99" name="discount_percentage" value="{{ old('discount_percentage', 15) }}" class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface font-bold text-primary">
                     </div>
+
                     <div x-show="bundleType === 'buy_x_get_y'" x-cloak>
                         <label class="block font-bold text-text-muted uppercase mb-1">Free Gift Product (Y) <span class="text-danger">*</span></label>
-                        <select name="free_gift_product_id" class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface font-semibold">
+                        <select name="free_gift_product_id"
+                                x-model="selectedGiftProductId"
+                                @change="selectedGiftVariant = ''; selectedGiftSubVariant = '';"
+                                class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface font-semibold">
                             @foreach($products as $prod)
                                 <option value="{{ $prod->id }}">{{ $prod->name }} (₱{{ number_format((float) $prod->price, 2) }} &rarr; ₱0.00)</option>
                             @endforeach
+                        </select>
+                    </div>
+                </div>
+
+                <div x-show="bundleType === 'buy_x_get_y' && giftVariants.length > 0" x-cloak class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                        <label class="block font-bold text-text-muted uppercase mb-1">Free Gift Variant</label>
+                        <select name="free_gift_variant_name"
+                                x-model="selectedGiftVariant"
+                                @change="selectedGiftSubVariant = ''"
+                                class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface font-semibold">
+                            <option value="">Default / Any Variant</option>
+                            <template x-for="gv in giftVariants" :key="gv.name">
+                                <option :value="gv.name" x-text="gv.name + ' (Stock: ' + gv.stock + ')'"></option>
+                            </template>
+                        </select>
+                    </div>
+                    <div x-show="giftSubVariants.length > 0" x-cloak>
+                        <label class="block font-bold text-text-muted uppercase mb-1">Free Gift Sub-Variant</label>
+                        <select name="free_gift_sub_variant_name"
+                                x-model="selectedGiftSubVariant"
+                                class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface font-semibold">
+                            <option value="">Default / Any Sub-Variant</option>
+                            <template x-for="gsv in giftSubVariants" :key="gsv.name">
+                                <option :value="gsv.name" x-text="gsv.name + ' (Stock: ' + gsv.stock + ')'"></option>
+                            </template>
                         </select>
                     </div>
                 </div>
@@ -195,9 +308,6 @@
                             </label>
                         @endforeach
                     </div>
-                    @error('applicable_product_ids')
-                        <p class="text-danger text-[11px] font-bold mt-1">{{ $message }}</p>
-                    @enderror
                 </div>
 
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -235,7 +345,7 @@
                 <table class="w-full text-left border-collapse text-xs">
                     <thead>
                         <tr class="border-b border-border-subtle bg-surface-subtle/40 text-text-muted uppercase text-[11px] font-bold">
-                            <th class="py-3 px-5">Type &amp; Product</th>
+                            <th class="py-3 px-5">Type &amp; Product / Variant</th>
                             <th class="py-3 px-4">Deal Price / Discount</th>
                             <th class="py-3 px-4">Slot Stock</th>
                             <th class="py-3 px-4">Schedule</th>
@@ -252,6 +362,7 @@
                                 $state = $d->status === 'ended' || now()->gt($ends)
                                     ? 'Ended'
                                     : (now()->lt($starts) ? 'Upcoming' : 'Ongoing');
+                                $varScope = implode(' / ', array_filter([$d->variant_name ?? null, $d->sub_variant_name ?? null]));
                             @endphp
                             <tr class="hover:bg-surface-subtle/30">
                                 <td class="py-3.5 px-5">
@@ -259,6 +370,11 @@
                                         {{ $d->deal_type === 'super_deal' ? 'Super Deal' : 'Store Sale' }}
                                     </span>
                                     <div class="font-bold text-text-main mt-1">{{ $prod->name ?? 'Product #' . $d->product_id }}</div>
+                                    @if($varScope !== '')
+                                        <span class="inline-block mt-0.5 px-2 py-0.5 rounded bg-surface-subtle border border-border-subtle text-[10px] font-bold text-primary-dark">
+                                            Variant: {{ $varScope }}
+                                        </span>
+                                    @endif
                                 </td>
                                 <td class="py-3.5 px-4">
                                     <div class="font-bold text-primary text-sm">₱{{ number_format((float) $d->deal_price, 2) }}</div>
@@ -334,13 +450,17 @@
                                 $bState = $b->status === 'ended' || now()->gt($bEnds)
                                     ? 'Ended'
                                     : (now()->lt($bStarts) ? 'Upcoming' : 'Ongoing');
+
                                 $appIds = is_string($b->applicable_product_ids)
                                     ? (json_decode($b->applicable_product_ids, true) ?: [])
                                     : (array) $b->applicable_product_ids;
+
                                 $qualifyingNames = collect($appIds)
                                     ->map(fn ($pid) => $productsById->get((int) $pid)?->name ?? ('Product #' . $pid))
                                     ->values();
+
                                 $freeGiftProd = $b->free_gift_product_id ? $productsById->get((int) $b->free_gift_product_id) : null;
+                                $giftVarLabel = implode(' / ', array_filter([$b->free_gift_variant_name ?? null, $b->free_gift_sub_variant_name ?? null]));
                             @endphp
                             <tr class="hover:bg-surface-subtle/30">
                                 <td class="py-3.5 px-5">
@@ -358,6 +478,9 @@
                                         <span class="font-bold text-primary text-sm">{{ number_format((float) $b->discount_percentage, 1) }}% OFF</span>
                                     @else
                                         <div class="font-bold text-purple-800">Free Gift: {{ $freeGiftProd->name ?? ('Product #' . $b->free_gift_product_id) }}</div>
+                                        @if($giftVarLabel !== '')
+                                            <div class="text-[10px] font-bold text-primary-dark">Variant: {{ $giftVarLabel }}</div>
+                                        @endif
                                         <div class="text-[11px] text-text-muted">100% Off Gift Item</div>
                                     @endif
                                 </td>

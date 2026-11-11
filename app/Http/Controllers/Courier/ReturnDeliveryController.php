@@ -13,17 +13,6 @@ use Illuminate\View\View;
 use Intervention\Image\Drivers\Gd\Driver;
 use Intervention\Image\ImageManager;
 
-/**
- * Courier side of Return & Refund (last leg of the parcel's trip back: Sorting Hub -> Seller):
- *
- *   GET  /courier/returns                                   -> my return deliveries
- *   POST /courier/returns/{returnShipment}/start-delivery   (parcel collected at the hub)
- *   POST /courier/returns/{returnShipment}/confirm-delivered (photo required)
- *
- * The Courier is paid for this leg by the system the moment delivery is confirmed
- * (ReturnShipmentService::courierConfirmDelivered). After that the seller is asked to
- * confirm receipt, and the refund continues from there.
- */
 class ReturnDeliveryController extends Controller
 {
     public function __construct(protected ReturnShipmentService $returnShipmentService)
@@ -98,10 +87,10 @@ class ReturnDeliveryController extends Controller
         }
 
         $validated = $request->validate([
-            'delivery_photo'  => ['required', 'file', 'mimetypes:image/jpeg,image/png,image/webp', 'mimes:jpg,jpeg,png,webp', 'max:5120'],
-            'recipient_name'  => ['nullable', 'string', 'max:120'],
-            'parcel_handed'   => ['accepted'],
-            'notes'           => ['nullable', 'string', 'max:500'],
+            'delivery_photo' => ['required', 'file', 'mimetypes:image/jpeg,image/png,image/webp', 'mimes:jpg,jpeg,png,webp', 'max:5120'],
+            'recipient_name' => ['nullable', 'string', 'max:120'],
+            'parcel_handed'  => ['accepted'],
+            'notes'          => ['nullable', 'string', 'max:500'],
         ], [
             'delivery_photo.required'  => 'A clear photo of the parcel handed to the seller (JPG, PNG, or WEBP, max 5 MB) is required.',
             'delivery_photo.mimetypes' => 'The delivery photo must be a valid JPG, PNG, or WEBP image.',
@@ -136,7 +125,6 @@ class ReturnDeliveryController extends Controller
             throw $e;
         }
 
-        // Repeat submit of an already-delivered return: the new photo was not used.
         $this->discardPhotoIfUnused($returnShipment->id, $path);
 
         return redirect()
@@ -144,10 +132,33 @@ class ReturnDeliveryController extends Controller
             ->with('success', "Delivery confirmed for {$updated->tracking_number}. ₱" . number_format((float) $updated->courier_pay, 2) . ' was added to your E-Wallet for this return leg.');
     }
 
-    /**
-     * Keep the uploaded photo only when the shipment really points to it.
-     * (If the delivery committed but a later step failed, the photo must stay.)
-     */
+    public function reportDeliveryFailed(Request $request, ReturnShipment $returnShipment): RedirectResponse
+    {
+        $courier = Auth::guard('courier')->user();
+
+        if ((int) $returnShipment->current_courier_id !== (int) $courier->id) {
+            abort(403, 'This return is not assigned to you.');
+        }
+
+        $validated = $request->validate([
+            'failure_reason' => ['required', 'string', 'min:5', 'max:150'],
+            'notes'          => ['nullable', 'string', 'max:500'],
+        ], [
+            'failure_reason.required' => 'Please explain why the parcel could not be handed over to the seller.',
+        ]);
+
+        $updated = $this->returnShipmentService->courierReportDeliveryFailed(
+            $returnShipment,
+            $courier,
+            $validated['failure_reason'],
+            $validated['notes'] ?? null
+        );
+
+        return redirect()
+            ->route('courier.returns.index')
+            ->with('success', "Failed return delivery attempt recorded for {$updated->tracking_number}. The parcel has been returned to the sorting hub queue for re-dispatch.");
+    }
+
     protected function discardPhotoIfUnused(int $returnShipmentId, string $path): void
     {
         $stored = ReturnShipment::whereKey($returnShipmentId)->value('seller_delivery_photo');

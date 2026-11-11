@@ -8,33 +8,21 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Support\Str;
 
-/**
- * A buyer's return / refund request for one seller order.
- *
- * Two resolutions, as on the big marketplaces:
- *   - return_refund : the item travels back (Buyer -> Rider -> Hub -> Courier -> Seller)
- *                     and the refund is released once the seller confirms receipt.
- *   - refund_only   : the buyer keeps the item and the refund is released on approval.
- *
- * The seller order itself stays "disputed" while a request is open, which keeps
- * the existing auto-completion paused and the existing dispute screens working.
- */
 class ReturnRequest extends Model
 {
     public const RESOLUTION_RETURN_REFUND = 'return_refund';
     public const RESOLUTION_REFUND_ONLY   = 'refund_only';
 
-    // Request lifecycle
-    public const STATUS_PENDING_SELLER_RESPONSE   = 'pending_seller_response';
-    public const STATUS_REJECTED_BY_SELLER        = 'rejected_by_seller';
-    public const STATUS_ESCALATED                 = 'escalated';
-    public const STATUS_RETURN_IN_TRANSIT         = 'return_in_transit';
-    public const STATUS_AWAITING_SELLER_CONFIRM   = 'awaiting_seller_confirmation';
-    public const STATUS_RECEIPT_DISPUTED          = 'receipt_disputed';
-    public const STATUS_REFUND_PENDING            = 'refund_pending';
-    public const STATUS_REFUNDED                  = 'refunded';
-    public const STATUS_REJECTED                  = 'rejected';
-    public const STATUS_CLOSED                    = 'closed';
+    public const STATUS_PENDING_SELLER_RESPONSE = 'pending_seller_response';
+    public const STATUS_REJECTED_BY_SELLER      = 'rejected_by_seller';
+    public const STATUS_ESCALATED               = 'escalated';
+    public const STATUS_RETURN_IN_TRANSIT       = 'return_in_transit';
+    public const STATUS_AWAITING_SELLER_CONFIRM = 'awaiting_seller_confirmation';
+    public const STATUS_RECEIPT_DISPUTED        = 'receipt_disputed';
+    public const STATUS_REFUND_PENDING          = 'refund_pending';
+    public const STATUS_REFUNDED                = 'refunded';
+    public const STATUS_REJECTED                = 'rejected';
+    public const STATUS_CLOSED                  = 'closed';
 
     public const TERMINAL_STATUSES = [
         self::STATUS_REFUNDED,
@@ -42,21 +30,17 @@ class ReturnRequest extends Model
         self::STATUS_CLOSED,
     ];
 
-    // Decisions (seller and admin)
     public const DECISION_APPROVED_RETURN      = 'approved_return';
     public const DECISION_APPROVED_REFUND_ONLY = 'approved_refund_only';
     public const DECISION_REJECTED             = 'rejected';
 
-    // Refund payout queue (GCash only, paid by Admin)
     public const REFUND_NOT_DUE       = 'not_due';
     public const REFUND_PENDING_ADMIN = 'pending_admin_refund';
     public const REFUND_REFUNDED      = 'refunded';
 
-    // Seller's verdict on the parcel that came back
-    public const RECEIPT_OK               = 'received_ok';
-    public const RECEIPT_NOT_AS_EXPECTED  = 'received_not_as_expected';
+    public const RECEIPT_OK              = 'received_ok';
+    public const RECEIPT_NOT_AS_EXPECTED = 'received_not_as_expected';
 
-    // Time windows (hours). 72h matches the existing 3-day dispute rules.
     public const SELLER_RESPONSE_HOURS = 72;
     public const HANDOVER_HOURS        = 72;
     public const SELLER_CONFIRM_HOURS  = 72;
@@ -76,6 +60,7 @@ class ReturnRequest extends Model
         'reason',
         'evidence_photos',
         'refund_amount',
+        'refund_payout_method',
         'refund_account_name',
         'refund_account_number',
         'refund_status',
@@ -133,8 +118,6 @@ class ReturnRequest extends Model
         ];
     }
 
-    // ------------------------------------------------------------------ relations
-
     public function sellerOrder(): BelongsTo
     {
         return $this->belongsTo(SellerOrder::class, 'seller_order_id');
@@ -165,8 +148,6 @@ class ReturnRequest extends Model
         return $this->hasOne(ReturnShipment::class, 'return_request_id');
     }
 
-    // ------------------------------------------------------------------ scopes
-
     public function scopeActive(Builder $query): Builder
     {
         return $query->whereNotIn('status', self::TERMINAL_STATUSES);
@@ -177,15 +158,6 @@ class ReturnRequest extends Model
         return $query->where('refund_status', self::REFUND_PENDING_ADMIN);
     }
 
-    // ------------------------------------------------------------------ reasons
-
-    /**
-     * Reasons a buyer can pick, and the resolution marketplaces normally use for each.
-     * "Never arrived / empty box" cannot be returned, so those default to refund only.
-     * Anything that physically exists and is wrong with the item goes back to the seller.
-     *
-     * @return array<string, array{resolution: string, hint: string}>
-     */
     public static function reasonCatalog(): array
     {
         return [
@@ -225,8 +197,6 @@ class ReturnRequest extends Model
         return self::reasonCatalog()[$reasonCategory]['resolution'] ?? self::RESOLUTION_RETURN_REFUND;
     }
 
-    // ------------------------------------------------------------------ helpers
-
     public static function generateRequestNumber(): string
     {
         do {
@@ -236,7 +206,6 @@ class ReturnRequest extends Model
         return $number;
     }
 
-    /** What actually applies: the approved resolution, or the requested one while undecided. */
     public function effectiveResolution(): string
     {
         return $this->approved_resolution ?: $this->requested_resolution;
@@ -250,6 +219,16 @@ class ReturnRequest extends Model
     public function isRefundOnly(): bool
     {
         return $this->effectiveResolution() === self::RESOLUTION_REFUND_ONLY;
+    }
+
+    public function isWalletRefund(): bool
+    {
+        return strtoupper((string) ($this->refund_payout_method ?: 'WALLET')) === 'WALLET';
+    }
+
+    public function isGcashRefund(): bool
+    {
+        return strtoupper((string) ($this->refund_payout_method ?: 'WALLET')) === 'GCASH';
     }
 
     public function isTerminal(): bool

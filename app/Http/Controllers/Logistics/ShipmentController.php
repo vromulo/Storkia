@@ -13,11 +13,11 @@ use App\Models\Shipment;
 use App\Models\ShipmentTracking;
 use App\Models\ShipmentVerification;
 use App\Models\User;
-use App\Models\WalletTransaction;
 use App\Notifications\OrderLifecycleNotification;
 use App\Services\AddressService;
 use App\Services\BuyerAbandonmentService;
 use App\Services\BuyerOrderNotificationService;
+use App\Services\BuyerRewardService;
 use App\Services\InventoryStockService;
 use App\Services\OrderCompletionService;
 use App\Services\RoleWalletService;
@@ -37,8 +37,11 @@ class ShipmentController extends Controller
         protected BuyerAbandonmentService $buyerAbandonmentService,
         protected VoucherService $voucherService,
         protected BuyerOrderNotificationService $buyerNotifications,
-        protected RoleWalletService $roleWalletService
-    ) {}
+        protected RoleWalletService $roleWalletService,
+        protected ?BuyerRewardService $buyerRewardService = null
+    ) {
+        $this->buyerRewardService = $buyerRewardService ?? app(BuyerRewardService::class);
+    }
 
     public function index(Request $request)
     {
@@ -342,9 +345,7 @@ class ShipmentController extends Controller
             ]);
         }
 
-        $createdAssignment = null;
-
-        DB::transaction(function () use ($shipment, $courier, $profile, $user, $validated, &$createdAssignment) {
+        DB::transaction(function () use ($shipment, $courier, $profile, $user, $validated) {
             $locked = Shipment::with(['sellerOrder.order', 'packages'])->where('id', $shipment->id)->lockForUpdate()->firstOrFail();
 
             if (! in_array($locked->status, ['pickup_requested', 'courier_assigned'], true)) {
@@ -362,7 +363,7 @@ class ShipmentController extends Controller
                 ? '[Scheduled Pickup By: ' . \Carbon\Carbon::parse($validated['scheduled_pickup_by'])->format('M d, Y h:i A') . '] '
                 : '[SLA: Pickup within 2 hours] ';
 
-            $createdAssignment = PickupAssignment::updateOrCreate(
+            PickupAssignment::updateOrCreate(
                 [
                     'shipment_id' => $locked->id,
                     'courier_id'  => $courier->id,
@@ -459,10 +460,12 @@ class ShipmentController extends Controller
 
         $notifiableCourier = null;
         $creditedPayInfo = null;
+        $isCod = true;
 
-        DB::transaction(function () use ($shipment, $profile, $user, &$notifiableCourier, &$creditedPayInfo) {
+        DB::transaction(function () use ($shipment, $profile, $user, &$notifiableCourier, &$creditedPayInfo, &$isCod) {
             $locked = Shipment::with([
                 'sellerOrder.order',
+                'sellerOrder.payment',
                 'latestPickupAssignment',
                 'currentCourier',
                 'packages.logisticsHub',
@@ -520,26 +523,9 @@ class ShipmentController extends Controller
             if ($locked->currentCourier) {
                 $notifiableCourier = $locked->currentCourier;
                 $creditedPayInfo = WebPickupController::calculateFirstMileCourierPay($locked);
+                $isCod = strtoupper((string) ($locked->sellerOrder?->effective_payment_method ?? 'COD')) === 'COD';
 
-                $alreadyCredited = WalletTransaction::where('owner_type', 'Courier')
-                    ->where('owner_id', $locked->currentCourier->id)
-                    ->where('shipment_id', $locked->id)
-                    ->exists();
-
-                if (! $alreadyCredited) {
-                    $this->roleWalletService->creditAvailableDirect(
-                        ownerType: 'Courier',
-                        ownerId: (int) $locked->currentCourier->id,
-                        ownerName: $locked->currentCourier->full_name,
-                        amount: (float) $creditedPayInfo['total_pay'],
-                        sellerOrderId: (int) $locked->seller_order_id,
-                        shipmentId: (int) $locked->id,
-                        entryType: 'first_mile_pickup_pay',
-                        paymentMethod: $locked->sellerOrder?->effective_payment_method ?? 'COD',
-                        description: "First-Mile Pickup Haulage Pay ({$creditedPayInfo['distance_tier']}) for Shipment #{$locked->tracking_number}",
-                        meta: $creditedPayInfo
-                    );
-                }
+                $this->roleWalletService->recordFirstMileCourierTaskCredit($locked, $locked->currentCourier, $creditedPayInfo);
 
                 $remainingActive = PickupAssignment::where('courier_id', $locked->currentCourier->id)
                     ->whereIn('status', ['assigned', 'accepted', 'picked_up', 'in_transit_to_hub'])
@@ -603,7 +589,9 @@ class ShipmentController extends Controller
                 $peso = "\u{20B1}";
                 $notifiableCourier->notify(new OrderLifecycleNotification(
                     title: "Hub Handover Completed (#{$shipment->tracking_number})",
-                    message: "Sorting Hub verified receipt of Shipment #{$shipment->tracking_number}. {$peso}" . number_format((float) $creditedPayInfo['total_pay'], 2) . ' earned in your Courier E-Wallet.',
+                    message: $isCod
+                        ? "Sorting Hub verified receipt of Shipment #{$shipment->tracking_number}. {$peso}" . number_format((float) $creditedPayInfo['total_pay'], 2) . ' recorded in your Pending Escrow (releases upon Admin COD Remittance verification).'
+                        : "Sorting Hub verified receipt of Shipment #{$shipment->tracking_number}. {$peso}" . number_format((float) $creditedPayInfo['total_pay'], 2) . ' earned in your Courier E-Wallet.',
                     type: 'success',
                     url: '/courier/dashboard',
                     orderId: $shipment->order_id,
@@ -772,7 +760,7 @@ class ShipmentController extends Controller
             &$abandonmentReasonText,
             &$abandonmentAttempts
         ) {
-            $locked = Shipment::with(['sellerOrder.order', 'sellerOrder.payment', 'deliveryAttempts', 'packages'])
+            $locked = Shipment::with(['sellerOrder.order', 'sellerOrder.payment', 'sellerOrder.extra', 'deliveryAttempts', 'packages'])
                 ->where('id', $shipment->id)
                 ->lockForUpdate()
                 ->firstOrFail();
@@ -887,6 +875,9 @@ class ShipmentController extends Controller
                     'returned_at' => now(),
                 ]);
 
+                $wasWalletPaid = strtoupper((string) $locked->sellerOrder->effective_payment_method) === 'WALLET'
+                    || (float) ($locked->sellerOrder->extra?->wallet_paid_amount ?? 0) > 0;
+
                 $locked->sellerOrder->update([
                     'status'         => 'returned_to_seller',
                     'payment_status' => 'cancelled',
@@ -897,8 +888,18 @@ class ShipmentController extends Controller
                     'status' => 'cancelled',
                 ]);
 
+                if ($wasWalletPaid) {
+                    $refundAmt = (float) ($locked->sellerOrder->extra?->wallet_paid_amount > 0 ? $locked->sellerOrder->extra->wallet_paid_amount : $locked->sellerOrder->total_amount);
+                    $this->roleWalletService->refundBuyerWalletForOrder(
+                        $locked->sellerOrder,
+                        $refundAmt,
+                        'Order Returned to Seller (RTS) — E-Wallet Refund'
+                    );
+                }
+
                 $this->inventoryStockService->restoreStockForSellerOrder($locked->sellerOrder);
                 $this->voucherService->restoreVouchersForSellerOrder($locked->sellerOrder);
+                $this->buyerRewardService?->restoreCoinsForSellerOrder($locked->sellerOrder);
 
                 ShipmentTracking::create([
                     'shipment_id'     => $locked->id,
@@ -919,7 +920,7 @@ class ShipmentController extends Controller
                     'to_status'       => 'returned_to_seller',
                     'actor_type'      => 'Logistics',
                     'actor_id'        => $user->id,
-                    'remarks'         => "Failed delivery resolved as Return to Seller (RTS): {$failureReason}. Reserved stock restored and Buyer COD abandonment strike logged.",
+                    'remarks'         => "Failed delivery resolved as Return to Seller (RTS): {$failureReason}. Reserved stock, vouchers, and coins restored; Buyer COD abandonment strike logged.",
                 ]);
 
                 $this->orderCompletionService->syncParentOrderStatus($locked->sellerOrder->order);

@@ -16,7 +16,6 @@ use App\Http\Controllers\Logistics\ZonesAndExceptionsController;
 use App\Http\Controllers\Support\HelpCenterController;
 
 Route::middleware('throttle:120,1')->group(function () {
-
     Route::middleware(['guest', 'throttle:30,1'])->group(function () {
         Route::get('/logistics/login', [AuthController::class, 'showLogin'])->name('logistics.login');
         Route::post('/logistics/login', [AuthController::class, 'login'])->name('logistics.login.post');
@@ -27,8 +26,6 @@ Route::middleware('throttle:120,1')->group(function () {
         Route::get('/logistics/dashboard', [DashboardController::class, 'index'])->name('logistics.logistics-dashboard');
         Route::get('/logistics/reapply', [DashboardController::class, 'showReapply'])->name('logistics.reapply');
 
-        // Help Center: deliberately OUTSIDE "logistics.approved" so a pending, rejected or
-        // restricted hub can still reach the support team.
         Route::prefix('logistics/help-center')->name('logistics.help-center.')->group(function () {
             Route::get('/', [HelpCenterController::class, 'index'])->name('index');
             Route::get('/messages', [HelpCenterController::class, 'messages'])->name('messages');
@@ -46,7 +43,6 @@ Route::middleware('throttle:120,1')->group(function () {
             Route::post('/shipments/{shipment}/resolve-failed', [ShipmentController::class, 'resolveFailedDelivery'])->name('shipments.resolve-failed');
             Route::post('/shipments/{shipment}/override-status', [ZonesAndExceptionsController::class, 'overrideShipmentStatus'])->name('shipments.override-status');
 
-            // Return & Refund: the parcel's trip back (Buyer -> Rider -> Hub -> Courier -> Seller)
             Route::get('/returns', [ReturnShipmentController::class, 'index'])->name('returns.index');
             Route::get('/returns/{returnShipment}', [ReturnShipmentController::class, 'show'])->name('returns.show');
             Route::post('/returns/{returnShipment}/assign-rider', [ReturnShipmentController::class, 'assignRider'])->middleware('throttle:30,1')->name('returns.assign-rider');
@@ -88,6 +84,7 @@ Route::middleware('throttle:120,1')->group(function () {
             Route::get('/finance', [FinanceController::class, 'index'])->name('finance.index');
             Route::get('/reports/formal-pdf', [ZonesAndExceptionsController::class, 'formalPdfReport'])->name('reports.formal-pdf');
             Route::post('/finance/remittances/{remittance}/verify', [FinanceController::class, 'verifyRemittance'])->name('finance.verify-remittance');
+            Route::post('/finance/admin-remittances', [FinanceController::class, 'submitAdminRemittance'])->name('finance.remit-to-admin');
             Route::post('/finance/settlements/settle', [FinanceController::class, 'settleSeller'])->name('finance.settle-seller');
             Route::post('/finance/withdrawals', [FinanceController::class, 'requestWithdrawal'])->name('finance.withdrawals.store');
             Route::get('/ratings', [FinanceController::class, 'ratingsIndex'])->name('ratings.index');
@@ -105,7 +102,6 @@ Route::middleware('throttle:120,1')->group(function () {
             Route::post('/hub-settings/password/verify-otp', [HubSettingsController::class, 'verifyPasswordOtp'])->name('hub-settings.verify-password-otp');
             Route::patch('/hub-settings/password', [HubSettingsController::class, 'updatePassword'])->name('hub-settings.update-password');
 
-            // Logistics <-> Seller chat (the {contactId} name is part of the chat contract: see HandlesUserChat)
             Route::get('/messages', [LogisticsMessageController::class, 'index'])->name('messages.logistics-messages');
             Route::get('/messages/contacts', [LogisticsMessageController::class, 'fetchContacts'])->name('messages.contacts');
             Route::get('/messages/fetch/{contactId}', [LogisticsMessageController::class, 'fetchMessages'])->whereNumber('contactId')->name('messages.fetch');

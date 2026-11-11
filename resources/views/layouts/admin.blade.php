@@ -50,7 +50,7 @@
                 </p>
             </div>
 
-            <form method="POST" action="{{ route('admin.logout') }}" class="w-full">
+            <form method="POST" action="{{ route('admin.logout') }}" data-no-live class="w-full">
                 @csrf
                 <button type="submit" class="w-full flex items-center justify-center px-6 py-4 bg-red-500 text-white text-lg font-bold rounded-2xl shadow-md hover:bg-red-600 transition-all duration-200 cursor-pointer active:scale-95">
                     <svg class="w-6 h-6 mr-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -83,7 +83,7 @@
                         $recentNotifications = $adminUser ? $adminUser->notifications()->take(8)->get() : collect();
                     @endphp
 
-                    <div x-data="{ notifOpen: false }" @click.away="notifOpen = false" class="relative">
+                    <div data-live-notifications x-data="{ notifOpen: false }" @click.away="notifOpen = false" class="relative">
                         <button type="button"
                                 @click="notifOpen = !notifOpen"
                                 class="p-2.5 rounded-xl bg-surface-subtle hover:bg-brand-light/30 text-text-muted hover:text-primary transition-colors relative cursor-pointer focus:outline-none">
@@ -173,9 +173,11 @@
                 </div>
             </header>
 
-            <main class="flex-1 overflow-y-auto custom-scrollbar relative p-6 lg:p-10">
-                @yield('content')
-                {{ $slot ?? '' }}
+            <main id="storkia-main-scroll" class="flex-1 overflow-y-auto custom-scrollbar relative p-6 lg:p-10">
+                <div id="storkia-main-content">
+                    @yield('content')
+                    {{ $slot ?? '' }}
+                </div>
             </main>
         </div>
     </div>

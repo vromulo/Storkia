@@ -90,22 +90,22 @@
             <div class="p-5 bg-surface rounded-2xl border border-border-subtle shadow-xs">
                 <span class="text-[11px] font-bold uppercase text-text-muted">Unremitted COD Cash on Hand</span>
                 <p class="text-2xl font-serif font-bold text-primary mt-1">&#8369;{{ number_format($metrics['cod_on_hand'], 2) }}</p>
-                <span class="text-[11px] text-text-muted">{{ $unremittedCollections->count() }} collection(s) to remit</span>
+                <span class="text-[11px] text-text-muted">{{ $unremittedCollections->count() }} collection(s) to remit (100% Gross)</span>
             </div>
             <div class="p-5 bg-surface rounded-2xl border border-border-subtle shadow-xs">
-                <span class="text-[11px] font-bold uppercase text-text-muted">Pending Rider Commission (10%)</span>
+                <span class="text-[11px] font-bold uppercase text-text-muted">Pending Rider Task Escrow</span>
                 <p class="text-2xl font-serif font-bold text-blue-700 mt-1">&#8369;{{ number_format($metrics['pending_rider_comm'], 2) }}</p>
-                <span class="text-[11px] text-text-muted">10% of Shipping Fee on unremitted COD</span>
+                <span class="text-[11px] text-text-muted">From Shipping &amp; Operational Fare Pool</span>
             </div>
             <a href="{{ route('rider.report') }}" class="p-5 bg-surface rounded-2xl border border-border-subtle hover:border-primary/50 shadow-xs transition-all block">
-                <span class="text-[11px] font-bold uppercase text-text-muted">Verified Commission Earned</span>
-                <p class="text-2xl font-serif font-bold text-green-700 mt-1">&#8369;{{ number_format($metrics['verified_rider_earnings'], 2) }}</p>
-                <span class="text-[11px] text-primary font-semibold">Open E-Wallet &amp; Withdraw &rarr;</span>
+                <span class="text-[11px] font-bold uppercase text-text-muted">Available Rider E-Wallet</span>
+                <p class="text-2xl font-serif font-bold text-green-700 mt-1">&#8369;{{ number_format($metrics['wallet_available'] ?? 0, 2) }}</p>
+                <span class="text-[11px] text-primary font-semibold">Total Earned: &#8369;{{ number_format($metrics['verified_rider_earnings'], 2) }} &rarr;</span>
             </a>
         </div>
 
         <div class="flex flex-wrap items-center gap-2">
-            @foreach(['deliveries' => 'Active Deliveries (' . $activeAssignments->count() . ')', 'remittance' => 'COD Collections & Remittance (' . $unremittedCollections->count() . ')', 'history' => 'Delivery History'] as $key => $label)
+            @foreach(['deliveries' => 'Active Deliveries (' . $activeAssignments->count() . ')', 'remittance' => 'COD Collections & 100% Remittance (' . $unremittedCollections->count() . ')', 'history' => 'Delivery History'] as $key => $label)
                 <a href="{{ route('rider.dashboard', ['tab' => $key]) }}"
                    class="px-4 py-2.5 rounded-2xl text-xs font-bold border transition-all {{ $tab === $key ? 'bg-primary-dark text-surface border-primary-dark shadow-xs' : 'bg-surface text-text-muted border-border-subtle hover:text-text-main' }}">
                     {{ $label }}
@@ -128,7 +128,9 @@
                             $deliv = $shipment->delivery_address_snapshot ?? [];
                             $packages = $shipment->packages ?? collect();
                             $primaryPackage = $packages->first();
-                            $riderComm = round(((float) $shipment->shipping_fee) * 0.10, 2);
+                            $payInfo = \App\Http\Controllers\Rider\DeliveryController::calculateDistanceScaledRiderPay($shipment);
+                            $riderComm = (float) ($payInfo['total_pay'] ?? 50.00);
+                            $distanceTierLabel = $payInfo['distance_tier'] ?? 'Standard';
 
                             $isTaskAccepted = in_array($assignment->status, ['accepted', 'collected', 'out_for_delivery'], true)
                                 || ($primaryPackage && $primaryPackage->rider_accepted_at !== null);
@@ -251,8 +253,8 @@
                                     <span class="text-[10px] font-bold uppercase tracking-wider text-primary-dark block">Cash on Delivery (COD) To Collect</span>
                                     <p class="text-2xl font-serif font-extrabold text-primary">&#8369;{{ number_format((float) $shipment->cod_amount, 2) }}</p>
                                     <p class="text-text-muted">
-                                        Includes Shipping Fee &#8369;{{ number_format((float) $shipment->shipping_fee, 2) }}
-                                        (Your 10% Rider Commission: <strong class="text-green-700">&#8369;{{ number_format($riderComm, 2) }}</strong>)
+                                        Shipping &amp; Ops Fee: &#8369;{{ number_format((float) $shipment->shipping_fee, 2) }} &bull;
+                                        Your Task Commission ({{ $distanceTierLabel }}): <strong class="text-green-700">&#8369;{{ number_format($riderComm, 2) }}</strong>
                                     </p>
                                 </div>
                             </div>
@@ -521,17 +523,17 @@
             <div class="bg-surface rounded-3xl border border-border-subtle p-6 shadow-xs space-y-4">
                 <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-border-subtle">
                     <div>
-                        <h2 class="text-base font-bold text-primary-dark">Unremitted COD Collections</h2>
+                        <h2 class="text-base font-bold text-primary-dark">Unremitted COD Collections (100% Gross Handover to Hub)</h2>
                         <p class="text-xs text-text-muted">
-                            Remit collected COD cash to {{ $rider->logisticsProfile->business_name ?? 'your Logistics hub' }}.
-                            Your 10% Rider Commission on Shipping Fees is automatically calculated.
+                            Remit <strong>100% of collected COD cash</strong> to {{ $rider->logisticsProfile->business_name ?? 'your Logistics hub' }}.
+                            Your distance &amp; weight Rider Task Commission (funded from the Shipping &amp; Operational Fee pool) is credited to your Available Rider E-Wallet once Logistics remits to Admin and Admin verifies.
                         </p>
                     </div>
                     @if($unremittedCollections->isNotEmpty())
                         <form action="{{ route('rider.remittances.store') }}" method="POST" class="m-0 shrink-0">
                             @csrf
                             <button type="submit" class="px-5 py-3 rounded-xl bg-primary hover:bg-primary-dark text-white text-xs font-bold shadow-sm cursor-pointer">
-                                Remit All Collected COD (&#8369;{{ number_format($metrics['cod_on_hand'], 2) }})
+                                Remit 100% Collected COD (&#8369;{{ number_format($metrics['cod_on_hand'], 2) }})
                             </button>
                         </form>
                     @endif
@@ -546,23 +548,26 @@
                                 <tr class="border-b border-border-subtle bg-surface-subtle/50 text-text-muted uppercase text-[11px] font-bold">
                                     <th class="py-3 px-4">Collection Ref</th>
                                     <th class="py-3 px-4">Tracking / Order</th>
-                                    <th class="py-3 px-4">Collected COD</th>
-                                    <th class="py-3 px-4">Shipping Fee</th>
-                                    <th class="py-3 px-4">Your 10% Comm</th>
+                                    <th class="py-3 px-4">100% COD Cash to Remit</th>
+                                    <th class="py-3 px-4">Shipping &amp; Ops Fee</th>
+                                    <th class="py-3 px-4">Your Task Commission (Escrow)</th>
                                     <th class="py-3 px-4 text-right">Collected At</th>
                                 </tr>
                             </thead>
                             <tbody class="divide-y divide-border-subtle">
                                 @foreach($unremittedCollections as $col)
+                                    @php
+                                        $colTaskComm = \App\Http\Controllers\Rider\DeliveryController::resolveCollectionRiderCommission($col);
+                                    @endphp
                                     <tr class="hover:bg-surface-subtle/30">
                                         <td class="py-3 px-4 font-mono font-bold text-primary-dark">{{ $col->collection_reference }}</td>
                                         <td class="py-3 px-4">
                                             {{ $col->shipment->tracking_number ?? '' }}
                                             <span class="text-text-muted">({{ $col->sellerOrder->seller_order_number ?? '' }})</span>
                                         </td>
-                                        <td class="py-3 px-4 font-bold text-text-main">&#8369;{{ number_format((float) $col->collected_amount, 2) }}</td>
+                                        <td class="py-3 px-4 font-extrabold text-primary">&#8369;{{ number_format((float) $col->collected_amount, 2) }}</td>
                                         <td class="py-3 px-4">&#8369;{{ number_format((float) $col->shipping_fee, 2) }}</td>
-                                        <td class="py-3 px-4 font-bold text-green-700">&#8369;{{ number_format(round((float) $col->shipping_fee * 0.10, 2), 2) }}</td>
+                                        <td class="py-3 px-4 font-bold text-green-700">&#8369;{{ number_format($colTaskComm, 2) }}</td>
                                         <td class="py-3 px-4 text-right text-text-muted">{{ $col->collected_at?->format('M d, Y h:i A') }}</td>
                                     </tr>
                                 @endforeach
@@ -582,10 +587,9 @@
                             <thead>
                                 <tr class="border-b border-border-subtle bg-surface-subtle/50 text-text-muted uppercase text-[11px] font-bold">
                                     <th class="py-3 px-4">Remittance Ref</th>
-                                    <th class="py-3 px-4">Total COD</th>
-                                    <th class="py-3 px-4">Your 10% Commission</th>
-                                    <th class="py-3 px-4">Net Cash Remitted</th>
-                                    <th class="py-3 px-4">Status</th>
+                                    <th class="py-3 px-4">100% Gross COD Remitted</th>
+                                    <th class="py-3 px-4">Rider Task Comm (E-Wallet)</th>
+                                    <th class="py-3 px-4">Hub Handover Status</th>
                                     <th class="py-3 px-4 text-right">Submitted At</th>
                                 </tr>
                             </thead>
@@ -593,12 +597,11 @@
                                 @foreach($remittances as $rem)
                                     <tr>
                                         <td class="py-3 px-4 font-mono font-bold text-primary-dark">{{ $rem->remittance_reference }}</td>
-                                        <td class="py-3 px-4 font-semibold">&#8369;{{ number_format((float) $rem->total_collected_amount, 2) }}</td>
+                                        <td class="py-3 px-4 font-extrabold text-text-main">&#8369;{{ number_format((float) $rem->total_collected_amount, 2) }}</td>
                                         <td class="py-3 px-4 font-bold text-green-700">&#8369;{{ number_format((float) $rem->total_rider_commission, 2) }}</td>
-                                        <td class="py-3 px-4 font-bold text-text-main">&#8369;{{ number_format((float) $rem->net_remitted_amount, 2) }}</td>
                                         <td class="py-3 px-4">
                                             <span class="px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase {{ $rem->status === 'verified' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-800' }}">
-                                                {{ $rem->status }}
+                                                {{ $rem->status === 'verified' ? 'Verified at Hub' : 'Pending Hub Verification' }}
                                             </span>
                                         </td>
                                         <td class="py-3 px-4 text-right text-text-muted">{{ $rem->submitted_at?->format('M d, Y h:i A') }}</td>

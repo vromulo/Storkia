@@ -8,6 +8,7 @@ use App\Models\CodCollection;
 use App\Models\CodRemittance;
 use App\Models\DeliveryAssignment;
 use App\Models\DeliveryAttempt;
+use App\Models\DeliveryChatMessage;
 use App\Models\DeliveryProof;
 use App\Models\OrderStatusHistory;
 use App\Models\Rider;
@@ -75,6 +76,7 @@ class RiderDeliveryApiController extends Controller
             'sellerOrder.buyer',
             'sellerOrder.items',
             'sellerOrder.payment',
+            'sellerOrder.extra',
             'sellerOrder.order.userAddress',
         ])
             ->where('rider_id', $rider->id)
@@ -83,7 +85,8 @@ class RiderDeliveryApiController extends Controller
             ->orderBy('id', 'asc')
             ->get();
 
-        $unremittedCollections = CodCollection::where('rider_id', $rider->id)
+        $unremittedCollections = CodCollection::with(['shipment.sellerOrder.extra', 'commissionRecord'])
+            ->where('rider_id', $rider->id)
             ->where('status', 'collected')
             ->get();
 
@@ -98,7 +101,7 @@ class RiderDeliveryApiController extends Controller
             ->count();
 
         $unremittedCodTotal = round((float) $unremittedCollections->sum('collected_amount'), 2);
-        $pendingRiderComm = round((float) $unremittedCollections->sum(fn ($c) => round((float) $c->shipping_fee * 0.10, 2)), 2);
+        $pendingRiderComm = round((float) $unremittedCollections->sum(fn (CodCollection $c) => WebRiderDeliveryController::resolveCollectionRiderCommission($c)), 2);
 
         $verifiedRiderEarnings = max(
             round((float) $riderWallet->total_earned, 2),
@@ -154,6 +157,7 @@ class RiderDeliveryApiController extends Controller
             'sellerOrder.buyer',
             'sellerOrder.items',
             'sellerOrder.payment',
+            'sellerOrder.extra',
             'sellerOrder.order.userAddress',
         ])->where('rider_id', $rider->id);
 
@@ -227,6 +231,7 @@ class RiderDeliveryApiController extends Controller
             'sellerOrder.buyer',
             'sellerOrder.items',
             'sellerOrder.payment',
+            'sellerOrder.extra',
             'sellerOrder.order.userAddress',
             'attempts',
             'proof',
@@ -276,7 +281,7 @@ class RiderDeliveryApiController extends Controller
         }
 
         if (in_array($assignment->status, ['accepted', 'collected', 'out_for_delivery'], true)) {
-            $assignment->load(['shipment.packages.verifications', 'sellerOrder.items', 'sellerOrder.payment']);
+            $assignment->load(['shipment.packages.verifications', 'sellerOrder.items', 'sellerOrder.payment', 'sellerOrder.extra']);
             return response()->json([
                 'status'  => 'success',
                 'message' => 'Delivery assignment is already accepted.',
@@ -355,6 +360,7 @@ class RiderDeliveryApiController extends Controller
             'sellerOrder.buyer',
             'sellerOrder.items',
             'sellerOrder.payment',
+            'sellerOrder.extra',
         ]);
 
         return response()->json([
@@ -396,10 +402,16 @@ class RiderDeliveryApiController extends Controller
                 ->lockForUpdate()
                 ->firstOrFail();
 
-            $locked->update([
+            $updates = [
                 'status' => 'reassigned',
                 'notes'  => trim(($locked->notes ? $locked->notes . ' | ' : '') . "Declined by Rider {$rider->full_name}: {$reason}"),
-            ]);
+            ];
+            if (Schema::hasColumn('delivery_assignments', 'declined_at')) {
+                $updates['declined_at'] = now();
+                $updates['decline_reason'] = substr($reason, 0, 300);
+            }
+
+            $locked->update($updates);
 
             if ($locked->shipment && (int) $locked->shipment->current_rider_id === (int) $rider->id) {
                 $locked->shipment->update([
@@ -424,6 +436,293 @@ class RiderDeliveryApiController extends Controller
         return response()->json([
             'status'  => 'success',
             'message' => 'Delivery assignment declined and returned to the hub queue.',
+        ]);
+    }
+
+    public function reportDelay(Request $request, int $assignmentId): JsonResponse
+    {
+        StorkSchemaBootstrapService::ensureTablesExist();
+        RiderMobileSchemaService::ensureTablesExist();
+
+        /** @var Rider $rider */
+        $rider = $request->user();
+
+        $assignment = DeliveryAssignment::with(['shipment', 'sellerOrder.buyer'])->find($assignmentId);
+
+        if (! $assignment || (int) $assignment->rider_id !== (int) $rider->id) {
+            return response()->json(['status' => 'error', 'message' => 'Forbidden.'], 403);
+        }
+
+        $validated = $request->validate([
+            'reason'               => ['required', 'string', 'min:3', 'max:150'],
+            'notes'                => ['nullable', 'string', 'max:300'],
+            'estimated_arrival_at' => ['nullable', 'date'],
+            'latitude'             => ['nullable', 'numeric', 'between:-90,90'],
+            'longitude'            => ['nullable', 'numeric', 'between:-180,180'],
+        ]);
+
+        $eta = ! empty($validated['estimated_arrival_at']) ? Carbon::parse($validated['estimated_arrival_at']) : null;
+
+        DB::transaction(function () use ($assignment, $rider, $validated, $eta) {
+            if (Schema::hasColumn('delivery_assignments', 'is_delayed')) {
+                $assignment->update([
+                    'is_delayed'           => true,
+                    'delay_reason'         => trim($validated['reason']),
+                    'estimated_arrival_at' => $eta,
+                ]);
+            }
+
+            if (Schema::hasTable('rider_trip_incidents')) {
+                DB::table('rider_trip_incidents')->insert([
+                    'delivery_assignment_id' => $assignment->id,
+                    'shipment_id'            => $assignment->shipment_id,
+                    'rider_id'               => $rider->id,
+                    'logistics_profile_id'   => $assignment->logistics_profile_id,
+                    'incident_type'          => 'delay',
+                    'reason'                 => trim($validated['reason']),
+                    'notes'                  => ! empty($validated['notes']) ? trim($validated['notes']) : null,
+                    'estimated_arrival_at'   => $eta,
+                    'latitude'               => isset($validated['latitude']) ? round((float) $validated['latitude'], 7) : null,
+                    'longitude'              => isset($validated['longitude']) ? round((float) $validated['longitude'], 7) : null,
+                    'status'                 => 'reported',
+                    'created_at'             => now(),
+                    'updated_at'             => now(),
+                ]);
+            }
+
+            if ($assignment->shipment) {
+                ShipmentTracking::create([
+                    'shipment_id'     => $assignment->shipment_id,
+                    'seller_order_id' => $assignment->seller_order_id,
+                    'status'          => $assignment->shipment->status,
+                    'title'           => 'Delivery Delay Reported by Rider',
+                    'description'     => "Rider {$rider->full_name} reported a route delay: {$validated['reason']}" . ($eta ? ' (New ETA: ' . $eta->format('h:i A') . ')' : ''),
+                    'location'        => $assignment->shipment->delivery_address_snapshot['municipality'] ?? 'En Route',
+                    'actor_type'      => 'Rider',
+                    'actor_id'        => $rider->id,
+                    'occurred_at'     => now(),
+                ]);
+            }
+        });
+
+        try {
+            $assignment->sellerOrder?->buyer?->notify(new OrderLifecycleNotification(
+                title: 'Delivery Delay Update (Order #' . ($assignment->sellerOrder->seller_order_number ?? '') . ')',
+                message: "Your rider {$rider->full_name} reported a slight delay ({$validated['reason']}). Thank you for your patience!",
+                type: 'warning',
+                url: route('user.orders.show', $assignment->seller_order_id),
+                orderId: $assignment->sellerOrder->order_id ?? null,
+                sellerOrderId: $assignment->seller_order_id,
+                shipmentId: $assignment->shipment_id
+            ));
+        } catch (\Throwable $e) {
+        }
+
+        return response()->json([
+            'status'  => 'success',
+            'message' => 'Delivery delay logged and buyer/hub notified.',
+        ]);
+    }
+
+    public function reportBreakdown(Request $request, int $assignmentId): JsonResponse
+    {
+        StorkSchemaBootstrapService::ensureTablesExist();
+        RiderMobileSchemaService::ensureTablesExist();
+
+        /** @var Rider $rider */
+        $rider = $request->user();
+
+        $assignment = DeliveryAssignment::with(['shipment.logisticsProfile.user', 'sellerOrder.buyer'])->find($assignmentId);
+
+        if (! $assignment || (int) $assignment->rider_id !== (int) $rider->id) {
+            return response()->json(['status' => 'error', 'message' => 'Forbidden.'], 403);
+        }
+
+        $validated = $request->validate([
+            'reason'    => ['required', 'string', 'min:3', 'max:150'],
+            'notes'     => ['nullable', 'string', 'max:300'],
+            'photo'     => ['nullable', 'image', 'mimes:jpg,jpeg,png,webp', 'max:5120'],
+            'latitude'  => ['nullable', 'numeric', 'between:-90,90'],
+            'longitude' => ['nullable', 'numeric', 'between:-180,180'],
+        ]);
+
+        $photoPath = $request->hasFile('photo')
+            ? $request->file('photo')->store('rider_incidents', 'public')
+            : null;
+
+        DB::transaction(function () use ($assignment, $rider, $validated, $photoPath) {
+            if (Schema::hasColumn('delivery_assignments', 'is_delayed')) {
+                $assignment->update([
+                    'is_delayed'   => true,
+                    'delay_reason' => 'Vehicle Breakdown / Emergency: ' . trim($validated['reason']),
+                ]);
+            }
+
+            if (Schema::hasTable('rider_trip_incidents')) {
+                DB::table('rider_trip_incidents')->insert([
+                    'delivery_assignment_id' => $assignment->id,
+                    'shipment_id'            => $assignment->shipment_id,
+                    'rider_id'               => $rider->id,
+                    'logistics_profile_id'   => $assignment->logistics_profile_id,
+                    'incident_type'          => 'breakdown',
+                    'reason'                 => trim($validated['reason']),
+                    'notes'                  => ! empty($validated['notes']) ? trim($validated['notes']) : null,
+                    'photo_path'             => $photoPath,
+                    'latitude'               => isset($validated['latitude']) ? round((float) $validated['latitude'], 7) : null,
+                    'longitude'              => isset($validated['longitude']) ? round((float) $validated['longitude'], 7) : null,
+                    'status'                 => 'reported',
+                    'created_at'             => now(),
+                    'updated_at'             => now(),
+                ]);
+            }
+
+            if ($assignment->shipment) {
+                ShipmentTracking::create([
+                    'shipment_id'     => $assignment->shipment_id,
+                    'seller_order_id' => $assignment->seller_order_id,
+                    'status'          => $assignment->shipment->status,
+                    'title'           => 'Rider Vehicle Breakdown / Emergency Reported',
+                    'description'     => "Rider {$rider->full_name} reported an emergency/breakdown: {$validated['reason']}. Logistics hub notified for assistance.",
+                    'location'        => $assignment->shipment->delivery_address_snapshot['municipality'] ?? 'En Route',
+                    'actor_type'      => 'Rider',
+                    'actor_id'        => $rider->id,
+                    'occurred_at'     => now(),
+                ]);
+            }
+        });
+
+        try {
+            $assignment->shipment?->logisticsProfile?->user?->notify(new OrderLifecycleNotification(
+                title: "URGENT: Rider Breakdown on Shipment #{$assignment->shipment->tracking_number}",
+                message: "Rider {$rider->full_name} reported a breakdown ({$validated['reason']}). Immediate hub assistance required.",
+                type: 'danger',
+                url: route('logistics.shipments.show', $assignment->shipment_id),
+                orderId: $assignment->sellerOrder->order_id ?? null,
+                sellerOrderId: $assignment->seller_order_id,
+                shipmentId: $assignment->shipment_id
+            ));
+        } catch (\Throwable $e) {
+        }
+
+        return response()->json([
+            'status'  => 'success',
+            'message' => 'Emergency / breakdown incident reported to your Logistics Sorting Hub.',
+        ]);
+    }
+
+    public function chatMessages(Request $request, int $assignmentId): JsonResponse
+    {
+        StorkSchemaBootstrapService::ensureTablesExist();
+
+        /** @var Rider $rider */
+        $rider = $request->user();
+
+        $assignment = DeliveryAssignment::with('sellerOrder.buyer')->find($assignmentId);
+        if (! $assignment || (int) $assignment->rider_id !== (int) $rider->id) {
+            return response()->json(['status' => 'error', 'message' => 'Forbidden.'], 403);
+        }
+
+        if (! Schema::hasTable('delivery_chat_messages')) {
+            return response()->json([
+                'status' => 'success',
+                'data'   => [
+                    'can_send' => false,
+                    'messages' => [],
+                ],
+            ]);
+        }
+
+        DeliveryChatMessage::where('seller_order_id', $assignment->seller_order_id)
+            ->where('sender_type', 'buyer')
+            ->where('is_read', false)
+            ->update([
+                'is_read' => true,
+                'read_at' => now(),
+            ]);
+
+        $messages = DeliveryChatMessage::where('seller_order_id', $assignment->seller_order_id)
+            ->orderBy('id', 'asc')
+            ->get()
+            ->map(fn (DeliveryChatMessage $m) => [
+                'id'             => (int) $m->id,
+                'sender_type'    => $m->sender_type,
+                'message'        => $m->message,
+                'attachment_url' => $m->attachment_url,
+                'is_read'        => (bool) $m->is_read,
+                'created_at'     => $m->created_at?->toIso8601String(),
+            ]);
+
+        $canSend = in_array($assignment->status, ['accepted', 'collected', 'out_for_delivery'], true);
+
+        return response()->json([
+            'status' => 'success',
+            'data'   => [
+                'can_send' => $canSend,
+                'buyer'    => [
+                    'name'         => $assignment->sellerOrder?->delivery_address_snapshot['recipient_name'] ?? ($assignment->sellerOrder?->buyer?->full_name ?? 'Buyer'),
+                    'phone_number' => $assignment->sellerOrder?->delivery_address_snapshot['phone_number'] ?? '',
+                ],
+                'messages' => $messages,
+            ],
+        ]);
+    }
+
+    public function sendChatMessage(Request $request, int $assignmentId): JsonResponse
+    {
+        StorkSchemaBootstrapService::ensureTablesExist();
+
+        /** @var Rider $rider */
+        $rider = $request->user();
+
+        $assignment = DeliveryAssignment::with('sellerOrder.buyer')->find($assignmentId);
+        if (! $assignment || (int) $assignment->rider_id !== (int) $rider->id) {
+            return response()->json(['status' => 'error', 'message' => 'Forbidden.'], 403);
+        }
+
+        if (! in_array($assignment->status, ['accepted', 'collected', 'out_for_delivery'], true)) {
+            return response()->json([
+                'status'  => 'error',
+                'message' => 'Chat with Buyer is only available for active accepted/out-for-delivery assignments.',
+            ], 422);
+        }
+
+        $validated = $request->validate([
+            'message' => ['required', 'string', 'min:1', 'max:1000'],
+        ]);
+
+        $chatMsg = DeliveryChatMessage::create([
+            'shipment_id'            => $assignment->shipment_id,
+            'seller_order_id'        => $assignment->seller_order_id,
+            'delivery_assignment_id' => $assignment->id,
+            'buyer_id'               => $assignment->sellerOrder->buyer_id,
+            'rider_id'               => $rider->id,
+            'sender_type'            => 'rider',
+            'message'                => trim($validated['message']),
+            'is_read'                => false,
+        ]);
+
+        try {
+            $assignment->sellerOrder?->buyer?->notify(new OrderLifecycleNotification(
+                title: "Message from Delivery Rider {$rider->full_name}",
+                message: '"' . substr($chatMsg->message, 0, 120) . '"',
+                type: 'info',
+                url: route('user.orders.show', $assignment->seller_order_id),
+                orderId: $assignment->sellerOrder->order_id ?? null,
+                sellerOrderId: $assignment->seller_order_id,
+                shipmentId: $assignment->shipment_id
+            ));
+        } catch (\Throwable $e) {
+        }
+
+        return response()->json([
+            'status'  => 'success',
+            'message' => 'Message sent to Buyer.',
+            'data'    => [
+                'id'          => (int) $chatMsg->id,
+                'sender_type' => $chatMsg->sender_type,
+                'message'     => $chatMsg->message,
+                'created_at'  => $chatMsg->created_at?->toIso8601String(),
+            ],
         ]);
     }
 
@@ -543,6 +842,7 @@ class RiderDeliveryApiController extends Controller
             'sellerOrder.buyer',
             'sellerOrder.items',
             'sellerOrder.payment',
+            'sellerOrder.extra',
         ]);
 
         return response()->json([
@@ -567,6 +867,7 @@ class RiderDeliveryApiController extends Controller
             'shipment.packages.verifications',
             'shipment.sellerOrder.buyer',
             'shipment.sellerOrder.order',
+            'shipment.sellerOrder.extra',
         ])->find($assignmentId);
 
         if (! $assignment || (int) $assignment->rider_id !== (int) $rider->id) {
@@ -698,6 +999,7 @@ class RiderDeliveryApiController extends Controller
             'sellerOrder.buyer',
             'sellerOrder.items',
             'sellerOrder.payment',
+            'sellerOrder.extra',
         ]);
 
         return response()->json([
@@ -720,6 +1022,7 @@ class RiderDeliveryApiController extends Controller
             'shipment.sellerOrder.buyer',
             'shipment.sellerOrder.seller',
             'shipment.sellerOrder.payment',
+            'shipment.sellerOrder.extra',
             'shipment.packages',
         ])->find($assignmentId);
 
@@ -758,11 +1061,6 @@ class RiderDeliveryApiController extends Controller
             'latitude'           => ['nullable', 'numeric', 'between:-90,90'],
             'longitude'          => ['nullable', 'numeric', 'between:-180,180'],
             'accuracy'           => ['nullable', 'numeric', 'min:0'],
-        ], [
-            'proof_photo.required'  => 'A live Proof of Delivery photo (JPG, PNG, or WEBP, max 5 MB) is strictly required.',
-            'proof_photo.mimetypes' => 'Proof of Delivery must be a valid JPG, PNG, or WEBP image.',
-            'proof_photo.mimes'     => 'Proof of Delivery must be a JPG, PNG, or WEBP file.',
-            'proof_photo.max'       => 'Proof of Delivery image must not exceed 5 MB.',
         ]);
 
         $shipment = $assignment->shipment;
@@ -1003,6 +1301,7 @@ class RiderDeliveryApiController extends Controller
             'sellerOrder.buyer',
             'sellerOrder.items',
             'sellerOrder.payment',
+            'sellerOrder.extra',
         ]);
 
         return response()->json([
@@ -1155,6 +1454,7 @@ class RiderDeliveryApiController extends Controller
             'sellerOrder.buyer',
             'sellerOrder.items',
             'sellerOrder.payment',
+            'sellerOrder.extra',
         ]);
 
         return response()->json([
@@ -1237,11 +1537,11 @@ class RiderDeliveryApiController extends Controller
         $payBreakdown = $shipment
             ? WebRiderDeliveryController::calculateDistanceScaledRiderPay($shipment)
             : [
-                'base_pay'       => 50.00,
-                'distance_tier'  => 'Standard',
+                'base_pay'       => 15.75,
+                'distance_tier'  => 'Same Barangay (45% Share)',
                 'distance_bonus' => 0.00,
                 'weight_bonus'   => 0.00,
-                'total_pay'      => 50.00,
+                'total_pay'      => 15.75,
             ];
 
         if ($assignment->status === 'failed') {
@@ -1251,7 +1551,7 @@ class RiderDeliveryApiController extends Controller
         $buyerCoords = $this->resolveCoordinatesForAddress($delivSnap, $sellerOrder?->order?->userAddress);
         $hubCoords = $this->resolveCoordinatesForAddress($hubSnap, null, $rider->assigned_hub);
 
-        $payMethod = $sellerOrder?->effective_payment_method ?? ((float) ($shipment?->cod_amount ?? 0) > 0 ? 'COD' : 'GCASH');
+        $payMethod = $sellerOrder?->effective_payment_method ?? ((float) ($shipment?->cod_amount ?? 0) > 0 ? 'COD' : 'WALLET');
         $codAmount = round((float) ($shipment?->cod_amount ?? 0), 2);
 
         $slaDeadlineAt = $assignment->assigned_at
@@ -1276,6 +1576,8 @@ class RiderDeliveryApiController extends Controller
             'shipping_fee'            => round((float) ($shipment?->shipping_fee ?? 0), 2),
             'total_weight'            => round((float) ($shipment?->total_weight ?? 0), 3),
             'rider_pay'               => $payBreakdown,
+            'is_delayed'              => (bool) ($assignment->is_delayed ?? false),
+            'delay_reason'            => $assignment->delay_reason ?? null,
             'workflow_state'          => [
                 'step_1_accepted'            => $isTaskAccepted,
                 'step_2_collection_verified' => $allCollectionVerified,
@@ -1330,20 +1632,20 @@ class RiderDeliveryApiController extends Controller
                 'is_exact_pin'     => $buyerCoords['is_exact'],
                 'coordinate_label' => $buyerCoords['source_label'],
             ],
-            'packages'                => $packages->map(function ($pkg) use ($isOutForDelivery, $allCollectionVerified, $allDoorstepVerified) {
+            'packages'                => $packages->map(function ($pkg) use ($allCollectionVerified, $allDoorstepVerified) {
                 return [
-                    'id'                          => (int) $pkg->id,
-                    'package_reference'           => (string) $pkg->package_reference,
-                    'qr_token'                    => (string) $pkg->qr_token,
-                    'package_number'              => (int) $pkg->package_number,
-                    'total_packages'              => (int) $pkg->total_packages,
-                    'package_weight'              => (float) $pkg->package_weight,
-                    'total_items_count'           => (int) $pkg->total_items_count,
-                    'is_collection_verified'      => $pkg->rider_verified_at !== null || $allCollectionVerified,
-                    'is_doorstep_verified'        => $pkg->delivery_verified_at !== null || $allDoorstepVerified,
-                    'rider_verification_method'   => $pkg->rider_verification_method,
-                    'delivery_verification_method'=> $pkg->delivery_verification_method,
-                    'manifest'                    => is_array($pkg->manifest_snapshot) ? $pkg->manifest_snapshot : [],
+                    'id'                           => (int) $pkg->id,
+                    'package_reference'            => (string) $pkg->package_reference,
+                    'qr_token'                     => (string) $pkg->qr_token,
+                    'package_number'               => (int) $pkg->package_number,
+                    'total_packages'               => (int) $pkg->total_packages,
+                    'package_weight'               => (float) $pkg->package_weight,
+                    'total_items_count'            => (int) $pkg->total_items_count,
+                    'is_collection_verified'       => $pkg->rider_verified_at !== null || $allCollectionVerified,
+                    'is_doorstep_verified'         => $pkg->delivery_verified_at !== null || $allDoorstepVerified,
+                    'rider_verification_method'    => $pkg->rider_verification_method,
+                    'delivery_verification_method' => $pkg->delivery_verification_method,
+                    'manifest'                     => is_array($pkg->manifest_snapshot) ? $pkg->manifest_snapshot : [],
                 ];
             })->values()->all(),
         ];
@@ -1422,25 +1724,25 @@ class RiderDeliveryApiController extends Controller
         $province = trim((string) ($snapshot['province'] ?? ($hub?->province ?? '')));
 
         $knownDirectory = [
-            'santa cruz|laguna'  => [14.2786, 121.4162],
-            'sta. rosa|laguna'   => [14.3122, 121.1114],
-            'santa rosa|laguna'  => [14.3122, 121.1114],
-            'calamba|laguna'     => [14.2118, 121.1653],
-            'san pablo|laguna'   => [14.0693, 121.3266],
-            'pagsanjan|laguna'   => [14.2733, 121.4542],
-            'pila|laguna'        => [14.2339, 121.3636],
-            'los banos|laguna'   => [14.1700, 121.2414],
-            'binan|laguna'       => [14.3364, 121.0842],
-            'cabuyao|laguna'     => [14.2725, 121.1239],
-            'quezon city'        => [14.6760, 121.0437],
-            'makati'             => [14.5547, 121.0244],
-            'pasig'              => [14.5764, 121.0851],
-            'manila'             => [14.5995, 120.9842],
-            'taguig'             => [14.5176, 121.0509],
-            'mandaluyong'        => [14.5794, 121.0359],
-            'cebu city'          => [10.3157, 123.8854],
-            'davao city'         => [7.1907, 125.4553],
-            'imus|cavite'        => [14.4297, 120.9367],
+            'santa cruz|laguna' => [14.2786, 121.4162],
+            'sta. rosa|laguna'  => [14.3122, 121.1114],
+            'santa rosa|laguna' => [14.3122, 121.1114],
+            'calamba|laguna'    => [14.2118, 121.1653],
+            'san pablo|laguna'  => [14.0693, 121.3266],
+            'pagsanjan|laguna'  => [14.2733, 121.4542],
+            'pila|laguna'       => [14.2339, 121.3636],
+            'los banos|laguna'  => [14.1700, 121.2414],
+            'binan|laguna'      => [14.3364, 121.0842],
+            'cabuyao|laguna'    => [14.2725, 121.1239],
+            'quezon city'       => [14.6760, 121.0437],
+            'makati'            => [14.5547, 121.0244],
+            'pasig'             => [14.5764, 121.0851],
+            'manila'            => [14.5995, 120.9842],
+            'taguig'            => [14.5176, 121.0509],
+            'mandaluyong'       => [14.5794, 121.0359],
+            'cebu city'         => [10.3157, 123.8854],
+            'davao city'        => [7.1907, 125.4553],
+            'imus|cavite'       => [14.4297, 120.9367],
         ];
 
         $normMun = strtolower(preg_replace('/\b(city of|municipality of|city)\b/', '', strtolower($municipality)));
@@ -1450,17 +1752,17 @@ class RiderDeliveryApiController extends Controller
         $queryKey = strtolower(trim("{$barangay}|{$normMun}|{$normProv}"));
 
         if ($normMun !== '' || $normProv !== '') {
-            $cached = Cache::remember("stork_geo_v1_" . md5($queryKey), now()->addDays(7), function () use ($barangay, $municipality, $province) {
+            $cached = Cache::remember('stork_geo_v1_' . md5($queryKey), now()->addDays(7), function () use ($barangay, $municipality, $province) {
                 try {
                     $q = collect([$barangay, $municipality, $province, 'Philippines'])->filter()->implode(', ');
                     $resp = Http::withoutVerifying()
                         ->withHeaders(['User-Agent' => 'StorkiaEcommerceLogistics/1.0'])
                         ->timeout(4)
                         ->get('https://nominatim.openstreetmap.org/search', [
-                            'q'              => $q,
-                            'format'         => 'json',
-                            'limit'          => 1,
-                            'countrycodes'   => 'ph',
+                            'q'            => $q,
+                            'format'       => 'json',
+                            'limit'        => 1,
+                            'countrycodes' => 'ph',
                         ]);
 
                     if ($resp->successful() && is_array($resp->json()) && ! empty($resp->json()[0]['lat'])) {

@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Cart;
+use App\Models\DeliveryChatMessage;
 use App\Models\DeliveryProof;
 use App\Models\OrderStatusHistory;
 use App\Models\Product;
@@ -11,12 +12,17 @@ use App\Models\SellerOrder;
 use App\Models\SellerOrderExtra;
 use App\Notifications\OrderLifecycleNotification;
 use App\Services\BuyerCancellationGuardService;
+use App\Services\BuyerRewardService;
+use App\Services\CourierMobileSchemaService;
 use App\Services\InventoryStockService;
 use App\Services\OrderCompletionService;
+use App\Services\RoleWalletService;
+use App\Services\StorkSchemaBootstrapService;
 use App\Services\VoucherService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\ValidationException;
 use Intervention\Image\Drivers\Gd\Driver;
@@ -29,18 +35,25 @@ class OrderController extends Controller
         protected OrderCompletionService $orderCompletionService,
         protected InventoryStockService $inventoryStockService,
         protected VoucherService $voucherService,
-        protected BuyerCancellationGuardService $cancellationGuardService
-    ) {}
+        protected BuyerCancellationGuardService $cancellationGuardService,
+        protected ?RoleWalletService $roleWalletService = null,
+        protected ?BuyerRewardService $buyerRewardService = null
+    ) {
+        $this->roleWalletService = $roleWalletService ?? app(RoleWalletService::class);
+        $this->buyerRewardService = $buyerRewardService ?? app(BuyerRewardService::class);
+    }
 
     public function index(Request $request): JsonResponse
     {
         $user = $request->user();
+
         $this->orderCompletionService->runLifecycleMaintenance(buyerId: (int) $user->id);
 
         $statusTab = $request->query('status', 'all');
         $search = trim((string) $request->query('search', ''));
 
         $baseQuery = SellerOrder::where('buyer_id', $user->id);
+
         $counts = [
             'all'        => (clone $baseQuery)->count(),
             'unpaid'     => (clone $baseQuery)->whereIn('payment_status', ['unpaid', 'flagged'])->whereNotIn('status', ['rejected', 'cancelled', 'returned_to_seller'])->count(),
@@ -117,8 +130,8 @@ class OrderController extends Controller
         }
 
         $this->orderCompletionService->runLifecycleMaintenance(buyerId: (int) $user->id);
-
         $sellerOrder->refresh();
+
         $sellerOrder->load([
             'order',
             'items',
@@ -151,6 +164,357 @@ class OrderController extends Controller
         ]);
     }
 
+    public function invoice(Request $request, $id): JsonResponse
+    {
+        $user = $request->user();
+        $sellerOrder = SellerOrder::with([
+            'order',
+            'buyer',
+            'items',
+            'sellerProfile',
+            'logisticsProfile',
+            'payment',
+            'extra',
+            'shipment',
+        ])->findOrFail($id);
+
+        if ((int) $sellerOrder->buyer_id !== (int) $user->id) {
+            return response()->json(['success' => false, 'message' => 'Unauthorized'], 403);
+        }
+
+        $extra = $sellerOrder->extra;
+        $origSub = (float) ($extra?->original_subtotal_amount ?: $sellerOrder->subtotal_amount);
+        $storeDisc = (float) ($extra?->store_voucher_discount ?? 0);
+        $rawPlatDisc = (float) ($extra?->platform_voucher_discount ?? 0);
+        $coinsDisc = (float) ($extra?->coins_discount_amount ?? 0);
+        $netSub = (float) $sellerOrder->subtotal_amount;
+
+        $cleanPlatformDiscount = 0.0;
+        if ($extra && ! empty($extra->platform_voucher_code)) {
+            if ($origSub > 0 && abs(round($origSub - $storeDisc - $rawPlatDisc - $coinsDisc, 2) - round($netSub, 2)) < 0.02) {
+                $cleanPlatformDiscount = round($rawPlatDisc, 2);
+            } else {
+                $cleanPlatformDiscount = max(0.0, round($rawPlatDisc - $coinsDisc, 2));
+            }
+        }
+
+        return response()->json([
+            'success' => true,
+            'data'    => [
+                'invoice_number'             => 'INV-' . str_replace('SO-', '', $sellerOrder->seller_order_number),
+                'seller_order_id'            => (int) $sellerOrder->id,
+                'seller_order_number'        => $sellerOrder->seller_order_number,
+                'order_number'               => $sellerOrder->order?->order_number,
+                'issued_at'                  => ($sellerOrder->completed_at ?? $sellerOrder->delivered_at ?? $sellerOrder->created_at)?->timezone('Asia/Manila')->format('M d, Y h:i A'),
+                'status'                     => $sellerOrder->status,
+                'status_label'               => $sellerOrder->status_label,
+                'payment_method'             => $sellerOrder->effective_payment_method,
+                'payment_status'             => $sellerOrder->payment_status,
+                'payment_reference'          => $sellerOrder->payment?->payment_reference,
+                'printable_url'              => route('user.orders.invoice', $sellerOrder->id),
+                'seller'                     => [
+                    'business_name' => $sellerOrder->sellerProfile?->business_name ?? 'Seller Store',
+                    'address'       => $sellerOrder->pickup_address_snapshot['full_address'] ?? '',
+                    'contact_no'    => $sellerOrder->pickup_address_snapshot['contact_no'] ?? '',
+                ],
+                'buyer'                      => [
+                    'recipient_name' => $sellerOrder->delivery_address_snapshot['recipient_name'] ?? $user->full_name,
+                    'phone_number'   => $sellerOrder->delivery_address_snapshot['phone_number'] ?? $user->contact_no,
+                    'address'        => $sellerOrder->delivery_address_snapshot['full_address'] ?? '',
+                ],
+                'items'                      => $sellerOrder->items->map(fn ($item) => [
+                    'id'                    => (int) $item->id,
+                    'product_name'          => $item->product_name,
+                    'variant'               => implode(' / ', array_filter([$item->variant_name, $item->sub_variant_name])) ?: null,
+                    'quantity'              => (int) $item->quantity,
+                    'unit_price'            => (float) $item->unit_price,
+                    'discounted_unit_price' => (float) $item->discounted_unit_price,
+                    'line_total'            => (float) $item->line_total,
+                ])->values(),
+                'original_subtotal'          => $origSub,
+                'store_voucher_discount'     => $storeDisc,
+                'platform_voucher_discount'  => $cleanPlatformDiscount,
+                'coins_used'                 => (int) ($extra?->coins_used ?? 0),
+                'coins_discount_amount'      => $coinsDisc,
+                'net_subtotal'               => $netSub,
+                'original_shipping_fee'      => (float) ($extra?->original_shipping_fee ?: $sellerOrder->shipping_fee),
+                'shipping_voucher_discount'  => (float) ($extra?->shipping_voucher_discount ?? 0),
+                'net_shipping_fee'           => (float) $sellerOrder->shipping_fee,
+                'total_amount'               => (float) $sellerOrder->total_amount,
+            ],
+        ]);
+    }
+
+    public function liveTracking(Request $request, $id): JsonResponse
+    {
+        StorkSchemaBootstrapService::ensureTablesExist();
+
+        $sellerOrder = SellerOrder::with([
+            'order.userAddress',
+            'shipment.currentRider',
+            'shipment.currentCourier',
+            'shipment.logisticsProfile',
+            'sellerProfile',
+        ])->findOrFail($id);
+
+        if ((int) $sellerOrder->buyer_id !== (int) $request->user()->id) {
+            return response()->json(['success' => false, 'message' => 'Unauthorized'], 403);
+        }
+
+        $shipment = $sellerOrder->shipment;
+        if (! $shipment) {
+            return response()->json([
+                'success' => true,
+                'data'    => [
+                    'has_shipment'    => false,
+                    'status'          => $sellerOrder->status,
+                    'status_label'    => $sellerOrder->status_label,
+                    'is_live_active'  => false,
+                    'driver'          => null,
+                    'destination'     => null,
+                    'sorting_hub'     => null,
+                    'distance_meters' => null,
+                ],
+            ]);
+        }
+
+        $delivSnap = (array) ($shipment->delivery_address_snapshot ?? $sellerOrder->delivery_address_snapshot ?? []);
+        $hubSnap = (array) ($shipment->hub_address_snapshot ?? []);
+        $pickupSnap = (array) ($shipment->pickup_address_snapshot ?? $sellerOrder->pickup_address_snapshot ?? []);
+
+        $destCoords = CourierMobileSchemaService::resolveCoordinatesForAddress($delivSnap, $sellerOrder->order?->userAddress);
+        $hubCoords = CourierMobileSchemaService::resolveCoordinatesForAddress($hubSnap, $shipment->logisticsProfile);
+        $sellerCoords = CourierMobileSchemaService::resolveCoordinatesForAddress($pickupSnap, $sellerOrder->sellerProfile);
+
+        $driverPayload = null;
+        $distanceMeters = null;
+        $isLiveActive = false;
+
+        if ($shipment->currentRider && in_array($shipment->status, ['rider_assigned', 'out_for_delivery', 'delivery_failed'], true)) {
+            $rider = $shipment->currentRider;
+            $latestLoc = Schema::hasTable('rider_locations')
+                ? DB::table('rider_locations')->where('rider_id', $rider->id)->orderByDesc('recorded_at')->first()
+                : null;
+
+            $lat = $latestLoc?->latitude ?? $rider->current_latitude ?? $hubCoords['latitude'];
+            $lng = $latestLoc?->longitude ?? $rider->current_longitude ?? $hubCoords['longitude'];
+
+            if ($lat !== null && $lng !== null) {
+                $distanceMeters = CourierMobileSchemaService::calculateDistanceMeters(
+                    (float) $lat,
+                    (float) $lng,
+                    (float) $destCoords['latitude'],
+                    (float) $destCoords['longitude']
+                );
+            }
+
+            $isLiveActive = $shipment->status === 'out_for_delivery';
+            $driverPayload = [
+                'role'         => 'Rider',
+                'id'           => (int) $rider->id,
+                'name'         => $rider->full_name,
+                'contact_no'   => $rider->contact_no,
+                'vehicle_type' => $rider->vehicle_type,
+                'plate_number' => $rider->plate_number,
+                'is_online'    => (bool) ($rider->is_online ?? true),
+                'latitude'     => (float) $lat,
+                'longitude'    => (float) $lng,
+                'speed'        => $latestLoc?->speed !== null ? (float) $latestLoc->speed : null,
+                'heading'      => $latestLoc?->heading !== null ? (float) $latestLoc->heading : null,
+                'updated_at'   => $latestLoc?->recorded_at ?? $rider->location_updated_at?->toIso8601String() ?? now()->toIso8601String(),
+            ];
+        } elseif ($shipment->currentCourier && in_array($shipment->status, ['courier_assigned', 'picked_up_from_seller', 'in_transit_to_hub'], true)) {
+            $courier = $shipment->currentCourier;
+            $latestLoc = Schema::hasTable('courier_locations')
+                ? DB::table('courier_locations')->where('courier_id', $courier->id)->orderByDesc('recorded_at')->first()
+                : null;
+
+            $lat = $latestLoc?->latitude ?? $courier->current_latitude ?? $sellerCoords['latitude'];
+            $lng = $latestLoc?->longitude ?? $courier->current_longitude ?? $sellerCoords['longitude'];
+
+            if ($lat !== null && $lng !== null) {
+                $distanceMeters = CourierMobileSchemaService::calculateDistanceMeters(
+                    (float) $lat,
+                    (float) $lng,
+                    (float) $hubCoords['latitude'],
+                    (float) $hubCoords['longitude']
+                );
+            }
+
+            $isLiveActive = in_array($shipment->status, ['picked_up_from_seller', 'in_transit_to_hub'], true);
+            $driverPayload = [
+                'role'         => 'Courier',
+                'id'           => (int) $courier->id,
+                'name'         => $courier->full_name,
+                'contact_no'   => $courier->contact_no,
+                'vehicle_type' => $courier->vehicle_type,
+                'plate_number' => $courier->plate_number,
+                'is_online'    => (bool) ($courier->is_online ?? true),
+                'latitude'     => (float) $lat,
+                'longitude'    => (float) $lng,
+                'speed'        => $latestLoc?->speed !== null ? (float) $latestLoc->speed : null,
+                'heading'      => $latestLoc?->heading !== null ? (float) $latestLoc->heading : null,
+                'updated_at'   => $latestLoc?->recorded_at ?? $courier->location_updated_at?->toIso8601String() ?? now()->toIso8601String(),
+            ];
+        }
+
+        return response()->json([
+            'success' => true,
+            'data'    => [
+                'has_shipment'    => true,
+                'tracking_number' => $shipment->tracking_number,
+                'status'          => $shipment->status,
+                'status_label'    => $shipment->status_label,
+                'is_live_active'  => $isLiveActive,
+                'driver'          => $driverPayload,
+                'distance_meters' => $distanceMeters,
+                'eta_minutes'     => $distanceMeters !== null ? max(2, (int) ceil($distanceMeters / 400)) : null,
+                'origin_seller'   => [
+                    'name'      => $pickupSnap['business_name'] ?? ($sellerOrder->sellerProfile?->business_name ?? 'Seller'),
+                    'address'   => $pickupSnap['full_address'] ?? '',
+                    'latitude'  => $sellerCoords['latitude'],
+                    'longitude' => $sellerCoords['longitude'],
+                ],
+                'sorting_hub'     => [
+                    'name'      => $hubSnap['hub_name'] ?? ($shipment->logisticsProfile?->business_name ?? 'Sorting Hub'),
+                    'address'   => $hubSnap['full_address'] ?? '',
+                    'latitude'  => $hubCoords['latitude'],
+                    'longitude' => $hubCoords['longitude'],
+                ],
+                'destination'     => [
+                    'recipient' => $delivSnap['recipient_name'] ?? 'Buyer',
+                    'address'   => $delivSnap['full_address'] ?? '',
+                    'latitude'  => $destCoords['latitude'],
+                    'longitude' => $destCoords['longitude'],
+                ],
+            ],
+        ]);
+    }
+
+    public function deliveryChatMessages(Request $request, $id): JsonResponse
+    {
+        StorkSchemaBootstrapService::ensureTablesExist();
+
+        $sellerOrder = SellerOrder::with('shipment.currentRider')->findOrFail($id);
+        if ((int) $sellerOrder->buyer_id !== (int) $request->user()->id) {
+            return response()->json(['success' => false, 'message' => 'Unauthorized'], 403);
+        }
+
+        $shipment = $sellerOrder->shipment;
+        if (! $shipment || ! Schema::hasTable('delivery_chat_messages')) {
+            return response()->json([
+                'success'  => true,
+                'can_send' => false,
+                'rider'    => null,
+                'messages' => [],
+            ]);
+        }
+
+        DeliveryChatMessage::where('seller_order_id', $sellerOrder->id)
+            ->where('sender_type', 'rider')
+            ->where('is_read', false)
+            ->update([
+                'is_read' => true,
+                'read_at' => now(),
+            ]);
+
+        $messages = DeliveryChatMessage::where('seller_order_id', $sellerOrder->id)
+            ->orderBy('id', 'asc')
+            ->get()
+            ->map(fn (DeliveryChatMessage $m) => [
+                'id'             => (int) $m->id,
+                'sender_type'    => $m->sender_type,
+                'message'        => $m->message,
+                'attachment_url' => $m->attachment_url,
+                'is_read'        => (bool) $m->is_read,
+                'created_at'     => $m->created_at?->toIso8601String(),
+            ]);
+
+        $canSend = $shipment->current_rider_id !== null
+            && in_array($shipment->status, ['rider_assigned', 'out_for_delivery', 'delivery_failed'], true);
+
+        return response()->json([
+            'success'  => true,
+            'can_send' => $canSend,
+            'rider'    => $shipment->currentRider ? [
+                'id'           => (int) $shipment->currentRider->id,
+                'name'         => $shipment->currentRider->full_name,
+                'contact_no'   => $shipment->currentRider->contact_no,
+                'vehicle_type' => $shipment->currentRider->vehicle_type,
+                'plate_number' => $shipment->currentRider->plate_number,
+            ] : null,
+            'messages' => $messages,
+        ]);
+    }
+
+    public function sendDeliveryChatMessage(Request $request, $id): JsonResponse
+    {
+        StorkSchemaBootstrapService::ensureTablesExist();
+
+        $user = $request->user();
+        $sellerOrder = SellerOrder::with(['shipment.currentRider', 'shipment.deliveryAssignments'])->findOrFail($id);
+
+        if ((int) $sellerOrder->buyer_id !== (int) $user->id) {
+            return response()->json(['success' => false, 'message' => 'Unauthorized'], 403);
+        }
+
+        $shipment = $sellerOrder->shipment;
+        if (
+            ! $shipment
+            || ! $shipment->currentRider
+            || ! in_array($shipment->status, ['rider_assigned', 'out_for_delivery', 'delivery_failed'], true)
+        ) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Delivery chat is only active while a Rider is assigned and delivering your parcel.',
+            ], 422);
+        }
+
+        $validated = $request->validate([
+            'message' => ['required', 'string', 'min:1', 'max:1000'],
+        ]);
+
+        $activeAssignment = $shipment->deliveryAssignments
+            ->where('rider_id', $shipment->current_rider_id)
+            ->sortByDesc('id')
+            ->first();
+
+        $chatMsg = DeliveryChatMessage::create([
+            'shipment_id'            => $shipment->id,
+            'seller_order_id'        => $sellerOrder->id,
+            'delivery_assignment_id' => $activeAssignment?->id,
+            'buyer_id'               => $user->id,
+            'rider_id'               => $shipment->current_rider_id,
+            'sender_type'            => 'buyer',
+            'message'                => trim($validated['message']),
+            'is_read'                => false,
+        ]);
+
+        try {
+            $shipment->currentRider->notify(new OrderLifecycleNotification(
+                title: "Buyer Delivery Note (#{$shipment->tracking_number})",
+                message: "{$user->full_name}: \"" . substr($chatMsg->message, 0, 120) . '"',
+                type: 'info',
+                url: '/rider/dashboard',
+                orderId: $sellerOrder->order_id,
+                sellerOrderId: $sellerOrder->id,
+                shipmentId: $shipment->id
+            ));
+        } catch (\Throwable $e) {
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Message sent to Rider.',
+            'data'    => [
+                'id'          => (int) $chatMsg->id,
+                'sender_type' => $chatMsg->sender_type,
+                'message'     => $chatMsg->message,
+                'created_at'  => $chatMsg->created_at?->toIso8601String(),
+            ],
+        ]);
+    }
+
     public function cancelOrder(Request $request, $id): JsonResponse
     {
         $user = $request->user();
@@ -169,7 +533,9 @@ class OrderController extends Controller
 
         $this->cancellationGuardService->validateCanCancelOrder($sellerOrder, (int) $user->id);
 
-        DB::transaction(function () use ($sellerOrder, $user, $validated) {
+        $refundedWalletAmount = 0.00;
+
+        DB::transaction(function () use ($sellerOrder, $user, $validated, &$refundedWalletAmount) {
             $locked = SellerOrder::with(['order', 'payment', 'paymentSubmission', 'extra', 'items'])
                 ->where('id', $sellerOrder->id)
                 ->lockForUpdate()
@@ -182,10 +548,11 @@ class OrderController extends Controller
             if (! $locked->canBuyerCancelPreShipment()) {
                 throw ValidationException::withMessages([
                     'cancel' => 'This order can no longer be cancelled because the seller has already marked it Ready for Pickup or handed it over.',
-                ]);
-            }
+                ]);             }
 
             $prevStatus = $locked->status;
+            $wasWalletPaid = strtoupper((string) $locked->effective_payment_method) === 'WALLET'
+                || (float) ($locked->extra?->wallet_paid_amount ?? 0) > 0;
 
             $locked->update([
                 'status'           => 'cancelled',
@@ -206,15 +573,24 @@ class OrderController extends Controller
                 'order_id'        => $locked->order_id,
                 'seller_order_id' => $locked->id,
             ]);
-
             $extra->update([
                 'buyer_cancel_reason'   => trim($validated['cancel_reason']),
                 'buyer_cancel_notes'    => ! empty($validated['cancel_notes']) ? trim($validated['cancel_notes']) : null,
                 'cancelled_by_buyer_id' => $user->id,
             ]);
 
+            if ($wasWalletPaid) {
+                $refundedWalletAmount = (float) ($extra->wallet_paid_amount > 0 ? $extra->wallet_paid_amount : $locked->total_amount);
+                $this->roleWalletService?->refundBuyerWalletForOrder(
+                    $locked,
+                    $refundedWalletAmount,
+                    'Pre-Shipment Order Cancellation Refund'
+                );
+            }
+
             $this->inventoryStockService->restoreStockForSellerOrder($locked);
             $this->voucherService->restoreVouchersForSellerOrder($locked);
+            $this->buyerRewardService?->restoreCoinsForSellerOrder($locked);
             $this->cancellationGuardService->recordOrderCancellation($locked, (int) $user->id, $validated['cancel_reason']);
 
             OrderStatusHistory::create([
@@ -224,7 +600,9 @@ class OrderController extends Controller
                 'to_status'       => 'cancelled',
                 'actor_type'      => 'Buyer',
                 'actor_id'        => $user->id,
-                'remarks'         => 'Buyer cancelled order: ' . trim($validated['cancel_reason']) . (! empty($validated['cancel_notes']) ? ' (' . trim($validated['cancel_notes']) . ')' : ''),
+                'remarks'         => 'Buyer cancelled order: ' . trim($validated['cancel_reason'])
+                    . (! empty($validated['cancel_notes']) ? ' (' . trim($validated['cancel_notes']) . ')' : '')
+                    . ($refundedWalletAmount > 0 ? ' — ₱' . number_format($refundedWalletAmount, 2) . ' refunded immediately to Buyer E-Wallet.' : ''),
             ]);
 
             if ($locked->order) {
@@ -244,9 +622,13 @@ class OrderController extends Controller
         } catch (\Throwable $e) {
         }
 
+        $walletMsg = $refundedWalletAmount > 0
+            ? ' ₱' . number_format($refundedWalletAmount, 2) . ' has been refunded immediately to your Storkia E-Wallet.'
+            : '';
+
         return response()->json([
             'success' => true,
-            'message' => "Order #{$sellerOrder->seller_order_number} has been cancelled. Reserved product stock and any applied vouchers have been returned.",
+            'message' => "Order #{$sellerOrder->seller_order_number} has been cancelled. Reserved product stock, coins, and any applied vouchers have been returned.{$walletMsg}",
         ]);
     }
 
@@ -297,7 +679,7 @@ class OrderController extends Controller
                 'to_status'       => 'pending_seller_acceptance',
                 'actor_type'      => 'Buyer',
                 'actor_id'        => $user->id,
-                'remarks'         => 'Buyer reviewed flagged GCash payment details and confirmed continuing the transaction by switching payment method to Cash on Delivery (COD).',
+                'remarks'         => 'Buyer reviewed flagged payment details and confirmed continuing the transaction by switching payment method to Cash on Delivery (COD).',
             ]);
 
             if ($locked->order) {
@@ -356,14 +738,13 @@ class OrderController extends Controller
                 'status'           => 'cancelled',
                 'payment_status'   => 'cancelled',
                 'cancelled_at'     => now(),
-                'rejection_reason' => 'Cancelled immediately by Buyer after GCash online payment was flagged by Seller.',
+                'rejection_reason' => 'Cancelled immediately by Buyer after online payment was flagged.',
             ]);
 
             $extra = $locked->extra ?: SellerOrderExtra::create([
                 'order_id'        => $locked->order_id,
                 'seller_order_id' => $locked->id,
             ]);
-
             $extra->update([
                 'buyer_cancel_reason'   => 'Cancelled after flagged online payment',
                 'cancelled_by_buyer_id' => $user->id,
@@ -371,6 +752,7 @@ class OrderController extends Controller
 
             $this->inventoryStockService->restoreStockForSellerOrder($locked);
             $this->voucherService->restoreVouchersForSellerOrder($locked);
+            $this->buyerRewardService?->restoreCoinsForSellerOrder($locked);
 
             OrderStatusHistory::create([
                 'order_id'        => $locked->order_id,
@@ -379,7 +761,7 @@ class OrderController extends Controller
                 'to_status'       => 'cancelled',
                 'actor_type'      => 'Buyer',
                 'actor_id'        => $user->id,
-                'remarks'         => 'Buyer chose to cancel the order immediately instead of switching to COD after online payment was flagged.',
+                'remarks'         => 'Buyer chose to cancel the order immediately instead of switching to COD.',
             ]);
 
             if ($locked->order) {
@@ -401,14 +783,13 @@ class OrderController extends Controller
 
         return response()->json([
             'success' => true,
-            'message' => "Order #{$sellerOrder->seller_order_number} has been cancelled immediately. Reserved stock and any applied vouchers have been restored.",
+            'message' => "Order #{$sellerOrder->seller_order_number} has been cancelled immediately. Reserved stock, coins, and any applied vouchers have been restored.",
         ]);
     }
 
     public function confirmReceipt(Request $request, $id): JsonResponse
     {
         $sellerOrder = SellerOrder::findOrFail($id);
-
         if ((int) $sellerOrder->buyer_id !== (int) $request->user()->id) {
             return response()->json(['success' => false, 'message' => 'Unauthorized'], 403);
         }
@@ -458,18 +839,6 @@ class OrderController extends Controller
             'refund_account_number'   => ['required_if:refund_method,GCASH', 'nullable', 'regex:/^09\d{9}$/'],
             'evidence_photos'         => ['required', 'array', 'min:1', 'max:5'],
             'evidence_photos.*'       => ['required', 'image', 'mimes:jpeg,png,jpg,webp', 'max:5120'],
-        ], [
-            'dispute_reason_category.required'  => 'Please select a return/refund reason category.',
-            'dispute_reason.required'           => 'Please describe the delivery issue.',
-            'dispute_reason.min'                => 'Please provide at least 10 characters explaining the issue.',
-            'refund_method.required'            => 'Please choose how you want to receive your refund (GCash or Storkia Wallet).',
-            'refund_account_name.required_if'   => 'Please enter your GCash account name for the refund.',
-            'refund_account_number.required_if' => 'Please enter your 11-digit GCash number starting with 09 for the refund.',
-            'refund_account_number.regex'       => 'Refund GCash number must be a valid 11-digit mobile number starting with 09.',
-            'evidence_photos.required'          => 'Please upload 1 to 5 photo evidence files.',
-            'evidence_photos.min'               => 'Please upload at least 1 evidence photo.',
-            'evidence_photos.max'               => 'You may upload a maximum of 5 evidence photos.',
-            'evidence_photos.*.max'             => 'Each evidence photo must not exceed 5MB.',
         ]);
 
         $storedPhotos = [];
@@ -477,6 +846,7 @@ class OrderController extends Controller
         foreach ($request->file('evidence_photos', []) as $file) {
             $filename = uniqid('dispute_') . '_' . time() . '.webp';
             $path = 'dispute_evidence/' . $filename;
+
             $img = $manager->decode($file->getRealPath());
             $img->scaleDown(width: 1200, height: 1200);
             $encoded = $img->encode(new WebpEncoder(quality: 85));
@@ -486,7 +856,7 @@ class OrderController extends Controller
 
         $refundSummary = $validated['refund_method'] === 'GCASH'
             ? "Refund via GCash ({$validated['refund_account_name']} - {$validated['refund_account_number']})"
-            : 'Refund via Storkia Buyer Wallet';
+            : 'Instant Refund via Storkia Buyer E-Wallet';
 
         $fullReason = '[' . trim($validated['dispute_reason_category']) . ' | ' . $refundSummary . '] ' . trim($validated['dispute_reason']);
 

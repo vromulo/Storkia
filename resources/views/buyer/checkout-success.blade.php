@@ -2,11 +2,20 @@
 
 @section('content')
 @php
-    $hasGcashOrders = $order->sellerOrders->contains(fn ($so) => $so->effective_payment_method === 'GCASH');
-    $hasCodOrders = $order->sellerOrders->contains(fn ($so) => $so->effective_payment_method === 'COD');
-    $step3Label = ($hasGcashOrders && $hasCodOrders)
-        ? 'GCash & COD'
-        : ($hasGcashOrders ? 'GCash Escrow' : 'Cash on Delivery');
+    $hasWalletOrders = $order->sellerOrders->contains(fn ($so) => strtoupper((string) $so->effective_payment_method) === 'WALLET');
+    $hasGcashOrders = $order->sellerOrders->contains(fn ($so) => strtoupper((string) $so->effective_payment_method) === 'GCASH');
+    $hasCodOrders = $order->sellerOrders->contains(fn ($so) => strtoupper((string) $so->effective_payment_method) === 'COD');
+
+    $step3Label = match (true) {
+        $hasWalletOrders && $hasCodOrders => 'E-Wallet & COD',
+        $hasWalletOrders                  => 'Storkia E-Wallet',
+        $hasGcashOrders && $hasCodOrders  => 'GCash & COD',
+        $hasGcashOrders                   => 'GCash Escrow',
+        default                           => 'Cash on Delivery',
+    };
+
+    $totalCoinsUsed = (int) ($order->coins_used_total ?? $order->sellerOrders->sum(fn ($so) => (int) ($so->extra?->coins_used ?? 0)));
+    $totalCoinsDiscount = (float) ($order->coins_discount_total ?? $order->sellerOrders->sum(fn ($so) => (float) ($so->extra?->coins_discount_amount ?? 0)));
 @endphp
 
 <div class="min-h-screen bg-surface-subtle/40 pb-16 pt-6">
@@ -46,8 +55,10 @@
             <p class="text-sm text-text-muted max-w-xl mx-auto">
                 Parent Order Reference: <strong class="text-text-main font-mono">{{ $order->order_number }}</strong> &bull;
                 Order Total: <strong class="text-primary">₱{{ number_format((float) $order->total_amount, 2) }}</strong>.
-                @if($hasGcashOrders)
-                    Your uploaded GCash payment receipt has been submitted to Storkia Admin Escrow.
+                @if($totalCoinsUsed > 0)
+                    <span class="inline-block mt-1 px-2.5 py-0.5 rounded-full bg-brand-light/40 text-primary-dark text-xs font-bold">
+                        Redeemed {{ number_format($totalCoinsUsed) }} Storkia Coins (-₱{{ number_format($totalCoinsDiscount, 2) }})
+                    </span>
                 @endif
             </p>
             <div class="flex flex-wrap items-center justify-center gap-3 pt-2">
@@ -67,20 +78,27 @@
 
             @foreach($order->sellerOrders as $sellerOrder)
                 @php
-                    $payMethod = $sellerOrder->effective_payment_method;
+                    $payMethod = strtoupper((string) $sellerOrder->effective_payment_method);
+                    $soCoinsUsed = (int) ($sellerOrder->extra?->coins_used ?? 0);
+                    $soCoinsDiscount = (float) ($sellerOrder->extra?->coins_discount_amount ?? 0);
                 @endphp
                 <div class="bg-surface rounded-2xl border border-border-subtle p-5 sm:p-6 shadow-xs space-y-4">
                     <div class="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-border-subtle">
-                        <div class="flex items-center gap-2">
+                        <div class="flex items-center gap-2 flex-wrap">
                             <span class="text-xs font-mono font-bold text-primary-dark bg-brand-light/40 px-2.5 py-1 rounded-lg">
                                 {{ $sellerOrder->seller_order_number }}
                             </span>
                             <span class="font-bold text-sm text-text-main">
                                 {{ $sellerOrder->sellerProfile->business_name ?? 'Seller Store' }}
                             </span>
-                            <span class="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase {{ $payMethod === 'GCASH' ? 'bg-blue-100 text-blue-800 border border-blue-200' : 'bg-surface-subtle text-text-main border border-border-subtle' }}">
-                                {{ $payMethod === 'GCASH' ? 'GCash Escrow' : 'COD' }}
+                            <span class="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase {{ $payMethod === 'WALLET' ? 'bg-emerald-100 text-emerald-800 border border-emerald-200' : ($payMethod === 'GCASH' ? 'bg-blue-100 text-blue-800 border border-blue-200' : 'bg-surface-subtle text-text-main border border-border-subtle') }}">
+                                {{ $payMethod === 'WALLET' ? 'Storkia E-Wallet Paid' : ($payMethod === 'GCASH' ? 'GCash Escrow' : 'COD') }}
                             </span>
+                            @if($soCoinsUsed > 0)
+                                <span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-primary/10 text-primary">
+                                    {{ $soCoinsUsed }} Coins (-₱{{ number_format($soCoinsDiscount, 2) }})
+                                </span>
+                            @endif
                         </div>
                         <span class="px-3 py-1 rounded-full text-xs font-bold bg-yellow-100 text-yellow-800 border border-yellow-200">
                             {{ $sellerOrder->status_label }}

@@ -73,6 +73,7 @@
                 'maxStock'        => $stock,
                 'selected'        => true,
                 'isSyncing'       => false,
+                'isRemoving'      => false,
             ];
         }
     }
@@ -83,11 +84,14 @@
         return {
             items: Array.isArray(initialItems) ? initialItems : [],
             syncTimers: {},
+            get activeItems() {
+                return this.items.filter(i => !i.isRemoving);
+            },
             get isAllSelected() {
-                return this.items.length > 0 && this.items.every(i => i.selected);
+                return this.activeItems.length > 0 && this.activeItems.every(i => i.selected);
             },
             get selectedItems() {
-                return this.items.filter(i => i.selected);
+                return this.activeItems.filter(i => i.selected);
             },
             get selectedCount() {
                 return this.selectedItems.length;
@@ -107,15 +111,18 @@
             get savingsTotal() {
                 return Math.max(0, this.retailTotal - this.estimatedTotal);
             },
+            hasActiveStoreItems(storeName) {
+                return this.activeItems.some(i => i.store === storeName);
+            },
             toggleSelectAll(checked) {
-                this.items.forEach(i => { i.selected = Boolean(checked); });
+                this.activeItems.forEach(i => { i.selected = Boolean(checked); });
             },
             isStoreSelected(storeName) {
-                const storeItems = this.items.filter(i => i.store === storeName);
+                const storeItems = this.activeItems.filter(i => i.store === storeName);
                 return storeItems.length > 0 && storeItems.every(i => i.selected);
             },
             toggleStore(storeName, checked) {
-                this.items.forEach(i => {
+                this.activeItems.forEach(i => {
                     if (i.store === storeName) {
                         i.selected = Boolean(checked);
                     }
@@ -132,6 +139,50 @@
                     }
                 }));
             },
+            async removeItem(index) {
+                const item = this.items[index];
+                if (!item || item.isRemoving) return;
+
+                item.isRemoving = true;
+                item.selected = false;
+
+                try {
+                    const destroyUrl = `{{ route('cart.destroy', ':id') }}`.replace(':id', item.id);
+                    const token = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '{{ csrf_token() }}';
+                    const response = await fetch(destroyUrl, {
+                        method: 'POST',
+                        headers: {
+                            'Accept': 'application/json, text/html',
+                            'Content-Type': 'application/json',
+                            'X-Requested-With': 'XMLHttpRequest',
+                            'X-CSRF-TOKEN': token
+                        },
+                        body: JSON.stringify({ _method: 'DELETE' })
+                    });
+
+                    if (response.ok) {
+                        if (typeof window.setCartBadge === 'function') {
+                            window.setCartBadge(this.activeItems.length);
+                        }
+                        if (window.StorkiaLive) {
+                            window.StorkiaLive.showToast(`Removed "${item.title}" from your cart.`, 'success');
+                        }
+                        if (this.activeItems.length === 0 && window.StorkiaLive) {
+                            await window.StorkiaLive.visit(window.location.href, {
+                                method: 'GET',
+                                preserveScroll: false,
+                                pushState: false
+                            });
+                        }
+                    } else {
+                        item.isRemoving = false;
+                        item.selected = true;
+                    }
+                } catch (err) {
+                    item.isRemoving = false;
+                    item.selected = true;
+                }
+            },
             queueDatabaseSync(index, delay = 180) {
                 const item = this.items[index];
                 if (!item) return;
@@ -145,7 +196,7 @@
             },
             async syncDatabase(index) {
                 const item = this.items[index];
-                if (!item) return;
+                if (!item || item.isRemoving) return;
                 let parsedQty = parseInt(item.quantity, 10);
                 if (isNaN(parsedQty) || parsedQty < 1) parsedQty = 1;
                 const maxLimit = Math.max(1, parseInt(item.maxStock) || 1);
@@ -319,16 +370,18 @@
                                 class="w-5 h-5 rounded-md text-primary focus:ring-primary/30 border-border-subtle cursor-pointer"
                             >
                             <span class="text-base font-bold text-text-main font-sans tracking-tight">
-                                ALL ITEMS (<span x-text="items.length"></span>)
+                                ALL ITEMS (<span x-text="activeItems.length"></span>)
                             </span>
                         </label>
                         <div class="text-xs text-text-muted font-medium">
-                            <span x-text="selectedCount"></span> of <span x-text="items.length"></span> selected
+                            <span x-text="selectedCount"></span> of <span x-text="activeItems.length"></span> selected
                         </div>
                     </div>
 
                     @foreach ($groupedCart as $storeName => $itemsInStore)
-                        <div class="bg-surface rounded-2xl border border-border-subtle shadow-xs overflow-hidden">
+                        <div x-show="hasActiveStoreItems('{{ addslashes($storeName) }}')"
+                             x-transition
+                             class="bg-surface rounded-2xl border border-border-subtle shadow-xs overflow-hidden">
                             <div class="p-4 sm:px-6 bg-surface-subtle/50 border-b border-border-subtle flex items-center gap-3.5 select-none">
                                 <input
                                     type="checkbox"
@@ -351,7 +404,9 @@
                                     @php
                                         $alpineIndex = $cartItems->search(fn($ci) => $ci->id === $cartItem->id);
                                     @endphp
-                                    <div class="p-4 sm:p-6 flex items-start gap-4 hover:bg-surface-subtle/20 transition-colors">
+                                    <div x-show="!items[{{ $alpineIndex }}].isRemoving"
+                                         x-transition
+                                         class="p-4 sm:p-6 flex items-start gap-4 hover:bg-surface-subtle/20 transition-colors">
                                         <div class="pt-2 sm:pt-4">
                                             <input
                                                 type="checkbox"
@@ -444,15 +499,16 @@
                                                         </button>
                                                     </div>
 
-                                                    <form action="{{ route('cart.destroy', $cartItem->id) }}" method="POST" class="m-0 inline" onsubmit="return confirm('Remove this item from your cart?');">
-                                                        @csrf
-                                                        @method('DELETE')
-                                                        <button type="submit" class="text-text-muted hover:text-danger p-1 transition-colors cursor-pointer" title="Remove item">
-                                                            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
-                                                                <path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                                                            </svg>
-                                                        </button>
-                                                    </form>
+                                                    <button
+                                                        type="button"
+                                                        @click="removeItem({{ $alpineIndex }})"
+                                                        class="text-text-muted hover:text-danger p-1 transition-colors cursor-pointer"
+                                                        title="Remove item"
+                                                    >
+                                                        <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
+                                                            <path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                                        </svg>
+                                                    </button>
                                                 </div>
                                             </div>
                                         </div>
@@ -534,7 +590,7 @@
                         </div>
 
                         <div class="pt-0">
-                            <form action="{{ route('checkout.index') }}" method="GET">
+                            <form action="{{ route('checkout.index') }}" method="GET" data-no-live>
                                 <input type="hidden" name="mode" value="cart">
                                 <template x-for="item in selectedItems" :key="'desk_' + item.id">
                                     <input type="hidden" name="cart_ids[]" :value="item.id">
@@ -614,7 +670,7 @@
                             </div>
 
                             <div>
-                                <form action="{{ route('checkout.index') }}" method="GET" class="m-0">
+                                <form action="{{ route('checkout.index') }}" method="GET" data-no-live class="m-0">
                                     <input type="hidden" name="mode" value="cart">
                                     <template x-for="item in selectedItems" :key="'mob_' + item.id">
                                         <input type="hidden" name="cart_ids[]" :value="item.id">

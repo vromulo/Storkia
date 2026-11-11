@@ -8,7 +8,7 @@ use Illuminate\Support\Facades\Schema;
 
 class RiderMobileSchemaService
 {
-    protected const CACHE_KEY = 'storkia_rider_mobile_schema_v1_ready';
+    protected const CACHE_KEY = 'storkia_rider_mobile_schema_v2_ready';
 
     public static function ensureTablesExist(): void
     {
@@ -16,8 +16,12 @@ class RiderMobileSchemaService
             Cache::get(self::CACHE_KEY) === true
             && Schema::hasTable('rider_locations')
             && Schema::hasTable('rider_vehicle_updates')
+            && Schema::hasTable('rider_shift_checklists')
+            && Schema::hasTable('rider_trip_incidents')
             && Schema::hasColumn('riders', 'current_latitude')
+            && Schema::hasColumn('riders', 'last_checklist_passed_at')
             && Schema::hasColumn('delivery_assignments', 'accepted_at')
+            && Schema::hasColumn('delivery_assignments', 'decline_reason')
         ) {
             return;
         }
@@ -34,6 +38,8 @@ class RiderMobileSchemaService
             self::upgradeAddressCoordinatesColumns();
             self::createRiderLocationsTable();
             self::createRiderVehicleUpdatesTable();
+            self::createRiderShiftChecklistsTable();
+            self::createRiderTripIncidentsTable();
 
             Cache::put(self::CACHE_KEY, true, now()->addHours(12));
         } catch (\Throwable $e) {
@@ -63,6 +69,9 @@ class RiderMobileSchemaService
             if (! Schema::hasColumn('riders', 'vehicle_verification_status')) {
                 $table->string('vehicle_verification_status', 30)->default('verified');
             }
+            if (! Schema::hasColumn('riders', 'last_checklist_passed_at')) {
+                $table->timestamp('last_checklist_passed_at')->nullable();
+            }
         });
     }
 
@@ -78,6 +87,21 @@ class RiderMobileSchemaService
                 }
                 if (! Schema::hasColumn('delivery_assignments', 'failure_reason')) {
                     $table->string('failure_reason', 255)->nullable()->after('failed_at');
+                }
+                if (! Schema::hasColumn('delivery_assignments', 'declined_at')) {
+                    $table->timestamp('declined_at')->nullable()->after('failed_at');
+                }
+                if (! Schema::hasColumn('delivery_assignments', 'decline_reason')) {
+                    $table->string('decline_reason', 300)->nullable()->after('declined_at');
+                }
+                if (! Schema::hasColumn('delivery_assignments', 'is_delayed')) {
+                    $table->boolean('is_delayed')->default(false)->after('decline_reason');
+                }
+                if (! Schema::hasColumn('delivery_assignments', 'delay_reason')) {
+                    $table->string('delay_reason', 300)->nullable()->after('is_delayed');
+                }
+                if (! Schema::hasColumn('delivery_assignments', 'estimated_arrival_at')) {
+                    $table->timestamp('estimated_arrival_at')->nullable()->after('delay_reason');
                 }
             });
         }
@@ -231,6 +255,90 @@ class RiderMobileSchemaService
             $table->timestamps();
 
             $table->index(['rider_id', 'status']);
+        });
+    }
+
+    protected static function createRiderShiftChecklistsTable(): void
+    {
+        if (Schema::hasTable('rider_shift_checklists')) {
+            return;
+        }
+
+        Schema::create('rider_shift_checklists', function (Blueprint $table) {
+            $table->id();
+            $table->unsignedBigInteger('rider_id');
+            $table->unsignedBigInteger('logistics_profile_id');
+            $table->boolean('tires_ok')->default(true);
+            $table->boolean('lights_ok')->default(true);
+            $table->boolean('brakes_ok')->default(true);
+            $table->boolean('fuel_ok')->default(true);
+            $table->boolean('helmet_gear_ok')->default(true);
+            $table->boolean('thermal_bag_ok')->default(true);
+            $table->boolean('all_passed')->default(true)->index();
+            $table->string('failed_items_summary', 255)->nullable();
+            $table->string('notes', 300)->nullable();
+            $table->decimal('latitude', 10, 7)->nullable();
+            $table->decimal('longitude', 10, 7)->nullable();
+            $table->timestamp('submitted_at')->index();
+            $table->timestamps();
+
+            $table->foreign('rider_id', 'rsc_rider_id_fk')
+                ->references('id')
+                ->on('riders')
+                ->cascadeOnDelete();
+
+            $table->foreign('logistics_profile_id', 'rsc_log_prof_fk')
+                ->references('id')
+                ->on('logistics_profiles')
+                ->cascadeOnDelete();
+
+            $table->index(['rider_id', 'submitted_at'], 'rsc_rider_sub_idx');
+        });
+    }
+
+    protected static function createRiderTripIncidentsTable(): void
+    {
+        if (Schema::hasTable('rider_trip_incidents')) {
+            return;
+        }
+
+        Schema::create('rider_trip_incidents', function (Blueprint $table) {
+            $table->id();
+            $table->unsignedBigInteger('delivery_assignment_id');
+            $table->unsignedBigInteger('shipment_id');
+            $table->unsignedBigInteger('rider_id');
+            $table->unsignedBigInteger('logistics_profile_id');
+            $table->string('incident_type', 30)->index();
+            $table->string('reason', 150);
+            $table->string('notes', 300)->nullable();
+            $table->timestamp('estimated_arrival_at')->nullable();
+            $table->string('photo_path')->nullable();
+            $table->decimal('latitude', 10, 7)->nullable();
+            $table->decimal('longitude', 10, 7)->nullable();
+            $table->string('status', 30)->default('reported')->index();
+            $table->timestamps();
+
+            $table->foreign('delivery_assignment_id', 'rti_deliv_asg_fk')
+                ->references('id')
+                ->on('delivery_assignments')
+                ->cascadeOnDelete();
+
+            $table->foreign('shipment_id', 'rti_ship_id_fk')
+                ->references('id')
+                ->on('shipments')
+                ->cascadeOnDelete();
+
+            $table->foreign('rider_id', 'rti_rider_id_fk')
+                ->references('id')
+                ->on('riders')
+                ->cascadeOnDelete();
+
+            $table->foreign('logistics_profile_id', 'rti_log_prof_fk')
+                ->references('id')
+                ->on('logistics_profiles')
+                ->cascadeOnDelete();
+
+            $table->index(['delivery_assignment_id', 'incident_type'], 'rti_asg_type_idx');
         });
     }
 }

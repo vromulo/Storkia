@@ -6,63 +6,84 @@
     $hasPendingPayout = $payoutRequests->whereIn('status', ['pending', 'approved'])->isNotEmpty();
     $availableBalance = (float) ($metrics['wallet_available'] ?? $metrics['settled_total'] ?? 0);
     $arrearsAmount = (float) ($metrics['wallet_arrears'] ?? ($availableBalance < 0 ? abs($availableBalance) : 0));
+    $netWithdrawableAfterArrears = max(0.0, round($availableBalance - $arrearsAmount, 2));
+    $canWithdraw = $netWithdrawableAfterArrears >= 100 && !$hasPendingPayout;
+
+    $settlementsConfig = [
+        'canWithdraw'     => (bool) $canWithdraw,
+        'maxWithdrawable' => round($netWithdrawableAfterArrears, 2),
+        'requestedAmount' => max(100, floor($netWithdrawableAfterArrears * 100) / 100),
+        'accountName'     => (string) (auth()->user()?->full_name ?? ''),
+    ];
 @endphp
 
-<div x-data="{
-    payoutModalOpen: false,
-    payoutConfirmStep: false,
-    payoutError: '',
-    arrearsModalOpen: false,
-    payoutMethod: 'GCASH',
-    maxWithdrawable: {{ round(max(0, $availableBalance), 2) }},
-    requestedAmount: {{ max(100, floor($availableBalance * 100) / 100) }},
-    accountName: @js(auth()->user()?->full_name ?? ''),
-    accountNumber: '',
-    isSubmittingPayout: false,
-    isSubmittingArrears: false,
-    openPayoutModal() {
-        this.payoutError = '';
-        this.payoutConfirmStep = false;
-        this.isSubmittingPayout = false;
-        this.payoutModalOpen = true;
-    },
-    sanitizeAccountNumber() {
-        let digits = (this.accountNumber || '').replace(/\D/g, '');
-        if (digits.startsWith('63') && digits.length === 12) {
-            digits = '0' + digits.slice(2);
-        } else if (digits.startsWith('9') && digits.length === 10) {
-            digits = '0' + digits;
-        }
-        this.accountNumber = digits.slice(0, 11);
-    },
-    reviewPayoutRequest() {
-        this.payoutError = '';
-        this.sanitizeAccountNumber();
-        const amt = parseFloat(this.requestedAmount);
-        if (isNaN(amt) || amt < 100) {
-            this.payoutError = 'Minimum withdrawal amount is \u20B1100.00.';
-            return;
-        }
-        if (amt > this.maxWithdrawable + 0.001) {
-            this.payoutError = 'Requested amount cannot exceed your available balance of \u20B1' + this.maxWithdrawable.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + '.';
-            return;
-        }
-        if (!this.accountName || this.accountName.trim().length < 2) {
-            this.payoutError = 'Please enter the GCash Account Holder Name (at least 2 characters).';
-            return;
-        }
-        if (!/^09\d{9}$/.test(this.accountNumber)) {
-            this.payoutError = 'Please enter a valid 11-digit GCash mobile number starting with 09 (e.g., 09171234567).';
-            return;
-        }
-        this.payoutConfirmStep = true;
-    },
-    confirmAndSubmitPayout() {
-        if (this.isSubmittingPayout) return;
-        this.isSubmittingPayout = true;
-        this.$refs.sellerPayoutForm.submit();
-    }
-}" class="max-w-7xl mx-auto space-y-8 select-none">
+<script>
+    window.storkiaSellerSettlementsState = function (cfg) {
+        return {
+            payoutModalOpen: false,
+            payoutConfirmStep: false,
+            payoutError: '',
+            arrearsModalOpen: false,
+            payoutMethod: 'GCASH',
+            canWithdraw: Boolean(cfg.canWithdraw),
+            maxWithdrawable: Number(cfg.maxWithdrawable || 0),
+            requestedAmount: Number(cfg.requestedAmount || 100),
+            accountName: cfg.accountName || '',
+            accountNumber: '',
+            isSubmittingPayout: false,
+            isSubmittingArrears: false,
+
+            openPayoutModal() {
+                if (!this.canWithdraw) return;
+                this.payoutError = '';
+                this.payoutConfirmStep = false;
+                this.isSubmittingPayout = false;
+                this.payoutModalOpen = true;
+            },
+
+            sanitizeAccountNumber() {
+                let digits = (this.accountNumber || '').replace(/\D/g, '');
+                if (digits.startsWith('63') && digits.length === 12) {
+                    digits = '0' + digits.slice(2);
+                } else if (digits.startsWith('9') && digits.length === 10) {
+                    digits = '0' + digits;
+                }
+                this.accountNumber = digits.slice(0, 11);
+            },
+
+            reviewPayoutRequest() {
+                this.payoutError = '';
+                this.sanitizeAccountNumber();
+                const amt = parseFloat(this.requestedAmount);
+                if (isNaN(amt) || amt < 100) {
+                    this.payoutError = 'Minimum withdrawal amount is \u20B1100.00.';
+                    return;
+                }
+                if (amt > this.maxWithdrawable + 0.001) {
+                    this.payoutError = 'Requested amount cannot exceed your net withdrawable balance of \u20B1' + this.maxWithdrawable.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + '.';
+                    return;
+                }
+                if (!this.accountName || this.accountName.trim().length < 2) {
+                    this.payoutError = 'Please enter the GCash Account Holder Name (at least 2 characters).';
+                    return;
+                }
+                if (!/^09\d{9}$/.test(this.accountNumber)) {
+                    this.payoutError = 'Please enter a valid 11-digit GCash mobile number starting with 09 (e.g., 09171234567).';
+                    return;
+                }
+                this.payoutConfirmStep = true;
+            },
+
+            confirmAndSubmitPayout() {
+                if (this.isSubmittingPayout) return;
+                this.isSubmittingPayout = true;
+                this.$refs.sellerPayoutForm.submit();
+            }
+        };
+    };
+</script>
+
+<div x-data="storkiaSellerSettlementsState(@js($settlementsConfig))" class="max-w-7xl mx-auto space-y-8 select-none">
 
     <div class="flex flex-col lg:flex-row lg:items-end justify-between gap-4">
         <div>
@@ -81,16 +102,26 @@
 
             <button type="button"
                     @click="openPayoutModal()"
-                    @if($availableBalance < 100 || $hasPendingPayout || $arrearsAmount > 0) disabled @endif
-                    class="px-4 py-2.5 rounded-2xl text-xs font-bold shadow-xs transition-colors {{ ($availableBalance >= 100 && !$hasPendingPayout && $arrearsAmount <= 0) ? 'bg-green-600 hover:bg-green-700 text-white cursor-pointer' : 'bg-gray-200 text-gray-500 cursor-not-allowed' }}">
+                    :disabled="!canWithdraw"
+                    class="px-4 py-2.5 rounded-2xl text-xs font-bold shadow-xs transition-colors {{ $canWithdraw ? 'bg-green-600 hover:bg-green-700 text-white cursor-pointer' : 'bg-gray-200 text-gray-500 cursor-not-allowed' }}">
                 {{ $hasPendingPayout ? 'Withdrawal Request Pending Admin Review' : 'Request Withdrawal (Min &#8369;100)' }}
             </button>
 
             @if($arrearsAmount > 0)
+                @if($availableBalance > 0)
+                    <form action="{{ route('seller.arrears.wallet-offset') }}" method="POST" class="m-0">
+                        @csrf
+                        <button type="submit"
+                                class="px-4 py-2.5 rounded-2xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold shadow-xs cursor-pointer">
+                            Offset Arrears from E-Wallet (&#8369;{{ number_format(min($availableBalance, $arrearsAmount), 2) }})
+                        </button>
+                    </form>
+                @endif
+
                 <button type="button"
                         @click="arrearsModalOpen = true"
                         class="px-4 py-2.5 rounded-2xl bg-danger text-white text-xs font-bold shadow-xs cursor-pointer">
-                    Settle Commission Arrears (&#8369;{{ number_format($arrearsAmount, 2) }})
+                    Remit Arrears via GCash (&#8369;{{ number_format($arrearsAmount, 2) }})
                 </button>
             @endif
         </div>
@@ -114,7 +145,13 @@
         <div class="p-5 bg-gradient-to-br from-primary-dark to-primary text-white rounded-2xl shadow-sm">
             <span class="text-[11px] font-bold text-white/80 uppercase">Available Real-Money E-Wallet</span>
             <p class="text-2xl font-serif font-extrabold mt-2">&#8369;{{ number_format($availableBalance, 2) }}</p>
-            <span class="text-[10px] text-white/85 mt-1 block">Withdrawable when &ge; &#8369;100.00</span>
+            <span class="text-[10px] text-white/85 mt-1 block">
+                @if($arrearsAmount > 0)
+                    Arrears: &#8369;{{ number_format($arrearsAmount, 2) }} &bull; Net Withdrawable: &#8369;{{ number_format($netWithdrawableAfterArrears, 2) }}
+                @else
+                    Withdrawable when &ge; &#8369;100.00
+                @endif
+            </span>
         </div>
         <div class="p-5 bg-surface rounded-2xl border border-border-subtle shadow-xs">
             <span class="text-[11px] font-bold text-text-muted uppercase">Pending Escrow Balance</span>
@@ -144,7 +181,7 @@
         </div>
         @if($payoutRequests->isEmpty())
             <div class="p-8 text-center text-xs text-text-muted">
-                No withdrawal requests submitted yet. Once your Available E-Wallet Balance reaches &#8369;100.00, click "Request Withdrawal" above.
+                No withdrawal requests submitted yet. Once your net Available E-Wallet Balance reaches &#8369;100.00, click "Request Withdrawal" above.
             </div>
         @else
             <div class="overflow-x-auto">
@@ -259,7 +296,6 @@
         @endif
     </div>
 
-    <!-- Request Withdrawal Modal with Required GCash Account Holder Name & Pre-Submission Confirmation Step -->
     <template x-teleport="body">
         <div x-show="payoutModalOpen"
              x-cloak
@@ -269,12 +305,18 @@
                 <div class="flex items-center justify-between pb-3 border-b border-border-subtle">
                     <div>
                         <h3 class="text-base font-bold text-primary-dark" x-text="payoutConfirmStep ? 'Confirm Withdrawal Details' : 'Request E-Wallet Withdrawal'"></h3>
-                        <p class="text-xs text-text-muted">Available Balance: <strong class="text-green-700">&#8369;{{ number_format($availableBalance, 2) }}</strong></p>
+                        <p class="text-xs text-text-muted">Net Withdrawable: <strong class="text-green-700">&#8369;{{ number_format($netWithdrawableAfterArrears, 2) }}</strong></p>
                     </div>
                     <button type="button"
                             @click="if (!isSubmittingPayout) { payoutModalOpen = false; payoutConfirmStep = false; }"
                             class="p-1 text-text-muted hover:text-text-main cursor-pointer">&times;</button>
                 </div>
+
+                @if($arrearsAmount > 0)
+                    <div class="p-3 rounded-2xl bg-amber-50 border border-amber-300 text-amber-950 text-[11px] font-semibold">
+                        Note: Your outstanding arrears of &#8369;{{ number_format($arrearsAmount, 2) }} will be automatically offset from your Available E-Wallet balance upon submitting this withdrawal.
+                    </div>
+                @endif
 
                 <form x-ref="sellerPayoutForm"
                       action="{{ route('seller.payouts.store') }}"
@@ -285,19 +327,18 @@
                     <input type="hidden" name="idempotency_key" value="{{ (string) \Illuminate\Support\Str::uuid() }}">
                     <input type="hidden" name="payout_method" value="GCASH">
 
-                    <!-- STEP 1: Enter Withdrawal & GCash Account Holder Details -->
                     <div x-show="!payoutConfirmStep" class="space-y-4">
                         <div>
                             <label class="block font-bold text-text-muted uppercase mb-1">Withdrawal Amount (&#8369;) <span class="text-danger">*</span></label>
                             <input type="number"
                                    step="0.01"
                                    min="100"
-                                   max="{{ number_format($availableBalance, 2, '.', '') }}"
+                                   max="{{ number_format($netWithdrawableAfterArrears, 2, '.', '') }}"
                                    name="requested_amount"
                                    x-model="requestedAmount"
                                    required
                                    class="w-full p-3 rounded-xl border border-border-subtle bg-surface font-bold text-sm text-primary-dark outline-none focus:border-primary">
-                            <span class="text-[11px] text-text-muted mt-1 block">Minimum &#8369;100.00 &bull; Max &#8369;{{ number_format($availableBalance, 2) }}</span>
+                            <span class="text-[11px] text-text-muted mt-1 block">Minimum &#8369;100.00 &bull; Max &#8369;{{ number_format($netWithdrawableAfterArrears, 2) }}</span>
                         </div>
 
                         <div>
@@ -351,7 +392,6 @@
                         </div>
                     </div>
 
-                    <!-- STEP 2: Pre-Submission Confirmation Message & Summary -->
                     <div x-show="payoutConfirmStep" x-cloak class="space-y-4">
                         <div class="p-3.5 rounded-2xl bg-amber-50 border border-amber-300 text-amber-950 space-y-1">
                             <div class="font-extrabold text-xs uppercase tracking-wider text-amber-900">Please Confirm Your GCash Details</div>
@@ -400,7 +440,6 @@
         </div>
     </template>
 
-    <!-- Settle Arrears Modal -->
     @if($arrearsAmount > 0)
         <template x-teleport="body">
             <div x-show="arrearsModalOpen"
@@ -410,11 +449,26 @@
                 <div @click.stop class="relative z-10 bg-surface rounded-3xl max-w-md w-full p-6 shadow-2xl border border-border-subtle space-y-4">
                     <div class="flex items-center justify-between pb-3 border-b border-border-subtle">
                         <div>
-                            <h3 class="text-base font-bold text-danger">Remit Platform Commission Arrears</h3>
+                            <h3 class="text-base font-bold text-danger">Settle Platform Commission Arrears</h3>
                             <p class="text-xs text-text-muted">Outstanding Arrears: <strong>&#8369;{{ number_format($arrearsAmount, 2) }}</strong></p>
                         </div>
                         <button type="button" @click="arrearsModalOpen = false" class="p-1 text-text-muted hover:text-text-main cursor-pointer">&times;</button>
                     </div>
+
+                    @if($availableBalance > 0)
+                        <div class="p-3.5 rounded-2xl bg-emerald-50 border border-emerald-200 flex items-center justify-between gap-3 text-xs">
+                            <div>
+                                <strong class="text-emerald-950 block">Instant Offset from Available E-Wallet</strong>
+                                <span class="text-emerald-800 text-[11px]">Use &#8369;{{ number_format(min($availableBalance, $arrearsAmount), 2) }} from your Available E-Wallet</span>
+                            </div>
+                            <form action="{{ route('seller.arrears.wallet-offset') }}" method="POST" class="m-0">
+                                @csrf
+                                <button type="submit" class="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold cursor-pointer shrink-0">
+                                    Offset Now
+                                </button>
+                            </form>
+                        </div>
+                    @endif
 
                     <form action="{{ route('seller.arrears.remit') }}"
                           method="POST"
@@ -423,7 +477,7 @@
                           class="space-y-4 text-xs">
                         @csrf
                         <div>
-                            <label class="block font-bold text-text-muted uppercase mb-1">Amount Remitted (&#8369;) <span class="text-danger">*</span></label>
+                            <label class="block font-bold text-text-muted uppercase mb-1">Amount Remitted via GCash (&#8369;) <span class="text-danger">*</span></label>
                             <input type="number" step="0.01" min="1" name="amount_remitted" value="{{ number_format($arrearsAmount, 2, '.', '') }}" required class="w-full p-3 rounded-xl border border-border-subtle font-bold">
                         </div>
                         <div>

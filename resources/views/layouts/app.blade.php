@@ -8,7 +8,7 @@
     @auth
         <meta name="session-authenticated" content="1">
     @endauth
-    <title> 
+    <title>
         {{ isset($title) ? $title . ' | ' . config('app.name') : config('app.name') }}
     </title>
     <link rel="icon" type="image/webp" href="{{ asset('assets/pink-storkia-minimized.webp') }}">
@@ -22,7 +22,7 @@
 <body class="overflow-x-clip max-w-full flex flex-col min-h-screen">
     <x-ui.preloader />
 
-    <header 
+    <header
         x-data="{
             showHeader: true,
             lastScroll: 0,
@@ -67,7 +67,7 @@
         </div>
     @endauth
 
-    <main class="flex-grow w-full min-w-0 overflow-x-clip">
+    <main id="storkia-main-content" class="flex-grow w-full min-w-0 overflow-x-clip">
         @yield('content')
         {{ $slot ?? '' }}
     </main>

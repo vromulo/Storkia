@@ -15,25 +15,12 @@ use Illuminate\View\View;
 use Intervention\Image\Drivers\Gd\Driver;
 use Intervention\Image\ImageManager;
 
-/**
- * Buyer side of Return & Refund.
- *
- *   GET  /user/orders/{sellerOrder}/return   -> the request form
- *   POST /user/orders/{sellerOrder}/return   -> submit the request
- *   GET  /user/returns/{returnRequest}       -> status, return tracking, refund
- *   POST /user/returns/{returnRequest}/escalate
- *
- * All business rules (who may do what, and when) live in ReturnRefundService;
- * this controller only validates input, stores photos and shows pages.
- */
 class ReturnRequestController extends Controller
 {
     public function __construct(
         protected ReturnRefundService $returnRefundService
     ) {
     }
-
-    // ------------------------------------------------------------------ pages
 
     public function create(Request $request, SellerOrder $sellerOrder): View|RedirectResponse
     {
@@ -81,8 +68,6 @@ class ReturnRequestController extends Controller
         ]);
     }
 
-    // ------------------------------------------------------------------ actions
-
     public function store(Request $request, SellerOrder $sellerOrder): RedirectResponse
     {
         $this->authorizeBuyer($request, $sellerOrder);
@@ -91,7 +76,13 @@ class ReturnRequestController extends Controller
             throw ValidationException::withMessages(['identity_verification' => $this->identityMessage()]);
         }
 
+        $payoutMethod = strtoupper(trim((string) $request->input('refund_payout_method', 'WALLET')));
+        if (! in_array($payoutMethod, ['WALLET', 'GCASH'], true)) {
+            $payoutMethod = 'WALLET';
+        }
+
         $request->merge([
+            'refund_payout_method'  => $payoutMethod,
             'refund_account_number' => $this->normalizeMobileNumber((string) $request->input('refund_account_number')),
         ]);
 
@@ -99,24 +90,25 @@ class ReturnRequestController extends Controller
             'reason_category'       => ['required', 'string', Rule::in(array_keys(ReturnRequest::reasonCatalog()))],
             'requested_resolution'  => ['nullable', Rule::in([ReturnRequest::RESOLUTION_RETURN_REFUND, ReturnRequest::RESOLUTION_REFUND_ONLY])],
             'reason'                => ['required', 'string', 'min:10', 'max:1000'],
-            'refund_account_name'   => ['required', 'string', 'max:120'],
-            'refund_account_number' => ['required', 'regex:/^09\d{9}$/'],
+            'refund_payout_method'  => ['required', Rule::in(['WALLET', 'GCASH'])],
+            'refund_account_name'   => ['required_if:refund_payout_method,GCASH', 'nullable', 'string', 'max:120'],
+            'refund_account_number' => ['required_if:refund_payout_method,GCASH', 'nullable', 'regex:/^09\d{9}$/'],
             'evidence_photos'       => ['required', 'array', 'min:1', 'max:5'],
             'evidence_photos.*'     => ['required', 'image', 'mimes:jpeg,png,jpg,webp', 'max:5120'],
         ], [
-            'reason_category.required'       => 'Please choose what went wrong with your order.',
-            'reason_category.in'             => 'Please choose one of the listed reasons.',
-            'reason.required'                => 'Please describe the problem.',
-            'reason.min'                     => 'Please provide at least 10 characters explaining the problem.',
-            'refund_account_name.required'   => 'Please enter the GCash account name for your refund.',
-            'refund_account_number.required' => 'Please enter your 11-digit GCash number starting with 09.',
-            'refund_account_number.regex'    => 'Your GCash number must be a valid 11-digit mobile number starting with 09.',
-            'evidence_photos.required'       => 'Please upload 1 to 5 photos as evidence.',
-            'evidence_photos.min'            => 'Please upload at least 1 evidence photo.',
-            'evidence_photos.max'            => 'You may upload a maximum of 5 evidence photos.',
-            'evidence_photos.*.image'        => 'Evidence files must be photos (JPG, PNG or WebP).',
-            'evidence_photos.*.mimes'        => 'Evidence photos must be JPG, PNG or WebP.',
-            'evidence_photos.*.max'          => 'Each evidence photo must not exceed 5MB.',
+            'reason_category.required'          => 'Please choose what went wrong with your order.',
+            'reason_category.in'                => 'Please choose one of the listed reasons.',
+            'reason.required'                   => 'Please describe the problem.',
+            'reason.min'                        => 'Please provide at least 10 characters explaining the problem.',
+            'refund_account_name.required_if'   => 'Please enter the GCash account name for your refund.',
+            'refund_account_number.required_if' => 'Please enter your 11-digit GCash number starting with 09.',
+            'refund_account_number.regex'       => 'Your GCash number must be a valid 11-digit mobile number starting with 09.',
+            'evidence_photos.required'          => 'Please upload 1 to 5 photos as evidence.',
+            'evidence_photos.min'               => 'Please upload at least 1 evidence photo.',
+            'evidence_photos.max'               => 'You may upload a maximum of 5 evidence photos.',
+            'evidence_photos.*.image'           => 'Evidence files must be photos (JPG, PNG or WebP).',
+            'evidence_photos.*.mimes'           => 'Evidence photos must be JPG, PNG or WebP.',
+            'evidence_photos.*.max'             => 'Each evidence photo must not exceed 5MB.',
         ]);
 
         $storedPhotos = [];
@@ -130,11 +122,15 @@ class ReturnRequestController extends Controller
                 'reason'                => $validated['reason'],
                 'requested_resolution'  => $validated['requested_resolution'] ?? null,
                 'evidence_photos'       => $storedPhotos,
-                'refund_account_name'   => $validated['refund_account_name'],
-                'refund_account_number' => $validated['refund_account_number'],
+                'refund_payout_method'  => $validated['refund_payout_method'],
+                'refund_account_name'   => $validated['refund_payout_method'] === 'GCASH'
+                    ? $validated['refund_account_name']
+                    : $request->user()->full_name,
+                'refund_account_number' => $validated['refund_payout_method'] === 'GCASH'
+                    ? $validated['refund_account_number']
+                    : null,
             ]);
         } catch (\Throwable $e) {
-            // Nothing was saved, so do not leave the uploaded photos behind.
             foreach ($storedPhotos as $path) {
                 Storage::disk('public')->delete($path);
             }
@@ -168,10 +164,6 @@ class ReturnRequestController extends Controller
             ->with('success', 'Your request was escalated to Storkia Admin for a final decision.');
     }
 
-    /**
-     * The old order-page form posts here until the page itself is updated.
-     * Send the buyer to the new request form instead of creating an old-style dispute.
-     */
     public function legacyReport(Request $request, SellerOrder $sellerOrder): RedirectResponse
     {
         $this->authorizeBuyer($request, $sellerOrder);
@@ -179,11 +171,6 @@ class ReturnRequestController extends Controller
         return redirect()->route('user.orders.return.create', $sellerOrder->id);
     }
 
-    /**
-     * The old "Escalate to Admin" button posted to OrderController@escalateDispute,
-     * which only touched the legacy dispute record and never the return request.
-     * Send the buyer to the request's status page, where the real escalate form lives.
-     */
     public function legacyEscalate(Request $request, SellerOrder $sellerOrder): RedirectResponse
     {
         $this->authorizeBuyer($request, $sellerOrder);
@@ -199,14 +186,11 @@ class ReturnRequestController extends Controller
         return redirect()->route('user.returns.show', $existing->id);
     }
 
-    // ------------------------------------------------------------------ helpers
-
     protected function authorizeBuyer(Request $request, SellerOrder $sellerOrder): void
     {
         abort_unless((int) $sellerOrder->buyer_id === (int) $request->user()->id, 403);
     }
 
-    /** Same rules the service enforces, checked early so the buyer sees a friendly message. */
     protected function eligibilityError(SellerOrder $sellerOrder): ?string
     {
         if ($sellerOrder->status === 'completed') {
@@ -234,7 +218,6 @@ class ReturnRequestController extends Controller
         return 'Valid ID Verification Required: You must have an approved Valid Government ID on your account to request a Return & Refund. Please complete Identity Verification in your Account Management settings first.';
     }
 
-    /** 09171234567, 9171234567 and +639171234567 all become 09171234567. */
     protected function normalizeMobileNumber(string $value): string
     {
         $digits = preg_replace('/\D/', '', $value);

@@ -9,34 +9,9 @@ use App\Models\SellerOrder;
 use App\Models\SellerOrderExtra;
 use App\Notifications\OrderLifecycleNotification;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Validation\ValidationException;
 
-/**
- * The return / refund workflow. Controllers (buyer, seller, admin, logistics) call
- * these methods; they never change a return request or its order directly.
- *
- *   buyer   submit()          -> request is created, order becomes "disputed"
- *   seller  sellerRespond()   -> approve_return | approve_refund_only | reject
- *   buyer   buyerEscalate()   -> only after a seller rejection
- *   admin   adminResolve()    -> escalated or receipt_disputed requests
- *   seller  sellerConfirmReceipt() -> after the parcel is delivered back to them
- *   admin   markRefundPaid()  -> after sending the GCash refund
- *   system  markReturnDelivered() / closeWithoutRefund()
- *
- * Return & Refund path:
- *   approve_return -> return_in_transit (return shipment created) -> awaiting_seller_confirmation
- *   -> seller confirms -> refund_pending -> refunded
- * Refund Only path:
- *   approve_refund_only -> refund_pending -> refunded
- *
- * Money is handled by ReturnRefundLedgerService. This service also keeps the
- * legacy dispute fields (SellerOrderExtra, order status, payment status) in sync so
- * every existing admin / buyer / seller screen that reads them keeps working.
- *
- * Every public method is one database transaction. Notifications and follow-up
- * work (such as completing the order after a rejected request) run only AFTER the
- * transaction commits and never throw.
- */
 class ReturnRefundService
 {
     public const ACTION_APPROVE_RETURN      = 'approve_return';
@@ -45,17 +20,14 @@ class ReturnRefundService
 
     public function __construct(
         protected ReturnRefundLedgerService $ledger,
-        protected InventoryStockService $inventoryStockService
+        protected InventoryStockService $inventoryStockService,
+        protected ?RoleWalletService $roleWalletService = null,
+        protected ?BuyerRewardService $buyerRewardService = null
     ) {
+        $this->roleWalletService = $roleWalletService ?? app(RoleWalletService::class);
+        $this->buyerRewardService = $buyerRewardService ?? app(BuyerRewardService::class);
     }
 
-    // ================================================================== buyer
-
-    /**
-     * @param  array{reason_category: string, reason: string, requested_resolution?: ?string,
-     *               evidence_photos?: array<int, string>, refund_account_name?: ?string,
-     *               refund_account_number?: ?string}  $data
-     */
     public function submit(SellerOrder $sellerOrder, int $buyerId, array $data): ReturnRequest
     {
         $ctx = $this->newContext();
@@ -66,19 +38,15 @@ class ReturnRefundService
             if ((int) $locked->buyer_id !== $buyerId) {
                 $this->fail('This order does not belong to your account.');
             }
-
             if ($locked->status === 'completed') {
                 $this->fail('Completed orders can no longer be returned or refunded.');
             }
-
             if ($locked->status !== 'delivered') {
                 $this->fail('A return or refund can only be requested after the parcel is marked delivered.');
             }
-
             if ($locked->confirmation_deadline_at && $locked->confirmation_deadline_at->isPast()) {
                 $this->fail('The ' . SellerOrder::BUYER_CONFIRMATION_HOURS . '-hour window to request a return or refund has already expired.');
             }
-
             if (ReturnRequest::where('seller_order_id', $locked->id)->exists()) {
                 $this->fail('A return or refund request already exists for this order.');
             }
@@ -95,10 +63,15 @@ class ReturnRefundService
 
             $resolution = $this->chooseRequestedResolution($category, $data['requested_resolution'] ?? null);
             $photos = array_values(array_filter((array) ($data['evidence_photos'] ?? [])));
+            $payoutMethod = strtoupper(trim((string) ($data['refund_payout_method'] ?? 'WALLET')));
+            if (! in_array($payoutMethod, ['WALLET', 'GCASH'], true)) {
+                $payoutMethod = 'WALLET';
+            }
+
             $accountName = trim((string) ($data['refund_account_name'] ?? ''));
             $accountNumber = trim((string) ($data['refund_account_number'] ?? ''));
 
-            $request = ReturnRequest::create([
+            $createPayload = [
                 'request_number'              => ReturnRequest::generateRequestNumber(),
                 'seller_order_id'             => $locked->id,
                 'order_id'                    => $locked->order_id,
@@ -111,11 +84,17 @@ class ReturnRefundService
                 'reason'                      => $reason,
                 'evidence_photos'             => $photos,
                 'refund_amount'               => round((float) $locked->total_amount, 2),
-                'refund_account_name'         => $accountName !== '' ? $accountName : null,
+                'refund_account_name'         => $accountName !== '' ? $accountName : ($locked->buyer?->full_name ?? null),
                 'refund_account_number'       => $accountNumber !== '' ? $accountNumber : null,
                 'refund_status'               => ReturnRequest::REFUND_NOT_DUE,
                 'seller_response_deadline_at' => now()->addHours(ReturnRequest::SELLER_RESPONSE_HOURS),
-            ]);
+            ];
+
+            if (Schema::hasColumn('return_requests', 'refund_payout_method')) {
+                $createPayload['refund_payout_method'] = $payoutMethod;
+            }
+
+            $request = ReturnRequest::create($createPayload);
 
             $locked->update([
                 'status'                 => 'disputed',
@@ -137,7 +116,7 @@ class ReturnRefundService
             $this->syncLegacyExtra($locked, [
                 'dispute_reason_category' => $category,
                 'dispute_evidence_photos' => $photos,
-                'refund_method'           => 'GCASH',
+                'refund_method'           => $payoutMethod,
                 'refund_account_name'     => $request->refund_account_name,
                 'refund_account_number'   => $request->refund_account_number,
                 'refund_amount'           => $request->refund_amount,
@@ -186,7 +165,6 @@ class ReturnRefundService
             if ((int) $locked->buyer_id !== $buyerId) {
                 $this->fail('This request does not belong to your account.');
             }
-
             if (! $locked->canBuyerEscalate()) {
                 $this->fail('Only a request rejected by the seller can be escalated, and only once.');
             }
@@ -233,8 +211,6 @@ class ReturnRefundService
         return $request->fresh();
     }
 
-    // ================================================================== seller
-
     public function sellerRespond(ReturnRequest $request, int $sellerUserId, string $action, ?string $reason = null): ReturnRequest
     {
         $ctx = $this->newContext();
@@ -246,7 +222,6 @@ class ReturnRefundService
             if ((int) $order->seller_id !== $sellerUserId) {
                 $this->fail('This request belongs to another seller.');
             }
-
             if (! $locked->isAwaitingSellerResponse()) {
                 $this->fail('This request is no longer waiting for your response.');
             }
@@ -258,15 +233,12 @@ class ReturnRefundService
                 if ($cannotBeSentBack) {
                     $this->fail('An item that was never received (or an empty package) cannot be sent back. Approve a refund only instead.');
                 }
-
                 $this->approveReturn($locked, $order, 'Seller', $sellerUserId, $note, $ctx);
-
                 return;
             }
 
             if ($action === self::ACTION_APPROVE_REFUND_ONLY) {
                 $this->approveRefundOnly($locked, $order, 'Seller', $sellerUserId, $note, $ctx);
-
                 return;
             }
 
@@ -297,7 +269,6 @@ class ReturnRefundService
                     $this->url('user.orders.show', $order->id),
                     $order
                 );
-
                 return;
             }
 
@@ -309,13 +280,6 @@ class ReturnRefundService
         return $request->fresh();
     }
 
-    /**
-     * The seller's verdict on the parcel that came back.
-     *   received_ok              -> stock is restored, the refund becomes due
-     *   received_not_as_expected -> Admin reviews (notes required)
-     *
-     * @param  array<int, string>  $photos
-     */
     public function sellerConfirmReceipt(ReturnRequest $request, int $sellerUserId, string $outcome, ?string $notes = null, array $photos = []): ReturnRequest
     {
         $ctx = $this->newContext();
@@ -327,7 +291,6 @@ class ReturnRefundService
             if ((int) $order->seller_id !== $sellerUserId) {
                 $this->fail('This request belongs to another seller.');
             }
-
             if ($locked->status !== ReturnRequest::STATUS_AWAITING_SELLER_CONFIRM) {
                 $this->fail('There is no returned parcel waiting for your confirmation.');
             }
@@ -343,7 +306,6 @@ class ReturnRefundService
                 ]);
 
                 $this->makeRefundDue($locked, $order, true, 'Seller', $sellerUserId, 'Seller confirmed the returned parcel was received in good order.', $ctx);
-
                 return;
             }
 
@@ -371,7 +333,6 @@ class ReturnRefundService
                     $this->url('user.orders.show', $order->id),
                     $order
                 );
-
                 return;
             }
 
@@ -383,13 +344,6 @@ class ReturnRefundService
         return $request->fresh();
     }
 
-    // ================================================================== admin
-
-    /**
-     * Final decision on an escalated request, or on a returned parcel the seller disputed.
-     *
-     * @param  string  $decision  one of ReturnRequest::DECISION_*
-     */
     public function adminResolve(ReturnRequest $request, int $adminId, string $decision, ?string $remarks = null): ReturnRequest
     {
         $ctx = $this->newContext();
@@ -399,7 +353,6 @@ class ReturnRefundService
             $order = $this->lockOrder($locked->seller_order_id);
 
             $isReceiptDispute = $locked->status === ReturnRequest::STATUS_RECEIPT_DISPUTED;
-
             if (! $isReceiptDispute && $locked->status !== ReturnRequest::STATUS_ESCALATED) {
                 $this->fail('Only escalated requests or disputed returned parcels can be resolved by Admin.');
             }
@@ -419,7 +372,6 @@ class ReturnRefundService
 
             if ($decision === ReturnRequest::DECISION_REJECTED) {
                 $locked->update($this->decisionAttributes('Admin', $adminId, $decision, $remarks));
-
                 $this->applyClose(
                     $locked,
                     $order,
@@ -430,14 +382,11 @@ class ReturnRefundService
                     $adminId,
                     $ctx
                 );
-
                 return;
             }
 
-            // The buyer won. A parcel the seller already received (and disputed) is not sent again.
             if ($isReceiptDispute || $decision === ReturnRequest::DECISION_APPROVED_REFUND_ONLY) {
                 $this->approveRefundOnly($locked, $order, 'Admin', $adminId, $remarks, $ctx, $isReceiptDispute);
-
                 return;
             }
 
@@ -453,9 +402,6 @@ class ReturnRefundService
         return $request->fresh();
     }
 
-    /**
-     * Admin has sent the GCash refund to the buyer.
-     */
     public function markRefundPaid(ReturnRequest $request, int $adminId, string $reference, ?string $remarks = null): ReturnRequest
     {
         $ctx = $this->newContext();
@@ -489,7 +435,6 @@ class ReturnRefundService
                 'refund_released_at' => now(),
             ]);
 
-            // Keep the existing GCash refund queue (commissions page) from listing it again.
             $order->paymentSubmission?->update([
                 'refund_status'    => 'refunded',
                 'refund_reference' => $reference,
@@ -513,11 +458,6 @@ class ReturnRefundService
         return $request->fresh();
     }
 
-    // ================================================================== system / logistics
-
-    /**
-     * The returned parcel reached the seller. Called by the return shipment flow.
-     */
     public function markReturnDelivered(ReturnRequest $request): ReturnRequest
     {
         $ctx = $this->newContext();
@@ -563,28 +503,16 @@ class ReturnRefundService
         return $request->fresh();
     }
 
-    /**
-     * End a request with NO refund. The order goes back to "delivered" and then
-     * completes normally (the seller is paid). Used when:
-     *   - the seller rejected and the buyer did not escalate in time,
-     *   - the buyer never handed the parcel over for the return pickup,
-     *   - the return pickup failed too many times.
-     *
-     * @param  string  $finalStatus  ReturnRequest::STATUS_REJECTED or STATUS_CLOSED
-     */
     public function closeWithoutRefund(ReturnRequest $request, string $finalStatus, string $reasonCode, string $message, string $actorType = 'System', ?int $actorId = null): ReturnRequest
     {
         $ctx = $this->newContext();
 
         DB::transaction(function () use ($request, $finalStatus, $reasonCode, $message, $actorType, $actorId, &$ctx) {
             $locked = $this->lockRequest($request->id);
-
             if ($locked->isTerminal()) {
                 return;
             }
-
             $order = $this->lockOrder($locked->seller_order_id);
-
             $this->applyClose($locked, $order, $finalStatus, $reasonCode, $message, $actorType, $actorId, $ctx);
         });
 
@@ -593,14 +521,6 @@ class ReturnRefundService
         return $request->fresh();
     }
 
-    // ================================================================== shared steps
-
-    /**
-     * The seller (or Admin) requires the item back: create the return shipment and
-     * hand it to Logistics. Refund waits until the seller confirms receipt.
-     *
-     * @param  array<string, mixed>  $ctx
-     */
     protected function approveReturn(ReturnRequest $locked, SellerOrder $order, string $actorType, ?int $actorId, string $note, array &$ctx): void
     {
         $locked->update(array_merge(
@@ -613,7 +533,6 @@ class ReturnRefundService
         ));
 
         $forward = $order->shipment;
-
         $returnShipment = ReturnShipment::firstOrCreate(
             ['return_request_id' => $locked->id],
             [
@@ -669,11 +588,6 @@ class ReturnRefundService
         );
     }
 
-    /**
-     * Refund without any item coming back (buyer keeps it).
-     *
-     * @param  array<string, mixed>  $ctx
-     */
     protected function approveRefundOnly(ReturnRequest $locked, SellerOrder $order, string $actorType, ?int $actorId, string $note, array &$ctx, bool $afterReceiptDispute = false): void
     {
         $locked->update(array_merge(
@@ -694,25 +608,68 @@ class ReturnRefundService
         $this->makeRefundDue($locked, $order, false, $actorType, $actorId, $remarks, $ctx);
     }
 
-    /**
-     * The refund is now owed to the buyer: settle the wallets, end the order, and
-     * put the refund in Admin's payout queue.
-     *
-     * @param  array<string, mixed>  $ctx
-     */
     protected function makeRefundDue(ReturnRequest $locked, SellerOrder $order, bool $restoreStock, string $actorType, ?int $actorId, string $remarks, array &$ctx): void
     {
-        $locked->update([
-            'status'         => ReturnRequest::STATUS_REFUND_PENDING,
-            'refund_status'  => ReturnRequest::REFUND_PENDING_ADMIN,
-            'refund_due_at'  => now()->addHours(ReturnRequest::REFUND_PAYOUT_HOURS),
-        ]);
+        $isWalletRefund = $locked->isWalletRefund() || empty($locked->refund_account_number);
 
-        // Wallets first, so a failure rolls the whole step back.
         $this->ledger->settleRefund($locked->fresh());
+        $locked->refresh();
 
         if ($restoreStock) {
             $this->inventoryStockService->restoreStockForSellerOrder($order);
+        }
+
+        $this->buyerRewardService?->restoreCoinsForSellerOrder($order);
+
+        if ($isWalletRefund) {
+            $walletTx = $this->roleWalletService?->refundBuyerWalletForOrder(
+                $order,
+                (float) $locked->refund_amount,
+                "Instant E-Wallet Refund ({$locked->request_number})"
+            );
+
+            $walletRef = $walletTx?->transaction_reference ?? ('WAL-' . now()->format('YmdHis'));
+
+            $locked->update([
+                'status'           => ReturnRequest::STATUS_REFUNDED,
+                'refund_status'    => ReturnRequest::REFUND_REFUNDED,
+                'refund_reference' => $walletRef,
+                'refund_remarks'   => 'Instant automated refund credited to Buyer Storkia E-Wallet.',
+                'refund_due_at'    => now(),
+                'refunded_at'      => now(),
+                'closed_at'        => now(),
+                'closed_reason'    => 'refunded',
+            ]);
+
+            $order->paymentSubmission?->update([
+                'refund_status'    => 'refunded',
+                'refund_reference' => $walletRef,
+            ]);
+
+            $this->syncLegacyExtra($order, [
+                'refund_method'      => 'WALLET',
+                'refund_amount'      => $locked->refund_amount,
+                'refund_status'      => 'refund_released',
+                'refund_released_at' => now(),
+            ]);
+
+            $this->history($order, 'disputed', 'returned_to_seller', $actorType, $actorId, $remarks . " Instant refund of ₱" . number_format((float) $locked->refund_amount, 2) . " credited to Buyer Storkia E-Wallet (Ref #{$walletRef}).");
+        } else {
+            $locked->update([
+                'status'        => ReturnRequest::STATUS_REFUND_PENDING,
+                'refund_status' => ReturnRequest::REFUND_PENDING_ADMIN,
+                'refund_due_at' => now()->addHours(ReturnRequest::REFUND_PAYOUT_HOURS),
+            ]);
+
+            $order->paymentSubmission?->update(['refund_status' => 'pending_admin_refund']);
+
+            $this->syncLegacyExtra($order, [
+                'refund_method' => 'GCASH',
+                'refund_amount' => $locked->refund_amount,
+                'refund_status' => 'pending_admin_refund',
+            ]);
+
+            $this->history($order, 'disputed', 'returned_to_seller', $actorType, $actorId, $remarks . " Refund of ₱" . number_format((float) $locked->refund_amount, 2) . " queued for payout ({$locked->request_number}).");
         }
 
         $order->update([
@@ -722,26 +679,17 @@ class ReturnRefundService
             'dispute_resolved_at'    => now(),
             'cancelled_at'           => now(),
         ]);
-
         $order->payment?->update(['status' => 'cancelled']);
-
-        $order->paymentSubmission?->update(['refund_status' => 'pending_admin_refund']);
-
-        $this->syncLegacyExtra($order, [
-            'refund_method' => 'GCASH',
-            'refund_amount' => $locked->refund_amount,
-            'refund_status' => 'pending_admin_refund',
-        ]);
-
-        $this->history($order, 'disputed', 'returned_to_seller', $actorType, $actorId, $remarks . " Refund of ₱" . number_format((float) $locked->refund_amount, 2) . " queued for payout ({$locked->request_number}).");
 
         $this->syncParent($order);
 
         $this->queue(
             $ctx,
             $order->buyer,
-            'Refund Approved',
-            "Your refund of ₱" . number_format((float) $locked->refund_amount, 2) . " for Order #{$order->seller_order_number} was approved. Storkia will send it to your GCash within " . ReturnRequest::REFUND_PAYOUT_HOURS . ' hours.',
+            $isWalletRefund ? 'Instant Refund Credited to Your E-Wallet!' : 'Refund Approved',
+            $isWalletRefund
+                ? "Your refund of ₱" . number_format((float) $locked->refund_amount, 2) . " for Order #{$order->seller_order_number} was instantly credited to your Storkia E-Wallet!"
+                : "Your refund of ₱" . number_format((float) $locked->refund_amount, 2) . " for Order #{$order->seller_order_number} was approved. Storkia will send it to your GCash within " . ReturnRequest::REFUND_PAYOUT_HOURS . ' hours.',
             'success',
             $this->url('user.orders.show', $order->id),
             $order
@@ -758,12 +706,6 @@ class ReturnRefundService
         );
     }
 
-    /**
-     * Terminal "no refund" ending. The order is put back to delivered; the order is
-     * completed after the transaction commits.
-     *
-     * @param  array<string, mixed>  $ctx
-     */
     protected function applyClose(ReturnRequest $locked, SellerOrder $order, string $finalStatus, string $reasonCode, string $message, string $actorType, ?int $actorId, array &$ctx): void
     {
         $locked->update([
@@ -789,7 +731,6 @@ class ReturnRefundService
         ]);
 
         $this->history($order, 'disputed', 'delivered', $actorType, $actorId, $message . ' The order will now complete normally.');
-
         $this->syncParent($order);
 
         $this->queue(
@@ -821,11 +762,8 @@ class ReturnRefundService
         };
     }
 
-    // ================================================================== helpers
-
     protected function chooseRequestedResolution(string $category, ?string $requested): string
     {
-        // Never-arrived / empty-box cases have nothing to send back.
         if (ReturnRequest::suggestedResolutionFor($category) === ReturnRequest::RESOLUTION_REFUND_ONLY) {
             return ReturnRequest::RESOLUTION_REFUND_ONLY;
         }
@@ -835,9 +773,6 @@ class ReturnRefundService
             : ReturnRequest::RESOLUTION_RETURN_REFUND;
     }
 
-    /**
-     * @return array<string, mixed>
-     */
     protected function decisionAttributes(string $actorType, ?int $actorId, string $decision, ?string $note): array
     {
         if ($actorType === 'Admin') {
@@ -888,11 +823,6 @@ class ReturnRefundService
         ]);
     }
 
-    /**
-     * Keep the legacy dispute record in step so existing screens still read correctly.
-     *
-     * @param  array<string, mixed>  $attributes
-     */
     protected function syncLegacyExtra(SellerOrder $order, array $attributes): void
     {
         $extra = $order->extra ?: SellerOrderExtra::create([
@@ -906,7 +836,6 @@ class ReturnRefundService
     protected function syncParent(SellerOrder $order): void
     {
         if ($order->order) {
-            // Resolved lazily: OrderCompletionService will call back into this service.
             app(OrderCompletionService::class)->syncParentOrderStatus($order->order);
         }
     }
@@ -916,19 +845,11 @@ class ReturnRefundService
         throw ValidationException::withMessages(['return' => $message]);
     }
 
-    // ------------------------------------------------------------------ notifications
-
-    /**
-     * @return array{notifications: array<int, array{0: object, 1: OrderLifecycleNotification}>, after: array<int, callable>}
-     */
     protected function newContext(): array
     {
         return ['notifications' => [], 'after' => []];
     }
 
-    /**
-     * @param  array<string, mixed>  $ctx
-     */
     protected function queue(array &$ctx, ?object $recipient, string $title, string $message, string $type, ?string $url, SellerOrder $order): void
     {
         if (! $recipient) {
@@ -941,11 +862,6 @@ class ReturnRefundService
         ];
     }
 
-    /**
-     * Runs once the transaction has committed. Nothing here may throw.
-     *
-     * @param  array<string, mixed>  $ctx
-     */
     protected function runAfterCommit(array $ctx): void
     {
         foreach ($ctx['notifications'] as [$recipient, $notification]) {
@@ -963,10 +879,6 @@ class ReturnRefundService
         }
     }
 
-    /**
-     * Route URL, or null if that route does not exist (yet). A missing screen must
-     * never stop a refund from being processed.
-     */
     protected function url(string $routeName, mixed $parameter = null): ?string
     {
         try {

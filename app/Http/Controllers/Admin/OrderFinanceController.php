@@ -5,9 +5,11 @@ namespace App\Http\Controllers\Admin;
 use App\Http\Controllers\Controller;
 use App\Http\Controllers\Courier\PickupController;
 use App\Http\Controllers\Rider\DeliveryController;
+use App\Models\BuyerWalletTopup;
 use App\Models\CommissionRecord;
 use App\Models\Courier;
 use App\Models\DeliveryAssignment;
+use App\Models\LogisticsAdminRemittance;
 use App\Models\LogisticsProfile;
 use App\Models\OrderPaymentSubmission;
 use App\Models\OrderServiceRating;
@@ -37,6 +39,37 @@ class OrderFinanceController extends Controller
         protected RoleWalletService $roleWalletService
     ) {}
 
+    protected function sumAdminSubsidyForOrderIds($orderIds): float
+    {
+        if (! Schema::hasTable('seller_order_extras') || empty($orderIds) || count($orderIds) === 0) {
+            return 0.00;
+        }
+
+        $rows = DB::table('seller_order_extras')
+            ->whereIn('seller_order_id', $orderIds)
+            ->get([
+                'platform_voucher_code',
+                'platform_voucher_discount',
+                'shipping_voucher_discount',
+                'coins_discount_amount',
+            ]);
+
+        $total = 0.00;
+        foreach ($rows as $row) {
+            $platDisc = (float) ($row->platform_voucher_discount ?? 0);
+            $coinsDisc = (float) ($row->coins_discount_amount ?? 0);
+            $shipDisc = (float) ($row->shipping_voucher_discount ?? 0);
+
+            if (empty($row->platform_voucher_code) && abs($platDisc - $coinsDisc) < 0.009) {
+                $platDisc = 0.00;
+            }
+
+            $total = round($total + $platDisc + $coinsDisc + $shipDisc, 2);
+        }
+
+        return $total;
+    }
+
     public function index(Request $request)
     {
         StorkSchemaBootstrapService::ensureTablesExist();
@@ -47,7 +80,7 @@ class OrderFinanceController extends Controller
         $status = $request->query('status', 'all');
         $search = trim((string) $request->query('search', ''));
 
-        $commQuery = CommissionRecord::with(['sellerOrder.buyer', 'sellerProfile', 'logisticsProfile', 'shipment', 'rider'])
+        $commQuery = CommissionRecord::with(['sellerOrder.buyer', 'sellerProfile', 'logisticsProfile', 'shipment', 'courier', 'rider'])
             ->orderByDesc('created_at');
 
         if ($status !== 'all' && in_array($status, ['recorded', 'pending_settlement', 'settled'], true)) {
@@ -90,6 +123,27 @@ class OrderFinanceController extends Controller
             : collect();
         $payoutRequests = $withdrawalRequests;
 
+        $logisticsCodRemittances = Schema::hasTable('logistics_admin_remittances')
+            ? LogisticsAdminRemittance::with([
+                'logisticsProfile.user',
+                'items.sellerOrder.sellerProfile',
+                'items.shipment',
+                'reviewedByAdmin',
+            ])
+                ->orderByRaw("CASE WHEN status = 'pending_verification' THEN 0 ELSE 1 END")
+                ->orderByDesc('submitted_at')
+                ->paginate(20, ['*'], 'lar_page')
+                ->withQueryString()
+            : collect();
+
+        $buyerWalletTopups = Schema::hasTable('buyer_wallet_topups')
+            ? BuyerWalletTopup::with(['buyer', 'wallet', 'reviewedByAdmin'])
+                ->orderByRaw("CASE WHEN status = 'pending_verification' THEN 0 ELSE 1 END")
+                ->orderByDesc('created_at')
+                ->paginate(20, ['*'], 'topup_page')
+                ->withQueryString()
+            : collect();
+
         $arrearsRemittances = Schema::hasTable('seller_commission_remittances')
             ? collect(
                 DB::table('seller_commission_remittances')
@@ -117,16 +171,12 @@ class OrderFinanceController extends Controller
         $sellerNet90 = round((float) $allCommissions->sum(fn ($c) => (float) ($c->seller_net_earning ?? $c->seller_net_amount ?? 0)), 2);
         $logisticsComm10 = round((float) $allCommissions->sum('logistics_commission_amount'), 2);
         $logisticsOps80 = round((float) $allCommissions->sum(fn ($c) => (float) ($c->logistics_operational_revenue ?? $c->logistics_operational_amount ?? 0)), 2);
-        $logisticsNet90 = round((float) $allCommissions->sum(fn ($c) => (float) ($c->logistics_total_earning ?: ((float) $c->logistics_commission_amount + (float) ($c->logistics_operational_revenue ?? $c->logistics_operational_amount ?? 0)))), 2);
+        $logisticsNetShare = round((float) $allCommissions->sum(fn ($c) => (float) ($c->logistics_total_earning ?: ((float) $c->logistics_commission_amount + (float) ($c->logistics_operational_revenue ?? $c->logistics_operational_amount ?? 0)))), 2);
+        $courierNetTotal = round((float) $allCommissions->sum(fn ($c) => (float) ($c->courier_commission_amount ?? 0)), 2);
         $riderNet10 = round((float) $allCommissions->sum('rider_commission_amount'), 2);
 
-        $completedOrderIds = $allCommissions->pluck('seller_order_id')->unique()->values();
-        $adminVoucherSubsidy = Schema::hasTable('seller_order_extras') && $completedOrderIds->isNotEmpty()
-            ? round((float) DB::table('seller_order_extras')
-                ->whereIn('seller_order_id', $completedOrderIds)
-                ->selectRaw('COALESCE(SUM(platform_voucher_discount + shipping_voucher_discount), 0) as total_subsidy')
-                ->value('total_subsidy'), 2)
-            : 0.00;
+        $completedOrderIds = $allCommissions->pluck('seller_order_id')->unique()->values()->all();
+        $adminVoucherSubsidy = $this->sumAdminSubsidyForOrderIds($completedOrderIds);
 
         $netAdminProfit = round($grossAdminCommission10 - $adminVoucherSubsidy, 2);
 
@@ -140,6 +190,20 @@ class OrderFinanceController extends Controller
             ? round((float) WithdrawalRequest::where('status', 'completed')->sum('requested_amount'), 2)
             : 0.00;
 
+        $pendingLogisticsRemittancesCount = Schema::hasTable('logistics_admin_remittances')
+            ? LogisticsAdminRemittance::where('status', 'pending_verification')->count()
+            : 0;
+        $pendingLogisticsRemittancesAmount = Schema::hasTable('logistics_admin_remittances')
+            ? round((float) LogisticsAdminRemittance::where('status', 'pending_verification')->sum('total_cod_amount'), 2)
+            : 0.00;
+
+        $pendingWalletTopupsCount = Schema::hasTable('buyer_wallet_topups')
+            ? BuyerWalletTopup::where('status', 'pending_verification')->count()
+            : 0;
+        $approvedWalletTopupsAmount = Schema::hasTable('buyer_wallet_topups')
+            ? round((float) BuyerWalletTopup::where('status', 'approved')->sum('approved_amount'), 2)
+            : 0.00;
+
         $pendingGcashVerificationsCount = Schema::hasTable('order_payment_submissions')
             ? OrderPaymentSubmission::whereIn('status', ['submitted', 'refund_required_seller_timeout'])
                 ->orWhere('refund_status', 'pending_admin_refund')
@@ -147,28 +211,33 @@ class OrderFinanceController extends Controller
             : 0;
 
         $metrics = [
-            'gross_merchandise_sales'      => $grossMerchandiseSales,
-            'gross_admin_commission'       => $grossAdminCommission10,
-            'admin_voucher_subsidy'        => $adminVoucherSubsidy,
-            'net_admin_profit'             => $netAdminProfit,
-            'gross_shipping_fees'          => $grossShippingFees,
-            'seller_net_90'                => $sellerNet90,
-            'logistics_net_90'             => $logisticsNet90,
-            'rider_net_10'                 => $riderNet10,
-            'pending_withdrawals_count'    => $pendingWithdrawalsCount,
-            'pending_withdrawals_amount'   => $pendingWithdrawalsAmount,
-            'completed_withdrawals_amount' => $completedWithdrawalsAmount,
-            'pending_gcash_verifications'  => $pendingGcashVerificationsCount,
-            'admin_wallet_available'       => $netAdminProfit,
-            'admin_wallet_pending'         => round((float) $allCommissions->where('status', '!=', 'settled')->sum('admin_commission_amount'), 2),
-            'admin_10_commission_total'    => $grossAdminCommission10,
-            'admin_net_profit_after_sub'   => $netAdminProfit,
-            'seller_90_net_total'          => $sellerNet90,
-            'settled_seller_payouts'       => $completedWithdrawalsAmount,
-            'logistics_10_commission'      => $logisticsComm10,
-            'logistics_80_operational'     => $logisticsOps80,
-            'rider_10_commission'          => $riderNet10,
-            'gross_shipping_volume'        => $grossShippingFees,
+            'gross_merchandise_sales'              => $grossMerchandiseSales,
+            'gross_admin_commission'               => $grossAdminCommission10,
+            'admin_voucher_subsidy'                => $adminVoucherSubsidy,
+            'net_admin_profit'                     => $netAdminProfit,
+            'gross_shipping_fees'                  => $grossShippingFees,
+            'seller_net_90'                        => $sellerNet90,
+            'logistics_net_90'                     => $logisticsNetShare,
+            'courier_net_total'                    => $courierNetTotal,
+            'rider_net_10'                         => $riderNet10,
+            'pending_withdrawals_count'            => $pendingWithdrawalsCount,
+            'pending_withdrawals_amount'           => $pendingWithdrawalsAmount,
+            'completed_withdrawals_amount'         => $completedWithdrawalsAmount,
+            'pending_logistics_remittances_count'  => $pendingLogisticsRemittancesCount,
+            'pending_logistics_remittances_amount' => $pendingLogisticsRemittancesAmount,
+            'pending_wallet_topups_count'          => $pendingWalletTopupsCount,
+            'approved_wallet_topups_amount'        => $approvedWalletTopupsAmount,
+            'pending_gcash_verifications'          => $pendingGcashVerificationsCount,
+            'admin_wallet_available'               => $netAdminProfit,
+            'admin_wallet_pending'                 => round((float) $allCommissions->where('status', '!=', 'settled')->sum('admin_commission_amount'), 2),
+            'admin_10_commission_total'            => $grossAdminCommission10,
+            'admin_net_profit_after_sub'           => $netAdminProfit,
+            'seller_90_net_total'                  => $sellerNet90,
+            'settled_seller_payouts'               => $completedWithdrawalsAmount,
+            'logistics_10_commission'              => $logisticsComm10,
+            'logistics_80_operational'             => $logisticsOps80,
+            'rider_10_commission'                  => $riderNet10,
+            'gross_shipping_volume'                => $grossShippingFees,
         ];
 
         return view()->first(
@@ -184,11 +253,93 @@ class OrderFinanceController extends Controller
                 'platformVouchers',
                 'withdrawalRequests',
                 'payoutRequests',
+                'logisticsCodRemittances',
+                'buyerWalletTopups',
                 'arrearsRemittances',
                 'gcashSubmissions',
                 'metrics'
             )
         );
+    }
+
+    public function decideBuyerWalletTopup(Request $request, int $topup)
+    {
+        $admin = Auth::guard('admin')->user();
+
+        $validated = $request->validate([
+            'decision'        => ['required', 'in:approve,reject,approved,rejected'],
+            'approved_amount' => ['required_if:decision,approve,approved', 'nullable', 'numeric', 'min:1', 'max:500000'],
+            'remarks'         => ['nullable', 'string', 'max:500'],
+        ], [
+            'approved_amount.required_if' => 'Please enter the exact verified Peso amount shown on the buyer\'s GCash receipt screenshot.',
+        ]);
+
+        $processed = $this->roleWalletService->processBuyerWalletTopupDecision(
+            topupId: $topup,
+            adminId: (int) ($admin?->id ?? 1),
+            decision: $validated['decision'],
+            approvedAmount: isset($validated['approved_amount']) ? (float) $validated['approved_amount'] : null,
+            remarks: $validated['remarks'] ?? null
+        );
+
+        AuditLoggerService::log(
+            action: $processed->status === 'approved' ? 'buyer_wallet_topup_approved' : 'buyer_wallet_topup_rejected',
+            targetType: 'BuyerWalletTopup',
+            targetId: (int) $processed->id,
+            targetReference: $processed->topup_reference,
+            oldValues: ['status' => 'pending_verification'],
+            newValues: [
+                'status'          => $processed->status,
+                'approved_amount' => $processed->approved_amount ? (float) $processed->approved_amount : null,
+            ],
+            reason: $validated['remarks'] ?? ($processed->status === 'approved' ? 'Verified and credited to Buyer E-Wallet' : 'Rejected by Admin')
+        );
+
+        $msg = $processed->status === 'approved'
+            ? "Buyer E-Wallet Top-Up #{$processed->topup_reference} (Ref #{$processed->reference_number}) approved! ₱" . number_format((float) $processed->approved_amount, 2) . " has been credited to {$processed->buyer?->full_name}'s Storkia E-Wallet."
+            : "Buyer E-Wallet Top-Up #{$processed->topup_reference} declined.";
+
+        return redirect()
+            ->route('admin.commissions.index', ['tab' => 'wallet_topups'])
+            ->with('success', $msg);
+    }
+
+    public function decideLogisticsCodRemittance(Request $request, int $remittance)
+    {
+        $admin = Auth::guard('admin')->user();
+
+        $validated = $request->validate([
+            'decision' => ['required', 'in:approve,reject,verify,verified,rejected'],
+            'remarks'  => ['nullable', 'string', 'max:500'],
+        ]);
+
+        $batch = $this->roleWalletService->processLogisticsAdminRemittanceDecision(
+            remittanceId: $remittance,
+            adminId: (int) ($admin?->id ?? 1),
+            decision: $validated['decision'],
+            remarks: $validated['remarks'] ?? null
+        );
+
+        AuditLoggerService::log(
+            action: $batch->status === 'verified' ? 'logistics_admin_cod_remittance_verified' : 'logistics_admin_cod_remittance_rejected',
+            targetType: 'LogisticsAdminRemittance',
+            targetId: (int) $batch->id,
+            targetReference: $batch->remittance_reference,
+            oldValues: ['status' => 'pending_verification'],
+            newValues: [
+                'status'           => $batch->status,
+                'total_cod_amount' => (float) $batch->total_cod_amount,
+            ],
+            reason: $validated['remarks'] ?? ($batch->status === 'verified' ? 'Verified by Admin' : 'Rejected by Admin')
+        );
+
+        $msg = $batch->status === 'verified'
+            ? "Logistics COD Remittance #{$batch->remittance_reference} (₱" . number_format((float) $batch->total_cod_amount, 2) . ") verified! Courier, Rider, Logistics Hub, and Seller commissions have been automatically distributed to Available E-Wallets."
+            : "Logistics COD Remittance #{$batch->remittance_reference} rejected and returned to the Logistics Hub queue.";
+
+        return redirect()
+            ->route('admin.commissions.index', ['tab' => 'logistics_remittances'])
+            ->with('success', $msg);
     }
 
     public function storePlatformVoucher(Request $request)
@@ -617,15 +768,11 @@ class OrderFinanceController extends Controller
         $periodSellerNet90 = round((float) $periodCommissions->sum(fn ($c) => (float) ($c->seller_net_earning ?? $c->seller_net_amount ?? 0)), 2);
         $periodGrossShipping = round((float) $periodCommissions->sum('shipping_fee'), 2);
         $periodLogisticsNet90 = round((float) $periodCommissions->sum(fn ($c) => (float) ($c->logistics_total_earning ?: ((float) $c->logistics_commission_amount + (float) ($c->logistics_operational_revenue ?? $c->logistics_operational_amount ?? 0)))), 2);
+        $periodCourierComm = round((float) $periodCommissions->sum(fn ($c) => (float) ($c->courier_commission_amount ?? 0)), 2);
         $periodRiderComm10 = round((float) $periodCommissions->sum('rider_commission_amount'), 2);
 
-        $periodOrderIds = $periodCommissions->pluck('seller_order_id')->unique()->values();
-        $periodVoucherSubsidy = Schema::hasTable('seller_order_extras') && $periodOrderIds->isNotEmpty()
-            ? round((float) DB::table('seller_order_extras')
-                ->whereIn('seller_order_id', $periodOrderIds)
-                ->selectRaw('COALESCE(SUM(platform_voucher_discount + shipping_voucher_discount), 0) as sub')
-                ->value('sub'), 2)
-            : 0.00;
+        $periodOrderIds = $periodCommissions->pluck('seller_order_id')->unique()->values()->all();
+        $periodVoucherSubsidy = $this->sumAdminSubsidyForOrderIds($periodOrderIds);
 
         $periodNetAdminProfit = round($periodAdminComm10 - $periodVoucherSubsidy, 2);
 
@@ -638,6 +785,7 @@ class OrderFinanceController extends Controller
             'seller_net_90'       => $periodSellerNet90,
             'gross_shipping'      => $periodGrossShipping,
             'logistics_net_90'    => $periodLogisticsNet90,
+            'courier_comm'        => $periodCourierComm,
             'rider_comm_10'       => $periodRiderComm10,
         ];
 

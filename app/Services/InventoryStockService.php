@@ -3,7 +3,10 @@
 namespace App\Services;
 
 use App\Models\Product;
+use App\Models\ProductRestockSubscription;
 use App\Models\SellerOrder;
+use App\Notifications\OrderLifecycleNotification;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Validation\ValidationException;
 
 class InventoryStockService
@@ -23,11 +26,9 @@ class InventoryStockService
         if (preg_match('/([0-9]+(?:\.[0-9]+)?)\s*(kg|kilogram|kilograms|g|gram|grams)?/', $str, $matches)) {
             $num = (float) $matches[1];
             $unit = $matches[2] ?? 'kg';
-
             if (in_array($unit, ['g', 'gram', 'grams'], true)) {
                 return max(0.001, round($num / 1000, 3));
             }
-
             return max(0.001, round($num, 3));
         }
 
@@ -50,6 +51,7 @@ class InventoryStockService
         $defaultImage = (! empty($product->pictures) && is_array($product->pictures))
             ? $product->pictures[0]
             : null;
+
         $discountPercent = (float) ($product->discount ?? 0);
 
         if (! is_array($rawVariants) || empty($rawVariants['items']) || ! is_array($rawVariants['items'])) {
@@ -171,6 +173,7 @@ class InventoryStockService
                     'stock' => "Insufficient stock for \"{$product->name}\". Only {$product->stock_quantity} left.",
                 ]);
             }
+
             $product->stock_quantity = (int) $product->stock_quantity - $quantity;
             $product->save();
             return;
@@ -246,6 +249,7 @@ class InventoryStockService
         }
 
         $lockedOrder->loadMissing('items');
+        $restockedProducts = [];
 
         foreach ($lockedOrder->items as $item) {
             /** @var Product|null $product */
@@ -259,6 +263,7 @@ class InventoryStockService
             if (! is_array($rawVariants) || empty($rawVariants['items']) || ! is_array($rawVariants['items'])) {
                 $product->stock_quantity = (int) $product->stock_quantity + (int) $item->quantity;
                 $product->save();
+                $restockedProducts[$product->id] = $product;
                 continue;
             }
 
@@ -289,12 +294,77 @@ class InventoryStockService
             $product->variants = $rawVariants;
             $product->stock_quantity = $this->calculateTotalApprovedStock($rawVariants);
             $product->save();
+            $restockedProducts[$product->id] = $product;
         }
 
         $lockedOrder->update([
             'stock_restored'    => true,
             'stock_restored_at' => now(),
         ]);
+
+        foreach ($restockedProducts as $restockedProd) {
+            $this->notifyRestockSubscribers($restockedProd);
+        }
+    }
+
+    public function notifyRestockSubscribers(Product $product): int
+    {
+        if (! Schema::hasTable('product_restock_subscriptions') || (int) $product->stock_quantity <= 0) {
+            return 0;
+        }
+
+        $subscriptions = ProductRestockSubscription::with('user')
+            ->where('product_id', $product->id)
+            ->where('status', 'active')
+            ->get();
+
+        if ($subscriptions->isEmpty()) {
+            return 0;
+        }
+
+        $notified = 0;
+        $rawVariants = $product->raw_variants;
+
+        foreach ($subscriptions as $sub) {
+            if (! $sub->user) {
+                continue;
+            }
+
+            $isOptionInStock = true;
+            if (! empty($sub->variant_name) && is_array($rawVariants) && ! empty($rawVariants['items'])) {
+                try {
+                    $resolved = $this->resolveProductSelection($product, $sub->variant_name, $sub->sub_variant_name);
+                    $isOptionInStock = (int) ($resolved['available_stock'] ?? 0) > 0;
+                } catch (\Throwable $e) {
+                    $isOptionInStock = (int) $product->stock_quantity > 0;
+                }
+            }
+
+            if (! $isOptionInStock) {
+                continue;
+            }
+
+            $variantSuffix = implode(' / ', array_filter([$sub->variant_name, $sub->sub_variant_name]));
+            $label = $variantSuffix !== '' ? "{$product->name} ({$variantSuffix})" : $product->name;
+
+            try {
+                $sub->user->notify(new OrderLifecycleNotification(
+                    title: 'Back in Stock Alert!',
+                    message: "\"{$label}\" is now back in stock on Storkia! Tap to view and order before it sells out.",
+                    type: 'success',
+                    url: route('product.show', $product->id)
+                ));
+
+                $sub->update([
+                    'status'      => 'notified',
+                    'notified_at' => now(),
+                ]);
+                $notified++;
+            } catch (\Throwable $e) {
+            }
+        }
+
+        return $notified;
     }
 
     public function calculateTotalApprovedStock(array $variants): int

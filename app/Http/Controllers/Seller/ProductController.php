@@ -10,6 +10,7 @@ use App\Models\Product;
 use App\Models\ProductApproval;
 use App\Models\ProductSpecification;
 use App\Models\SellerCategory;
+use App\Services\InventoryStockService;
 use App\Services\StorkSchemaBootstrapService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -134,7 +135,6 @@ class ProductController extends Controller
                 ->toWebp(84);
 
             Storage::disk('public')->put($filename, (string) $encoded);
-
             return $filename;
         } catch (\Throwable $e) {
             return $uploadedFile->store($folder, 'public');
@@ -253,6 +253,7 @@ class ProductController extends Controller
         }
 
         $catName = $sellerCategory->category;
+
         $productCount = Product::withTrashed()
             ->where('user_id', $user->id)
             ->where('category', $catName)
@@ -382,10 +383,8 @@ class ProductController extends Controller
 
                     $variantSumStock += $sStock;
                     $totalStock += $sStock;
-
                     $variantMinPrice = $variantMinPrice === null ? $sPrice : min($variantMinPrice, $sPrice);
                     $variantMinWeight = $variantMinWeight === null ? $sWeight : min($variantMinWeight, $sWeight);
-
                     $lowestPrice = $lowestPrice === null ? $sPrice : min($lowestPrice, $sPrice);
                     $defaultWeight = $defaultWeight === null ? $sWeight : min($defaultWeight, $sWeight);
 
@@ -574,7 +573,6 @@ class ProductController extends Controller
             if (! $isArchived && isset($variantNamesInput[$vIdx])) {
                 $item['name'] = trim((string) $variantNamesInput[$vIdx]);
             }
-
             if (! $isArchived && isset($variantPicsFiles[$vIdx])) {
                 $item['image'] = $this->encodeAndStoreWebp($variantPicsFiles[$vIdx], 'products/variants');
             }
@@ -638,7 +636,6 @@ class ProductController extends Controller
                         if ($nsName === '') {
                             continue;
                         }
-
                         $nsPrice = round((float) ($newExistingSubPrices[$vIdx][$nsKey] ?? 20), 2);
                         $nsWeight = round((float) ($newExistingSubWeights[$vIdx][$nsKey] ?? 0.1), 2);
                         $nsStock = max(0, (int) ($newExistingSubStocks[$vIdx][$nsKey] ?? 0));
@@ -741,7 +738,6 @@ class ProductController extends Controller
                     if ($nsName === '') {
                         continue;
                     }
-
                     $nsPrice = round((float) ($newSubPrices[$nvId][$nsId] ?? 20), 2);
                     $nsWeight = round((float) ($newSubWeights[$nvId][$nsId] ?? 0.1), 2);
                     $nsStock = max(0, (int) ($newSubStocks[$nvId][$nsId] ?? 0));
@@ -859,6 +855,11 @@ class ProductController extends Controller
                 }
             }
         });
+
+        try {
+            app(InventoryStockService::class)->notifyRestockSubscribers($product->fresh());
+        } catch (\Throwable $e) {
+        }
 
         return back()->with(
             'success',

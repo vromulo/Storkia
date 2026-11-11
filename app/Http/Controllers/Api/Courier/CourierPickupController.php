@@ -55,6 +55,7 @@ class CourierPickupController extends Controller
             'shipment.packages.logisticsHub',
             'sellerOrder.items',
             'sellerOrder.buyer',
+            'sellerOrder.extra',
         ])
             ->where('courier_id', $courier->id)
             ->where('logistics_profile_id', $courier->logistics_profile_id)
@@ -151,6 +152,7 @@ class CourierPickupController extends Controller
             'shipment.packages.logisticsHub',
             'sellerOrder.items',
             'sellerOrder.buyer',
+            'sellerOrder.extra',
         ])
             ->where('courier_id', $courier->id)
             ->where('logistics_profile_id', $courier->logistics_profile_id)
@@ -250,6 +252,7 @@ class CourierPickupController extends Controller
             'sellerOrder.items',
             'sellerOrder.buyer',
             'sellerOrder.payment',
+            'sellerOrder.extra',
         ])->find($id);
 
         if (
@@ -366,6 +369,7 @@ class CourierPickupController extends Controller
                 'shipment.packages.logisticsHub',
                 'shipment.trackingLogs',
                 'sellerOrder.items',
+                'sellerOrder.extra',
             ]);
 
             return response()->json([
@@ -691,6 +695,7 @@ class CourierPickupController extends Controller
                 'shipment.packages.logisticsHub',
                 'shipment.trackingLogs',
                 'sellerOrder.items',
+                'sellerOrder.extra',
             ]);
 
             return response()->json([
@@ -711,7 +716,8 @@ class CourierPickupController extends Controller
 
         /** @var PickupAssignment|null $assignment */
         $assignment = PickupAssignment::with([
-            'shipment.sellerOrder',
+            'shipment.sellerOrder.payment',
+            'shipment.sellerOrder.extra',
             'shipment.logisticsProfile.user',
             'shipment.packages.logisticsHub',
         ])->find($id);
@@ -763,7 +769,8 @@ class CourierPickupController extends Controller
         return DB::transaction(function () use ($assignment, $courier) {
             /** @var PickupAssignment $locked */
             $locked = PickupAssignment::with([
-                'shipment.sellerOrder',
+                'shipment.sellerOrder.payment',
+                'shipment.sellerOrder.extra',
                 'shipment.logisticsProfile.user',
                 'shipment.packages.logisticsHub',
             ])
@@ -792,10 +799,11 @@ class CourierPickupController extends Controller
             $shipment = $locked->shipment;
             $sellerOrder = $shipment->sellerOrder;
             $payInfo = WebPickupController::calculateFirstMileCourierPay($shipment);
+            $isCod = strtoupper((string) ($sellerOrder?->effective_payment_method ?? 'COD')) === 'COD';
 
             $locked->update([
-                'status'          => 'in_transit_to_hub',
-                'handed_over_at'  => now(),
+                'status'         => 'in_transit_to_hub',
+                'handed_over_at' => now(),
             ]);
 
             $shipment->update([
@@ -817,25 +825,7 @@ class CourierPickupController extends Controller
                 'occurred_at'     => now(),
             ]);
 
-            $alreadyCredited = WalletTransaction::where('owner_type', 'Courier')
-                ->where('owner_id', $courier->id)
-                ->where('shipment_id', $shipment->id)
-                ->exists();
-
-            if (! $alreadyCredited) {
-                $this->roleWalletService->creditAvailableDirect(
-                    ownerType: 'Courier',
-                    ownerId: (int) $courier->id,
-                    ownerName: $courier->full_name,
-                    amount: (float) $payInfo['total_pay'],
-                    sellerOrderId: (int) $sellerOrder->id,
-                    shipmentId: (int) $shipment->id,
-                    entryType: 'first_mile_pickup_pay',
-                    paymentMethod: $sellerOrder->effective_payment_method,
-                    description: "First-Mile Pickup Haulage Pay ({$payInfo['distance_tier']}) for Shipment #{$shipment->tracking_number}",
-                    meta: $payInfo
-                );
-            }
+            $this->roleWalletService->recordFirstMileCourierTaskCredit($shipment, $courier, $payInfo);
 
             if ($shipment->logisticsProfile?->user) {
                 try {
@@ -858,11 +848,14 @@ class CourierPickupController extends Controller
                 'shipment.packages.logisticsHub',
                 'shipment.trackingLogs',
                 'sellerOrder.items',
+                'sellerOrder.extra',
             ]);
 
             return response()->json([
                 'status'  => 'success',
-                'message' => "Handover recorded at {$hubName}! ₱" . number_format((float) $payInfo['total_pay'], 2) . " First-Mile Haulage Pay credited to your Courier E-Wallet.",
+                'message' => $isCod
+                    ? "Handover recorded at {$hubName}! ₱" . number_format((float) $payInfo['total_pay'], 2) . " First-Mile Pickup Task Pay (25% of Shipping/Ops Fee) credited to your Pending Escrow and will release to Available E-Wallet upon Admin COD Remittance verification."
+                    : "Handover recorded at {$hubName}! ₱" . number_format((float) $payInfo['total_pay'], 2) . " First-Mile Pickup Task Pay (25% of Shipping/Ops Fee) credited to your Courier E-Wallet.",
                 'data'    => $this->formatAssignmentPayload($fresh, true),
             ]);
         });
@@ -1187,11 +1180,11 @@ class CourierPickupController extends Controller
         $payInfo = $shipment
             ? WebPickupController::calculateFirstMileCourierPay($shipment)
             : [
-                'base_pay'       => 30.00,
-                'distance_tier'  => 'Same Municipality',
-                'distance_bonus' => 0.00,
+                'base_pay'       => 8.75,
+                'distance_tier'  => 'Same Municipality (25% Share)',
+                'distance_bonus' => 2.50,
                 'weight_bonus'   => 0.00,
-                'total_pay'      => 30.00,
+                'total_pay'      => 11.25,
             ];
 
         if (in_array($assignment->status, ['declined', 'reassigned', 'cancelled'], true)) {

@@ -117,6 +117,78 @@ class AuthApiController extends Controller
         ]);
     }
 
+    public function submitPreTripChecklist(Request $request): JsonResponse
+    {
+        StorkSchemaBootstrapService::ensureTablesExist();
+        RiderMobileSchemaService::ensureTablesExist();
+
+        /** @var Rider $rider */
+        $rider = $request->user();
+
+        $validated = $request->validate([
+            'tires_ok'       => ['required', 'boolean'],
+            'lights_ok'      => ['required', 'boolean'],
+            'brakes_ok'      => ['required', 'boolean'],
+            'fuel_ok'        => ['required', 'boolean'],
+            'helmet_gear_ok' => ['nullable', 'boolean'],
+            'thermal_bag_ok' => ['nullable', 'boolean'],
+            'notes'          => ['nullable', 'string', 'max:300'],
+            'latitude'       => ['nullable', 'numeric', 'between:-90,90'],
+            'longitude'      => ['nullable', 'numeric', 'between:-180,180'],
+        ]);
+
+        $checks = [
+            'Tires'        => (bool) $validated['tires_ok'],
+            'Lights'       => (bool) $validated['lights_ok'],
+            'Brakes'       => (bool) $validated['brakes_ok'],
+            'Fuel'         => (bool) $validated['fuel_ok'],
+            'Helmet/Gear'  => (bool) ($validated['helmet_gear_ok'] ?? true),
+            'Thermal Bag'  => (bool) ($validated['thermal_bag_ok'] ?? true),
+        ];
+
+        $failedItems = array_keys(array_filter($checks, fn ($passed) => ! $passed));
+        $allPassed = empty($failedItems);
+        $failedSummary = $allPassed ? null : ('Failed: ' . implode(', ', $failedItems));
+
+        $checklistId = DB::table('rider_shift_checklists')->insertGetId([
+            'rider_id'             => $rider->id,
+            'logistics_profile_id' => $rider->logistics_profile_id,
+            'tires_ok'             => $checks['Tires'],
+            'lights_ok'            => $checks['Lights'],
+            'brakes_ok'            => $checks['Brakes'],
+            'fuel_ok'              => $checks['Fuel'],
+            'helmet_gear_ok'       => $checks['Helmet/Gear'],
+            'thermal_bag_ok'       => $checks['Thermal Bag'],
+            'all_passed'           => $allPassed,
+            'failed_items_summary' => $failedSummary,
+            'notes'                => ! empty($validated['notes']) ? trim($validated['notes']) : null,
+            'latitude'             => isset($validated['latitude']) ? round((float) $validated['latitude'], 7) : null,
+            'longitude'            => isset($validated['longitude']) ? round((float) $validated['longitude'], 7) : null,
+            'submitted_at'         => now(),
+            'created_at'           => now(),
+            'updated_at'           => now(),
+        ]);
+
+        if ($allPassed && Schema::hasColumn('riders', 'last_checklist_passed_at')) {
+            $rider->update(['last_checklist_passed_at' => now()]);
+        } elseif (! $allPassed && Schema::hasColumn('riders', 'is_online')) {
+            $rider->update(['is_online' => false]);
+        }
+
+        return response()->json([
+            'status'  => $allPassed ? 'success' : 'warning',
+            'message' => $allPassed
+                ? 'Pre-shift safety checklist passed! You are cleared for last-mile delivery dispatch.'
+                : "Safety check flagged ({$failedSummary}). Please resolve vehicle issues before going Online.",
+            'data'    => [
+                'checklist_id'             => $checklistId,
+                'all_passed'               => $allPassed,
+                'failed_items_summary'     => $failedSummary,
+                'last_checklist_passed_at' => $rider->fresh()->last_checklist_passed_at?->toIso8601String(),
+            ],
+        ]);
+    }
+
     public function updateAvailability(Request $request): JsonResponse
     {
         StorkSchemaBootstrapService::ensureTablesExist();
@@ -134,10 +206,10 @@ class AuthApiController extends Controller
         }
 
         $validated = $request->validate([
-            'is_online'  => ['required', 'boolean'],
-            'latitude'   => ['nullable', 'numeric', 'between:-90,90'],
-            'longitude'  => ['nullable', 'numeric', 'between:-180,180'],
-            'accuracy'   => ['nullable', 'numeric', 'min:0'],
+            'is_online' => ['required', 'boolean'],
+            'latitude'  => ['nullable', 'numeric', 'between:-90,90'],
+            'longitude' => ['nullable', 'numeric', 'between:-180,180'],
+            'accuracy'  => ['nullable', 'numeric', 'min:0'],
         ]);
 
         $wantsOnline = (bool) $validated['is_online'];
@@ -289,6 +361,84 @@ class AuthApiController extends Controller
         ]);
     }
 
+    public function batchUpdateLocations(Request $request): JsonResponse
+    {
+        StorkSchemaBootstrapService::ensureTablesExist();
+        RiderMobileSchemaService::ensureTablesExist();
+
+        /** @var Rider $rider */
+        $rider = $request->user();
+
+        $validated = $request->validate([
+            'locations'                            => ['required', 'array', 'min:1', 'max:100'],
+            'locations.*.latitude'                 => ['required', 'numeric', 'between:-90,90'],
+            'locations.*.longitude'                => ['required', 'numeric', 'between:-180,180'],
+            'locations.*.accuracy'                 => ['nullable', 'numeric', 'min:0'],
+            'locations.*.speed'                    => ['nullable', 'numeric', 'min:0'],
+            'locations.*.heading'                  => ['nullable', 'numeric', 'between:0,360'],
+            'locations.*.delivery_assignment_id'   => ['nullable', 'integer'],
+            'locations.*.recorded_at'              => ['nullable', 'date'],
+        ]);
+
+        $ownedAssignmentIds = $rider->deliveryAssignments()->pluck('id')->map(fn ($id) => (int) $id)->all();
+        $rows = [];
+        $latestPoint = null;
+
+        foreach ($validated['locations'] as $pt) {
+            $asgId = isset($pt['delivery_assignment_id']) ? (int) $pt['delivery_assignment_id'] : null;
+            if ($asgId !== null && ! in_array($asgId, $ownedAssignmentIds, true)) {
+                $asgId = null;
+            }
+
+            $ts = ! empty($pt['recorded_at']) ? Carbon::parse($pt['recorded_at']) : now();
+            $lat = round((float) $pt['latitude'], 7);
+            $lng = round((float) $pt['longitude'], 7);
+            $acc = isset($pt['accuracy']) ? round((float) $pt['accuracy'], 2) : null;
+
+            $rows[] = [
+                'rider_id'               => $rider->id,
+                'delivery_assignment_id' => $asgId,
+                'latitude'               => $lat,
+                'longitude'              => $lng,
+                'accuracy'               => $acc,
+                'speed'                  => isset($pt['speed']) ? round((float) $pt['speed'], 2) : null,
+                'heading'                => isset($pt['heading']) ? round((float) $pt['heading'], 2) : null,
+                'recorded_at'            => $ts,
+                'created_at'             => now(),
+                'updated_at'             => now(),
+            ];
+
+            if (! $latestPoint || $ts->gte($latestPoint['recorded_at'])) {
+                $latestPoint = [
+                    'latitude'    => $lat,
+                    'longitude'   => $lng,
+                    'accuracy'    => $acc,
+                    'recorded_at' => $ts,
+                ];
+            }
+        }
+
+        if (! empty($rows) && Schema::hasTable('rider_locations')) {
+            DB::table('rider_locations')->insert($rows);
+        }
+
+        if ($latestPoint) {
+            $rider->update([
+                'current_latitude'    => $latestPoint['latitude'],
+                'current_longitude'   => $latestPoint['longitude'],
+                'location_accuracy'   => $latestPoint['accuracy'],
+                'location_updated_at' => now(),
+                'last_seen_at'        => now(),
+            ]);
+        }
+
+        return response()->json([
+            'status'         => 'success',
+            'inserted_count' => count($rows),
+            'message'        => count($rows) . ' GPS location packet(s) synced.',
+        ]);
+    }
+
     public function updateVehicleAndDocuments(Request $request): JsonResponse
     {
         StorkSchemaBootstrapService::ensureTablesExist();
@@ -344,14 +494,6 @@ class AuthApiController extends Controller
             'license_expiry_date' => ['nullable', 'date', 'after_or_equal:today'],
             'license_file'        => ['nullable', 'file', 'mimetypes:image/jpeg,image/png,image/webp,application/pdf', 'mimes:jpg,jpeg,png,webp,pdf', 'max:5120'],
             'or_cr_file'          => ['nullable', 'file', 'mimetypes:image/jpeg,image/png,image/webp,application/pdf', 'mimes:jpg,jpeg,png,webp,pdf', 'max:5120'],
-        ], [
-            'license_expiry_date.after_or_equal' => 'Driver\'s license expiry date cannot be in the past. Please enter today or a future expiry date.',
-            'license_file.mimetypes'             => 'Driver\'s license file must be a genuine JPG, PNG, WEBP, or PDF file (max 5 MB).',
-            'license_file.mimes'                 => 'Driver\'s license file must have a .jpg, .png, .webp, or .pdf extension.',
-            'license_file.max'                   => 'Driver\'s license file must not exceed 5 MB.',
-            'or_cr_file.mimetypes'               => 'OR/CR document must be a genuine JPG, PNG, WEBP, or PDF file (max 5 MB).',
-            'or_cr_file.mimes'                   => 'OR/CR document must have a .jpg, .png, .webp, or .pdf extension.',
-            'or_cr_file.max'                     => 'OR/CR document must not exceed 5 MB.',
         ]);
 
         $oldPlate = $rider->plate_number;
@@ -484,6 +626,9 @@ class AuthApiController extends Controller
             'vehicle_verification_status' => (string) ($rider->vehicle_verification_status ?? 'verified'),
             'is_online'                   => (bool) ($rider->is_online ?? false),
             'last_seen_at'                => $rider->last_seen_at?->toIso8601String(),
+            'last_checklist_passed_at'    => Schema::hasColumn('riders', 'last_checklist_passed_at') && $rider->last_checklist_passed_at
+                ? Carbon::parse($rider->last_checklist_passed_at)->toIso8601String()
+                : null,
             'sla_strikes'                 => (int) ($rider->sla_strikes ?? 0),
             'current_latitude'            => $rider->current_latitude !== null ? (float) $rider->current_latitude : null,
             'current_longitude'           => $rider->current_longitude !== null ? (float) $rider->current_longitude : null,

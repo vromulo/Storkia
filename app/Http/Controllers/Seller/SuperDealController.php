@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Seller;
 
 use App\Http\Controllers\Controller;
 use App\Models\Product;
+use App\Services\InventoryStockService;
 use App\Services\StorkSchemaBootstrapService;
 use App\Services\SuperDealPricingService;
 use Carbon\Carbon;
@@ -15,18 +16,32 @@ use Illuminate\Validation\ValidationException;
 class SuperDealController extends Controller
 {
     public function __construct(
-        protected SuperDealPricingService $superDealPricingService
-    ) {}
+        protected SuperDealPricingService $superDealPricingService,
+        protected ?InventoryStockService $inventoryStockService = null
+    ) {
+        $this->inventoryStockService = $inventoryStockService ?? app(InventoryStockService::class);
+    }
 
-    protected function resolveProductBasePrice(Product $product): float
+    protected function resolveProductBasePriceAndStock(Product $product, ?string $variantName = null, ?string $subVariantName = null): array
     {
-        $base = (float) ($product->price ?? 0);
-        if ($base > 0) {
-            return round($base, 2);
+        $raw = $product->raw_variants;
+        $hasVariants = is_array($raw) && ! empty($raw['items']) && is_array($raw['items']);
+
+        if ($hasVariants && trim((string) $variantName) !== '') {
+            try {
+                $resolved = $this->inventoryStockService->resolveProductSelection($product, $variantName, $subVariantName);
+                return [
+                    'unit_price'       => (float) $resolved['unit_price'],
+                    'available_stock'  => (int) $resolved['available_stock'],
+                    'variant_name'     => $resolved['variant_name'],
+                    'sub_variant_name' => $resolved['sub_variant_name'],
+                ];
+            } catch (\Throwable $e) {
+            }
         }
 
-        $raw = $product->raw_variants;
-        if (is_array($raw) && ! empty($raw['items']) && is_array($raw['items'])) {
+        $base = (float) ($product->price ?? 0);
+        if ($base <= 0 && $hasVariants) {
             $minVariantPrice = null;
             foreach ($raw['items'] as $vItem) {
                 if (! empty($vItem['is_archived']) || ($vItem['status'] ?? 'Approved') === 'Disapproved') {
@@ -49,11 +64,16 @@ class SuperDealController extends Controller
                 }
             }
             if ($minVariantPrice !== null && $minVariantPrice > 0) {
-                return round($minVariantPrice, 2);
+                $base = round($minVariantPrice, 2);
             }
         }
 
-        return 0.00;
+        return [
+            'unit_price'       => round($base, 2),
+            'available_stock'  => (int) ($product->stock_quantity ?? 0),
+            'variant_name'     => trim((string) $variantName) ?: null,
+            'sub_variant_name' => trim((string) $subVariantName) ?: null,
+        ];
     }
 
     public function index(Request $request)
@@ -112,6 +132,7 @@ class SuperDealController extends Controller
 
         $user = $request->user();
         $profile = $user?->sellerProfile;
+
         if (! $profile) {
             abort(403);
         }
@@ -119,6 +140,8 @@ class SuperDealController extends Controller
         $validated = $request->validate([
             'deal_type'           => ['required', 'in:super_deal,store_sale'],
             'product_id'          => ['required', 'integer', 'exists:products,id'],
+            'variant_name'        => ['nullable', 'string', 'max:100'],
+            'sub_variant_name'    => ['nullable', 'string', 'max:100'],
             'title'               => ['nullable', 'string', 'max:120'],
             'discount_percentage' => ['required', 'integer', 'min:1', 'max:99'],
             'flash_quantity'      => ['required_if:deal_type,super_deal', 'nullable', 'integer', 'min:1'],
@@ -132,14 +155,20 @@ class SuperDealController extends Controller
         ]);
 
         $product = Product::where('user_id', $user->id)->findOrFail($validated['product_id']);
-        $originalPrice = $this->resolveProductBasePrice($product);
+        $resolvedInfo = $this->resolveProductBasePriceAndStock(
+            $product,
+            $validated['variant_name'] ?? null,
+            $validated['sub_variant_name'] ?? null
+        );
 
+        $originalPrice = (float) $resolvedInfo['unit_price'];
+        $availableStock = (int) $resolvedInfo['available_stock'];
         $discountPct = (int) $validated['discount_percentage'];
         $dealPrice = round($originalPrice * (1 - ($discountPct / 100)), 2);
 
-        if ($validated['deal_type'] === 'super_deal' && (int) $validated['flash_quantity'] > (int) $product->stock_quantity) {
+        if ($validated['deal_type'] === 'super_deal' && (int) $validated['flash_quantity'] > $availableStock) {
             throw ValidationException::withMessages([
-                'flash_quantity' => "Super Deal quantity cannot exceed the product's available stock ({$product->stock_quantity}).",
+                'flash_quantity' => "Super Deal quantity cannot exceed the product/variant's available stock ({$availableStock}).",
             ]);
         }
 
@@ -167,7 +196,7 @@ class SuperDealController extends Controller
             }
         }
 
-        DB::table('super_deals')->insert([
+        $insertPayload = [
             'seller_profile_id'   => $profile->id,
             'product_id'          => $product->id,
             'deal_type'           => $validated['deal_type'],
@@ -181,7 +210,14 @@ class SuperDealController extends Controller
             'status'              => 'active',
             'created_at'          => now(),
             'updated_at'          => now(),
-        ]);
+        ];
+
+        if (Schema::hasColumn('super_deals', 'variant_name')) {
+            $insertPayload['variant_name'] = $resolvedInfo['variant_name'];
+            $insertPayload['sub_variant_name'] = $resolvedInfo['sub_variant_name'];
+        }
+
+        DB::table('super_deals')->insert($insertPayload);
 
         return back()->with(
             'success',
@@ -210,7 +246,12 @@ class SuperDealController extends Controller
         ]);
 
         $product = Product::findOrFail($deal->product_id);
-        $basePrice = $this->resolveProductBasePrice($product);
+        $resolvedInfo = $this->resolveProductBasePriceAndStock(
+            $product,
+            $deal->variant_name ?? null,
+            $deal->sub_variant_name ?? null
+        );
+        $basePrice = (float) $resolvedInfo['unit_price'];
         $newPrice = round($basePrice * (1 - ((int) $validated['discount_percentage'] / 100)), 2);
 
         DB::table('super_deals')->where('id', $id)->update([
@@ -247,20 +288,23 @@ class SuperDealController extends Controller
 
         $user = $request->user();
         $profile = $user?->sellerProfile;
+
         if (! $profile) {
             abort(403);
         }
 
         $validated = $request->validate([
-            'title'                    => ['required', 'string', 'min:3', 'max:120'],
-            'bundle_type'              => ['required', 'in:percentage_off,buy_x_get_y'],
-            'required_quantity'        => ['required', 'integer', 'min:2', 'max:20'],
-            'discount_percentage'      => ['required_if:bundle_type,percentage_off', 'nullable', 'numeric', 'min:1', 'max:99'],
-            'free_gift_product_id'     => ['required_if:bundle_type,buy_x_get_y', 'nullable', 'integer', 'exists:products,id'],
-            'applicable_product_ids'   => ['required', 'array', 'min:1'],
-            'applicable_product_ids.*' => ['required', 'integer'],
-            'starts_at'                => ['bail', 'required', 'date', $this->startNotInPast()],
-            'ends_at'                  => ['bail', 'required', 'date', 'after:starts_at', $this->endNotInPast()],
+            'title'                      => ['required', 'string', 'min:3', 'max:120'],
+            'bundle_type'                => ['required', 'in:percentage_off,buy_x_get_y'],
+            'required_quantity'          => ['required', 'integer', 'min:2', 'max:20'],
+            'discount_percentage'        => ['required_if:bundle_type,percentage_off', 'nullable', 'numeric', 'min:1', 'max:99'],
+            'free_gift_product_id'       => ['required_if:bundle_type,buy_x_get_y', 'nullable', 'integer', 'exists:products,id'],
+            'free_gift_variant_name'     => ['nullable', 'string', 'max:100'],
+            'free_gift_sub_variant_name' => ['nullable', 'string', 'max:100'],
+            'applicable_product_ids'     => ['required', 'array', 'min:1'],
+            'applicable_product_ids.*'   => ['required', 'integer'],
+            'starts_at'                  => ['bail', 'required', 'date', $this->startNotInPast()],
+            'ends_at'                    => ['bail', 'required', 'date', 'after:starts_at', $this->endNotInPast()],
         ], [
             'title.required'                  => 'Please enter a Bundle Deal title.',
             'applicable_product_ids.required' => 'Please select at least one qualifying product for the bundle.',
@@ -282,6 +326,9 @@ class SuperDealController extends Controller
         }
 
         $freeGiftId = null;
+        $giftVariantName = null;
+        $giftSubVariantName = null;
+
         if ($validated['bundle_type'] === 'buy_x_get_y') {
             $freeGift = Product::where('user_id', $user->id)->find($validated['free_gift_product_id']);
             if (! $freeGift) {
@@ -290,9 +337,36 @@ class SuperDealController extends Controller
                 ]);
             }
             $freeGiftId = (int) $freeGift->id;
+
+            $rawGiftVars = $freeGift->raw_variants;
+            $hasGiftVars = is_array($rawGiftVars) && ! empty($rawGiftVars['items']) && is_array($rawGiftVars['items']);
+
+            if ($hasGiftVars) {
+                $giftVariantName = trim((string) ($validated['free_gift_variant_name'] ?? '')) ?: null;
+                $giftSubVariantName = trim((string) ($validated['free_gift_sub_variant_name'] ?? '')) ?: null;
+
+                if (! $giftVariantName) {
+                    foreach ($rawGiftVars['items'] as $vItem) {
+                        if (! empty($vItem['is_archived']) || ($vItem['status'] ?? 'Approved') !== 'Approved') {
+                            continue;
+                        }
+                        $giftVariantName = $vItem['name'] ?? null;
+                        if (! empty($vItem['subs']) && is_array($vItem['subs'])) {
+                            foreach ($vItem['subs'] as $sItem) {
+                                if (! empty($sItem['is_archived']) || ($sItem['status'] ?? 'Approved') !== 'Approved') {
+                                    continue;
+                                }
+                                $giftSubVariantName = $sItem['name'] ?? null;
+                                break;
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
         }
 
-        DB::table('bundle_deals')->insert([
+        $insertPayload = [
             'seller_profile_id'      => $profile->id,
             'title'                  => trim($validated['title']),
             'bundle_type'            => $validated['bundle_type'],
@@ -305,7 +379,14 @@ class SuperDealController extends Controller
             'status'                 => 'active',
             'created_at'             => now(),
             'updated_at'             => now(),
-        ]);
+        ];
+
+        if (Schema::hasColumn('bundle_deals', 'free_gift_variant_name')) {
+            $insertPayload['free_gift_variant_name'] = $giftVariantName;
+            $insertPayload['free_gift_sub_variant_name'] = $giftSubVariantName;
+        }
+
+        DB::table('bundle_deals')->insert($insertPayload);
 
         return back()->with('success', "Bundle Deal \"{$validated['title']}\" published!");
     }

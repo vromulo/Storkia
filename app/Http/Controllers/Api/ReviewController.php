@@ -7,6 +7,8 @@ use App\Models\OrderItemReview;
 use App\Models\OrderServiceRating;
 use App\Models\OrderStatusHistory;
 use App\Models\SellerOrder;
+use App\Services\BuyerRewardService;
+use App\Services\StorkSchemaBootstrapService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -19,8 +21,16 @@ use Intervention\Image\ImageManager;
 
 class ReviewController extends Controller
 {
+    public function __construct(
+        protected ?BuyerRewardService $buyerRewardService = null
+    ) {
+        $this->buyerRewardService = $buyerRewardService ?? app(BuyerRewardService::class);
+    }
+
     public function store(Request $request, $id): JsonResponse
     {
+        StorkSchemaBootstrapService::ensureTablesExist();
+
         $user = $request->user();
         $sellerOrder = SellerOrder::with(['items', 'sellerProfile', 'logisticsProfile', 'shipment'])->findOrFail($id);
 
@@ -91,8 +101,9 @@ class ReviewController extends Controller
         ]);
 
         $manager = ImageManager::usingDriver(Driver::class);
+        $totalReviewCoinsEarned = 0;
 
-        DB::transaction(function () use ($request, $user, $sellerOrder, $validated, $manager) {
+        DB::transaction(function () use ($request, $user, $sellerOrder, $validated, $manager, &$totalReviewCoinsEarned) {
             $itemRatingValues = [];
 
             foreach ($sellerOrder->items as $item) {
@@ -114,6 +125,8 @@ class ReviewController extends Controller
                     Storage::disk('public')->put($photoPath, $encoded->toString());
                 }
 
+                $variantLabel = implode(' / ', array_filter([$item->variant_name, $item->sub_variant_name])) ?: null;
+
                 $reviewAttributes = [
                     'order_id'          => $sellerOrder->order_id,
                     'seller_order_id'   => $sellerOrder->id,
@@ -128,11 +141,19 @@ class ReviewController extends Controller
                 if ($photoPath && Schema::hasColumn('order_item_reviews', 'review_photos')) {
                     $reviewAttributes['review_photos'] = [$photoPath];
                 }
+                if (Schema::hasColumn('order_item_reviews', 'purchased_variant_label')) {
+                    $reviewAttributes['purchased_variant_label'] = $variantLabel;
+                }
 
-                OrderItemReview::updateOrCreate(
+                $reviewModel = OrderItemReview::updateOrCreate(
                     ['order_item_id' => $item->id],
                     $reviewAttributes
                 );
+
+                $coinTx = $this->buyerRewardService?->awardProductReviewCoins($reviewModel, $photoPath !== null);
+                if ($coinTx) {
+                    $totalReviewCoinsEarned += (int) $coinTx->coins_delta;
+                }
             }
 
             $avgProductQuality = count($itemRatingValues) > 0
@@ -172,13 +193,19 @@ class ReviewController extends Controller
                 'to_status'       => 'completed',
                 'actor_type'      => 'Buyer',
                 'actor_id'        => $user->id,
-                'remarks'         => "Buyer submitted 5-point ratings (Overall {$overallAvg}/5.0 ★). Order moved to Completed (Buy Again).",
+                'remarks'         => "Buyer submitted 5-point ratings (Overall {$overallAvg}/5.0 ★)."
+                    . ($totalReviewCoinsEarned > 0 ? " Earned +{$totalReviewCoinsEarned} Storkia Coins review bonus." : ''),
             ]);
         });
 
+        $coinSuffix = $totalReviewCoinsEarned > 0
+            ? " You earned +{$totalReviewCoinsEarned} Storkia Coins for your review!"
+            : '';
+
         return response()->json([
-            'success' => true,
-            'message' => "Thank you for rating Order #{$sellerOrder->seller_order_number}! Your review is now live and the Buy Again button is unlocked.",
+            'success'      => true,
+            'coins_earned' => $totalReviewCoinsEarned,
+            'message'      => "Thank you for rating Order #{$sellerOrder->seller_order_number}!{$coinSuffix} Your review is now live and the Buy Again button is unlocked.",
         ]);
     }
 
@@ -217,6 +244,7 @@ class ReviewController extends Controller
         ]);
 
         $photoPaths = is_array($review->review_photos) ? $review->review_photos : [];
+
         if ($request->hasFile('review_photos')) {
             $photoPaths = [];
             foreach ($request->file('review_photos') as $file) {
@@ -242,6 +270,53 @@ class ReviewController extends Controller
             'success' => true,
             'message' => 'Your review has been updated (1 of 1 allowed edit used).',
             'review'  => $review->fresh(),
+        ]);
+    }
+
+    public function toggleHelpful(Request $request, OrderItemReview $review): JsonResponse
+    {
+        StorkSchemaBootstrapService::ensureTablesExist();
+
+        $userId = (int) $request->user()->id;
+
+        $result = DB::transaction(function () use ($review, $userId) {
+            $exists = DB::table('product_review_upvotes')
+                ->where('review_id', $review->id)
+                ->where('user_id', $userId)
+                ->exists();
+
+            if ($exists) {
+                DB::table('product_review_upvotes')
+                    ->where('review_id', $review->id)
+                    ->where('user_id', $userId)
+                    ->delete();
+                $upvoted = false;
+            } else {
+                DB::table('product_review_upvotes')->insert([
+                    'review_id'  => $review->id,
+                    'user_id'    => $userId,
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ]);
+                $upvoted = true;
+            }
+
+            $count = (int) DB::table('product_review_upvotes')->where('review_id', $review->id)->count();
+
+            if (Schema::hasColumn('order_item_reviews', 'helpful_count')) {
+                $review->update(['helpful_count' => $count]);
+            }
+
+            return [
+                'upvoted'       => $upvoted,
+                'helpful_count' => $count,
+            ];
+        });
+
+        return response()->json([
+            'success'       => true,
+            'upvoted'       => $result['upvoted'],
+            'helpful_count' => $result['helpful_count'],
         ]);
     }
 }

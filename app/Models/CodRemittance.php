@@ -13,6 +13,9 @@ class CodRemittance extends Model
         'logistics_profile_id',
         'rider_id',
         'total_collected_amount',
+        'total_seller_share',
+        'total_admin_commission',
+        'total_logistics_fee',
         'total_rider_commission',
         'net_remitted_amount',
         'status',
@@ -26,6 +29,9 @@ class CodRemittance extends Model
     {
         return [
             'total_collected_amount' => 'decimal:2',
+            'total_seller_share'     => 'decimal:2',
+            'total_admin_commission' => 'decimal:2',
+            'total_logistics_fee'    => 'decimal:2',
             'total_rider_commission' => 'decimal:2',
             'net_remitted_amount'    => 'decimal:2',
             'submitted_at'           => 'datetime',

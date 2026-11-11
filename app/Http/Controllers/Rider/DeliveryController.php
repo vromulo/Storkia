@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\CodCollection;
 use App\Models\CodRemittance;
 use App\Models\CodRemittanceItem;
+use App\Models\CommissionRecord;
 use App\Models\DeliveryAssignment;
 use App\Models\DeliveryAttempt;
 use App\Models\DeliveryProof;
@@ -18,10 +19,14 @@ use App\Models\WalletTransaction;
 use App\Notifications\OrderLifecycleNotification;
 use App\Services\AuditLoggerService;
 use App\Services\BuyerAbandonmentService;
+use App\Services\BuyerRewardService;
+use App\Services\CommissionCalculatorService;
 use App\Services\OperationalSlaGuardService;
 use App\Services\OrderCompletionService;
 use App\Services\RoleWalletService;
+use App\Services\ShippingCalculatorService;
 use App\Services\StorkSchemaBootstrapService;
+use App\Services\VoucherService;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -39,41 +44,75 @@ class DeliveryController extends Controller
         protected OrderCompletionService $orderCompletionService,
         protected BuyerAbandonmentService $buyerAbandonmentService,
         protected RoleWalletService $roleWalletService,
-        protected OperationalSlaGuardService $slaGuardService
-    ) {}
+        protected OperationalSlaGuardService $slaGuardService,
+        protected ?BuyerRewardService $buyerRewardService = null,
+        protected ?VoucherService $voucherService = null
+    ) {
+        $this->buyerRewardService = $buyerRewardService ?? app(BuyerRewardService::class);
+        $this->voucherService = $voucherService ?? app(VoucherService::class);
+    }
 
     public static function calculateDistanceScaledRiderPay(Shipment $shipment): array
     {
-        $pickup = $shipment->pickup_address_snapshot ?? [];
+        $shipment->loadMissing(['sellerOrder.extra', 'packages', 'latestPickupAssignment']);
+
+        $hub = ! empty($shipment->hub_address_snapshot)
+            ? $shipment->hub_address_snapshot
+            : ($shipment->pickup_address_snapshot ?? []);
         $deliv = $shipment->delivery_address_snapshot ?? [];
 
-        $originProv = strtolower(trim((string) ($pickup['province'] ?? '')));
-        $originMuni = strtolower(trim((string) ($pickup['municipality'] ?? '')));
-        $originBrgy = strtolower(trim((string) ($pickup['barangay'] ?? '')));
+        $originProv = strtolower(trim((string) ($hub['province'] ?? '')));
+        $originMuni = strtolower(trim((string) ($hub['municipality'] ?? '')));
+        $originBrgy = strtolower(trim((string) ($hub['barangay'] ?? '')));
 
         $destProv = strtolower(trim((string) ($deliv['province'] ?? '')));
         $destMuni = strtolower(trim((string) ($deliv['municipality'] ?? '')));
         $destBrgy = strtolower(trim((string) ($deliv['barangay'] ?? '')));
 
+        $primaryPkg = $shipment->packages?->first();
+        $isSelfDropOff = ($primaryPkg && $primaryPkg->handover_method === 'self_drop_off')
+            && $shipment->current_courier_id === null
+            && $shipment->latestPickupAssignment === null;
+
+        $sharePercent = $isSelfDropOff
+            ? CommissionCalculatorService::RIDER_SELF_DROPOFF_SHARE_PERCENT
+            : CommissionCalculatorService::RIDER_SHIPPING_SHARE_PERCENT;
+        $shareRate = $sharePercent / 100;
+        $pctLabel = number_format($sharePercent, 0) . '% Share';
+
         if ($originProv !== '' && $originProv === $destProv && $originMuni !== '' && $originMuni === $destMuni) {
             if ($originBrgy !== '' && $originBrgy === $destBrgy) {
-                $distanceTier = 'Same Barangay';
-                $distanceBonus = 0.00;
+                $distanceTier = "Same Barangay ({$pctLabel})";
+                $tierBasePool = ShippingCalculatorService::BASE_FEE_SAME_BARANGAY;
             } else {
-                $distanceTier = 'Same Municipality';
-                $distanceBonus = 15.00;
+                $distanceTier = "Same Municipality ({$pctLabel})";
+                $tierBasePool = ShippingCalculatorService::BASE_FEE_SAME_MUNICIPALITY;
             }
         } elseif ($originProv !== '' && $originProv === $destProv) {
-            $distanceTier = 'Same Province (Cross-Municipality)';
-            $distanceBonus = 35.00;
+            $distanceTier = "Same Province ({$pctLabel})";
+            $tierBasePool = ShippingCalculatorService::BASE_FEE_SAME_PROVINCE;
         } else {
-            $distanceTier = 'Inter-Provincial / Regional';
-            $distanceBonus = 60.00;
+            $distanceTier = "Inter-Provincial ({$pctLabel})";
+            $tierBasePool = ShippingCalculatorService::BASE_FEE_INTER_PROVINCE;
         }
 
-        $basePay = max(50.00, round(((float) $shipment->shipping_fee) * 0.10, 2));
-        $weightBonus = max(0, ceil((float) $shipment->total_weight - 1)) * 5.00;
-        $totalPay = round($basePay + $distanceBonus + $weightBonus, 2);
+        $extraKg = max(0, (int) ceil(max(0.01, (float) $shipment->total_weight)) - 1);
+        $extraWeightPool = round($extraKg * ShippingCalculatorService::EXTRA_WEIGHT_FEE_PER_KG, 2);
+
+        $extra = $shipment->sellerOrder?->extra;
+        $actualShippingPool = $extra && (float) $extra->original_shipping_fee > 0
+            ? round((float) $extra->original_shipping_fee, 2)
+            : round((float) $shipment->shipping_fee, 2);
+
+        if ($actualShippingPool <= 0) {
+            $actualShippingPool = round($tierBasePool + $extraWeightPool, 2);
+        }
+
+        $minBaseShipping = ShippingCalculatorService::BASE_FEE_SAME_BARANGAY;
+        $basePay = round($minBaseShipping * $shareRate, 2);
+        $weightBonus = round($extraWeightPool * $shareRate, 2);
+        $totalPay = round($actualShippingPool * $shareRate, 2);
+        $distanceBonus = max(0.00, round($totalPay - $basePay - $weightBonus, 2));
 
         return [
             'base_pay'       => $basePay,
@@ -82,6 +121,21 @@ class DeliveryController extends Controller
             'weight_bonus'   => $weightBonus,
             'total_pay'      => $totalPay,
         ];
+    }
+
+    public static function resolveCollectionRiderCommission(CodCollection $col): float
+    {
+        $record = CommissionRecord::where('seller_order_id', $col->seller_order_id)->first();
+        if ($record && (float) $record->rider_commission_amount > 0) {
+            return round((float) $record->rider_commission_amount, 2);
+        }
+
+        if ($col->shipment) {
+            $pay = self::calculateDistanceScaledRiderPay($col->shipment);
+            return round((float) $pay['total_pay'], 2);
+        }
+
+        return round((float) $col->shipping_fee * (CommissionCalculatorService::RIDER_SHIPPING_SHARE_PERCENT / 100), 2);
     }
 
     public function index(Request $request)
@@ -106,6 +160,7 @@ class DeliveryController extends Controller
             'sellerOrder.buyer',
             'sellerOrder.items',
             'sellerOrder.payment',
+            'sellerOrder.extra',
         ])
             ->where('rider_id', $rider->id)
             ->whereIn('status', ['assigned', 'accepted', 'collected', 'out_for_delivery'])
@@ -116,6 +171,7 @@ class DeliveryController extends Controller
         $historyAssignments = DeliveryAssignment::with([
             'shipment.sellerProfile',
             'sellerOrder.buyer',
+            'sellerOrder.extra',
         ])
             ->where('rider_id', $rider->id)
             ->whereIn('status', ['delivered', 'failed', 'reassigned'])
@@ -123,7 +179,7 @@ class DeliveryController extends Controller
             ->limit(50)
             ->get();
 
-        $unremittedCollections = CodCollection::with(['shipment', 'sellerOrder'])
+        $unremittedCollections = CodCollection::with(['shipment.sellerOrder.extra', 'sellerOrder', 'commissionRecord'])
             ->where('rider_id', $rider->id)
             ->where('status', 'collected')
             ->orderBy('collected_at', 'asc')
@@ -143,14 +199,8 @@ class DeliveryController extends Controller
             ->count();
 
         $unremittedCodTotal = round((float) $unremittedCollections->sum('collected_amount'), 2);
-        $pendingRiderComm = round((float) $unremittedCollections->sum(fn ($c) => round((float) $c->shipping_fee * 0.10, 2)), 2);
-
-        $verifiedRiderEarnings = max(
-            round((float) $riderWallet->total_earned, 2),
-            Schema::hasTable('cod_remittances')
-                ? round((float) CodRemittance::where('rider_id', $rider->id)->where('status', 'verified')->sum('total_rider_commission'), 2)
-                : 0.00
-        );
+        $pendingRiderComm = round((float) $unremittedCollections->sum(fn (CodCollection $c) => self::resolveCollectionRiderCommission($c)), 2);
+        $verifiedRiderEarnings = round((float) $riderWallet->total_earned, 2);
 
         $metrics = [
             'active_deliveries'       => $activeAssignments->count(),
@@ -357,6 +407,7 @@ class DeliveryController extends Controller
 
             $sellerOrder = $shipment->sellerOrder;
             $oldStatus = $sellerOrder->status;
+
             $sellerOrder->update([
                 'status' => 'out_for_delivery',
             ]);
@@ -427,8 +478,9 @@ class DeliveryController extends Controller
             'proof_photo.max'       => 'Proof of Delivery image must not exceed 5 MB.',
         ]);
 
-        $shipment = $assignment->shipment()->with(['sellerOrder.order', 'sellerOrder.buyer', 'sellerOrder.seller', 'sellerOrder.payment', 'packages'])->firstOrFail();
+        $shipment = $assignment->shipment()->with(['sellerOrder.order', 'sellerOrder.buyer', 'sellerOrder.seller', 'sellerOrder.payment', 'sellerOrder.extra', 'packages'])->firstOrFail();
         $sellerOrder = $shipment->sellerOrder;
+
         $expectedCod = (float) $shipment->cod_amount;
         $collectedCod = isset($validated['collected_amount']) ? round((float) $validated['collected_amount'], 2) : $expectedCod;
 
@@ -514,24 +566,29 @@ class DeliveryController extends Controller
             DeliveryProof::create($proofPayload);
 
             if ($expectedCod > 0) {
+                $colPayload = [
+                    'collection_reference'   => 'COD-' . now()->format('Ymd') . '-' . strtoupper(Str::random(6)),
+                    'delivery_assignment_id' => $assignment->id,
+                    'logistics_profile_id'   => $shipment->logistics_profile_id,
+                    'rider_id'               => $rider->id,
+                    'expected_amount'        => $expectedCod,
+                    'collected_amount'       => $collectedCod,
+                    'remitted_amount'        => null,
+                    'product_subtotal'       => (float) $sellerOrder->subtotal_amount,
+                    'shipping_fee'           => (float) $shipment->shipping_fee,
+                    'status'                 => 'collected',
+                    'collected_at'           => now(),
+                ];
+                if (Schema::hasColumn('cod_collections', 'admin_remittance_status')) {
+                    $colPayload['admin_remittance_status'] = 'unremitted';
+                }
+
                 CodCollection::updateOrCreate(
                     [
                         'shipment_id'     => $shipment->id,
                         'seller_order_id' => $sellerOrder->id,
                     ],
-                    [
-                        'collection_reference'   => 'COD-' . now()->format('Ymd') . '-' . strtoupper(Str::random(6)),
-                        'delivery_assignment_id' => $assignment->id,
-                        'logistics_profile_id'   => $shipment->logistics_profile_id,
-                        'rider_id'               => $rider->id,
-                        'expected_amount'        => $expectedCod,
-                        'collected_amount'       => $collectedCod,
-                        'remitted_amount'        => null,
-                        'product_subtotal'       => (float) $sellerOrder->subtotal_amount,
-                        'shipping_fee'           => (float) $shipment->shipping_fee,
-                        'status'                 => 'collected',
-                        'collected_at'           => now(),
-                    ]
+                    $colPayload
                 );
             }
 
@@ -594,7 +651,7 @@ class DeliveryController extends Controller
 
         return back()->with(
             'success',
-            "Delivery completed! Your distance-scaled Rider Pay of ₱" . number_format($payInfo['total_pay'], 2) . " ({$payInfo['distance_tier']}) has been credited to your Pending Escrow Wallet."
+            "Delivery completed! Your distance-scaled Rider Pay of ₱" . number_format($payInfo['total_pay'], 2) . " ({$payInfo['distance_tier']}) from the Shipping & Operational Fee has been credited to your Pending Escrow Wallet. Please remit 100% of collected COD cash to your Logistics Hub."
         );
     }
 
@@ -614,7 +671,7 @@ class DeliveryController extends Controller
 
         $fullReason = trim($validated['failure_reason'] . (! empty($validated['failure_notes']) ? ' — ' . $validated['failure_notes'] : ''));
 
-        $shipment = $assignment->shipment()->with(['sellerOrder.order', 'sellerOrder.buyer', 'sellerOrder.seller', 'sellerOrder.payment'])->firstOrFail();
+        $shipment = $assignment->shipment()->with(['sellerOrder.order', 'sellerOrder.buyer', 'sellerOrder.seller', 'sellerOrder.payment', 'sellerOrder.extra'])->firstOrFail();
         $sellerOrder = $shipment->sellerOrder;
 
         DB::transaction(function () use ($assignment, $shipment, $sellerOrder, $rider, $fullReason) {
@@ -668,6 +725,26 @@ class DeliveryController extends Controller
                 'cancelled_at'   => $autoRtsTriggered ? now() : $sellerOrder->cancelled_at,
             ]);
 
+            if ($autoRtsTriggered) {
+                $sellerOrder->payment?->update([
+                    'status' => 'cancelled',
+                ]);
+
+                $wasWalletPaid = strtoupper((string) $sellerOrder->effective_payment_method) === 'WALLET'
+                    || (float) ($sellerOrder->extra?->wallet_paid_amount ?? 0) > 0;
+                if ($wasWalletPaid) {
+                    $refundAmt = (float) ($sellerOrder->extra?->wallet_paid_amount > 0 ? $sellerOrder->extra->wallet_paid_amount : $sellerOrder->total_amount);
+                    $this->roleWalletService->refundBuyerWalletForOrder(
+                        $sellerOrder,
+                        $refundAmt,
+                        'Order Returned to Seller (RTS) — E-Wallet Refund'
+                    );
+                }
+
+                $this->voucherService?->restoreVouchersForSellerOrder($sellerOrder);
+                $this->buyerRewardService?->restoreCoinsForSellerOrder($sellerOrder);
+            }
+
             OrderStatusHistory::create([
                 'order_id'        => $sellerOrder->order_id,
                 'seller_order_id' => $sellerOrder->id,
@@ -716,7 +793,8 @@ class DeliveryController extends Controller
         /** @var \App\Models\Rider $rider */
         $rider = Auth::guard('rider')->user();
 
-        $collections = CodCollection::where('rider_id', $rider->id)
+        $collections = CodCollection::with(['shipment.sellerOrder.extra', 'commissionRecord'])
+            ->where('rider_id', $rider->id)
             ->where('status', 'collected')
             ->orderBy('collected_at', 'asc')
             ->get();
@@ -729,8 +807,8 @@ class DeliveryController extends Controller
 
         DB::transaction(function () use ($rider, $collections, $remittanceRef) {
             $totalCollected = round((float) $collections->sum('collected_amount'), 2);
-            $totalRiderComm = round((float) $collections->sum(fn ($c) => round((float) $c->shipping_fee * 0.10, 2)), 2);
-            $netRemitted = round(max(0, $totalCollected - $totalRiderComm), 2);
+            $totalRiderComm = round((float) $collections->sum(fn (CodCollection $c) => self::resolveCollectionRiderCommission($c)), 2);
+            $netRemitted = $totalCollected;
 
             $remittance = CodRemittance::create([
                 'remittance_reference'   => $remittanceRef,
@@ -741,10 +819,12 @@ class DeliveryController extends Controller
                 'net_remitted_amount'    => $netRemitted,
                 'status'                 => 'submitted',
                 'submitted_at'           => now(),
-                'notes'                  => "Submitted by Rider {$rider->full_name} ({$collections->count()} COD collection(s)).",
+                'notes'                  => "100% Gross COD Cash remitted by Rider {$rider->full_name} ({$collections->count()} collection(s)). Rider task commission (₱" . number_format($totalRiderComm, 2) . ") releases to E-Wallet upon Admin COD verification.",
             ]);
 
             foreach ($collections as $col) {
+                $colRiderComm = self::resolveCollectionRiderCommission($col);
+
                 $col->update([
                     'remitted_amount'      => $col->collected_amount,
                     'status'               => 'remitted',
@@ -756,7 +836,7 @@ class DeliveryController extends Controller
                     'cod_remittance_id'       => $remittance->id,
                     'seller_order_id'         => $col->seller_order_id,
                     'collected_amount'        => $col->collected_amount,
-                    'rider_commission_amount' => round((float) $col->shipping_fee * 0.10, 2),
+                    'rider_commission_amount' => $colRiderComm,
                 ];
                 if (Schema::hasColumn('cod_remittance_items', 'amount')) {
                     $itemPayload['amount'] = $col->collected_amount;
@@ -769,7 +849,7 @@ class DeliveryController extends Controller
             }
         });
 
-        return back()->with('success', "COD Remittance Batch #{$remittanceRef} submitted to your Logistics Hub for verification!");
+        return back()->with('success', "100% COD Remittance Batch #{$remittanceRef} submitted to your Logistics Hub! Your Rider Delivery Commission will be credited to your Available E-Wallet once Logistics remits to Admin and Admin verifies.");
     }
 
     public function remitCod(Request $request, CodCollection $codCollection)
@@ -806,6 +886,10 @@ class DeliveryController extends Controller
             : ('REM-' . now()->format('Ymd') . '-' . strtoupper(Str::random(6)));
 
         DB::transaction(function () use ($codCollection, $rider, $remitted, $expected, $isShort, $validated, $remittanceRef) {
+            $codCollection->loadMissing(['shipment.sellerOrder.extra', 'commissionRecord']);
+            $riderComm = self::resolveCollectionRiderCommission($codCollection);
+            $netRemitted = $remitted;
+
             $codCollection->update([
                 'remitted_amount'      => $remitted,
                 'status'               => $isShort ? 'short_remitted' : 'remitted',
@@ -813,9 +897,6 @@ class DeliveryController extends Controller
                 'notes'                => $validated['shortfall_reason'] ?? null,
                 'remitted_at'          => now(),
             ]);
-
-            $riderComm = round((float) $codCollection->shipping_fee * 0.10, 2);
-            $netRemitted = round(max(0, $remitted - $riderComm), 2);
 
             $remittance = CodRemittance::create([
                 'remittance_reference'   => $remittanceRef,
@@ -826,7 +907,7 @@ class DeliveryController extends Controller
                 'net_remitted_amount'    => $netRemitted,
                 'status'                 => 'submitted',
                 'submitted_at'           => now(),
-                'notes'                  => $validated['shortfall_reason'] ?? "Single COD collection remittance ({$codCollection->collection_reference}).",
+                'notes'                  => $validated['shortfall_reason'] ?? "100% Gross COD collection remittance ({$codCollection->collection_reference}).",
             ]);
 
             $itemPayload = [
@@ -864,7 +945,7 @@ class DeliveryController extends Controller
             'success',
             $isShort
                 ? 'Short COD remittance recorded and flagged for Logistics & Admin reconciliation.'
-                : 'Full COD remittance submitted to Logistics Hub for verification.'
+                : '100% Gross COD remittance submitted to Logistics Hub for verification.'
         );
     }
 
@@ -943,13 +1024,13 @@ class DeliveryController extends Controller
             ->orderBy('created_at', 'asc')
             ->get();
 
-        $attempts = DeliveryAttempt::with(['shipment', 'sellerOrder'])
+        $attempts = DeliveryAttempt::with(['shipment.sellerOrder.extra', 'sellerOrder'])
             ->where('rider_id', $rider->id)
             ->whereBetween('attempted_at', [$from, $to])
             ->orderBy('attempted_at', 'asc')
             ->get();
 
-        $collections = CodCollection::with(['shipment', 'sellerOrder'])
+        $collections = CodCollection::with(['shipment.sellerOrder.extra', 'sellerOrder'])
             ->where('rider_id', $rider->id)
             ->whereBetween('created_at', [$from, $to])
             ->orderBy('created_at', 'asc')

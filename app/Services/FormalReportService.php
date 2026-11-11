@@ -74,7 +74,7 @@ class FormalReportService
                 $rows[] = [
                     'date'        => $rec->created_at?->timezone('Asia/Manila')->format('M d, Y h:i A') ?? '',
                     'reference'   => $orderNo,
-                    'description' => "Completed Order ({$payMethod}) — 90% Seller Share / 10% Admin Commission",
+                    'description' => "Completed Order ({$payMethod}) — 90% Seller Share / 10% Admin Commission (Product Pool)",
                     'gross'       => $gross,
                     'deduction'   => $deduction,
                     'net'         => $net,
@@ -105,12 +105,14 @@ class FormalReportService
 
             foreach ($records as $rec) {
                 $gross = round((float) $rec->shipping_fee, 2);
+                $courierShare = round((float) ($rec->courier_commission_amount ?? 0), 2);
                 $riderShare = round((float) $rec->rider_commission_amount, 2);
+                $driverDeduction = round($courierShare + $riderShare, 2);
                 $opsShare = (float) ($rec->logistics_operational_revenue ?? $rec->logistics_operational_amount ?? 0);
                 $net = round((float) ($rec->logistics_total_earning ?: ((float) $rec->logistics_commission_amount + $opsShare)), 2);
 
                 $grossTotal += $gross;
-                $deductionTotal += $riderShare;
+                $deductionTotal += $driverDeduction;
                 $netTotal += $net;
 
                 $trk = $rec->shipment->tracking_number ?? ('SHP-#' . $rec->shipment_id);
@@ -119,19 +121,19 @@ class FormalReportService
                 $rows[] = [
                     'date'        => $rec->created_at?->timezone('Asia/Manila')->format('M d, Y h:i A') ?? '',
                     'reference'   => $trk,
-                    'description' => "Delivered Shipment from {$storeName} — 90% Hub Share / 10% Rider Share",
+                    'description' => "Delivered Shipment from {$storeName} — Hub Share vs Courier/Rider Task Commissions (Shipping Pool)",
                     'gross'       => $gross,
-                    'deduction'   => $riderShare,
+                    'deduction'   => $driverDeduction,
                     'net'         => $net,
-                    'status'      => 'COMPLETED',
+                    'status'      => strtoupper((string) ($rec->cod_remittance_stage ?: $rec->status ?: 'COMPLETED')),
                 ];
             }
 
             $kpis = [
                 ['label' => 'Delivered Shipments', 'value' => number_format($records->count())],
-                ['label' => 'Gross Shipping Base', 'value' => '₱' . number_format($grossTotal, 2)],
-                ['label' => 'Rider 10% Allocation', 'value' => '-₱' . number_format($deductionTotal, 2)],
-                ['label' => 'Hub Net (90%)', 'value' => '₱' . number_format($netTotal, 2)],
+                ['label' => 'Gross Shipping & Ops Pool', 'value' => '₱' . number_format($grossTotal, 2)],
+                ['label' => 'Courier & Rider Task Pay', 'value' => '-₱' . number_format($deductionTotal, 2)],
+                ['label' => 'Hub Net Share', 'value' => '₱' . number_format($netTotal, 2)],
                 ['label' => 'Available Hub Wallet', 'value' => '₱' . number_format((float) ($wallet?->available_balance ?? 0), 2)],
             ];
         } elseif ($normalizedRole === 'Rider') {
@@ -164,7 +166,7 @@ class FormalReportService
                 $rows[] = [
                     'date'        => ($deliv->completed_at ?? $deliv->updated_at)?->timezone('Asia/Manila')->format('M d, Y h:i A') ?? '',
                     'reference'   => $shipment->tracking_number ?? ('ASG-#' . $deliv->id),
-                    'description' => "Last-Mile Delivery ({$pay['distance_tier']}) — Order #" . ($deliv->sellerOrder->seller_order_number ?? 'N/A'),
+                    'description' => "Last-Mile Delivery ({$pay['distance_tier']}) from Shipping/Ops Fee — Order #" . ($deliv->sellerOrder->seller_order_number ?? 'N/A'),
                     'gross'       => $amount,
                     'deduction'   => 0.00,
                     'net'         => $amount,
@@ -174,7 +176,7 @@ class FormalReportService
 
             $kpis = [
                 ['label' => 'Completed Deliveries', 'value' => number_format($deliveries->count())],
-                ['label' => 'Gross Rider Pay', 'value' => '₱' . number_format($grossTotal, 2)],
+                ['label' => 'Gross Rider Task Pay', 'value' => '₱' . number_format($grossTotal, 2)],
                 ['label' => 'Deductions', 'value' => '₱0.00'],
                 ['label' => 'Net Rider Earnings', 'value' => '₱' . number_format($netTotal, 2)],
                 ['label' => 'Available E-Wallet', 'value' => '₱' . number_format((float) ($wallet?->available_balance ?? 0), 2)],
@@ -209,7 +211,7 @@ class FormalReportService
                 $rows[] = [
                     'date'        => $p->updated_at?->timezone('Asia/Manila')->format('M d, Y h:i A') ?? '',
                     'reference'   => $shipment->tracking_number ?? ('PKP-#' . $p->id),
-                    'description' => "First-Mile Pickup ({$pay['distance_tier']}) from " . ($shipment->sellerProfile->business_name ?? 'Seller'),
+                    'description' => "First-Mile Pickup ({$pay['distance_tier']}) from Shipping/Ops Fee — " . ($shipment->sellerProfile->business_name ?? 'Seller'),
                     'gross'       => $amount,
                     'deduction'   => 0.00,
                     'net'         => $amount,
@@ -238,8 +240,9 @@ class FormalReportService
             $totalProductVolume = 0.00;
             $totalShippingVolume = 0.00;
             $totalSellerNet90 = 0.00;
-            $totalLogisticsNet90 = 0.00;
-            $totalRiderShare10 = 0.00;
+            $totalLogisticsNet = 0.00;
+            $totalCourierShare = 0.00;
+            $totalRiderShare = 0.00;
 
             foreach ($records as $rec) {
                 $prodSub = round((float) $rec->product_subtotal, 2);
@@ -247,21 +250,27 @@ class FormalReportService
                 $admin10 = round((float) $rec->admin_commission_amount, 2);
                 $seller90 = round((float) ($rec->seller_net_earning ?? $rec->seller_net_amount ?? 0), 2);
                 $opsShare = (float) ($rec->logistics_operational_revenue ?? $rec->logistics_operational_amount ?? 0);
-                $hub90 = round((float) ($rec->logistics_total_earning ?: ((float) $rec->logistics_commission_amount + $opsShare)), 2);
-                $rider10 = round((float) $rec->rider_commission_amount, 2);
+                $hubShare = round((float) ($rec->logistics_total_earning ?: ((float) $rec->logistics_commission_amount + $opsShare)), 2);
+                $courierShare = round((float) ($rec->courier_commission_amount ?? 0), 2);
+                $riderShare = round((float) $rec->rider_commission_amount, 2);
 
                 $extra = $rec->sellerOrder?->extra;
+                $platDisc = $extra ? (float) ($extra->platform_voucher_discount ?? 0) : 0.00;
+                $coinsDisc = $extra ? (float) ($extra->coins_discount_amount ?? 0) : 0.00;
+                if ($extra && empty($extra->platform_voucher_code) && abs($platDisc - $coinsDisc) < 0.009) {
+                    $platDisc = 0.00;
+                }
                 $subsidy = $extra
-                    ? round((float) $extra->platform_voucher_discount + (float) $extra->shipping_voucher_discount, 2)
+                    ? round($platDisc + $coinsDisc + (float) ($extra->shipping_voucher_discount ?? 0), 2)
                     : 0.00;
-
                 $netAdminOrder = round($admin10 - $subsidy, 2);
 
                 $totalProductVolume += $prodSub;
                 $totalShippingVolume += $shipFee;
                 $totalSellerNet90 += $seller90;
-                $totalLogisticsNet90 += $hub90;
-                $totalRiderShare10 += $rider10;
+                $totalLogisticsNet += $hubShare;
+                $totalCourierShare += $courierShare;
+                $totalRiderShare += $riderShare;
 
                 $grossTotal += $admin10;
                 $deductionTotal += $subsidy;
@@ -274,11 +283,11 @@ class FormalReportService
                 $rows[] = [
                     'date'        => $rec->created_at?->timezone('Asia/Manila')->format('M d, Y h:i A') ?? '',
                     'reference'   => $orderNo,
-                    'description' => "{$storeName} via {$hubName} (Base ₱" . number_format($prodSub, 2) . " | Ship ₱" . number_format($shipFee, 2) . ")",
+                    'description' => "{$storeName} via {$hubName} (Prod ₱" . number_format($prodSub, 2) . " | Ship/Ops ₱" . number_format($shipFee, 2) . ")",
                     'gross'       => $admin10,
                     'deduction'   => $subsidy,
                     'net'         => $netAdminOrder,
-                    'status'      => 'SETTLED',
+                    'status'      => strtoupper((string) ($rec->status ?: 'SETTLED')),
                 ];
             }
 
@@ -297,31 +306,31 @@ class FormalReportService
 
             $roleSummaries = [
                 [
-                    'role'       => 'Seller Stores (90% Merchandise Share)',
+                    'role'       => 'Seller Stores (90% Merchandise Share from Product Price)',
                     'count'      => SellerProfile::count(),
                     'gross_base' => round($totalProductVolume, 2),
                     'net_share'  => round($totalSellerNet90, 2),
                     'disbursed'  => $disbursedSeller,
                 ],
                 [
-                    'role'       => 'Logistics Sorting Hubs (90% Shipping Share)',
+                    'role'       => 'Logistics Sorting Hubs (Hub Operational Share from Shipping Fee)',
                     'count'      => LogisticsProfile::count(),
                     'gross_base' => round($totalShippingVolume, 2),
-                    'net_share'  => round($totalLogisticsNet90, 2),
+                    'net_share'  => round($totalLogisticsNet, 2),
                     'disbursed'  => $disbursedLogistics,
                 ],
                 [
-                    'role'       => 'Last-Mile Delivery Riders (10% Ship + Distance Pay)',
+                    'role'       => 'Last-Mile Delivery Riders (Distance + Weight Pay from Shipping Fee)',
                     'count'      => Rider::count(),
                     'gross_base' => round($totalShippingVolume, 2),
-                    'net_share'  => round($totalRiderShare10, 2),
+                    'net_share'  => round($totalRiderShare, 2),
                     'disbursed'  => $disbursedRider,
                 ],
                 [
-                    'role'       => 'First-Mile Couriers (Haulage Pickup Pay)',
+                    'role'       => 'First-Mile Couriers (Haulage Pickup Pay from Shipping Fee)',
                     'count'      => Courier::count(),
                     'gross_base' => round($totalShippingVolume, 2),
-                    'net_share'  => round((float) RoleWallet::where('owner_type', 'Courier')->sum('total_earned'), 2),
+                    'net_share'  => max(round($totalCourierShare, 2), round((float) RoleWallet::where('owner_type', 'Courier')->sum('total_earned'), 2)),
                     'disbursed'  => $disbursedCourier,
                 ],
             ];
@@ -330,7 +339,7 @@ class FormalReportService
                 ['label' => 'Completed Orders', 'value' => number_format($records->count())],
                 ['label' => 'Gross Merchandise GMV', 'value' => '₱' . number_format($totalProductVolume, 2)],
                 ['label' => 'Admin 10% Commission', 'value' => '₱' . number_format($grossTotal, 2)],
-                ['label' => 'Voucher Subsidies', 'value' => '-₱' . number_format($deductionTotal, 2)],
+                ['label' => 'Voucher & Coin Subsidies', 'value' => '-₱' . number_format($deductionTotal, 2)],
                 ['label' => 'Net Admin Profit', 'value' => '₱' . number_format($netTotal, 2)],
             ];
         }

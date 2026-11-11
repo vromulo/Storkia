@@ -10,17 +10,25 @@ use App\Models\BuyerWishlist;
 use App\Models\OrderItem;
 use App\Models\OrderItemReview;
 use App\Models\Product;
+use App\Models\ProductQuestion;
+use App\Models\ProductRestockSubscription;
 use App\Models\SellerProfile;
 use App\Models\SellerStoreFollow;
 use App\Models\StorkVoucher;
+use App\Notifications\OrderLifecycleNotification;
+use App\Services\StorkSchemaBootstrapService;
+use App\Services\SuperDealPricingService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 
 class ProductController extends Controller
 {
     public function index(Request $request): JsonResponse
     {
+        StorkSchemaBootstrapService::ensureTablesExist();
+
         $query = Product::with(['approval', 'sellerProfile', 'user.sellerProfile'])
             ->where('stock_quantity', '>', 0)
             ->whereHas('approval', function ($q) {
@@ -100,6 +108,8 @@ class ProductController extends Controller
 
     public function show(Request $request, $id): JsonResponse
     {
+        StorkSchemaBootstrapService::ensureTablesExist();
+
         $product = Product::with(['approval', 'specifications', 'sellerProfile', 'user.sellerProfile'])
             ->findOrFail($id);
 
@@ -129,7 +139,7 @@ class ProductController extends Controller
         ];
 
         $productReviews = Schema::hasTable('order_item_reviews')
-            ? OrderItemReview::with('buyer')
+            ? OrderItemReview::with(['buyer', 'orderItem'])
                 ->where('product_id', $product->id)
                 ->latest('id')
                 ->get()
@@ -163,6 +173,45 @@ class ProductController extends Controller
                 ->exists();
         }
 
+        $upvotedReviewIds = [];
+        if ($user && Schema::hasTable('product_review_upvotes') && $productReviews->isNotEmpty()) {
+            $upvotedReviewIds = DB::table('product_review_upvotes')
+                ->where('user_id', $user->id)
+                ->whereIn('review_id', $productReviews->pluck('id')->all())
+                ->pluck('review_id')
+                ->map(fn ($rid) => (int) $rid)
+                ->all();
+        }
+
+        $hasRestockSubscription = false;
+        if ($user && Schema::hasTable('product_restock_subscriptions')) {
+            $hasRestockSubscription = ProductRestockSubscription::where('product_id', $product->id)
+                ->where('user_id', $user->id)
+                ->where('status', 'active')
+                ->exists();
+        }
+
+        $questions = Schema::hasTable('product_questions')
+            ? ProductQuestion::with(['buyer', 'answeredBy'])
+                ->where('product_id', $product->id)
+                ->where('is_visible', true)
+                ->latest('id')
+                ->limit(30)
+                ->get()
+                ->map(function (ProductQuestion $pq) {
+                    $fn = $pq->buyer?->first_name ?? '';
+                    return [
+                        'id'           => (int) $pq->id,
+                        'buyer_name'   => $fn !== '' ? substr($fn, 0, 1) . '***' : 'Buyer',
+                        'question'     => $pq->question,
+                        'answer'       => $pq->answer,
+                        'answered_at'  => $pq->answered_at?->format('M d, Y') ?? null,
+                        'created_at'   => $pq->created_at?->format('M d, Y') ?? '',
+                    ];
+                })
+                ->values()
+            : collect();
+
         $claimedVoucherIds = $user && Schema::hasTable('buyer_voucher_claims')
             ? BuyerVoucherClaim::where('buyer_id', $user->id)->pluck('voucher_id')->all()
             : [];
@@ -185,6 +234,8 @@ class ProductController extends Controller
                 })
             : collect();
 
+        $dealPricing = app(SuperDealPricingService::class)->resolveDisplayPricing($product, (float) ($product->price ?? 0));
+
         $candidatesQuery = Product::with(['approval', 'sellerProfile', 'user.sellerProfile'])
             ->where('stock_quantity', '>', 0)
             ->where('id', '!=', $product->id)
@@ -201,7 +252,7 @@ class ProductController extends Controller
             ->values();
         $this->appendProductMetrics($related, $user?->id);
 
-        $formattedReviews = $productReviews->map(function (OrderItemReview $rev) use ($user) {
+        $formattedReviews = $productReviews->map(function (OrderItemReview $rev) use ($user, $upvotedReviewIds) {
             $firstName = $rev->buyer?->first_name ?? '';
             $maskedName = $firstName !== '' ? substr($firstName, 0, 1) . '***' : 'Verified Buyer';
             $photos = is_array($rev->review_photos) && ! empty($rev->review_photos)
@@ -212,19 +263,25 @@ class ProductController extends Controller
             $withinWindow = ! $rev->created_at || $rev->created_at->gt(now()->subDays(30));
             $canEdit = $user && (int) $rev->buyer_id === (int) $user->id && $editCount < 1 && $withinWindow;
 
+            $variantLabel = $rev->purchased_variant_label
+                ?: ($rev->orderItem ? implode(' / ', array_filter([$rev->orderItem->variant_name, $rev->orderItem->sub_variant_name])) : null);
+
             return [
-                'id'                => $rev->id,
-                'buyer_id'          => $rev->buyer_id,
-                'rating'            => (int) $rev->rating,
-                'review_text'       => $rev->review_text,
-                'review_photo_path' => $rev->review_photo_path,
-                'review_photos'     => $photos,
-                'edit_count'        => $editCount,
-                'edited_at'         => $rev->edited_at?->toISOString(),
-                'can_edit'          => $canEdit,
-                'seller_reply'      => $rev->seller_reply,
-                'buyer_name'        => $maskedName,
-                'created_at_human'  => $rev->created_at?->format('M d, Y') ?? '',
+                'id'                      => $rev->id,
+                'buyer_id'                => $rev->buyer_id,
+                'rating'                  => (int) $rev->rating,
+                'purchased_variant_label' => $variantLabel ?: null,
+                'review_text'             => $rev->review_text,
+                'review_photo_path'       => $rev->review_photo_path,
+                'review_photos'           => $photos,
+                'helpful_count'           => (int) ($rev->helpful_count ?? 0),
+                'is_upvoted'              => in_array((int) $rev->id, $upvotedReviewIds, true),
+                'edit_count'              => $editCount,
+                'edited_at'               => $rev->edited_at?->toISOString(),
+                'can_edit'                => $canEdit,
+                'seller_reply'            => $rev->seller_reply,
+                'buyer_name'              => $maskedName,
+                'created_at_human'        => $rev->created_at?->format('M d, Y') ?? '',
             ];
         });
 
@@ -234,6 +291,7 @@ class ProductController extends Controller
         $productArray['sold_count'] = $totalSoldUnits;
         $productArray['is_wishlisted'] = $isWishlisted;
         $productArray['per_buyer_limit'] = $perBuyerLimit;
+        $productArray['deal_pricing'] = $dealPricing;
 
         if ($seller) {
             $sellerArray = $seller->toArray();
@@ -247,19 +305,102 @@ class ProductController extends Controller
         return response()->json([
             'success' => true,
             'data'    => [
-                'product'              => $productArray,
-                'seller'               => $productArray['seller_profile'] ?? null,
-                'stats'                => $stats,
-                'product_avg_rating'   => $productAvgRating,
-                'total_sold_units'     => $totalSoldUnits,
-                'is_own_store'         => $isOwnStore,
-                'is_following_store'   => $isFollowingStore,
-                'is_wishlisted'        => $isWishlisted,
-                'is_store_on_vacation' => $isStoreOnVacation,
-                'per_buyer_limit'      => $perBuyerLimit,
-                'store_vouchers'       => $storeVouchers,
-                'reviews'              => $formattedReviews,
-                'related_products'     => $related,
+                'product'                  => $productArray,
+                'seller'                   => $productArray['seller_profile'] ?? null,
+                'stats'                    => $stats,
+                'deal_pricing'             => $dealPricing,
+                'product_avg_rating'       => $productAvgRating,
+                'total_sold_units'         => $totalSoldUnits,
+                'is_own_store'             => $isOwnStore,
+                'is_following_store'       => $isFollowingStore,
+                'is_wishlisted'            => $isWishlisted,
+                'has_restock_subscription' => $hasRestockSubscription,
+                'is_store_on_vacation'     => $isStoreOnVacation,
+                'per_buyer_limit'          => $perBuyerLimit,
+                'store_vouchers'           => $storeVouchers,
+                'reviews'                  => $formattedReviews,
+                'questions'                => $questions,
+                'related_products'         => $related,
+            ],
+        ]);
+    }
+
+    public function subscribeRestock(Request $request, int $id): JsonResponse
+    {
+        StorkSchemaBootstrapService::ensureTablesExist();
+
+        $product = Product::findOrFail($id);
+        $user = $request->user();
+
+        $validated = $request->validate([
+            'variant_name'     => ['nullable', 'string', 'max:100'],
+            'sub_variant_name' => ['nullable', 'string', 'max:100'],
+        ]);
+
+        ProductRestockSubscription::updateOrCreate(
+            [
+                'product_id'       => $product->id,
+                'user_id'          => $user->id,
+                'variant_name'     => trim((string) ($validated['variant_name'] ?? '')) ?: null,
+                'sub_variant_name' => trim((string) ($validated['sub_variant_name'] ?? '')) ?: null,
+            ],
+            [
+                'status'      => 'active',
+                'notified_at' => null,
+            ]
+        );
+
+        return response()->json([
+            'success'    => true,
+            'subscribed' => true,
+            'message'    => "You will be notified as soon as \"{$product->name}\" is back in stock!",
+        ]);
+    }
+
+    public function askQuestion(Request $request, int $id): JsonResponse
+    {
+        StorkSchemaBootstrapService::ensureTablesExist();
+
+        $product = Product::with('user.sellerProfile')->findOrFail($id);
+        $user = $request->user();
+        $seller = $product->user?->sellerProfile
+            ?? ($product->user_id ? SellerProfile::where('user_id', $product->user_id)->first() : null);
+
+        if (! $seller) {
+            return response()->json(['success' => false, 'message' => 'Seller store not found.'], 404);
+        }
+
+        $validated = $request->validate([
+            'question' => ['required', 'string', 'min:5', 'max:500'],
+        ]);
+
+        $q = ProductQuestion::create([
+            'product_id'        => $product->id,
+            'seller_profile_id' => $seller->id,
+            'buyer_id'          => $user->id,
+            'question'          => trim($validated['question']),
+            'is_visible'        => true,
+        ]);
+
+        try {
+            $seller->user?->notify(new OrderLifecycleNotification(
+                title: 'New Buyer Question on ' . $product->name,
+                message: "{$user->first_name} asked: \"" . substr($q->question, 0, 120) . '"',
+                type: 'info',
+                url: route('seller.ratings.index', ['tab' => 'questions'])
+            ));
+        } catch (\Throwable $e) {
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Your question has been posted!',
+            'data'    => [
+                'id'         => (int) $q->id,
+                'buyer_name' => substr($user->first_name, 0, 1) . '***',
+                'question'   => $q->question,
+                'answer'     => null,
+                'created_at' => $q->created_at?->format('M d, Y') ?? '',
             ],
         ]);
     }

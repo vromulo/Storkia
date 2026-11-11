@@ -6,14 +6,13 @@ use App\Http\Controllers\Controller;
 use App\Models\CodCollection;
 use App\Models\CodRemittance;
 use App\Models\CommissionRecord;
+use App\Models\LogisticsAdminRemittance;
 use App\Models\OrderServiceRating;
 use App\Models\Rider;
 use App\Models\SellerProfile;
 use App\Models\SellerSettlement;
-use App\Models\SellerSettlementItem;
 use App\Models\WalletTransaction;
 use App\Models\WithdrawalRequest;
-use App\Notifications\OrderLifecycleNotification;
 use App\Services\AuditLoggerService;
 use App\Services\RoleWalletService;
 use App\Services\StorkSchemaBootstrapService;
@@ -21,7 +20,6 @@ use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
-use Illuminate\Support\Str;
 
 class FinanceController extends Controller
 {
@@ -45,24 +43,48 @@ class FinanceController extends Controller
         $from = Carbon::parse($fromDate)->startOfDay();
         $to = Carbon::parse($toDate)->endOfDay();
 
+        $unremittedToAdminBalance = $this->roleWalletService->syncLogisticsUnremittedCodBalance(
+            (int) $profile->id,
+            $profile->business_name
+        );
+
         $logisticsWallet = $this->roleWalletService->getOrCreateWallet('Logistics', (int) $profile->id, $profile->business_name);
 
         $remittances = Schema::hasTable('cod_remittances')
             ? CodRemittance::with(['rider', 'items.codCollection.sellerOrder', 'items.codCollection.shipment'])
                 ->where('logistics_profile_id', $profile->id)
-                ->orderBy('created_at', 'asc')
+                ->orderByDesc('created_at')
                 ->get()
             : collect();
 
-        $codCollections = CodCollection::with(['rider', 'sellerOrder', 'shipment'])
+        $codCollections = CodCollection::with(['rider', 'sellerOrder', 'shipment', 'commissionRecord'])
             ->where('logistics_profile_id', $profile->id)
-            ->orderBy('created_at', 'asc')
+            ->orderByDesc('created_at')
             ->get();
 
-        $commissionRecords = CommissionRecord::with(['sellerOrder', 'sellerProfile', 'shipment'])
+        $unremittedToAdminCollections = $codCollections->filter(function (CodCollection $col) {
+            if ($col->status !== 'verified') {
+                return false;
+            }
+            $stage = $col->admin_remittance_status ?? 'unremitted';
+            return in_array($stage, ['unremitted', 'held_by_logistics', 'rejected', ''], true);
+        })->values();
+
+        $adminRemittances = Schema::hasTable('logistics_admin_remittances')
+            ? LogisticsAdminRemittance::with(['items.sellerOrder', 'items.shipment', 'reviewedByAdmin'])
+                ->where('logistics_profile_id', $profile->id)
+                ->orderByDesc('submitted_at')
+                ->get()
+            : collect();
+
+        $platformGcash = Schema::hasTable('platform_gcash_settings')
+            ? DB::table('platform_gcash_settings')->where('is_active', true)->orderByDesc('id')->first()
+            : null;
+
+        $commissionRecords = CommissionRecord::with(['sellerOrder', 'sellerProfile', 'shipment', 'courier', 'rider'])
             ->where('logistics_profile_id', $profile->id)
             ->whereBetween('created_at', [$from, $to])
-            ->orderBy('created_at', 'asc')
+            ->orderByDesc('created_at')
             ->get();
 
         $settlements = Schema::hasTable('seller_settlements')
@@ -77,7 +99,7 @@ class FinanceController extends Controller
             ->where('owner_type', 'Logistics')
             ->where('owner_id', $profile->id)
             ->whereBetween('created_at', [$from, $to])
-            ->orderBy('created_at', 'asc')
+            ->orderByDesc('created_at')
             ->get();
 
         $withdrawalRequests = Schema::hasTable('withdrawal_requests')
@@ -89,24 +111,34 @@ class FinanceController extends Controller
             : collect();
 
         $totalCodCollected = round((float) $codCollections->sum('collected_amount'), 2);
-        $verifiedCodRemitted = round((float) $remittances->where('status', 'verified')->sum('total_collected_amount'), 2);
-        $pendingCodRemittances = round((float) $remittances->where('status', 'submitted')->sum('total_collected_amount'), 2);
+        $verifiedCodFromRiders = round((float) $remittances->where('status', 'verified')->sum('total_collected_amount'), 2);
+        $pendingCodFromRiders = round((float) $remittances->where('status', 'submitted')->sum('total_collected_amount'), 2);
+
+        $readyToRemitToAdminAmount = round((float) $unremittedToAdminCollections->sum(fn ($c) => (float) ($c->remitted_amount ?? $c->collected_amount)), 2);
+        $pendingAdminVerificationAmount = round((float) $adminRemittances->where('status', 'pending_verification')->sum('total_cod_amount'), 2);
+        $verifiedByAdminAmount = round((float) $adminRemittances->where('status', 'verified')->sum('total_cod_amount'), 2);
 
         $grossShippingRevenue = round((float) $commissionRecords->sum('shipping_fee'), 2);
-        $logisticsNet90 = round((float) $commissionRecords->sum(fn ($r) => (float) ($r->logistics_total_earning ?: ((float) $r->logistics_commission_amount + (float) $r->logistics_operational_revenue))), 2);
-        $riderShare10 = round((float) $commissionRecords->sum('rider_commission_amount'), 2);
+        $logisticsNetShare = round((float) $commissionRecords->sum(fn ($r) => (float) ($r->logistics_total_earning ?: ((float) $r->logistics_commission_amount + (float) $r->logistics_operational_revenue))), 2);
+        $courierShareTotal = round((float) $commissionRecords->sum(fn ($r) => (float) ($r->courier_commission_amount ?? 0)), 2);
+        $riderShareTotal = round((float) $commissionRecords->sum('rider_commission_amount'), 2);
 
         $metrics = [
-            'wallet_available'        => round((float) $logisticsWallet->available_balance, 2),
-            'wallet_pending'          => round((float) $logisticsWallet->pending_balance, 2),
-            'wallet_total_earned'     => round((float) $logisticsWallet->total_earned, 2),
-            'wallet_total_withdrawn'  => round((float) $logisticsWallet->total_withdrawn, 2),
-            'total_cod_collected'     => $totalCodCollected,
-            'verified_cod_remitted'   => $verifiedCodRemitted,
-            'pending_cod_remittances' => $pendingCodRemittances,
-            'gross_shipping_revenue'  => $grossShippingRevenue,
-            'logistics_net_90'        => $logisticsNet90,
-            'rider_share_10'          => $riderShare10,
+            'wallet_available'                => round((float) $logisticsWallet->available_balance, 2),
+            'wallet_pending'                  => round((float) $logisticsWallet->pending_balance, 2),
+            'wallet_unremitted_cod'           => $unremittedToAdminBalance,
+            'wallet_total_earned'             => round((float) $logisticsWallet->total_earned, 2),
+            'wallet_total_withdrawn'          => round((float) $logisticsWallet->total_withdrawn, 2),
+            'total_cod_collected'             => $totalCodCollected,
+            'verified_cod_remitted'           => $verifiedCodFromRiders,
+            'pending_cod_remittances'         => $pendingCodFromRiders,
+            'ready_to_remit_to_admin_amount'  => $readyToRemitToAdminAmount,
+            'pending_admin_remittance_amount' => $pendingAdminVerificationAmount,
+            'verified_admin_remittance_amount'=> $verifiedByAdminAmount,
+            'gross_shipping_revenue'          => $grossShippingRevenue,
+            'logistics_net_90'                => $logisticsNetShare,
+            'courier_share_total'             => $courierShareTotal,
+            'rider_share_10'                  => $riderShareTotal,
         ];
 
         $sellers = SellerProfile::orderBy('business_name')->get();
@@ -118,6 +150,9 @@ class FinanceController extends Controller
             'logisticsWallet',
             'remittances',
             'codCollections',
+            'unremittedToAdminCollections',
+            'adminRemittances',
+            'platformGcash',
             'commissionRecords',
             'settlements',
             'walletTransactions',
@@ -140,40 +175,31 @@ class FinanceController extends Controller
             return back()->with('info', 'This COD remittance batch is already verified.');
         }
 
-        DB::transaction(function () use ($remittance, $user) {
-            $remittance->update([
-                'status'      => 'verified',
-                'verified_by' => $user->id,
-                'verified_at' => now(),
-            ]);
+        $this->roleWalletService->recordRiderCodVerifiedByLogistics($remittance, (int) $user->id);
 
-            foreach ($remittance->items as $item) {
-                $col = $item->codCollection ?? $item->collection;
-                if ($col) {
-                    $col->update([
-                        'status'      => 'verified',
-                        'verified_by' => $user->id,
-                        'verified_at' => now(),
-                    ]);
-                }
-            }
+        AuditLoggerService::log(
+            action: 'cod_remittance_verified_at_hub',
+            targetType: 'CodRemittance',
+            targetId: (int) $remittance->id,
+            targetReference: $remittance->remittance_reference,
+            oldValues: ['status' => 'submitted'],
+            newValues: [
+                'status'                 => 'verified',
+                'total_collected_amount' => (float) $remittance->total_collected_amount,
+            ],
+            reason: "100% Gross COD Cash verified by Logistics Hub ({$user->full_name}). Ready for Logistics-to-Admin GCash Remittance."
+        );
 
-            AuditLoggerService::log(
-                action: 'cod_remittance_verified',
-                targetType: 'CodRemittance',
-                targetId: (int) $remittance->id,
-                targetReference: $remittance->remittance_reference,
-                oldValues: ['status' => 'submitted'],
-                newValues: ['status' => 'verified', 'net_remitted_amount' => (float) $remittance->net_remitted_amount],
-                reason: "Verified by Logistics Hub ({$user->full_name})"
-            );
-        });
-
-        return back()->with('success', "COD Remittance Batch #{$remittance->remittance_reference} verified!");
+        return back()->with(
+            'success',
+            "Rider COD Remittance Batch #{$remittance->remittance_reference} (₱" . number_format((float) $remittance->total_collected_amount, 2) . ") verified! Please remit the collected COD to Storkia Admin via GCash to release Courier, Rider, Logistics, and Seller commissions and unlock Hub withdrawals."
+        );
     }
 
-    public function settleSeller(Request $request)
+    public function submitAdminRemittance(Request $request)
     {
+        StorkSchemaBootstrapService::ensureTablesExist();
+
         $user = $request->user();
         $profile = $user->logisticsProfile;
 
@@ -182,73 +208,57 @@ class FinanceController extends Controller
         }
 
         $validated = $request->validate([
-            'seller_profile_id' => ['required', 'integer', 'exists:seller_profiles,id'],
-            'notes'             => ['nullable', 'string', 'max:255'],
+            'sender_account_name'    => ['required', 'string', 'min:2', 'max:120'],
+            'sender_account_number'  => ['required', 'string', 'min:10', 'max:25'],
+            'gcash_reference_number' => ['required', 'string', 'min:4', 'max:80'],
+            'proof_image'            => ['required', 'image', 'mimes:jpg,jpeg,png,webp', 'max:5120'],
+            'collection_ids'         => ['nullable', 'array'],
+            'collection_ids.*'       => ['integer', 'exists:cod_collections,id'],
+        ], [
+            'proof_image.required' => 'Please upload a screenshot of your GCash transfer to Storkia Admin.',
         ]);
 
-        $sellerProfile = SellerProfile::with('user')->findOrFail($validated['seller_profile_id']);
+        $proofPath = $request->file('proof_image')->store('logistics_admin_remittances', 'public');
 
-        $unsettledRecords = CommissionRecord::where('logistics_profile_id', $profile->id)
-            ->where('seller_profile_id', $sellerProfile->id)
-            ->whereIn('status', ['pending_settlement', 'recorded'])
-            ->whereDoesntHave('settlementItem')
-            ->get();
+        $remittanceBatch = $this->roleWalletService->submitLogisticsCodRemittanceToAdmin(
+            logisticsProfile: $profile,
+            submittedByUserId: (int) $user->id,
+            senderAccountName: $validated['sender_account_name'],
+            senderAccountNumber: $validated['sender_account_number'],
+            gcashReferenceNumber: $validated['gcash_reference_number'],
+            proofImagePath: $proofPath,
+            collectionIds: $validated['collection_ids'] ?? null
+        );
 
-        if ($unsettledRecords->isEmpty()) {
-            return back()->withErrors(['settlement' => "No pending unsettled commission records found for {$sellerProfile->business_name}."]);
-        }
+        AuditLoggerService::log(
+            action: 'logistics_admin_cod_remittance_submitted',
+            targetType: 'LogisticsAdminRemittance',
+            targetId: (int) $remittanceBatch->id,
+            targetReference: $remittanceBatch->remittance_reference,
+            oldValues: null,
+            newValues: [
+                'total_cod_amount'       => (float) $remittanceBatch->total_cod_amount,
+                'gcash_reference_number' => $remittanceBatch->gcash_reference_number,
+            ],
+            reason: "Submitted by {$profile->business_name} ({$user->full_name}) to Storkia Admin GCash."
+        );
 
-        $settlementRef = 'STL-' . now()->format('Ymd') . '-' . strtoupper(Str::random(6));
+        return redirect()
+            ->route('logistics.finance.index', ['tab' => 'admin_remittances'])
+            ->with(
+                'success',
+                "Logistics-to-Admin GCash Remittance #{$remittanceBatch->remittance_reference} (₱" . number_format((float) $remittanceBatch->total_cod_amount, 2) . ") submitted! Once Admin verifies receipt, Courier, Rider, Hub, and Seller commissions will be automatically credited to Available E-Wallets and Hub withdrawals will unlock."
+            );
+    }
 
-        DB::transaction(function () use ($profile, $user, $sellerProfile, $unsettledRecords, $settlementRef, $validated) {
-            $grossSales = round((float) $unsettledRecords->sum('product_subtotal'), 2);
-            $adminComm = round((float) $unsettledRecords->sum('admin_commission_amount'), 2);
-            $netPayout = round((float) $unsettledRecords->sum('seller_net_earning'), 2);
-
-            $settlement = SellerSettlement::create([
-                'settlement_reference'   => $settlementRef,
-                'logistics_profile_id'   => $profile->id,
-                'seller_profile_id'      => $sellerProfile->id,
-                'seller_id'              => $sellerProfile->user_id,
-                'gross_product_subtotal' => $grossSales,
-                'admin_commission_total' => $adminComm,
-                'net_settlement_amount'  => $netPayout,
-                'status'                 => 'released',
-                'processed_by'           => $user->id,
-                'settled_at'             => now(),
-                'notes'                  => $validated['notes'] ?? "Settled by {$profile->business_name}",
-            ]);
-
-            foreach ($unsettledRecords as $rec) {
-                SellerSettlementItem::updateOrCreate(
-                    ['commission_record_id' => $rec->id],
-                    [
-                        'seller_settlement_id'    => $settlement->id,
-                        'seller_order_id'         => $rec->seller_order_id,
-                        'product_subtotal'        => $rec->product_subtotal,
-                        'admin_commission_amount' => $rec->admin_commission_amount,
-                        'seller_net_earning'      => $rec->seller_net_earning,
-                    ]
-                );
-
-                $rec->update([
-                    'status'     => 'settled',
-                    'settled_at' => now(),
-                ]);
-            }
-
-            try {
-                $sellerProfile->user?->notify(new OrderLifecycleNotification(
-                    title: "Logistics Settlement Recorded ({$settlementRef})",
-                    message: "{$profile->business_name} settled {$unsettledRecords->count()} order(s) totaling ₱" . number_format($netPayout, 2) . " (90% Net Merchandise Share).",
-                    type: 'success',
-                    url: route('seller.settlements.index')
-                ));
-            } catch (\Throwable $e) {
-            }
-        });
-
-        return back()->with('success', "Settlement #{$settlementRef} recorded for {$sellerProfile->business_name}!");
+    public function settleSeller(Request $request)
+    {
+        return redirect()
+            ->route('logistics.finance.index', ['tab' => 'admin_remittances'])
+            ->with(
+                'info',
+                'Direct Logistics-to-Seller manual settlement is now automated through the Logistics-to-Admin GCash Remittance pipeline. Remit collected COD to Storkia Admin to automatically credit Seller, Courier, Rider, and Hub E-Wallets.'
+            );
     }
 
     public function requestWithdrawal(Request $request)

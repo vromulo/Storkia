@@ -11,8 +11,10 @@ use App\Models\ShipmentTracking;
 use App\Models\ShipmentVerification;
 use App\Models\WalletTransaction;
 use App\Notifications\OrderLifecycleNotification;
+use App\Services\CommissionCalculatorService;
 use App\Services\OrderCompletionService;
 use App\Services\RoleWalletService;
+use App\Services\ShippingCalculatorService;
 use App\Services\StorkSchemaBootstrapService;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
@@ -30,28 +32,52 @@ class PickupController extends Controller
 
     public static function calculateFirstMileCourierPay(Shipment $shipment): array
     {
+        $shipment->loadMissing('sellerOrder.extra');
+
         $pickup = $shipment->pickup_address_snapshot ?? [];
         $hub = $shipment->hub_address_snapshot ?? [];
 
         $originProv = strtolower(trim((string) ($pickup['province'] ?? '')));
         $originMuni = strtolower(trim((string) ($pickup['municipality'] ?? '')));
+        $originBrgy = strtolower(trim((string) ($pickup['barangay'] ?? '')));
         $hubProv = strtolower(trim((string) ($hub['province'] ?? '')));
         $hubMuni = strtolower(trim((string) ($hub['municipality'] ?? '')));
+        $hubBrgy = strtolower(trim((string) ($hub['barangay'] ?? '')));
 
         if ($originProv !== '' && $originProv === $hubProv && $originMuni !== '' && $originMuni === $hubMuni) {
-            $distanceTier = 'Same Municipality';
-            $distanceBonus = 0.00;
+            if ($originBrgy !== '' && $originBrgy === $hubBrgy) {
+                $distanceTier = 'Same Barangay (25% Share)';
+                $tierBasePool = ShippingCalculatorService::BASE_FEE_SAME_BARANGAY;
+            } else {
+                $distanceTier = 'Same Municipality (25% Share)';
+                $tierBasePool = ShippingCalculatorService::BASE_FEE_SAME_MUNICIPALITY;
+            }
         } elseif ($originProv !== '' && $originProv === $hubProv) {
-            $distanceTier = 'Same Province (Cross-Municipality)';
-            $distanceBonus = 15.00;
+            $distanceTier = 'Same Province (25% Share)';
+            $tierBasePool = ShippingCalculatorService::BASE_FEE_SAME_PROVINCE;
         } else {
-            $distanceTier = 'Inter-Provincial Haulage';
-            $distanceBonus = 35.00;
+            $distanceTier = 'Inter-Provincial (25% Share)';
+            $tierBasePool = ShippingCalculatorService::BASE_FEE_INTER_PROVINCE;
         }
 
-        $basePay = 30.00;
-        $weightBonus = max(0, ceil((float) $shipment->total_weight - 1)) * 5.00;
-        $totalPay = round($basePay + $distanceBonus + $weightBonus, 2);
+        $shareRate = CommissionCalculatorService::COURIER_SHIPPING_SHARE_PERCENT / 100;
+        $extraKg = max(0, (int) ceil(max(0.01, (float) $shipment->total_weight)) - 1);
+        $extraWeightPool = round($extraKg * ShippingCalculatorService::EXTRA_WEIGHT_FEE_PER_KG, 2);
+
+        $extra = $shipment->sellerOrder?->extra;
+        $actualShippingPool = $extra && (float) $extra->original_shipping_fee > 0
+            ? round((float) $extra->original_shipping_fee, 2)
+            : round((float) $shipment->shipping_fee, 2);
+
+        if ($actualShippingPool <= 0) {
+            $actualShippingPool = round($tierBasePool + $extraWeightPool, 2);
+        }
+
+        $minBaseShipping = ShippingCalculatorService::BASE_FEE_SAME_BARANGAY;
+        $basePay = round($minBaseShipping * $shareRate, 2);
+        $weightBonus = round($extraWeightPool * $shareRate, 2);
+        $totalPay = round($actualShippingPool * $shareRate, 2);
+        $distanceBonus = max(0.00, round($totalPay - $basePay - $weightBonus, 2));
 
         return [
             'base_pay'       => $basePay,
@@ -75,6 +101,7 @@ class PickupController extends Controller
             'shipment.logisticsProfile',
             'shipment.packages',
             'sellerOrder.items',
+            'sellerOrder.extra',
         ])
             ->where('courier_id', $courier->id)
             ->orderBy('created_at', 'asc')
@@ -340,10 +367,11 @@ class PickupController extends Controller
         }
 
         $notificationsToSend = [];
-        $payInfo = ['total_pay' => 30.00, 'distance_tier' => 'Same Municipality'];
+        $payInfo = ['total_pay' => 11.25, 'distance_tier' => 'Same Municipality (25% Share)'];
+        $isCod = true;
 
-        DB::transaction(function () use ($assignment, $courier, &$notificationsToSend, &$payInfo) {
-            $lockedAssignment = PickupAssignment::with(['shipment.sellerOrder', 'shipment.logisticsProfile.user'])
+        DB::transaction(function () use ($assignment, $courier, &$notificationsToSend, &$payInfo, &$isCod) {
+            $lockedAssignment = PickupAssignment::with(['shipment.sellerOrder.payment', 'shipment.sellerOrder.extra', 'shipment.logisticsProfile.user'])
                 ->where('id', $assignment->id)
                 ->lockForUpdate()
                 ->firstOrFail();
@@ -351,6 +379,7 @@ class PickupController extends Controller
             $shipment = $lockedAssignment->shipment;
             $sellerOrder = $shipment->sellerOrder;
             $payInfo = self::calculateFirstMileCourierPay($shipment);
+            $isCod = strtoupper((string) ($sellerOrder?->effective_payment_method ?? 'COD')) === 'COD';
 
             $lockedAssignment->update([
                 'status'         => 'in_transit_to_hub',
@@ -373,25 +402,7 @@ class PickupController extends Controller
                 'occurred_at'     => now(),
             ]);
 
-            $alreadyCredited = WalletTransaction::where('owner_type', 'Courier')
-                ->where('owner_id', $courier->id)
-                ->where('shipment_id', $shipment->id)
-                ->exists();
-
-            if (! $alreadyCredited) {
-                $this->roleWalletService->creditAvailableDirect(
-                    ownerType: 'Courier',
-                    ownerId: (int) $courier->id,
-                    ownerName: $courier->full_name,
-                    amount: (float) $payInfo['total_pay'],
-                    sellerOrderId: (int) $sellerOrder->id,
-                    shipmentId: (int) $shipment->id,
-                    entryType: 'first_mile_pickup_pay',
-                    paymentMethod: $sellerOrder->effective_payment_method,
-                    description: "First-Mile Pickup Haulage Pay ({$payInfo['distance_tier']}) for Shipment #{$shipment->tracking_number}",
-                    meta: $payInfo
-                );
-            }
+            $this->roleWalletService->recordFirstMileCourierTaskCredit($shipment, $courier, $payInfo);
 
             if ($shipment->logisticsProfile?->user) {
                 $notificationsToSend[] = [
@@ -419,7 +430,9 @@ class PickupController extends Controller
 
         return back()->with(
             'success',
-            "Handover recorded and ₱" . number_format((float) $payInfo['total_pay'], 2) . " First-Mile Pickup Pay credited to your Courier E-Wallet!"
+            $isCod
+                ? "Handover recorded! ₱" . number_format((float) $payInfo['total_pay'], 2) . " First-Mile Pickup Task Pay (25% of Shipping/Ops Fee) credited to your Pending Escrow and will release to Available E-Wallet upon Admin COD Remittance verification."
+                : "Handover recorded and ₱" . number_format((float) $payInfo['total_pay'], 2) . " First-Mile Pickup Task Pay (25% of Shipping/Ops Fee) credited to your Available Courier E-Wallet!"
         );
     }
 
@@ -494,7 +507,7 @@ class PickupController extends Controller
         $from = Carbon::parse($fromDate)->startOfDay();
         $to = Carbon::parse($toDate)->endOfDay();
 
-        $assignmentsInPeriod = PickupAssignment::with(['shipment.sellerProfile', 'sellerOrder'])
+        $assignmentsInPeriod = PickupAssignment::with(['shipment.sellerProfile', 'sellerOrder.extra'])
             ->where('courier_id', $courier->id)
             ->whereBetween('created_at', [$from, $to])
             ->orderBy('created_at', 'asc')
@@ -519,6 +532,7 @@ class PickupController extends Controller
             'reassigned_count'    => $assignmentsInPeriod->where('status', 'reassigned')->count(),
             'total_weight_hauled' => round((float) $totalWeightHauled, 2),
             'wallet_available'    => round((float) $courierWallet->available_balance, 2),
+            'wallet_pending'      => round((float) $courierWallet->pending_balance, 2),
             'total_earned'        => round((float) $courierWallet->total_earned, 2),
         ];
 

@@ -15,15 +15,12 @@ use App\Http\Controllers\Admin\OrderFinanceController;
 use App\Http\Controllers\Admin\PlatformSettingsController;
 
 Route::prefix('admin')->name('admin.')->group(function () {
-
     Route::middleware('guest:admin')->group(function () {
         Route::get('/login', [AuthController::class, 'showLogin'])->name('login');
         Route::post('/login', [AuthController::class, 'login'])->name('login.post');
-
         Route::get('/verify-2fa', [AuthController::class, 'showVerify2fa'])->name('verify-2fa');
         Route::post('/verify-2fa', [AuthController::class, 'verify2fa'])->name('verify-2fa.post');
         Route::post('/resend-2fa', [AuthController::class, 'resend2fa'])->name('resend-2fa');
-
         Route::get('/otp', [AuthController::class, 'showVerify2fa'])->name('otp.show');
         Route::post('/otp/verify', [AuthController::class, 'verify2fa'])->name('otp.verify');
         Route::post('/otp/resend', [AuthController::class, 'resend2fa'])->name('otp.resend');
@@ -35,7 +32,6 @@ Route::prefix('admin')->name('admin.')->group(function () {
 
         Route::prefix('applications')->name('applications.')->group(function () {
             Route::get('/document/{entity}/{id}/{type}', [DocumentController::class, 'view'])->name('document');
-
             Route::get('/identity', [ApplicationController::class, 'identityIndex'])->name('identity');
             Route::patch('/identity/{verification}/approve', [ApplicationController::class, 'approveIdentity'])->name('identity.approve');
             Route::patch('/identity/{verification}/reject', [ApplicationController::class, 'rejectIdentity'])->name('identity.reject');
@@ -68,14 +64,12 @@ Route::prefix('admin')->name('admin.')->group(function () {
         Route::post('/complaints/{sellerOrder}/resolve', [ComplaintController::class, 'resolveDispute'])->name('complaints.resolve');
         Route::post('/complaints/rts/{claim}/resolve', [ComplaintController::class, 'resolveRtsClaim'])->name('complaints.rts.resolve');
 
-        // Seller Reports: buyers' reports against seller accounts (review, dismiss, or warn / suspend / ban the seller)
         Route::get('/seller-reports', [SellerReportController::class, 'index'])->name('seller-reports.index');
         Route::get('/seller-reports/{report}', [SellerReportController::class, 'show'])->name('seller-reports.show');
         Route::post('/seller-reports/{report}/start-review', [SellerReportController::class, 'startReview'])->middleware('throttle:30,1')->name('seller-reports.start-review');
         Route::post('/seller-reports/{report}/dismiss', [SellerReportController::class, 'dismiss'])->middleware('throttle:30,1')->name('seller-reports.dismiss');
         Route::post('/seller-reports/{report}/resolve', [SellerReportController::class, 'resolve'])->middleware('throttle:30,1')->name('seller-reports.resolve');
 
-        // Help Center inbox: members write in, the support team answers (admins never start a conversation)
         Route::prefix('help-center')->name('help-center.')->group(function () {
             Route::get('/', [HelpCenterController::class, 'index'])->name('index');
             Route::get('/conversations', [HelpCenterController::class, 'conversations'])->name('conversations');
@@ -85,7 +79,6 @@ Route::prefix('admin')->name('admin.')->group(function () {
             Route::patch('/{conversation}/status', [HelpCenterController::class, 'updateStatus'])->whereNumber('conversation')->middleware('throttle:30,1')->name('status');
         });
 
-        // Return & Refund: escalations, disputed returned parcels and the GCash refund payout queue
         Route::get('/returns', [ReturnRequestController::class, 'index'])->name('returns.index');
         Route::get('/returns/{returnRequest}', [ReturnRequestController::class, 'show'])->name('returns.show');
         Route::post('/returns/{returnRequest}/resolve', [ReturnRequestController::class, 'resolve'])->middleware('throttle:30,1')->name('returns.resolve');
@@ -95,21 +88,19 @@ Route::prefix('admin')->name('admin.')->group(function () {
         Route::post('/commissions/vouchers', [OrderFinanceController::class, 'storePlatformVoucher'])->name('commissions.vouchers.store');
         Route::patch('/commissions/vouchers/{voucher}', [OrderFinanceController::class, 'updatePlatformVoucher'])->name('commissions.vouchers.update');
         Route::post('/commissions/vouchers/{voucher}/end', [OrderFinanceController::class, 'endPlatformVoucher'])->name('commissions.vouchers.end');
-
         Route::post('/vouchers', [OrderFinanceController::class, 'storePlatformVoucher'])->name('vouchers.store');
         Route::post('/vouchers/{voucher}/end', [OrderFinanceController::class, 'endPlatformVoucher'])->name('vouchers.end');
-
         Route::post('/commissions/payouts/{id}/process', [OrderFinanceController::class, 'processSellerPayout'])->name('commissions.payouts.process');
         Route::post('/commissions/withdrawals/{id}/decide', [OrderFinanceController::class, 'decideWithdrawalRequest'])->name('commissions.withdrawals.decide');
+        Route::post('/commissions/logistics-remittances/{remittance}/decide', [OrderFinanceController::class, 'decideLogisticsCodRemittance'])->name('commissions.logistics-remittances.decide');
+        Route::post('/commissions/wallet-topups/{topup}/decide', [OrderFinanceController::class, 'decideBuyerWalletTopup'])->name('commissions.wallet-topups.decide');
         Route::post('/commissions/arrears/{id}/verify', [OrderFinanceController::class, 'verifyArrearsRemittance'])->name('commissions.arrears.verify');
         Route::post('/commissions/gcash-payments/{submission}/verify', [OrderFinanceController::class, 'verifyBuyerGcashPayment'])->name('commissions.gcash-payments.verify');
         Route::post('/commissions/gcash-payments/{submission}/refund', [OrderFinanceController::class, 'refundBuyerGcashPayment'])->name('commissions.gcash-payments.refund');
-
         Route::get('/reports/sales', [OrderFinanceController::class, 'salesReport'])->name('reports.sales');
         Route::get('/reports/formal-pdf', [PlatformSettingsController::class, 'formalPdfReport'])->name('reports.formal-pdf');
 
         Route::get('/audit-logs', [PlatformSettingsController::class, 'auditLogsIndex'])->name('audit-logs.index');
-
         Route::get('/settings', [PlatformSettingsController::class, 'index'])->name('settings.index');
         Route::post('/settings/hero-banners', [PlatformSettingsController::class, 'storeHeroBanner'])->name('settings.hero.store');
         Route::patch('/settings/hero-banners/{id}/toggle', [PlatformSettingsController::class, 'toggleHeroBanner'])->name('settings.hero.toggle');
