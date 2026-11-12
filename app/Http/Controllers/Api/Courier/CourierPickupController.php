@@ -8,6 +8,7 @@ use App\Models\Courier;
 use App\Models\LogisticsHub;
 use App\Models\OrderStatusHistory;
 use App\Models\PickupAssignment;
+use App\Models\ReturnShipment;
 use App\Models\Shipment;
 use App\Models\ShipmentPackage;
 use App\Models\ShipmentTracking;
@@ -59,21 +60,49 @@ class CourierPickupController extends Controller
         ])
             ->where('courier_id', $courier->id)
             ->where('logistics_profile_id', $courier->logistics_profile_id)
-            ->whereIn('status', ['assigned', 'accepted', 'picked_up', 'in_transit_to_hub'])
+            ->whereIn('status', ['assigned', 'accepted', 'picked_up'])
             ->whereHas('shipment', function ($q) {
                 $q->where('status', '!=', 'awaiting_seller_drop_off');
             })
-            ->orderBy('created_at', 'asc')
+            ->orderByRaw('COALESCE(assigned_at, created_at) ASC')
             ->orderBy('id', 'asc')
+            ->get();
+
+        $recentCompletedAssignments = PickupAssignment::with([
+            'shipment.sellerProfile',
+            'shipment.logisticsProfile',
+            'shipment.packages.logisticsHub',
+            'sellerOrder.items',
+            'sellerOrder.buyer',
+            'sellerOrder.extra',
+        ])
+            ->where('courier_id', $courier->id)
+            ->where('logistics_profile_id', $courier->logistics_profile_id)
+            ->whereIn('status', ['in_transit_to_hub', 'completed'])
+            ->orderByRaw('COALESCE(handed_over_at, updated_at) DESC')
+            ->orderByDesc('id')
+            ->limit(10)
             ->get();
 
         $unacceptedCount = $activeAssignments->where('status', 'assigned')->count();
         $acceptedCount = $activeAssignments->where('status', 'accepted')->count();
-        $inTransitCount = $activeAssignments->whereIn('status', ['picked_up', 'in_transit_to_hub'])->count();
+        $inTransitCount = PickupAssignment::where('courier_id', $courier->id)
+            ->where('logistics_profile_id', $courier->logistics_profile_id)
+            ->whereIn('status', ['picked_up', 'in_transit_to_hub'])
+            ->count();
 
         $completedCount = PickupAssignment::where('courier_id', $courier->id)
-            ->where('status', 'completed')
+            ->whereIn('status', ['in_transit_to_hub', 'completed'])
             ->count();
+
+        $pendingReturnDeliveries = Schema::hasTable('return_shipments')
+            ? ReturnShipment::where('current_courier_id', $courier->id)
+                ->whereIn('status', [
+                    ReturnShipment::STATUS_COURIER_ASSIGNED,
+                    ReturnShipment::STATUS_OUT_FOR_RETURN_DELIVERY,
+                ])
+                ->count()
+            : 0;
 
         $wallet = $this->roleWalletService->getOrCreateWallet('Courier', (int) $courier->id, $courier->full_name);
 
@@ -97,6 +126,7 @@ class CourierPickupController extends Controller
                     'accepted_pickups'           => $acceptedCount,
                     'in_transit_pickups'         => $inTransitCount,
                     'completed_pickups'          => $completedCount,
+                    'pending_return_deliveries'  => $pendingReturnDeliveries,
                     'wallet_available'           => number_format((float) $wallet->available_balance, 2, '.', ''),
                     'wallet_available_raw'       => round((float) $wallet->available_balance, 2),
                     'wallet_pending'             => number_format((float) $wallet->pending_balance, 2, '.', ''),
@@ -107,7 +137,11 @@ class CourierPickupController extends Controller
                     'today_earnings_raw'         => round($todayEarnings, 2),
                     'unread_notifications_count' => $unreadNotificationsCount,
                 ],
-                'active_assignments' => $activeAssignments
+                'active_assignments'    => $activeAssignments
+                    ->map(fn (PickupAssignment $a) => $this->formatAssignmentPayload($a, false))
+                    ->values()
+                    ->all(),
+                'completed_assignments' => $recentCompletedAssignments
                     ->map(fn (PickupAssignment $a) => $this->formatAssignmentPayload($a, false))
                     ->values()
                     ->all(),
@@ -160,17 +194,6 @@ class CourierPickupController extends Controller
                 $q->where('status', '!=', 'awaiting_seller_drop_off');
             });
 
-        match ($filter) {
-            'assigned'        => $query->where('status', 'assigned'),
-            'accepted'        => $query->where('status', 'accepted'),
-            'en_route_to_hub',
-            'in_transit'      => $query->whereIn('status', ['picked_up', 'in_transit_to_hub']),
-            'history',
-            'completed'       => $query->whereIn('status', ['completed', 'in_transit_to_hub', 'declined', 'reassigned', 'cancelled']),
-            'all'             => null,
-            default           => $query->whereIn('status', ['assigned', 'accepted', 'picked_up', 'in_transit_to_hub']),
-        };
-
         if ($search !== '') {
             $query->where(function ($q) use ($search) {
                 $q->whereHas('shipment', function ($sq) use ($search) {
@@ -203,27 +226,73 @@ class CourierPickupController extends Controller
             });
         }
 
-        if (in_array($filter, ['history', 'completed'], true)) {
-            $query->orderByDesc('updated_at')->orderByDesc('id');
+        if ($filter === 'assigned') {
+            $assignments = $query->where('status', 'assigned')
+                ->orderByRaw('COALESCE(assigned_at, created_at) ASC')
+                ->orderBy('id', 'asc')
+                ->limit(100)
+                ->get();
+        } elseif ($filter === 'accepted') {
+            $assignments = $query->where('status', 'accepted')
+                ->orderByRaw('COALESCE(assigned_at, created_at) ASC')
+                ->orderBy('id', 'asc')
+                ->limit(100)
+                ->get();
+        } elseif (in_array($filter, ['en_route_to_hub', 'in_transit'], true)) {
+            $assignments = $query->whereIn('status', ['picked_up', 'in_transit_to_hub'])
+                ->orderByRaw('COALESCE(assigned_at, created_at) ASC')
+                ->orderBy('id', 'asc')
+                ->limit(100)
+                ->get();
+        } elseif (in_array($filter, ['history', 'completed'], true)) {
+            $assignments = $query->whereIn('status', ['completed', 'in_transit_to_hub', 'declined', 'reassigned', 'cancelled'])
+                ->orderByRaw('COALESCE(handed_over_at, updated_at) DESC')
+                ->orderByDesc('id')
+                ->limit(100)
+                ->get();
         } else {
-            $query->orderBy('created_at', 'asc')->orderBy('id', 'asc');
+            $activeItems = (clone $query)
+                ->whereIn('status', ['assigned', 'accepted', 'picked_up'])
+                ->orderByRaw('COALESCE(assigned_at, created_at) ASC')
+                ->orderBy('id', 'asc')
+                ->get();
+
+            $completedItems = (clone $query)
+                ->whereIn('status', ['in_transit_to_hub', 'completed'])
+                ->orderByRaw('COALESCE(handed_over_at, updated_at) DESC')
+                ->orderByDesc('id')
+                ->limit(25)
+                ->get();
+
+            $assignments = $activeItems->concat($completedItems);
         }
 
-        $assignments = $query->limit(100)->get();
-
         $countsBase = PickupAssignment::where('courier_id', $courier->id)
-            ->where('logistics_profile_id', $courier->logistics_profile_id);
+            ->where('logistics_profile_id', $courier->logistics_profile_id)
+            ->whereHas('shipment', function ($q) {
+                $q->where('status', '!=', 'awaiting_seller_drop_off');
+            });
+
+        $pendingReturnDeliveries = Schema::hasTable('return_shipments')
+            ? ReturnShipment::where('current_courier_id', $courier->id)
+                ->whereIn('status', [
+                    ReturnShipment::STATUS_COURIER_ASSIGNED,
+                    ReturnShipment::STATUS_OUT_FOR_RETURN_DELIVERY,
+                ])
+                ->count()
+            : 0;
 
         return response()->json([
             'status' => 'success',
             'data'   => [
                 'filter'      => $filter,
                 'counts'      => [
-                    'active'          => (clone $countsBase)->whereIn('status', ['assigned', 'accepted', 'picked_up', 'in_transit_to_hub'])->count(),
+                    'active'          => (clone $countsBase)->whereIn('status', ['assigned', 'accepted', 'picked_up'])->count(),
                     'assigned'        => (clone $countsBase)->where('status', 'assigned')->count(),
                     'accepted'        => (clone $countsBase)->where('status', 'accepted')->count(),
                     'en_route_to_hub' => (clone $countsBase)->whereIn('status', ['picked_up', 'in_transit_to_hub'])->count(),
                     'history'         => (clone $countsBase)->whereIn('status', ['completed', 'in_transit_to_hub', 'declined', 'reassigned'])->count(),
+                    'returns'         => $pendingReturnDeliveries,
                 ],
                 'assignments' => $assignments
                     ->map(fn (PickupAssignment $a) => $this->formatAssignmentPayload($a, false))

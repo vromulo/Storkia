@@ -13,7 +13,7 @@
                 </a>
             </div>
             <p class="text-sm text-text-muted mt-1">
-                Review incoming customer orders (FIFO), verify GCash online payments, assign an approved local Logistics hub, and track deliveries.
+                Active orders are prioritized at the top in First-In, First-Out (FIFO) order; once completed, rejected, or cancelled, they automatically move to the bottom sorted by most recent.
             </p>
         </div>
 
@@ -75,7 +75,7 @@
         @if($orders->isEmpty())
             <div class="py-16 px-6 text-center space-y-2">
                 <h3 class="text-base font-bold text-text-main">No seller orders found</h3>
-                <p class="text-xs text-text-muted">Orders matching the selected filter will appear here in First-In, First-Out (FIFO) sequence.</p>
+                <p class="text-xs text-text-muted">Active orders appear at the top in First-In, First-Out (FIFO) sequence, while completed or cancelled orders move to the bottom.</p>
             </div>
         @else
             <div class="overflow-x-auto">
@@ -91,8 +91,13 @@
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-border-subtle text-xs">
+                        @php $activePosition = 0; @endphp
                         @foreach($orders as $so)
                             @php
+                                $isTerminal = $so->isTerminalStatus();
+                                if (! $isTerminal) {
+                                    $activePosition++;
+                                }
                                 $deliv = $so->delivery_address_snapshot ?? [];
                                 $payMethod = $so->effective_payment_method;
                                 $subm = $so->paymentSubmission;
@@ -105,11 +110,26 @@
                                     default => 'bg-yellow-100 text-yellow-800 border-yellow-200',
                                 };
                             @endphp
-                            <tr class="hover:bg-surface-subtle/40 transition-colors">
+                            <tr class="hover:bg-surface-subtle/40 transition-colors {{ $isTerminal ? 'bg-surface-subtle/20 opacity-85' : '' }}">
                                 <td class="py-4 px-5 align-top">
-                                    <div class="font-mono font-bold text-sm text-primary-dark">{{ $so->seller_order_number }}</div>
+                                    <div class="flex flex-wrap items-center gap-1.5">
+                                        <span class="font-mono font-bold text-sm text-primary-dark">{{ $so->seller_order_number }}</span>
+                                        @if(! $isTerminal)
+                                            <span class="px-2 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20 text-[10px] font-extrabold">
+                                                Active Queue
+                                            </span>
+                                        @else
+                                            <span class="px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 border border-gray-200 text-[10px] font-bold">
+                                                Closed
+                                            </span>
+                                        @endif
+                                    </div>
                                     <div class="text-text-muted mt-0.5">Placed: {{ $so->created_at?->format('M d, Y h:i A') }}</div>
-                                    @if($so->status === 'pending_seller_acceptance' && $so->acceptance_deadline_at)
+                                    @if($isTerminal)
+                                        <div class="text-[11px] text-text-muted">
+                                            Closed: {{ ($so->completed_at ?? $so->cancelled_at ?? $so->rejected_at ?? $so->updated_at)?->format('M d, Y h:i A') }}
+                                        </div>
+                                    @elseif($so->status === 'pending_seller_acceptance' && $so->acceptance_deadline_at)
                                         <div class="mt-1 text-[11px] font-bold text-danger">
                                             Accept by: {{ $so->acceptance_deadline_at->format('M d, h:i A') }}
                                         </div>

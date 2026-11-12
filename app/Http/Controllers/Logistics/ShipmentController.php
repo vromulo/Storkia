@@ -111,8 +111,7 @@ class ShipmentController extends Controller
         }
 
         $shipments = $query
-            ->orderBy('created_at', 'asc')
-            ->orderBy('id', 'asc')
+            ->orderByOperationalQueue()
             ->paginate(10)
             ->withQueryString();
 

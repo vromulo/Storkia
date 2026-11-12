@@ -12,19 +12,8 @@ use Illuminate\Support\Facades\Auth;
 use Illuminate\Validation\Rule;
 use Illuminate\View\View;
 
-/**
- * Admin side of Return & Refund.
- *
- *   GET  /admin/returns                          -> queue (needs decision / refund payouts / in progress / done)
- *   GET  /admin/returns/{returnRequest}          -> one request: evidence, money, parcel timeline, actions
- *   POST /admin/returns/{returnRequest}/resolve      -> decide an escalated request or a disputed returned parcel
- *   POST /admin/returns/{returnRequest}/refund-paid  -> record the GCash refund that was sent to the buyer
- *
- * The rules (who may decide what, how money moves) live in ReturnRefundService.
- */
 class ReturnRequestController extends Controller
 {
-    /** Queue tabs and the request statuses each one lists. */
     protected const TAB_STATUSES = [
         'needs_decision' => [
             ReturnRequest::STATUS_ESCALATED,
@@ -50,16 +39,12 @@ class ReturnRequestController extends Controller
     {
     }
 
-    // ------------------------------------------------------------------ pages
-
     public function index(Request $request): View
     {
         $tab = (string) $request->query('tab', 'needs_decision');
-
         if ($tab !== 'all' && ! isset(self::TAB_STATUSES[$tab])) {
             $tab = 'needs_decision';
         }
-
         $search = trim((string) $request->query('search', ''));
 
         $counts = ['all' => ReturnRequest::count()];
@@ -89,10 +74,21 @@ class ReturnRequestController extends Controller
 
         if ($tab === 'refund_queue') {
             $query->orderBy('refund_due_at', 'asc')->orderBy('id', 'asc');
-        } elseif (in_array($tab, ['needs_decision', 'in_progress'], true)) {
-            $query->orderBy('created_at', 'asc')->orderBy('id', 'asc');
         } else {
-            $query->orderByDesc('created_at')->orderByDesc('id');
+            $query
+                ->orderByRaw(
+                    "CASE WHEN status IN ('refunded', 'rejected', 'closed') THEN 1 ELSE 0 END ASC"
+                )
+                ->orderByRaw(
+                    "CASE WHEN status NOT IN ('refunded', 'rejected', 'closed') THEN created_at END ASC"
+                )
+                ->orderByRaw(
+                    "CASE WHEN status NOT IN ('refunded', 'rejected', 'closed') THEN id END ASC"
+                )
+                ->orderByRaw(
+                    "CASE WHEN status IN ('refunded', 'rejected', 'closed') THEN COALESCE(refunded_at, closed_at, admin_resolved_at, updated_at) END DESC"
+                )
+                ->orderByDesc('id');
         }
 
         $returnRequests = $query->paginate(15)->withQueryString();
@@ -103,7 +99,7 @@ class ReturnRequestController extends Controller
             ->where('refund_due_at', '<', now())
             ->count();
 
-        return view('admin.returns.index', compact(
+        return view('admin.return.index', compact(
             'tab',
             'search',
             'counts',
@@ -132,15 +128,13 @@ class ReturnRequestController extends Controller
         ], true);
 
         $canPayRefund = $returnRequest->refund_status === ReturnRequest::REFUND_PENDING_ADMIN;
-
         $isReceiptDispute = $returnRequest->status === ReturnRequest::STATUS_RECEIPT_DISPUTED;
 
-        // An item that was never received cannot be sent back, so "return and refund" is not offered for it.
         $canApproveReturn = $canResolve
             && ! $isReceiptDispute
             && ReturnRequest::suggestedResolutionFor($returnRequest->reason_category) !== ReturnRequest::RESOLUTION_REFUND_ONLY;
 
-        return view('admin.returns.show', [
+        return view('admin.return.show', [
             'returnRequest'    => $returnRequest,
             'sellerOrder'      => $returnRequest->sellerOrder,
             'returnShipment'   => $returnRequest->returnShipment,
@@ -151,8 +145,6 @@ class ReturnRequestController extends Controller
             'payoutOverdue'    => $canPayRefund && $returnRequest->refund_due_at && $returnRequest->refund_due_at->isPast(),
         ]);
     }
-
-    // ------------------------------------------------------------------ actions
 
     public function resolve(Request $request, ReturnRequest $returnRequest): RedirectResponse
     {

@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -9,6 +10,11 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class Shipment extends Model
 {
+    public const TERMINAL_STATUSES = [
+        'delivered',
+        'returned_to_seller',
+    ];
+
     protected $fillable = [
         'tracking_number',
         'order_id',
@@ -57,6 +63,31 @@ class Shipment extends Model
             'failed_at'                 => 'datetime',
             'returned_at'               => 'datetime',
         ];
+    }
+
+    public function scopeOrderByOperationalQueue(Builder $query): Builder
+    {
+        $table = $this->getTable();
+
+        return $query
+            ->orderByRaw(
+                "CASE WHEN {$table}.status IN ('delivered', 'returned_to_seller') THEN 1 ELSE 0 END ASC"
+            )
+            ->orderByRaw(
+                "CASE WHEN {$table}.status NOT IN ('delivered', 'returned_to_seller') THEN {$table}.created_at END ASC"
+            )
+            ->orderByRaw(
+                "CASE WHEN {$table}.status NOT IN ('delivered', 'returned_to_seller') THEN {$table}.id END ASC"
+            )
+            ->orderByRaw(
+                "CASE WHEN {$table}.status IN ('delivered', 'returned_to_seller') THEN COALESCE({$table}.delivered_at, {$table}.returned_at, {$table}.updated_at) END DESC"
+            )
+            ->orderByDesc("{$table}.id");
+    }
+
+    public function isTerminalStatus(): bool
+    {
+        return in_array($this->status, self::TERMINAL_STATUSES, true);
     }
 
     public function order(): BelongsTo
@@ -157,20 +188,20 @@ class Shipment extends Model
     public function getStatusLabelAttribute(): string
     {
         return match ($this->status) {
-            'pickup_requested'        => 'Pickup Requested',
-            'awaiting_seller_drop_off'=> 'Awaiting Seller Drop-Off at Hub',
-            'courier_assigned'        => 'Courier Assigned',
-            'picked_up_from_seller'   => 'Picked Up from Seller',
-            'in_transit_to_hub'       => 'In Transit to Hub',
-            'received_at_hub'         => 'Received at Sorting Hub',
-            'rider_assigned'          => 'Rider Assigned',
-            'out_for_delivery'        => 'Out for Delivery',
-            'delivered'               => 'Delivered',
-            'delivery_failed'         => 'Delivery Failed (Pending Review)',
-            'scheduled_redelivery'    => 'Scheduled for Redelivery',
-            'returning_to_seller'     => 'Returning to Seller',
-            'returned_to_seller'      => 'Returned to Seller',
-            default                   => ucwords(str_replace('_', ' ', $this->status)),
+            'pickup_requested'         => 'Pickup Requested',
+            'awaiting_seller_drop_off' => 'Awaiting Seller Drop-Off at Hub',
+            'courier_assigned'         => 'Courier Assigned',
+            'picked_up_from_seller'    => 'Picked Up from Seller',
+            'in_transit_to_hub'        => 'In Transit to Hub',
+            'received_at_hub'          => 'Received at Sorting Hub',
+            'rider_assigned'           => 'Rider Assigned',
+            'out_for_delivery'         => 'Out for Delivery',
+            'delivered'                => 'Delivered',
+            'delivery_failed'          => 'Delivery Failed (Pending Review)',
+            'scheduled_redelivery'     => 'Scheduled for Redelivery',
+            'returning_to_seller'      => 'Returning to Seller',
+            'returned_to_seller'       => 'Returned to Seller',
+            default                    => ucwords(str_replace('_', ' ', $this->status)),
         };
     }
 }

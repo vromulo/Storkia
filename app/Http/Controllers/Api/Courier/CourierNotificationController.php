@@ -7,6 +7,7 @@ use App\Http\Controllers\Courier\PickupController as WebPickupController;
 use App\Models\Courier;
 use App\Models\OrderServiceRating;
 use App\Models\PickupAssignment;
+use App\Models\ReturnShipment;
 use App\Models\WalletTransaction;
 use App\Models\WithdrawalRequest;
 use App\Services\CourierMobileSchemaService;
@@ -38,7 +39,16 @@ class CourierNotificationController extends Controller
         $acceptedCount = (clone $baseQuery)->where('status', 'accepted')->count();
         $inTransitCount = (clone $baseQuery)->whereIn('status', ['picked_up', 'in_transit_to_hub'])->count();
 
-        $totalPickupsBadge = $unacceptedCount + $acceptedCount + $inTransitCount;
+        $pendingReturnDeliveries = Schema::hasTable('return_shipments')
+            ? ReturnShipment::where('current_courier_id', $courier->id)
+                ->whereIn('status', [
+                    ReturnShipment::STATUS_COURIER_ASSIGNED,
+                    ReturnShipment::STATUS_OUT_FOR_RETURN_DELIVERY,
+                ])
+                ->count()
+            : 0;
+
+        $totalPickupsBadge = $unacceptedCount + $acceptedCount + $inTransitCount + $pendingReturnDeliveries;
         $unreadNotificationsCount = $courier->unreadNotifications()->count();
 
         return response()->json([
@@ -47,6 +57,7 @@ class CourierNotificationController extends Controller
                 'unaccepted_pickups_count'   => $unacceptedCount,
                 'accepted_pickups_count'     => $acceptedCount,
                 'in_transit_pickups_count'   => $inTransitCount,
+                'pending_return_deliveries'  => $pendingReturnDeliveries,
                 'total_pickups_badge'        => $totalPickupsBadge,
                 'pickups_count'              => $totalPickupsBadge,
                 'unread_notifications_count' => $unreadNotificationsCount,
@@ -326,9 +337,28 @@ class CourierNotificationController extends Controller
             ->unique()
             ->values();
 
+        $ratingsList = Schema::hasTable('order_service_ratings') && $pickupOrderIds->isNotEmpty()
+            ? OrderServiceRating::with(['buyer', 'sellerOrder', 'sellerProfile'])
+                ->whereIn('seller_order_id', $pickupOrderIds)
+                ->orderByDesc('created_at')
+                ->limit(25)
+                ->get()
+                ->map(fn (OrderServiceRating $r) => [
+                    'id'                      => (int) $r->id,
+                    'seller_order_number'     => $r->sellerOrder?->seller_order_number ?? 'N/A',
+                    'seller_name'             => $r->sellerProfile?->business_name ?? 'Seller',
+                    'logistics_hub_rating'    => (int) ($r->logistics_hub_rating ?? 5),
+                    'parcel_condition_rating' => (int) ($r->parcel_condition_rating ?? 5),
+                    'review_comment'          => $r->review_comment,
+                    'created_at'              => $r->created_at?->toIso8601String(),
+                ])
+                ->values()
+                ->all()
+            : [];
+
         $avgRating = Schema::hasTable('order_service_ratings') && $pickupOrderIds->isNotEmpty()
             ? round((float) OrderServiceRating::whereIn('seller_order_id', $pickupOrderIds)->avg('logistics_hub_rating'), 2)
-            : 0.00;
+            : 5.00;
 
         $totalRatings = Schema::hasTable('order_service_ratings') && $pickupOrderIds->isNotEmpty()
             ? OrderServiceRating::whereIn('seller_order_id', $pickupOrderIds)->count()
@@ -337,8 +367,9 @@ class CourierNotificationController extends Controller
         return response()->json([
             'status' => 'success',
             'data'   => [
-                'avg_rating'    => $avgRating,
+                'avg_rating'    => $totalRatings > 0 ? $avgRating : 5.00,
                 'total_ratings' => $totalRatings,
+                'ratings'       => $ratingsList,
             ],
         ]);
     }

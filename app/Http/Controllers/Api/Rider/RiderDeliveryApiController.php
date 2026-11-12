@@ -11,6 +11,7 @@ use App\Models\DeliveryAttempt;
 use App\Models\DeliveryChatMessage;
 use App\Models\DeliveryProof;
 use App\Models\OrderStatusHistory;
+use App\Models\ReturnShipment;
 use App\Models\Rider;
 use App\Models\RiderLocation;
 use App\Models\Shipment;
@@ -81,8 +82,24 @@ class RiderDeliveryApiController extends Controller
         ])
             ->where('rider_id', $rider->id)
             ->whereIn('status', ['assigned', 'accepted', 'collected', 'out_for_delivery'])
-            ->orderBy('created_at', 'asc')
+            ->orderByRaw('COALESCE(assigned_at, created_at) ASC')
             ->orderBy('id', 'asc')
+            ->get();
+
+        $recentCompletedAssignments = DeliveryAssignment::with([
+            'shipment.sellerProfile',
+            'shipment.packages.verifications',
+            'sellerOrder.buyer',
+            'sellerOrder.items',
+            'sellerOrder.payment',
+            'sellerOrder.extra',
+            'sellerOrder.order.userAddress',
+        ])
+            ->where('rider_id', $rider->id)
+            ->whereIn('status', ['delivered', 'failed'])
+            ->orderByRaw('COALESCE(completed_at, updated_at) DESC')
+            ->orderByDesc('id')
+            ->limit(10)
             ->get();
 
         $unremittedCollections = CodCollection::with(['shipment.sellerOrder.extra', 'commissionRecord'])
@@ -115,8 +132,8 @@ class RiderDeliveryApiController extends Controller
         return response()->json([
             'status' => 'success',
             'data'   => [
-                'rider'              => $this->authApiController->formatRiderProfile($rider),
-                'metrics'            => [
+                'rider'                 => $this->authApiController->formatRiderProfile($rider),
+                'metrics'               => [
                     'active_deliveries'       => $activeAssignments->count(),
                     'completed_deliveries'    => $completedDeliveriesCount,
                     'failed_deliveries'       => $failedDeliveriesCount,
@@ -129,8 +146,9 @@ class RiderDeliveryApiController extends Controller
                     'wallet_total_earned'     => round((float) $riderWallet->total_earned, 2),
                     'wallet_total_withdrawn'  => round((float) $riderWallet->total_withdrawn, 2),
                 ],
-                'badges'             => $badges,
-                'active_assignments' => $activeAssignments->map(fn (DeliveryAssignment $a) => $this->formatDeliveryAssignment($a, $rider, false))->values()->all(),
+                'badges'                => $badges,
+                'active_assignments'    => $activeAssignments->map(fn (DeliveryAssignment $a) => $this->formatDeliveryAssignment($a, $rider, false))->values()->all(),
+                'completed_assignments' => $recentCompletedAssignments->map(fn (DeliveryAssignment $a) => $this->formatDeliveryAssignment($a, $rider, false))->values()->all(),
             ],
         ]);
     }
@@ -176,7 +194,7 @@ class RiderDeliveryApiController extends Controller
                 $query->where('updated_at', '<=', Carbon::parse($request->query('to_date'))->endOfDay());
             }
         } else {
-            $query->whereIn('status', ['assigned', 'accepted', 'collected', 'out_for_delivery']);
+            $query->whereIn('status', ['assigned', 'accepted', 'collected', 'out_for_delivery', 'delivered', 'failed']);
         }
 
         if ($search !== '') {
@@ -191,9 +209,31 @@ class RiderDeliveryApiController extends Controller
         }
 
         if ($filter === 'history') {
-            $assignments = $query->orderByDesc('updated_at')->orderByDesc('id')->limit(100)->get();
+            $assignments = $query
+                ->orderByRaw('COALESCE(completed_at, updated_at) DESC')
+                ->orderByDesc('id')
+                ->limit(100)
+                ->get();
+        } elseif (in_array($filter, ['assigned', 'to_collect', 'accepted', 'out_for_delivery'], true)) {
+            $assignments = $query
+                ->orderByRaw('COALESCE(assigned_at, created_at) ASC')
+                ->orderBy('id', 'asc')
+                ->get();
         } else {
-            $assignments = $query->orderBy('created_at', 'asc')->orderBy('id', 'asc')->get();
+            $activeItems = (clone $query)
+                ->whereIn('status', ['assigned', 'accepted', 'collected', 'out_for_delivery'])
+                ->orderByRaw('COALESCE(assigned_at, created_at) ASC')
+                ->orderBy('id', 'asc')
+                ->get();
+
+            $completedItems = (clone $query)
+                ->whereIn('status', ['delivered', 'failed'])
+                ->orderByRaw('COALESCE(completed_at, updated_at) DESC')
+                ->orderByDesc('id')
+                ->limit(25)
+                ->get();
+
+            $assignments = $activeItems->concat($completedItems);
         }
 
         $activeAll = DeliveryAssignment::with('shipment.packages.verifications')
@@ -518,9 +558,20 @@ class RiderDeliveryApiController extends Controller
         } catch (\Throwable $e) {
         }
 
+        $assignment->refresh()->load([
+            'shipment.sellerProfile',
+            'shipment.packages.verifications',
+            'shipment.trackingLogs',
+            'sellerOrder.buyer',
+            'sellerOrder.items',
+            'sellerOrder.payment',
+            'sellerOrder.extra',
+        ]);
+
         return response()->json([
             'status'  => 'success',
             'message' => 'Delivery delay logged and buyer/hub notified.',
+            'data'    => $this->formatDeliveryAssignment($assignment, $rider, true),
         ]);
     }
 
@@ -604,9 +655,20 @@ class RiderDeliveryApiController extends Controller
         } catch (\Throwable $e) {
         }
 
+        $assignment->refresh()->load([
+            'shipment.sellerProfile',
+            'shipment.packages.verifications',
+            'shipment.trackingLogs',
+            'sellerOrder.buyer',
+            'sellerOrder.items',
+            'sellerOrder.payment',
+            'sellerOrder.extra',
+        ]);
+
         return response()->json([
             'status'  => 'success',
             'message' => 'Emergency / breakdown incident reported to your Logistics Sorting Hub.',
+            'data'    => $this->formatDeliveryAssignment($assignment, $rider, true),
         ]);
     }
 
@@ -645,9 +707,9 @@ class RiderDeliveryApiController extends Controller
             ->get()
             ->map(fn (DeliveryChatMessage $m) => [
                 'id'             => (int) $m->id,
-                'sender_type'    => $m->sender_type,
-                'message'        => $m->message,
-                'attachment_url' => $m->attachment_url,
+                'sender_type'    => (string) $m->sender_type,
+                'message'        => (string) ($m->message ?? ''),
+                'attachment_url' => $m->attachment_url ?? ($m->attachment_path ? asset('storage/' . ltrim($m->attachment_path, '/')) : null),
                 'is_read'        => (bool) $m->is_read,
                 'created_at'     => $m->created_at?->toIso8601String(),
             ]);
@@ -687,8 +749,22 @@ class RiderDeliveryApiController extends Controller
         }
 
         $validated = $request->validate([
-            'message' => ['required', 'string', 'min:1', 'max:1000'],
+            'message'    => ['nullable', 'string', 'max:1000'],
+            'attachment' => ['nullable', 'file', 'mimetypes:image/jpeg,image/png,image/webp', 'mimes:jpg,jpeg,png,webp', 'max:5120'],
         ]);
+
+        $cleanMessage = trim((string) ($validated['message'] ?? ''));
+        if ($cleanMessage === '' && ! $request->hasFile('attachment')) {
+            return response()->json([
+                'status'  => 'error',
+                'message' => 'Please enter a message or attach a photo.',
+            ], 422);
+        }
+
+        $attachmentPath = null;
+        if ($request->hasFile('attachment')) {
+            $attachmentPath = $request->file('attachment')->store('delivery_chat', 'public');
+        }
 
         $chatMsg = DeliveryChatMessage::create([
             'shipment_id'            => $assignment->shipment_id,
@@ -697,7 +773,8 @@ class RiderDeliveryApiController extends Controller
             'buyer_id'               => $assignment->sellerOrder->buyer_id,
             'rider_id'               => $rider->id,
             'sender_type'            => 'rider',
-            'message'                => trim($validated['message']),
+            'message'                => $cleanMessage !== '' ? $cleanMessage : '[Photo Attachment]',
+            'attachment_path'        => $attachmentPath,
             'is_read'                => false,
         ]);
 
@@ -718,10 +795,12 @@ class RiderDeliveryApiController extends Controller
             'status'  => 'success',
             'message' => 'Message sent to Buyer.',
             'data'    => [
-                'id'          => (int) $chatMsg->id,
-                'sender_type' => $chatMsg->sender_type,
-                'message'     => $chatMsg->message,
-                'created_at'  => $chatMsg->created_at?->toIso8601String(),
+                'id'             => (int) $chatMsg->id,
+                'sender_type'    => (string) $chatMsg->sender_type,
+                'message'        => (string) $chatMsg->message,
+                'attachment_url' => $attachmentPath ? asset('storage/' . ltrim($attachmentPath, '/')) : null,
+                'is_read'        => false,
+                'created_at'     => $chatMsg->created_at?->toIso8601String(),
             ],
         ]);
     }
@@ -1482,13 +1561,23 @@ class RiderDeliveryApiController extends Controller
             }
         }
 
+        $pendingReturnPickups = Schema::hasTable('return_shipments')
+            ? ReturnShipment::where('current_rider_id', $rider->id)
+                ->whereIn('status', [
+                    ReturnShipment::STATUS_RIDER_ASSIGNED,
+                    ReturnShipment::STATUS_PICKED_UP_FROM_BUYER,
+                ])
+                ->count()
+            : 0;
+
         $unreadNotifications = $rider->unreadNotifications()->count();
 
         return [
             'unaccepted_assignments'     => $unacceptedCount,
             'pending_collections'        => $toCollectCount,
             'out_for_delivery'           => $outForDeliveryCount,
-            'total_deliveries_badge'     => $unacceptedCount + $toCollectCount + $outForDeliveryCount,
+            'pending_return_pickups'     => $pendingReturnPickups,
+            'total_deliveries_badge'     => $unacceptedCount + $toCollectCount + $outForDeliveryCount + $pendingReturnPickups,
             'pending_cod_remittances'    => $unremittedCodCount,
             'unread_notifications_count' => $unreadNotifications,
         ];
@@ -1558,6 +1647,21 @@ class RiderDeliveryApiController extends Controller
             ? $assignment->assigned_at->copy()->addHours(OperationalSlaGuardService::DISPATCH_SLA_HOURS)
             : null;
 
+        $unreadChatCount = Schema::hasTable('delivery_chat_messages') && $assignment->seller_order_id
+            ? DeliveryChatMessage::where('seller_order_id', $assignment->seller_order_id)
+                ->where('sender_type', 'buyer')
+                ->where('is_read', false)
+                ->count()
+            : 0;
+
+        $etaFormatted = null;
+        if (! empty($assignment->estimated_arrival_at)) {
+            try {
+                $etaFormatted = Carbon::parse($assignment->estimated_arrival_at)->toIso8601String();
+            } catch (\Throwable $e) {
+            }
+        }
+
         $payload = [
             'id'                      => (int) $assignment->id,
             'shipment_id'             => (int) $assignment->shipment_id,
@@ -1578,6 +1682,8 @@ class RiderDeliveryApiController extends Controller
             'rider_pay'               => $payBreakdown,
             'is_delayed'              => (bool) ($assignment->is_delayed ?? false),
             'delay_reason'            => $assignment->delay_reason ?? null,
+            'estimated_arrival_at'    => $etaFormatted,
+            'unread_chat_count'       => $unreadChatCount,
             'workflow_state'          => [
                 'step_1_accepted'            => $isTaskAccepted,
                 'step_2_collection_verified' => $allCollectionVerified,
@@ -1739,7 +1845,7 @@ class RiderDeliveryApiController extends Controller
             'pasig'             => [14.5764, 121.0851],
             'manila'            => [14.5995, 120.9842],
             'taguig'            => [14.5176, 121.0509],
-            'mandaluyong'       => [14.5794, 121.0359],
+            'mandaluyong'      => [14.5794, 121.0359],
             'cebu city'         => [10.3157, 123.8854],
             'davao city'        => [7.1907, 125.4553],
             'imus|cavite'       => [14.4297, 120.9367],

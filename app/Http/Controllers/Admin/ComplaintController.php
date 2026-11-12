@@ -66,14 +66,25 @@ class ComplaintController extends Controller
             $disputesQuery->where('seller_order_number', 'like', "%{$search}%");
         }
 
-        $disputes = $disputesQuery->orderByDesc('dispute_reported_at')->paginate(20, ['*'], 'disp_page')->withQueryString();
+        $disputes = $disputesQuery
+            ->orderByRaw('CASE WHEN has_unresolved_dispute = 1 THEN 0 ELSE 1 END ASC')
+            ->orderByRaw('CASE WHEN has_unresolved_dispute = 1 THEN COALESCE(dispute_reported_at, created_at) END ASC')
+            ->orderByRaw('CASE WHEN has_unresolved_dispute = 1 THEN id END ASC')
+            ->orderByRaw('CASE WHEN has_unresolved_dispute = 0 THEN COALESCE(dispute_resolved_at, updated_at) END DESC')
+            ->orderByDesc('id')
+            ->paginate(20, ['*'], 'disp_page')
+            ->withQueryString();
+
         $complaints = $disputes;
         $disputedOrders = $disputes;
 
         $rtsClaims = Schema::hasTable('seller_rts_claims')
             ? SellerRtsClaim::with(['sellerOrder', 'sellerProfile', 'logisticsProfile', 'buyer', 'shipment'])
-                ->orderByRaw("CASE WHEN reimbursement_status = 'pending_admin_review' THEN 0 ELSE 1 END")
-                ->orderByDesc('created_at')
+                ->orderByRaw("CASE WHEN reimbursement_status = 'pending_admin_review' THEN 0 ELSE 1 END ASC")
+                ->orderByRaw("CASE WHEN reimbursement_status = 'pending_admin_review' THEN created_at END ASC")
+                ->orderByRaw("CASE WHEN reimbursement_status = 'pending_admin_review' THEN id END ASC")
+                ->orderByRaw("CASE WHEN reimbursement_status != 'pending_admin_review' THEN COALESCE(resolved_at, updated_at) END DESC")
+                ->orderByDesc('id')
                 ->paginate(20, ['*'], 'rts_page')
                 ->withQueryString()
             : collect();
@@ -105,10 +116,7 @@ class ComplaintController extends Controller
 
     public function resolveDispute(Request $request, SellerOrder $sellerOrder)
     {
-        // Orders handled by the Return & Refund system must be decided there, so the refund,
-        // the wallets, the parcel and the stock all stay in step with the decision.
         $sellerOrder->loadMissing('returnRequest');
-
         if ($sellerOrder->returnRequest) {
             return redirect()
                 ->route('admin.returns.show', $sellerOrder->returnRequest->id)
@@ -255,7 +263,6 @@ class ComplaintController extends Controller
 
             if ($isApproved && (float) $claim->claimed_product_expense > 0 && $claim->seller_profile_id) {
                 $sellerName = $claim->sellerProfile?->business_name ?? "Seller #{$claim->seller_profile_id}";
-
                 $this->roleWalletService->creditAvailableDirect(
                     ownerType: 'Seller',
                     ownerId: (int) $claim->seller_profile_id,

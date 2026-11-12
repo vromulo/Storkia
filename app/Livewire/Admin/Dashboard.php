@@ -213,7 +213,7 @@ class Dashboard extends Component
 
         $recentOrders = Schema::hasTable('seller_orders')
             ? SellerOrder::with(['buyer', 'sellerProfile', 'logisticsProfile', 'shipment'])
-                ->latest('created_at')
+                ->orderByOperationalQueue()
                 ->limit(8)
                 ->get()
             : collect();
@@ -280,7 +280,6 @@ class Dashboard extends Component
         $buckets = [];
 
         if ($bucketMode === 'hour') {
-            // Hourly operation buckets from 12 AM (00:00) through 11 PM (23:00)
             for ($h = 0; $h <= 23; $h++) {
                 $slotStart = $startDate->copy()->addHours($h);
                 $slotEnd = $slotStart->copy()->addHour()->subSecond();

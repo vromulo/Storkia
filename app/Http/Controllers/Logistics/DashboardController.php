@@ -31,8 +31,8 @@ class DashboardController extends Controller
         $period = (string) $request->query('period', '7d');
         $offset = max(0, (int) $request->query('offset', 0));
         $refDateInput = trim((string) $request->query('ref_date', '')) ?: null;
-
         $window = AdminDashboardHelper::resolvePeriodWindow($period, $offset, $refDateInput);
+
         $period = $window['period'];
         $offset = $window['offset'];
         $refDate = $window['refDate'];
@@ -83,7 +83,7 @@ class DashboardController extends Controller
 
             $recentShipments = Shipment::with(['sellerProfile', 'currentCourier', 'currentRider', 'sellerOrder'])
                 ->where('logistics_profile_id', $profile->id)
-                ->orderByDesc('created_at')
+                ->orderByOperationalQueue()
                 ->paginate(10);
         }
 
@@ -128,7 +128,6 @@ class DashboardController extends Controller
         $buckets = [];
 
         if ($bucketMode === 'hour') {
-            // 12 AM (00:00) to 11 PM (23:00)
             for ($h = 0; $h <= 23; $h++) {
                 $slotStart = $startDate->copy()->addHours($h);
                 $slotEnd = $slotStart->copy()->addHour()->subSecond();

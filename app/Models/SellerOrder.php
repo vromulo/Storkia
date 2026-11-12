@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -11,6 +12,13 @@ class SellerOrder extends Model
 {
     public const ACCEPTANCE_DEADLINE_HOURS = 24;
     public const BUYER_CONFIRMATION_HOURS = 72;
+
+    public const TERMINAL_STATUSES = [
+        'completed',
+        'cancelled',
+        'rejected',
+        'returned_to_seller',
+    ];
 
     protected $fillable = [
         'order_id',
@@ -72,6 +80,31 @@ class SellerOrder extends Model
             'stock_restored'            => 'boolean',
             'stock_restored_at'         => 'datetime',
         ];
+    }
+
+    public function scopeOrderByOperationalQueue(Builder $query): Builder
+    {
+        $table = $this->getTable();
+
+        return $query
+            ->orderByRaw(
+                "CASE WHEN {$table}.status IN ('completed', 'cancelled', 'rejected', 'returned_to_seller') THEN 1 ELSE 0 END ASC"
+            )
+            ->orderByRaw(
+                "CASE WHEN {$table}.status NOT IN ('completed', 'cancelled', 'rejected', 'returned_to_seller') THEN {$table}.created_at END ASC"
+            )
+            ->orderByRaw(
+                "CASE WHEN {$table}.status NOT IN ('completed', 'cancelled', 'rejected', 'returned_to_seller') THEN {$table}.id END ASC"
+            )
+            ->orderByRaw(
+                "CASE WHEN {$table}.status IN ('completed', 'cancelled', 'rejected', 'returned_to_seller') THEN COALESCE({$table}.completed_at, {$table}.cancelled_at, {$table}.rejected_at, {$table}.dispute_resolved_at, {$table}.updated_at) END DESC"
+            )
+            ->orderByDesc("{$table}.id");
+    }
+
+    public function isTerminalStatus(): bool
+    {
+        return in_array($this->status, self::TERMINAL_STATUSES, true);
     }
 
     public function order(): BelongsTo
@@ -219,11 +252,6 @@ class SellerOrder extends Model
         };
     }
 
-    /**
-     * "returned_to_seller" is the terminal status for every finished return/refund.
-     * When the return request is loaded, say what actually happened. Orders with no
-     * return request (e.g. failed COD deliveries sent back) keep the original label.
-     */
     protected function returnedStatusLabel(): string
     {
         if ($this->relationLoaded('returnRequest') && $this->returnRequest) {

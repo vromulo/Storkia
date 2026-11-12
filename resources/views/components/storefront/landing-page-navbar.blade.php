@@ -19,13 +19,11 @@
             const link = pill.querySelector('[data-nav=' + this.active + ']');
             if (!link || !link.offsetWidth) return;
             this.ind = { x: link.offsetLeft, w: link.offsetWidth };
-            // first placement jumps into position; later ones glide
             if (!this.placed) requestAnimationFrame(() => requestAnimationFrame(() => { this.placed = true; }));
         },
         init() {
             this.scrolled = window.scrollY > 16;
 
-            // Scrollspy: highlight the link of the section crossing the middle of the viewport
             const ids = @js(array_column($navLinks, 'id'));
             const io = new IntersectionObserver((entries) => {
                 entries.forEach((e) => {
@@ -35,7 +33,6 @@
             }, { rootMargin: '-45% 0px -50% 0px' });
             ids.forEach((id) => { const el = document.getElementById(id); if (el) io.observe(el); });
 
-            // Glide the highlight to the newly active chip
             this.$watch('active', () => this.moveIndicator());
             if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => this.moveIndicator());
         }
@@ -44,7 +41,6 @@
      @resize.window="if (window.innerWidth >= 768) mobileMenuOpen = false; moveIndicator()"
      @keydown.escape.window="mobileMenuOpen = false">
 
-<!-- Moved to <body> so no parent wrapper (transform, filter, animation, overflow) can stop it staying fixed -->
 <template x-teleport="body">
 <div @click.outside="mobileMenuOpen = false"
      :class="scrolled
@@ -55,7 +51,6 @@
     <div class="max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-12">
         <div class="flex justify-between items-center gap-2 sm:gap-3 h-20">
 
-            <!-- Logo -->
             <div class="flex-shrink-0 flex items-center">
                 <a href="{{ route('landing') }}" aria-label="Storkia home" class="flex items-center text-primary hover:opacity-80 transition-opacity rounded-lg focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-primary">
                     <img src="{{ asset('assets/pink-storkia-maximized.webp') }}" alt="Storkia" class="block md:hidden h-8 w-auto object-contain">
@@ -63,9 +58,7 @@
                 </a>
             </div>
 
-            <!-- Desktop navigation pill (md and up) -->
             <nav x-ref="pill" aria-label="Primary" class="hidden md:flex relative items-center gap-1 bg-surface-subtle/40 p-1.5 rounded-full border border-border-subtle/30 backdrop-blur-xs">
-                <!-- Sliding highlight: glides and resizes to whichever chip is active -->
                 <span aria-hidden="true"
                       class="pointer-events-none absolute left-0 top-1.5 bottom-1.5 rounded-full bg-primary/10 shadow-[inset_0_0_0_1px_rgba(207,65,115,0.12)] motion-reduce:transition-none"
                       :class="[active ? 'opacity-100' : 'opacity-0', placed ? 'transition-[transform,width,opacity] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]' : '']"
@@ -82,8 +75,15 @@
                 @endforeach
             </nav>
 
-            <!-- Right side: Get Started + hamburger (phones) -->
             <div class="flex flex-shrink-0 items-center gap-2 sm:gap-3">
+                <a href="{{ route('download-app') }}"
+                   class="inline-flex items-center gap-2 whitespace-nowrap text-[12px] sm:text-[13px] md:text-[14px] font-bold bg-surface/90 hover:bg-white text-primary-dark border border-border-subtle/80 hover:border-primary/40 px-3.5 sm:px-4 md:px-5 py-2.5 rounded-full transition-all duration-300 shadow-xs hover:shadow-md hover:-translate-y-0.5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary">
+                    <svg class="w-4 h-4 text-primary shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.2">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                    </svg>
+                    <span>Download App</span>
+                </a>
+
                 <a href="{{ route('home') }}" class="inline-flex whitespace-nowrap text-[12px] sm:text-[13px] md:text-[14px] font-bold bg-primary text-white px-3.5 sm:px-5 md:px-6 py-2.5 rounded-full hover:bg-primary-dark transition-all duration-300 shadow-[0_4px_14px_0_rgba(207,65,115,0.39)] hover:shadow-[0_6px_20px_rgba(207,65,115,0.23)] hover:-translate-y-0.5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary">
                     Get Started
                 </a>
@@ -111,7 +111,6 @@
         </div>
     </div>
 
-    <!-- Hamburger dropdown: the nav links, right-aligned under the button (phones only) -->
     <div x-show="mobileMenuOpen"
          x-transition:enter="transition ease-out duration-200"
          x-transition:enter-start="opacity-0 -translate-y-2 scale-95"
@@ -131,6 +130,20 @@
                     <svg class="w-4 h-4 text-text-muted group-hover:text-primary transition-all group-hover:translate-x-1" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
                 </a>
             @endforeach
+
+            <div class="pt-1 border-t border-border-subtle/60">
+                <a href="{{ route('download-app') }}"
+                   @click="mobileMenuOpen = false"
+                   class="group flex items-center justify-between px-4 py-3 rounded-2xl bg-primary/10 hover:bg-primary text-primary hover:text-white transition-colors">
+                    <span class="text-sm font-extrabold flex items-center gap-2">
+                        <svg class="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.2">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                        </svg>
+                        Download Mobile Apps
+                    </span>
+                    <svg class="w-4 h-4 transition-transform group-hover:translate-x-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
+                </a>
+            </div>
         </nav>
     </div>
 </div>

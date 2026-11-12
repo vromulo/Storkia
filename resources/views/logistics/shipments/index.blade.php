@@ -6,7 +6,7 @@
     <div class="flex flex-col md:flex-row md:items-end justify-between gap-4">
         <div>
             <div class="flex flex-wrap items-center gap-2.5">
-                <h1 class="text-3xl font-bold text-primary-dark">Shipments & Dispatch</h1>
+                <h1 class="text-3xl font-bold text-primary-dark">Shipments &amp; Dispatch</h1>
                 <span class="px-2.5 py-0.5 rounded-full text-xs font-bold bg-brand-light/60 text-primary-dark border border-border-subtle">
                     {{ $profile->business_name }}
                 </span>
@@ -17,7 +17,7 @@
                 @endif
             </div>
             <p class="text-sm text-text-muted mt-1">
-                Assign first-mile Couriers, verify Seller Self Drop-Offs and sorting hub arrivals via QR or Manual lookup, dispatch Barangay Riders, and resolve failed deliveries.
+                Active shipments are prioritized at the top in First-In, First-Out (FIFO) sequence; once delivered or returned, they automatically move to the bottom sorted by most recent.
             </p>
         </div>
 
@@ -85,11 +85,11 @@
                 <table class="w-full text-left border-collapse">
                     <thead>
                         <tr class="border-b border-border-subtle bg-surface-subtle/60 text-[11px] uppercase tracking-wider font-bold text-text-muted">
-                            <th class="py-3.5 px-5">Tracking & Handover</th>
+                            <th class="py-3.5 px-5">Tracking &amp; Handover</th>
                             <th class="py-3.5 px-4">Origin (Seller)</th>
                             <th class="py-3.5 px-4">Destination (Buyer)</th>
-                            <th class="py-3.5 px-4">Hub & Personnel</th>
-                            <th class="py-3.5 px-4">COD & Weight</th>
+                            <th class="py-3.5 px-4">Hub &amp; Personnel</th>
+                            <th class="py-3.5 px-4">COD &amp; Weight</th>
                             <th class="py-3.5 px-4">Status</th>
                             <th class="py-3.5 px-5 text-right">Action</th>
                         </tr>
@@ -97,6 +97,9 @@
                     <tbody class="divide-y divide-border-subtle text-xs">
                         @foreach($shipments as $shipment)
                             @php
+                                $isTerminal = method_exists($shipment, 'isTerminalStatus')
+                                    ? $shipment->isTerminalStatus()
+                                    : in_array($shipment->status, ['delivered', 'returned_to_seller'], true);
                                 $pickup = $shipment->pickup_address_snapshot ?? [];
                                 $deliv = $shipment->delivery_address_snapshot ?? [];
                                 $hubSnap = $shipment->hub_address_snapshot ?? [];
@@ -110,10 +113,27 @@
                                     default => 'bg-yellow-100 text-yellow-800 border-yellow-200',
                                 };
                             @endphp
-                            <tr class="hover:bg-surface-subtle/40 transition-colors">
+                            <tr class="hover:bg-surface-subtle/40 transition-colors {{ $isTerminal ? 'bg-surface-subtle/20 opacity-85' : '' }}">
                                 <td class="py-4 px-5 align-top">
-                                    <div class="font-mono font-bold text-sm text-primary-dark">{{ $shipment->tracking_number }}</div>
+                                    <div class="flex flex-wrap items-center gap-1.5">
+                                        <span class="font-mono font-bold text-sm text-primary-dark">{{ $shipment->tracking_number }}</span>
+                                        @if(! $isTerminal)
+                                            <span class="px-2 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20 text-[10px] font-extrabold">
+                                                Active Queue
+                                            </span>
+                                        @else
+                                            <span class="px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 border border-gray-200 text-[10px] font-bold">
+                                                Closed
+                                            </span>
+                                        @endif
+                                    </div>
                                     <div class="text-text-muted mt-0.5">Order: {{ $shipment->sellerOrder->seller_order_number ?? 'N/A' }}</div>
+                                    <div class="text-[11px] text-text-muted">Created: {{ $shipment->created_at?->format('M d, Y h:i A') }}</div>
+                                    @if($isTerminal)
+                                        <div class="text-[11px] text-text-muted">
+                                            Closed: {{ ($shipment->delivered_at ?? $shipment->returned_at ?? $shipment->updated_at)?->format('M d, Y h:i A') }}
+                                        </div>
+                                    @endif
                                     <div class="mt-1 flex flex-wrap items-center gap-1">
                                         @if($handoverMethod === 'self_drop_off')
                                             <span class="px-2 py-0.5 rounded-md bg-purple-100 text-purple-800 border border-purple-200 text-[10px] font-bold">
@@ -199,6 +219,5 @@
             @endif
         @endif
     </div>
-
 </div>
 @endsection

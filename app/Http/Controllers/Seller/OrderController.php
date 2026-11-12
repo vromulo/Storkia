@@ -111,8 +111,7 @@ class OrderController extends Controller
         }
 
         $orders = $query
-            ->orderBy('created_at', 'asc')
-            ->orderBy('id', 'asc')
+            ->orderByOperationalQueue()
             ->paginate(10)
             ->withQueryString();
 
@@ -955,7 +954,7 @@ class OrderController extends Controller
         $periodOrders = SellerOrder::with(['items', 'extra'])
             ->where('seller_profile_id', $profile->id)
             ->whereBetween('created_at', [$start, $end])
-            ->orderBy('created_at', 'asc')
+            ->orderByOperationalQueue()
             ->get();
 
         $periodCommissions = CommissionRecord::where('seller_profile_id', $profile->id)

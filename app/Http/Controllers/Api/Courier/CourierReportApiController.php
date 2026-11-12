@@ -9,6 +9,7 @@ use App\Models\ReturnShipment;
 use App\Models\WalletTransaction;
 use App\Models\WithdrawalRequest;
 use App\Services\CourierMobileSchemaService;
+use App\Services\FormalReportService;
 use App\Services\ReturnRefundLedgerService;
 use App\Services\RoleWalletService;
 use App\Services\StorkSchemaBootstrapService;
@@ -28,8 +29,10 @@ class CourierReportApiController extends Controller
 
     protected const ACTIVE_PICKUP_STATUSES = ['assigned', 'accepted', 'picked_up', 'in_transit_to_hub'];
 
-    public function __construct(protected RoleWalletService $roleWalletService)
-    {
+    public function __construct(
+        protected RoleWalletService $roleWalletService,
+        protected FormalReportService $formalReportService
+    ) {
     }
 
     public function index(Request $request): JsonResponse
@@ -50,7 +53,7 @@ class CourierReportApiController extends Controller
             ->orderByDesc('id')
             ->get();
 
-        $completedPickups = $assignmentsInPeriod->where('status', 'completed');
+        $completedPickups = $assignmentsInPeriod->whereIn('status', ['in_transit_to_hub', 'completed']);
 
         $totalWeightHauled = $completedPickups->sum(fn ($a) => (float) ($a->shipment->total_weight ?? 0));
 
@@ -85,10 +88,18 @@ class CourierReportApiController extends Controller
 
         $assignmentLog = $assignmentsInPeriod->take(self::MAX_ASSIGNMENTS);
 
+        $formalPayload = $this->formalReportService->buildRoleReportPayload(
+            'Courier',
+            (int) $courier->id,
+            (string) $courier->full_name,
+            $request
+        );
+
         return response()->json([
             'status' => 'success',
             'data'   => [
                 'period'              => [
+                    'preset'    => (string) $request->query('preset', 'this_month'),
                     'from_date' => $fromDate,
                     'to_date'   => $toDate,
                 ],
@@ -103,6 +114,20 @@ class CourierReportApiController extends Controller
                     'wallet_available'         => round((float) $wallet->available_balance, 2),
                     'wallet_pending'           => round((float) $wallet->pending_balance, 2),
                     'total_earned'             => round((float) $wallet->total_earned, 2),
+                ],
+                'formal_report'       => [
+                    'document_number' => $formalPayload['document_number'] ?? '',
+                    'business_name'   => $formalPayload['business_name'] ?? $courier->full_name,
+                    'verifier_name'   => $formalPayload['verifier_name'] ?? $courier->full_name,
+                    'verifier_title'  => $formalPayload['verifier_title'] ?? 'Authorized First-Mile Courier',
+                    'generated_at'    => $formalPayload['generated_at'] ?? '',
+                    'kpis'            => $formalPayload['kpis'] ?? [],
+                    'rows'            => $formalPayload['rows'] ?? [],
+                    'totals'          => $formalPayload['totals'] ?? [
+                        'gross'     => 0.0,
+                        'deduction' => 0.0,
+                        'net'       => 0.0,
+                    ],
                 ],
                 'assignments_total'   => $assignmentsInPeriod->count(),
                 'assignments'         => $assignmentLog->map(fn (PickupAssignment $a) => [

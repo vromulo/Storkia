@@ -11,6 +11,7 @@ Route::prefix('rider')->name('rider.')->group(function () {
     });
 
     Route::get('/download-app', [RiderAuthController::class, 'downloadApp'])->name('download-app');
+    Route::get('/download-app/{app}', [RiderAuthController::class, 'downloadApk'])->name('download-app.apk');
     Route::post('/logout', [RiderAuthController::class, 'logout'])->name('logout');
 
     Route::middleware('auth:rider')->group(function () {

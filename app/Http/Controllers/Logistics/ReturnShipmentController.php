@@ -14,21 +14,8 @@ use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\View\View;
 
-/**
- * Logistics side of Return & Refund: the parcel's trip back.
- *
- *   GET  /logistics/returns                           -> queue of return parcels, by stage
- *   GET  /logistics/returns/{returnShipment}          -> one return: timeline, rider / courier assignment
- *   POST /logistics/returns/{returnShipment}/assign-rider
- *   POST /logistics/returns/{returnShipment}/receive-at-hub
- *   POST /logistics/returns/{returnShipment}/assign-courier
- *
- * Business rules live in ReturnShipmentService; this controller checks the company / hub,
- * validates input and prepares what the screens need.
- */
 class ReturnShipmentController extends Controller
 {
-    /** Queue tabs and the return-shipment statuses each one lists. */
     protected const TAB_STATUSES = [
         'needs_rider'  => [ReturnShipment::STATUS_AWAITING_RIDER, ReturnShipment::STATUS_PICKUP_FAILED],
         'rider_pickup' => [ReturnShipment::STATUS_RIDER_ASSIGNED],
@@ -43,12 +30,9 @@ class ReturnShipmentController extends Controller
     {
     }
 
-    // ------------------------------------------------------------------ pages
-
     public function index(Request $request): View
     {
         [$user, $profile] = $this->resolveProfile($request);
-
         $activeBranchHub = $user->isBranchLogisticsAccount() ? $user->branchLogisticsHub : null;
 
         $statusTab = (string) $request->query('status', 'all');
@@ -83,8 +67,19 @@ class ReturnShipmentController extends Controller
         }
 
         $returnShipments = $query
-            ->orderBy('created_at', 'asc')
-            ->orderBy('id', 'asc')
+            ->orderByRaw(
+                "CASE WHEN status IN ('delivered_to_seller', 'cancelled') THEN 1 ELSE 0 END ASC"
+            )
+            ->orderByRaw(
+                "CASE WHEN status NOT IN ('delivered_to_seller', 'cancelled') THEN created_at END ASC"
+            )
+            ->orderByRaw(
+                "CASE WHEN status NOT IN ('delivered_to_seller', 'cancelled') THEN id END ASC"
+            )
+            ->orderByRaw(
+                "CASE WHEN status IN ('delivered_to_seller', 'cancelled') THEN COALESCE(delivered_to_seller_at, cancelled_at, updated_at) END DESC"
+            )
+            ->orderByDesc('id')
             ->paginate(10)
             ->withQueryString();
 
@@ -127,7 +122,6 @@ class ReturnShipmentController extends Controller
                 ->where('status', 'approved')
                 ->orderBy('first_name')
                 ->get();
-
             $availableRiders = $this->returnShipmentService->eligibleRiders($returnShipment, $riders);
         }
 
@@ -140,7 +134,6 @@ class ReturnShipmentController extends Controller
                 ->whereIn('status', ['active', 'Active', 'on_delivery'])
                 ->orderBy('first_name')
                 ->get();
-
             $availableCouriers = $this->returnShipmentService->eligibleCouriers($returnShipment, $couriers);
         }
 
@@ -154,8 +147,6 @@ class ReturnShipmentController extends Controller
             'maxPickupAttempts' => ReturnShipment::MAX_PICKUP_ATTEMPTS,
         ]);
     }
-
-    // ------------------------------------------------------------------ actions
 
     public function assignRider(Request $request, ReturnShipment $returnShipment): RedirectResponse
     {
@@ -233,11 +224,6 @@ class ReturnShipmentController extends Controller
             ->with('success', "Courier {$updated->courier?->full_name} will bring return {$updated->tracking_number} back to the seller.");
     }
 
-    // ------------------------------------------------------------------ helpers
-
-    /**
-     * @return array{0: User, 1: LogisticsProfile}
-     */
     protected function resolveProfile(Request $request): array
     {
         /** @var User $user */
@@ -269,9 +255,6 @@ class ReturnShipmentController extends Controller
         }
     }
 
-    /**
-     * Every return of this company; a branch account only sees returns routed through its own hub.
-     */
     protected function scopedQuery(int $profileId, ?int $branchHubId = null): Builder
     {
         $query = ReturnShipment::where('logistics_profile_id', $profileId);

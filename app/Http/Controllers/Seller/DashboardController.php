@@ -104,7 +104,7 @@ class DashboardController extends Controller
 
             $recentOrders = SellerOrder::with(['buyer', 'items', 'shipment'])
                 ->where('seller_id', $user->id)
-                ->orderByDesc('created_at')
+                ->orderByOperationalQueue()
                 ->limit(8)
                 ->get();
 

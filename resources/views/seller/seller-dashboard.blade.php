@@ -232,7 +232,6 @@
                     @endforeach
                 </div>
 
-                <!-- Historical Date Navigator (Past Allowed, Future Strictly Blocked) -->
                 <div class="inline-flex items-center gap-1.5 p-1.5 rounded-2xl bg-surface border border-border-subtle shadow-2xs text-xs">
                     <a href="{{ route('seller.seller-dashboard', ['period' => $period, 'offset' => $offset + 1]) }}"
                        title="Browse previous {{ $period === 'today' ? 'day' : ($period === 'year' ? 'year' : 'period') }}"
@@ -363,7 +362,6 @@
                                 x-text="formatMetric(totalNetRevenue, 'revenue')"></strong>
                         <span class="text-[10px] text-text-muted font-mono">{{ $dateRangeLabel }}</span>
                     </div>
-
                     <div class="p-3.5 rounded-2xl border transition-all cursor-pointer"
                          :class="activeMetric === 'gross_sales' ? 'bg-teal-50 border-teal-500/40' : 'bg-surface-subtle/60 border-border-subtle'"
                          @click="activeMetric = 'gross_sales'">
@@ -372,7 +370,6 @@
                                 x-text="formatMetric(totalGrossSales, 'gross_sales')"></strong>
                         <span class="text-[10px] text-text-muted">Before 10% Admin Split</span>
                     </div>
-
                     <div class="p-3.5 rounded-2xl border transition-all cursor-pointer"
                          :class="activeMetric === 'orders' ? 'bg-brand-light/40 border-primary-dark/40' : 'bg-surface-subtle/60 border-border-subtle'"
                          @click="activeMetric = 'orders'">
@@ -381,7 +378,6 @@
                                 x-text="totalOrdersCount.toLocaleString() + ' Order(s)'"></strong>
                         <span class="text-[10px] text-text-muted" x-text="'Avg: ' + formatMetric(avgMetricValue) + ' / slot'"></span>
                     </div>
-
                     <div class="p-3.5 rounded-2xl bg-surface-subtle/60 border border-border-subtle">
                         <span class="text-[10px] font-bold uppercase text-text-muted block">Peak Interval</span>
                         <strong class="text-base sm:text-lg font-serif font-extrabold text-text-main block mt-0.5"
@@ -390,7 +386,6 @@
                     </div>
                 </div>
 
-                <!-- Interactive SVG Area Chart with Continuous Line Hover -->
                 <div class="relative w-full pt-2">
                     <div x-show="hoverIndex !== null && getCoordinates()[hoverIndex]"
                          x-cloak
@@ -431,6 +426,7 @@
                                       :stroke="metricMeta[activeMetric].color"
                                       stroke-dasharray="3 3"
                                       stroke-width="1.5" />
+
                                 <circle :cx="pt.x"
                                         :cy="pt.y"
                                         :r="hoverIndex === idx ? 6.5 : 3.5"
@@ -438,12 +434,14 @@
                                         :stroke="metricMeta[activeMetric].color"
                                         stroke-width="2.5"
                                         class="transition-all duration-100" />
+
                                 <text x-show="pt.val > 0 && (series.length <= 12 || hoverIndex === idx)"
                                       :x="pt.x"
                                       :y="Math.max(18, pt.y - 10)"
                                       text-anchor="middle"
                                       class="text-[9px] font-mono font-extrabold fill-stone-800"
                                       x-text="pt.formatted"></text>
+
                                 <text x-show="shouldShowXLabel(idx)"
                                       :x="pt.x"
                                       y="212"
@@ -454,7 +452,6 @@
                         </template>
                     </svg>
 
-                    <!-- Permanent Fixed-Height Live Scope Bar (Zero Layout Shift) -->
                     <div class="mt-2 h-11 px-4 rounded-2xl transition-colors duration-150 flex items-center justify-between gap-2 text-xs shadow-xs"
                          :class="hoverIndex !== null && getCoordinates()[hoverIndex] ? 'bg-primary-dark text-white' : 'bg-surface-subtle border border-border-subtle text-text-main'">
                         <template x-if="hoverIndex !== null && getCoordinates()[hoverIndex]">
@@ -476,7 +473,6 @@
                     </div>
                 </div>
 
-                <!-- Date & Statistical Numbers Breakdown Cards (Zero Glitch) -->
                 <div class="pt-3 border-t border-border-subtle" @mouseleave="clearHover()">
                     <div class="flex items-center justify-between mb-2">
                         <span class="text-[11px] font-extrabold uppercase tracking-wider text-text-muted">Date &amp; Statistical Numbers Breakdown</span>
@@ -503,7 +499,6 @@
                     <h3 class="text-base font-bold text-primary-dark">Low Stock Alerts</h3>
                     <a href="{{ route('seller.products.inventory') }}" class="text-xs font-bold text-primary hover:underline">Manage &rarr;</a>
                 </div>
-
                 @if($lowStockItems->isEmpty())
                     <p class="text-xs text-text-muted py-8 text-center">All products are well stocked above 5 units.</p>
                 @else
@@ -522,8 +517,11 @@
         </div>
 
         <div class="bg-surface rounded-3xl border border-border-subtle shadow-xs overflow-hidden">
-            <div class="p-5 border-b border-border-subtle flex items-center justify-between">
-                <h2 class="text-base font-bold text-primary-dark">Recent Store Orders</h2>
+            <div class="p-5 border-b border-border-subtle flex flex-wrap items-center justify-between gap-2">
+                <div>
+                    <h2 class="text-base font-bold text-primary-dark">Store Order Queue (Active FIFO at Top &bull; Completed/Cancelled at Bottom)</h2>
+                    <p class="text-xs text-text-muted">Active orders are prioritized in First-In, First-Out sequence; finished orders automatically sink to the bottom.</p>
+                </div>
                 <a href="{{ route('seller.orders.index') }}" class="text-xs font-bold text-primary hover:underline">View All Orders &rarr;</a>
             </div>
             @if($recentOrders->isEmpty())
@@ -537,20 +535,43 @@
                                 <th class="py-3 px-4">Buyer</th>
                                 <th class="py-3 px-4">Total</th>
                                 <th class="py-3 px-4">Status</th>
-                                <th class="py-3 px-4">Placed On</th>
+                                <th class="py-3 px-4">Placed / Closed</th>
                                 <th class="py-3 px-5 text-right">Action</th>
                             </tr>
                         </thead>
                         <tbody class="divide-y divide-border-subtle">
                             @foreach($recentOrders as $so)
-                                <tr class="hover:bg-surface-subtle/30">
-                                    <td class="py-3.5 px-5 font-mono font-bold text-primary-dark">{{ $so->seller_order_number }}</td>
+                                @php
+                                    $isTerminal = method_exists($so, 'isTerminalStatus')
+                                        ? $so->isTerminalStatus()
+                                        : in_array($so->status, ['completed', 'cancelled', 'rejected', 'returned_to_seller'], true);
+                                @endphp
+                                <tr class="hover:bg-surface-subtle/30 {{ $isTerminal ? 'bg-surface-subtle/20 opacity-85' : '' }}">
+                                    <td class="py-3.5 px-5">
+                                        <div class="flex items-center gap-2">
+                                            <span class="font-mono font-bold text-primary-dark">{{ $so->seller_order_number }}</span>
+                                            @if(! $isTerminal)
+                                                <span class="px-2 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20 text-[10px] font-extrabold">
+                                                    Active
+                                                </span>
+                                            @else
+                                                <span class="px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 border border-gray-200 text-[10px] font-bold">
+                                                    Closed
+                                                </span>
+                                            @endif
+                                        </div>
+                                    </td>
                                     <td class="py-3.5 px-4 font-semibold">{{ $so->buyer?->full_name ?? 'Buyer' }}</td>
                                     <td class="py-3.5 px-4 font-bold text-primary">&#8369;{{ number_format((float) $so->total_amount, 2) }}</td>
                                     <td class="py-3.5 px-4">
                                         <span class="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-brand-light/50 text-primary-dark">{{ $so->status_label }}</span>
                                     </td>
-                                    <td class="py-3.5 px-4 text-text-muted font-mono">{{ $so->created_at?->format('M d, Y h:i A') }}</td>
+                                    <td class="py-3.5 px-4 text-text-muted font-mono">
+                                        <div>Placed: {{ $so->created_at?->format('M d, Y h:i A') }}</div>
+                                        @if($isTerminal)
+                                            <div class="text-[10px]">Closed: {{ ($so->completed_at ?? $so->cancelled_at ?? $so->rejected_at ?? $so->updated_at)?->format('M d, Y h:i A') }}</div>
+                                        @endif
+                                    </td>
                                     <td class="py-3.5 px-5 text-right">
                                         <a href="{{ route('seller.orders.show', $so->id) }}" class="text-primary font-bold hover:underline">Manage &rarr;</a>
                                     </td>

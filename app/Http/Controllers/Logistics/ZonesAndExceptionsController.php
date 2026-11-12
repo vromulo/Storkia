@@ -34,6 +34,7 @@ class ZonesAndExceptionsController extends Controller
 
         $user = $request->user();
         $profile = $user?->logisticsProfile;
+
         if (! $profile) {
             abort(403);
         }
@@ -51,7 +52,7 @@ class ZonesAndExceptionsController extends Controller
 
         $activeShipments = Shipment::with(['sellerOrder.buyer', 'sellerProfile', 'currentRider'])
             ->where('logistics_profile_id', $profile->id)
-            ->orderBy('created_at', 'asc')
+            ->orderByOperationalQueue()
             ->limit(30)
             ->get();
 
@@ -92,6 +93,7 @@ class ZonesAndExceptionsController extends Controller
     {
         $user = $request->user();
         $profile = $user?->logisticsProfile;
+
         if (! $profile) {
             abort(403);
         }
@@ -114,6 +116,7 @@ class ZonesAndExceptionsController extends Controller
 
         if (! empty($validated['rate_id'])) {
             $existing = DB::table('logistics_shipping_rates')->where('id', (int) $validated['rate_id'])->first();
+
             DB::table('logistics_shipping_rates')
                 ->where('id', (int) $validated['rate_id'])
                 ->update([
@@ -298,7 +301,6 @@ class ZonesAndExceptionsController extends Controller
                         sellerOrderId: $sellerOrder->id,
                         shipmentId: $locked->id
                     ));
-
                     $sellerOrder->seller?->notify(new OrderLifecycleNotification(
                         title: 'Shipment Exception: Parcel Marked ' . ucfirst($newStatus),
                         message: "Tracking #{$locked->tracking_number} (Order #{$sellerOrder->seller_order_number}) was reported {$newStatus} by Logistics. An RTS reimbursement claim has been opened.",
@@ -350,6 +352,7 @@ class ZonesAndExceptionsController extends Controller
     {
         $user = $request->user();
         $profile = $user?->logisticsProfile;
+
         if (! $profile) {
             abort(403);
         }

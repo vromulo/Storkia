@@ -228,7 +228,6 @@
                     @endforeach
                 </div>
 
-                <!-- Historical Date Navigator (Past Allowed, Future Strictly Blocked) -->
                 <div class="inline-flex items-center gap-1.5 p-1.5 rounded-2xl bg-surface border border-border-subtle shadow-2xs text-xs">
                     <a href="{{ route('logistics.logistics-dashboard', ['period' => $period, 'offset' => $offset + 1]) }}"
                        title="Browse previous {{ $period === 'today' ? 'day' : ($period === 'year' ? 'year' : 'period') }}"
@@ -362,7 +361,6 @@
                             x-text="formatMetric(totalHubRevenue90, 'revenue')"></strong>
                     <span class="text-[10px] text-text-muted font-mono">{{ $dateRangeLabel }}</span>
                 </div>
-
                 <div class="p-3.5 rounded-2xl border transition-all cursor-pointer"
                      :class="activeMetric === 'gross_shipping' ? 'bg-teal-50 border-teal-500/40' : 'bg-surface-subtle/60 border-border-subtle'"
                      @click="activeMetric = 'gross_shipping'">
@@ -371,7 +369,6 @@
                             x-text="formatMetric(totalGrossShipping, 'gross_shipping')"></strong>
                     <span class="text-[10px] text-text-muted">90% Hub / 10% Rider</span>
                 </div>
-
                 <div class="p-3.5 rounded-2xl border transition-all cursor-pointer"
                      :class="activeMetric === 'shipments' ? 'bg-brand-light/40 border-primary-dark/40' : 'bg-surface-subtle/60 border-border-subtle'"
                      @click="activeMetric = 'shipments'">
@@ -380,7 +377,6 @@
                             x-text="totalShipmentsCount.toLocaleString() + ' Parcel(s)'"></strong>
                     <span class="text-[10px] text-text-muted" x-text="'Avg: ' + formatMetric(avgMetricValue) + ' / slot'"></span>
                 </div>
-
                 <div class="p-3.5 rounded-2xl bg-surface-subtle/60 border border-border-subtle">
                     <span class="text-[10px] font-bold uppercase text-text-muted block">Peak Dispatch Interval</span>
                     <strong class="text-base sm:text-lg font-serif font-extrabold text-text-main block mt-0.5"
@@ -389,7 +385,6 @@
                 </div>
             </div>
 
-            <!-- Interactive SVG Area Chart with Continuous Line Hover -->
             <div class="relative w-full pt-2">
                 <div x-show="hoverIndex !== null && getCoordinates()[hoverIndex]"
                      x-cloak
@@ -430,6 +425,7 @@
                                   :stroke="metricMeta[activeMetric].color"
                                   stroke-dasharray="3 3"
                                   stroke-width="1.5" />
+
                             <circle :cx="pt.x"
                                     :cy="pt.y"
                                     :r="hoverIndex === idx ? 6.5 : 3.5"
@@ -437,12 +433,14 @@
                                     :stroke="metricMeta[activeMetric].color"
                                     stroke-width="2.5"
                                     class="transition-all duration-100" />
+
                             <text x-show="pt.val > 0 && (series.length <= 12 || hoverIndex === idx)"
                                   :x="pt.x"
                                   :y="Math.max(18, pt.y - 10)"
                                   text-anchor="middle"
                                   class="text-[9px] font-mono font-extrabold fill-stone-800"
                                   x-text="pt.formatted"></text>
+
                             <text x-show="shouldShowXLabel(idx)"
                                   :x="pt.x"
                                   y="212"
@@ -453,7 +451,6 @@
                     </template>
                 </svg>
 
-                <!-- Permanent Fixed-Height Live Scope Bar (Zero Layout Shift) -->
                 <div class="mt-2 h-11 px-4 rounded-2xl transition-colors duration-150 flex items-center justify-between gap-2 text-xs shadow-xs"
                      :class="hoverIndex !== null && getCoordinates()[hoverIndex] ? 'bg-primary-dark text-white' : 'bg-surface-subtle border border-border-subtle text-text-main'">
                     <template x-if="hoverIndex !== null && getCoordinates()[hoverIndex]">
@@ -475,7 +472,6 @@
                 </div>
             </div>
 
-            <!-- Date & Statistical Numbers Breakdown Cards (Zero Glitch) -->
             <div class="pt-3 border-t border-border-subtle" @mouseleave="clearHover()">
                 <div class="flex items-center justify-between mb-2">
                     <span class="text-[11px] font-extrabold uppercase tracking-wider text-text-muted">Date &amp; Statistical Numbers Breakdown</span>
@@ -502,8 +498,8 @@
         <div class="bg-surface rounded-3xl border border-border-subtle shadow-xs overflow-hidden">
             <div class="p-5 border-b border-border-subtle flex flex-wrap items-center justify-between gap-2">
                 <div>
-                    <h2 class="text-base font-bold text-primary-dark">Assigned Hub Shipments Queue (First-In, First-Out — {{ $totalShipmentsCount ?? $recentShipments->count() }} Total)</h2>
-                    <p class="text-xs text-text-muted">Strictly scoped to shipments routed to your hub.</p>
+                    <h2 class="text-base font-bold text-primary-dark">Assigned Hub Shipments Queue (Active FIFO at Top &bull; Delivered/Returned at Bottom — {{ $totalShipmentsCount ?? $recentShipments->count() }} Total)</h2>
+                    <p class="text-xs text-text-muted">Active shipments are prioritized at the top in FIFO sequence; delivered or returned shipments automatically move to the bottom.</p>
                 </div>
                 <a href="{{ route('logistics.shipments.index') }}" class="text-xs font-bold text-primary hover:underline">Open Full Shipments Console &rarr;</a>
             </div>
@@ -521,10 +517,28 @@
                     </thead>
                     <tbody class="divide-y divide-border-subtle">
                         @foreach($recentShipments as $sh)
-                            <tr class="hover:bg-surface-subtle/30">
+                            @php
+                                $isTerminal = method_exists($sh, 'isTerminalStatus')
+                                    ? $sh->isTerminalStatus()
+                                    : in_array($sh->status, ['delivered', 'returned_to_seller'], true);
+                            @endphp
+                            <tr class="hover:bg-surface-subtle/30 {{ $isTerminal ? 'bg-surface-subtle/20 opacity-85' : '' }}">
                                 <td class="py-3.5 px-5">
-                                    <div class="font-mono font-bold text-primary-dark">{{ $sh->tracking_number }}</div>
-                                    <div class="text-[11px] text-text-muted">{{ $sh->created_at?->format('M d, Y h:i A') }}</div>
+                                    <div class="flex items-center gap-2">
+                                        <span class="font-mono font-bold text-primary-dark">{{ $sh->tracking_number }}</span>
+                                        @if(! $isTerminal)
+                                            <span class="px-2 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20 text-[10px] font-extrabold">
+                                                Active
+                                            </span>
+                                        @else
+                                            <span class="px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 border border-gray-200 text-[10px] font-bold">
+                                                Closed
+                                            </span>
+                                        @endif
+                                    </div>
+                                    <div class="text-[11px] text-text-muted">
+                                        {{ $isTerminal ? 'Closed: ' . ($sh->delivered_at ?? $sh->returned_at ?? $sh->updated_at)?->format('M d, Y h:i A') : 'Placed: ' . $sh->created_at?->format('M d, Y h:i A') }}
+                                    </div>
                                 </td>
                                 <td class="py-3.5 px-4 font-semibold text-text-main">{{ $sh->sellerProfile->business_name ?? 'N/A' }}</td>
                                 <td class="py-3.5 px-4 text-text-muted">

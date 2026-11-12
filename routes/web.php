@@ -25,12 +25,17 @@ use App\Http\Controllers\Buyer\SellerController;
 use App\Http\Controllers\Buyer\SellerReportController;
 use App\Http\Controllers\Buyer\VoucherController;
 use App\Http\Controllers\Buyer\WishlistController;
+use App\Http\Controllers\Rider\AuthController as RiderAuthController;
 use App\Http\Controllers\Support\HelpCenterController;
 use App\Livewire\Buyer\IdentityVerificationFlow;
 use App\Http\Controllers\Buyer\ProfileController;
 
 Route::middleware('throttle:120,1')->group(function () {
+
     Route::view('/', 'buyer.landing-page')->name('landing');
+    Route::get('/download-app', [RiderAuthController::class, 'downloadApp'])->name('download-app');
+    Route::get('/download-app/apk/{app}', [RiderAuthController::class, 'downloadApk'])->name('download-app.apk');
+
     Route::view('/terms-and-conditions', 'buyer.terms-and-conditions')->name('terms');
     Route::view('/privacy-policy', 'buyer.privacy-policy')->name('privacy');
     Route::view('/cookie-policy', 'buyer.cookie-policy')->name('cookies');
@@ -46,13 +51,13 @@ Route::middleware('throttle:120,1')->group(function () {
     Route::get('/category/{slug}', [CategoryController::class, 'show'])->name('category.show');
     Route::get('/search', [SearchController::class, 'index'])->name('search.search');
     Route::get('/search/suggestions', [SearchController::class, 'suggestions'])->name('search.suggestions');
+
     Route::get('/user/orders/proof/{proof}', [OrderController::class, 'proofImage'])->name('user.orders.proof-image');
 
     Route::middleware(['guest', 'throttle:30,1'])->group(function () {
         Route::get('/login', [AuthController::class, 'showLogin'])->name('login');
         Route::post('/login', [AuthController::class, 'login'])->name('login.post');
         Route::get('/register', [AuthController::class, 'showRegister'])->name('register');
-
         Route::get('/forgot-password', [PasswordResetController::class, 'showRequestForm'])->name('password.request');
         Route::post('/forgot-password', [PasswordResetController::class, 'sendResetLink'])
             ->middleware('throttle:5,1')
@@ -70,23 +75,18 @@ Route::middleware('throttle:120,1')->group(function () {
 
     Route::middleware('auth')->group(function () {
         Route::post('/logout', [AuthController::class, 'logout'])->name('logout');
-
         Route::post('/sellers/{seller}/follow', [SellerController::class, 'toggleFollow'])
             ->middleware('throttle:30,1')
             ->name('sellers.follow');
-
         Route::post('/product/{product}/restock-subscribe', [ProductController::class, 'subscribeRestock'])
             ->middleware('throttle:30,1')
             ->name('product.restock.subscribe');
-
         Route::post('/product/{product}/questions', [ProductController::class, 'askQuestion'])
             ->middleware('throttle:20,1')
             ->name('product.questions.store');
-
         Route::post('/user/reviews/{review}/helpful', [ProductController::class, 'toggleReviewHelpful'])
             ->middleware('throttle:60,1')
             ->name('user.reviews.helpful');
-
         Route::post('/bundles/{id}/add', [BundleDealController::class, 'addBundleToCart'])
             ->middleware('throttle:30,1')
             ->name('bundles.add');
@@ -132,6 +132,7 @@ Route::middleware('throttle:120,1')->group(function () {
                 Route::post('/account-management/password/request-otp', [AccountManagementController::class, 'requestPasswordOtp'])->middleware('throttle:10,1')->name('account-management.request-password-otp');
                 Route::post('/account-management/password/verify-otp', [AccountManagementController::class, 'verifyPasswordOtp'])->middleware('throttle:15,1')->name('account-management.verify-password-otp');
                 Route::patch('/account-management/password', [AccountManagementController::class, 'updatePassword'])->name('account-management.update-password');
+
                 Route::get('/account-management/delete/eligibility', [DeleteAccountController::class, 'eligibility'])->middleware('throttle:30,1')->name('account-management.delete.eligibility');
                 Route::post('/account-management/delete', [DeleteAccountController::class, 'destroy'])->middleware('throttle:10,1')->name('account-management.delete');
 
@@ -166,12 +167,10 @@ Route::middleware('throttle:120,1')->group(function () {
                 Route::post('/orders/{sellerOrder}/confirm-receipt', [OrderController::class, 'confirmReceipt'])->name('orders.confirm-receipt');
                 Route::post('/orders/{sellerOrder}/report-dispute', [ReturnRequestController::class, 'legacyReport'])->name('orders.report-dispute');
                 Route::post('/orders/{sellerOrder}/escalate-dispute', [ReturnRequestController::class, 'legacyEscalate'])->name('orders.escalate-dispute');
-
                 Route::get('/orders/{sellerOrder}/return', [ReturnRequestController::class, 'create'])->name('orders.return.create');
                 Route::post('/orders/{sellerOrder}/return', [ReturnRequestController::class, 'store'])->middleware('throttle:10,1')->name('orders.return.store');
                 Route::get('/returns/{returnRequest}', [ReturnRequestController::class, 'show'])->name('returns.show');
                 Route::post('/returns/{returnRequest}/escalate', [ReturnRequestController::class, 'escalate'])->middleware('throttle:10,1')->name('returns.escalate');
-
                 Route::get('/orders/{sellerOrder}/rate', [OrderController::class, 'showRatePage'])->name('orders.rate.show');
                 Route::post('/orders/{sellerOrder}/rate', [OrderController::class, 'submitRatings'])->name('orders.rate.submit');
                 Route::post('/orders/{sellerOrder}/buy-again', [OrderController::class, 'buyAgain'])->name('orders.buy-again');
@@ -219,6 +218,6 @@ Route::middleware('throttle:120,1')->group(function () {
             })->name('user.notifications.open');
         });
     });
-});
 
-require __DIR__ . '/rider.php';
+    require __DIR__ . '/rider.php';
+});

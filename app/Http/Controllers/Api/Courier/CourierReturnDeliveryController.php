@@ -6,6 +6,8 @@ use App\Http\Controllers\Api\Concerns\FormatsReturnShipments;
 use App\Http\Controllers\Api\Concerns\StoresReturnPhotos;
 use App\Http\Controllers\Controller;
 use App\Models\ReturnShipment;
+use App\Services\CommissionCalculatorService;
+use App\Services\CourierMobileSchemaService;
 use App\Services\ReturnShipmentService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -15,27 +17,47 @@ class CourierReturnDeliveryController extends Controller
 {
     use FormatsReturnShipments, StoresReturnPhotos;
 
-    protected const COMPLETED_LIMIT = 15;
+    protected const COMPLETED_LIMIT = 20;
 
-    public function __construct(protected ReturnShipmentService $returnShipmentService)
-    {
+    public const FAILURE_REASONS = [
+        'Seller store / warehouse closed',
+        'Seller unreachable by phone',
+        'Seller refused to receive return parcel',
+        'Incorrect or incomplete seller address',
+        'Vehicle breakdown or road closure',
+        'Severe weather conditions',
+        'Other',
+    ];
+
+    public function __construct(
+        protected ReturnShipmentService $returnShipmentService,
+        protected CommissionCalculatorService $commissionCalculator
+    ) {
     }
 
     public function index(Request $request): JsonResponse
     {
         $courier = $request->user();
-        $with = $this->returnShipmentRelations();
+        $with = array_unique(array_merge($this->returnShipmentRelations(), [
+            'returnRequest',
+            'sellerOrder.buyer',
+            'sellerOrder.items',
+            'sellerOrder.sellerProfile',
+            'events',
+        ]));
 
         $toCollect = ReturnShipment::with($with)
             ->where('current_courier_id', $courier->id)
             ->where('status', ReturnShipment::STATUS_COURIER_ASSIGNED)
-            ->orderBy('courier_assigned_at')
+            ->orderBy('courier_assigned_at', 'asc')
+            ->orderBy('id', 'asc')
             ->get();
 
         $outForDelivery = ReturnShipment::with($with)
             ->where('current_courier_id', $courier->id)
             ->where('status', ReturnShipment::STATUS_OUT_FOR_RETURN_DELIVERY)
-            ->orderBy('picked_up_from_hub_at')
+            ->orderBy('picked_up_from_hub_at', 'asc')
+            ->orderBy('id', 'asc')
             ->get();
 
         $completedQuery = ReturnShipment::where('current_courier_id', $courier->id)
@@ -46,6 +68,7 @@ class CourierReturnDeliveryController extends Controller
         $completed = (clone $completedQuery)
             ->with($with)
             ->orderByDesc('delivered_to_seller_at')
+            ->orderByDesc('id')
             ->limit(self::COMPLETED_LIMIT)
             ->get();
 
@@ -62,9 +85,11 @@ class CourierReturnDeliveryController extends Controller
                     'completed'        => $completedCount,
                 ],
                 'total_earned'     => round($totalEarned, 2),
-                'to_collect'       => $toCollect->map(fn (ReturnShipment $rs) => $this->formatReturnShipment($rs, 'courier'))->values()->all(),
-                'out_for_delivery' => $outForDelivery->map(fn (ReturnShipment $rs) => $this->formatReturnShipment($rs, 'courier'))->values()->all(),
-                'completed'        => $completed->map(fn (ReturnShipment $rs) => $this->formatReturnShipment($rs, 'courier'))->values()->all(),
+                'max_attempts'     => ReturnShipment::MAX_DELIVERY_ATTEMPTS,
+                'failure_reasons'  => self::FAILURE_REASONS,
+                'to_collect'       => $toCollect->map(fn (ReturnShipment $rs) => $this->enrichCourierReturn($rs, $courier))->values()->all(),
+                'out_for_delivery' => $outForDelivery->map(fn (ReturnShipment $rs) => $this->enrichCourierReturn($rs, $courier))->values()->all(),
+                'completed'        => $completed->map(fn (ReturnShipment $rs) => $this->enrichCourierReturn($rs, $courier))->values()->all(),
             ],
         ]);
     }
@@ -84,13 +109,19 @@ class CourierReturnDeliveryController extends Controller
             return $this->returnFailureFrom($e);
         }
 
-        $updated->load($this->returnShipmentRelations());
+        $updated->load(array_unique(array_merge($this->returnShipmentRelations(), [
+            'returnRequest',
+            'sellerOrder.buyer',
+            'sellerOrder.items',
+            'sellerOrder.sellerProfile',
+            'events',
+        ])));
 
         return response()->json([
             'status'  => 'success',
-            'message' => "Delivery started for {$updated->tracking_number}. Take the parcel to the seller and confirm with a photo once it is handed over.",
+            'message' => "Return delivery started for {$updated->tracking_number}. Transport the parcel from the sorting hub to the Seller and confirm with a photo upon handover.",
             'data'    => [
-                'return' => $this->formatReturnShipment($updated, 'courier'),
+                'return' => $this->enrichCourierReturn($updated, $courier),
             ],
         ]);
     }
@@ -140,13 +171,19 @@ class CourierReturnDeliveryController extends Controller
 
         $this->discardReturnPhotoIfUnused((int) $returnShipment->id, 'seller_delivery_photo', $path);
 
-        $updated->load($this->returnShipmentRelations());
+        $updated->load(array_unique(array_merge($this->returnShipmentRelations(), [
+            'returnRequest',
+            'sellerOrder.buyer',
+            'sellerOrder.items',
+            'sellerOrder.sellerProfile',
+            'events',
+        ])));
 
         return response()->json([
             'status'  => 'success',
-            'message' => "Delivery confirmed for {$updated->tracking_number}. \u{20B1}" . number_format((float) $updated->courier_pay, 2) . ' was added to your E-Wallet for this return leg.',
+            'message' => "Return delivery confirmed for {$updated->tracking_number}. \u{20B1}" . number_format((float) $updated->courier_pay, 2) . ' was credited to your Available E-Wallet.',
             'data'    => [
-                'return' => $this->formatReturnShipment($updated, 'courier'),
+                'return' => $this->enrichCourierReturn($updated, $courier),
             ],
         ]);
     }
@@ -178,14 +215,118 @@ class CourierReturnDeliveryController extends Controller
             return $this->returnFailureFrom($e);
         }
 
-        $updated->load($this->returnShipmentRelations());
+        $updated->load(array_unique(array_merge($this->returnShipmentRelations(), [
+            'returnRequest',
+            'sellerOrder.buyer',
+            'sellerOrder.items',
+            'sellerOrder.sellerProfile',
+            'events',
+        ])));
 
         return response()->json([
             'status'  => 'success',
             'message' => "Failed return delivery attempt recorded for {$updated->tracking_number}. The parcel was returned to the sorting hub queue for re-dispatch.",
             'data'    => [
-                'return' => $this->formatReturnShipment($updated, 'courier'),
+                'return' => $this->enrichCourierReturn($updated, $courier),
             ],
+        ]);
+    }
+
+    protected function enrichCourierReturn(ReturnShipment $rs, $courier): array
+    {
+        $base = [];
+        try {
+            $base = $this->formatReturnShipment($rs, 'courier');
+        } catch (\Throwable $e) {
+            $base = [];
+        }
+
+        $req = $rs->returnRequest;
+        $order = $rs->sellerOrder;
+        $sellerProfile = $order?->sellerProfile;
+        $hubSnap = (array) ($rs->hub_address_snapshot ?? []);
+        $sellerSnap = (array) ($rs->return_address_snapshot ?? ($order?->pickup_address_snapshot ?? []));
+
+        $hubCoords = CourierMobileSchemaService::resolveCoordinatesForAddress($hubSnap, $courier?->assigned_hub);
+        $sellerCoords = CourierMobileSchemaService::resolveCoordinatesForAddress($sellerSnap, $sellerProfile);
+
+        $estimatedPay = (float) ($rs->courier_pay ?? 0);
+        if ($estimatedPay <= 0) {
+            $calc = $this->commissionCalculator->calculateDistanceScaledDriverPay(
+                'pickup',
+                $hubSnap,
+                $sellerSnap,
+                (float) ($rs->total_weight ?: 0.5)
+            );
+            $estimatedPay = round((float) ($calc['total_pay'] ?? 15.00), 2);
+        }
+
+        $sellerAddress = $sellerSnap['full_address']
+            ?? $sellerProfile?->full_address
+            ?? collect([
+                $sellerSnap['house_details'] ?? $sellerProfile?->house_details,
+                $sellerSnap['street'] ?? $sellerProfile?->street,
+                $sellerSnap['barangay'] ?? $sellerProfile?->barangay,
+                $sellerSnap['municipality'] ?? $sellerProfile?->municipality,
+                $sellerSnap['province'] ?? $sellerProfile?->province,
+            ])->filter()->implode(', ');
+
+        $hubAddress = $hubSnap['full_address'] ?? ($courier?->assigned_hub?->full_address ?? collect([
+            $hubSnap['barangay'] ?? null,
+            $hubSnap['municipality'] ?? null,
+            $hubSnap['province'] ?? null,
+        ])->filter()->implode(', '));
+
+        return array_merge($base, [
+            'id'                      => (int) $rs->id,
+            'tracking_number'         => (string) $rs->tracking_number,
+            'return_request_id'       => (int) $rs->return_request_id,
+            'request_number'          => (string) ($req?->request_number ?? 'RET-' . $rs->return_request_id),
+            'seller_order_id'         => (int) $rs->seller_order_id,
+            'seller_order_number'     => (string) ($order?->seller_order_number ?? 'SO-N/A'),
+            'status'                  => (string) $rs->status,
+            'status_label'            => strtoupper(str_replace('_', ' ', (string) $rs->status)),
+            'total_weight'            => round((float) ($rs->total_weight ?? 0.5), 3),
+            'total_weight_formatted'  => number_format((float) ($rs->total_weight ?? 0.5), 2) . ' kg',
+            'courier_pay'             => round($estimatedPay, 2),
+            'is_paid'                 => $rs->courier_paid_at !== null,
+            'courier_paid_at'         => $rs->courier_paid_at?->toIso8601String(),
+            'delivery_attempts_count' => (int) ($rs->delivery_attempts_count ?? 0),
+            'max_attempts'            => ReturnShipment::MAX_DELIVERY_ATTEMPTS,
+            'delivery_failure_reason' => $rs->delivery_failure_reason ?? null,
+            'reason_category'         => (string) ($req?->reason_category ?? 'Return & Refund'),
+            'reason'                  => (string) ($req?->reason ?? ''),
+            'seller_delivery_photo'   => $rs->seller_delivery_photo ? asset('storage/' . ltrim($rs->seller_delivery_photo, '/')) : null,
+            'courier_assigned_at'     => $rs->courier_assigned_at?->toIso8601String(),
+            'picked_up_from_hub_at'   => $rs->picked_up_from_hub_at?->toIso8601String(),
+            'delivered_to_seller_at'  => $rs->delivered_to_seller_at?->toIso8601String(),
+            'hub'                     => [
+                'hub_name'     => (string) ($hubSnap['hub_name'] ?? ($courier?->assigned_hub?->hub_name ?? 'Sorting Hub')),
+                'contact_no'   => (string) ($hubSnap['contact_no'] ?? ($courier?->assigned_hub?->contact_no ?? '')),
+                'barangay'     => (string) ($hubSnap['barangay'] ?? ($courier?->assigned_hub?->barangay ?? '')),
+                'municipality' => (string) ($hubSnap['municipality'] ?? ($courier?->assigned_hub?->municipality ?? '')),
+                'province'     => (string) ($hubSnap['province'] ?? ($courier?->assigned_hub?->province ?? '')),
+                'full_address' => (string) $hubAddress,
+                'latitude'     => (float) $hubCoords['latitude'],
+                'longitude'    => (float) $hubCoords['longitude'],
+            ],
+            'seller'                  => [
+                'business_name' => (string) ($sellerProfile?->business_name ?? ($sellerSnap['business_name'] ?? 'Seller Store')),
+                'contact_no'    => (string) ($sellerSnap['contact_no'] ?? ($sellerProfile?->contact_no ?? '')),
+                'barangay'      => (string) ($sellerSnap['barangay'] ?? ($sellerProfile?->barangay ?? '')),
+                'municipality'  => (string) ($sellerSnap['municipality'] ?? ($sellerProfile?->municipality ?? '')),
+                'province'      => (string) ($sellerSnap['province'] ?? ($sellerProfile?->province ?? '')),
+                'full_address'  => (string) ($sellerAddress ?: 'Seller Facility Address'),
+                'latitude'      => (float) $sellerCoords['latitude'],
+                'longitude'     => (float) $sellerCoords['longitude'],
+            ],
+            'items'                   => ($order?->items ?? collect())->map(fn ($item) => [
+                'id'           => (int) $item->id,
+                'product_name' => (string) $item->product_name,
+                'variant_name' => $item->variant_name,
+                'quantity'     => (int) $item->quantity,
+                'line_weight'  => (float) $item->line_weight,
+            ])->values()->all(),
         ]);
     }
 }

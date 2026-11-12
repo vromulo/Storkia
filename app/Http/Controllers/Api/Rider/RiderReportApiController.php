@@ -10,6 +10,7 @@ use App\Models\DeliveryAttempt;
 use App\Models\ReturnShipment;
 use App\Models\WalletTransaction;
 use App\Models\WithdrawalRequest;
+use App\Services\FormalReportService;
 use App\Services\ReturnRefundLedgerService;
 use App\Services\RiderMobileSchemaService;
 use App\Services\RoleWalletService;
@@ -26,8 +27,10 @@ class RiderReportApiController extends Controller
 
     protected const MAX_WITHDRAWALS = 20;
 
-    public function __construct(protected RoleWalletService $roleWalletService)
-    {
+    public function __construct(
+        protected RoleWalletService $roleWalletService,
+        protected FormalReportService $formalReportService
+    ) {
     }
 
     public function index(Request $request): JsonResponse
@@ -94,10 +97,18 @@ class RiderReportApiController extends Controller
                 ->get()
             : collect();
 
+        $formalPayload = $this->formalReportService->buildRoleReportPayload(
+            'Rider',
+            (int) $rider->id,
+            (string) $rider->full_name,
+            $request
+        );
+
         return response()->json([
             'status' => 'success',
             'data'   => [
                 'period'              => [
+                    'preset'    => (string) $request->query('preset', 'this_month'),
                     'from_date' => $fromDate,
                     'to_date'   => $toDate,
                 ],
@@ -114,6 +125,20 @@ class RiderReportApiController extends Controller
                     'wallet_available'       => round((float) $wallet->available_balance, 2),
                     'wallet_pending'         => round((float) $wallet->pending_balance, 2),
                     'total_earned'           => round((float) $wallet->total_earned, 2),
+                ],
+                'formal_report'       => [
+                    'document_number' => $formalPayload['document_number'] ?? '',
+                    'business_name'   => $formalPayload['business_name'] ?? $rider->full_name,
+                    'verifier_name'   => $formalPayload['verifier_name'] ?? $rider->full_name,
+                    'verifier_title'  => $formalPayload['verifier_title'] ?? 'Authorized Last-Mile Delivery Rider',
+                    'generated_at'    => $formalPayload['generated_at'] ?? '',
+                    'kpis'            => $formalPayload['kpis'] ?? [],
+                    'rows'            => $formalPayload['rows'] ?? [],
+                    'totals'          => $formalPayload['totals'] ?? [
+                        'gross'     => 0.0,
+                        'deduction' => 0.0,
+                        'net'       => 0.0,
+                    ],
                 ],
                 'transactions_total'  => $transactionsTotal,
                 'transactions'        => $transactions->map(fn (WalletTransaction $tx) => [

@@ -12,7 +12,6 @@
         'delivered'    => 'Delivered to Seller',
         'cancelled'    => 'Cancelled',
     ];
-
     $activeTab = array_key_exists($statusTab, $tabs) ? $statusTab : 'all';
 @endphp
 
@@ -32,8 +31,7 @@
                 @endif
             </div>
             <p class="text-sm text-text-muted mt-1">
-                Parcels travelling back to sellers after an approved Return &amp; Refund. Dispatch a Rider to collect from the buyer,
-                confirm the parcel at the sorting hub, then dispatch a Courier to deliver it to the seller.
+                Active return parcels are prioritized at the top in First-In, First-Out (FIFO) sequence; once delivered back to the seller or cancelled, they automatically move to the bottom sorted by most recent.
             </p>
         </div>
 
@@ -103,6 +101,7 @@
                     <tbody class="divide-y divide-border-subtle text-xs">
                         @foreach($returnShipments as $rs)
                             @php
+                                $isTerminal = in_array($rs->status, ['delivered_to_seller', 'cancelled'], true);
                                 $pickup = $rs->pickup_address_snapshot ?? [];
                                 $sellerAddr = $rs->return_address_snapshot ?? [];
                                 $hubSnap = $rs->hub_address_snapshot ?? [];
@@ -121,11 +120,25 @@
                                 };
                                 $needsAction = in_array($rs->status, ['awaiting_rider_assignment', 'pickup_failed', 'picked_up_from_buyer', 'received_at_hub'], true);
                             @endphp
-                            <tr class="hover:bg-surface-subtle/40 transition-colors">
+                            <tr class="hover:bg-surface-subtle/40 transition-colors {{ $isTerminal ? 'bg-surface-subtle/20 opacity-85' : '' }}">
                                 <td class="py-4 px-5 align-top">
-                                    <div class="font-mono font-bold text-sm text-primary-dark">{{ $rs->tracking_number }}</div>
+                                    <div class="flex flex-wrap items-center gap-1.5">
+                                        <span class="font-mono font-bold text-sm text-primary-dark">{{ $rs->tracking_number }}</span>
+                                        @if(! $isTerminal)
+                                            <span class="px-2 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20 text-[10px] font-extrabold">
+                                                Active Queue
+                                            </span>
+                                        @else
+                                            <span class="px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 border border-gray-200 text-[10px] font-bold">
+                                                Closed
+                                            </span>
+                                        @endif
+                                    </div>
                                     <div class="text-text-muted mt-0.5">Request: {{ $rs->returnRequest?->request_number ?? 'N/A' }}</div>
                                     <div class="text-text-muted">Order: {{ $rs->sellerOrder?->seller_order_number ?? 'N/A' }}</div>
+                                    <div class="text-[11px] text-text-muted">
+                                        {{ $isTerminal ? 'Closed: ' . ($rs->delivered_to_seller_at ?? $rs->cancelled_at ?? $rs->updated_at)?->format('M d, Y h:i A') : 'Created: ' . $rs->created_at?->format('M d, Y h:i A') }}
+                                    </div>
                                 </td>
 
                                 <td class="py-4 px-4 align-top">
@@ -192,6 +205,5 @@
             @endif
         @endif
     </div>
-
 </div>
 @endsection
