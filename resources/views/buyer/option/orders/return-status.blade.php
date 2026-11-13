@@ -310,7 +310,8 @@
                 </p>
             @else
                 <p class="text-blue-700 font-bold">
-                    Waiting for Storkia to send it@if($rr->refund_due_at) &bull; due by {{ $fmt($rr->refund_due_at) }}@endif
+                    Waiting for Storkia to send it
+                    @if($rr->refund_due_at) &bull; due by {{ $fmt($rr->refund_due_at) }}@endif
                 </p>
             @endif
         </div>

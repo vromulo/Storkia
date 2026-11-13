@@ -718,7 +718,8 @@
                         <p class="text-green-700 font-bold">Paid on {{ $fmt($rr->refunded_at) }}</p>
                     @else
                         <p class="text-blue-700 font-bold">
-                            Queued for Storkia payout@if($rr->refund_due_at) &bull; due by {{ $fmt($rr->refund_due_at) }}@endif
+                            Queued for Storkia payout
+                            @if($rr->refund_due_at) &bull; due by {{ $fmt($rr->refund_due_at) }}@endif
                         </p>
                     @endif
                     <p class="text-text-muted">Storkia pays this refund to the buyer. You do not need to send anything.</p>
