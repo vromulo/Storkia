@@ -28,7 +28,7 @@ document.addEventListener('alpine:init', () => {
     Alpine.data('sellerStoreSettingsManager', sellerStoreSettingsManager);
     Alpine.data('searchableSelect', searchableSelect);
     Alpine.data('accountManager', accountManager);
-    Alpine.data('addressManager', addressManager);
+    Alpine.data('addressBookManager', addressManager);
     Alpine.data('cartPageManager', cartPageManager);
     Alpine.data('categoryPageManager', categoryPageManager);
     Alpine.data('idCameraCapture', idCameraCapture);

@@ -138,7 +138,7 @@ Route::middleware('throttle:120,1')->group(function () {
 
                 Route::get('/addresses', [AddressController::class, 'index'])->name('addresses');
                 Route::post('/addresses', [AddressController::class, 'store'])->name('addresses.store');
-                Route::put('/addresses/{id}', [AddressController::class, 'update'])->name('addresses.update');
+                Route::match(['put', 'patch'], '/addresses/{id}', [AddressController::class, 'update'])->name('addresses.update');
                 Route::patch('/addresses/{id}/default', [AddressController::class, 'setDefault'])->name('addresses.set-default');
                 Route::delete('/addresses/{id}', [AddressController::class, 'destroy'])->name('addresses.destroy');
                 Route::get('/addresses/psgc/municipalities/{provinceCode}', [AddressController::class, 'getMunicipalities'])->name('addresses.psgc.municipalities');
