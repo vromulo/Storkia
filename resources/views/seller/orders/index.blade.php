@@ -1,6 +1,10 @@
 @extends('layouts.seller', ['title' => 'Storkia - Seller Orders'])
 
 @section('content')
+@php
+    $queueSort = ($queueSort ?? 'oldest') === 'newest' ? 'newest' : 'oldest';
+    $isQueueNewestFirst = $queueSort === 'newest';
+@endphp
 <div class="max-w-7xl mx-auto space-y-6 select-none">
 
     <div class="flex flex-col md:flex-row md:items-end justify-between gap-4">
@@ -13,13 +17,20 @@
                 </a>
             </div>
             <p class="text-sm text-text-muted mt-1">
-                Active orders are prioritized at the top in First-In, First-Out (FIFO) order; once completed, rejected, or cancelled, they automatically move to the bottom sorted by most recent.
+                @if($isQueueNewestFirst)
+                    Active orders are shown at the top in Last-In, First-Out (LIFO) order, newest first; once completed, rejected, or cancelled, they automatically move to the bottom.
+                @else
+                    Active orders are prioritized at the top in First-In, First-Out (FIFO) order; once completed, rejected, or cancelled, they automatically move to the bottom sorted by most recent.
+                @endif
             </p>
         </div>
 
         <form method="GET" action="{{ route('seller.orders.index') }}" class="flex items-center gap-2">
             @if($statusTab && $statusTab !== 'all')
                 <input type="hidden" name="status" value="{{ $statusTab }}">
+            @endif
+            @if($isQueueNewestFirst)
+                <input type="hidden" name="sort" value="newest">
             @endif
             <input type="text"
                    name="search"
@@ -46,36 +57,54 @@
         </div>
     @endif
 
-    <div class="flex flex-wrap items-center gap-2">
-        @php
-            $tabs = [
-                'all'        => ['label' => 'All Orders', 'count' => $counts['all']],
-                'new'        => ['label' => 'New Orders', 'count' => $counts['new']],
-                'pending'    => ['label' => 'Pending', 'count' => $counts['pending'] ?? 0],
-                'to_process' => ['label' => 'To Process', 'count' => $counts['to_process']],
-                'to_ship'    => ['label' => 'Ready / To Ship', 'count' => $counts['to_ship']],
-                'shipped'    => ['label' => 'In Transit', 'count' => $counts['shipped']],
-                'delivered'  => ['label' => 'Delivered / Completed', 'count' => $counts['delivered']],
-                'cancelled'  => ['label' => 'Cancelled / Disputed', 'count' => $counts['cancelled']],
-            ];
-        @endphp
+    <div class="flex flex-wrap items-center justify-between gap-3">
+        <div class="flex flex-wrap items-center gap-2">
+            @php
+                $tabs = [
+                    'all'        => ['label' => 'All Orders', 'count' => $counts['all']],
+                    'new'        => ['label' => 'New Orders', 'count' => $counts['new']],
+                    'pending'    => ['label' => 'Pending', 'count' => $counts['pending'] ?? 0],
+                    'to_process' => ['label' => 'To Process', 'count' => $counts['to_process']],
+                    'to_ship'    => ['label' => 'Ready / To Ship', 'count' => $counts['to_ship']],
+                    'shipped'    => ['label' => 'In Transit', 'count' => $counts['shipped']],
+                    'delivered'  => ['label' => 'Delivered / Completed', 'count' => $counts['delivered']],
+                    'cancelled'  => ['label' => 'Cancelled / Disputed', 'count' => $counts['cancelled']],
+                ];
+            @endphp
 
-        @foreach($tabs as $key => $tab)
-            <a href="{{ route('seller.orders.index', array_filter(['status' => $key === 'all' ? null : $key, 'search' => $search])) }}"
-               class="inline-flex items-center gap-2 px-4 py-2 rounded-2xl text-xs font-bold border transition-all {{ $statusTab === $key || ($key === 'all' && !$statusTab) ? 'bg-primary-dark text-surface border-primary-dark shadow-xs' : 'bg-surface text-text-muted border-border-subtle hover:text-text-main hover:bg-surface-subtle' }}">
-                <span>{{ $tab['label'] }}</span>
-                <span class="px-2 py-0.5 rounded-full text-[10px] {{ $statusTab === $key || ($key === 'all' && !$statusTab) ? 'bg-surface/20 text-surface' : ($key === 'pending' && ($tab['count'] ?? 0) > 0 ? 'bg-amber-100 text-amber-800' : 'bg-surface-subtle text-text-main') }}">
-                    {{ $tab['count'] }}
-                </span>
-            </a>
-        @endforeach
+            @foreach($tabs as $key => $tab)
+                <a href="{{ route('seller.orders.index', array_filter(['status' => $key === 'all' ? null : $key, 'search' => $search, 'sort' => $isQueueNewestFirst ? 'newest' : null])) }}"
+                   class="inline-flex items-center gap-2 px-4 py-2 rounded-2xl text-xs font-bold border transition-all {{ $statusTab === $key || ($key === 'all' && !$statusTab) ? 'bg-primary-dark text-surface border-primary-dark shadow-xs' : 'bg-surface text-text-muted border-border-subtle hover:text-text-main hover:bg-surface-subtle' }}">
+                    <span>{{ $tab['label'] }}</span>
+                    <span class="px-2 py-0.5 rounded-full text-[10px] {{ $statusTab === $key || ($key === 'all' && !$statusTab) ? 'bg-surface/20 text-surface' : ($key === 'pending' && ($tab['count'] ?? 0) > 0 ? 'bg-amber-100 text-amber-800' : 'bg-surface-subtle text-text-main') }}">
+                        {{ $tab['count'] }}
+                    </span>
+                </a>
+            @endforeach
+        </div>
+
+        <div class="flex items-center gap-2" x-data="orderQueueSort({ current: @js($queueSort) })">
+            <label for="orders-queue-sort" class="text-[11px] font-bold uppercase tracking-wider text-text-muted">Sort by</label>
+            <select id="orders-queue-sort"
+                    x-on:change="change($event.target.value)"
+                    class="px-3 py-2 rounded-xl border border-border-subtle bg-surface text-xs font-bold text-text-main outline-none focus:border-primary cursor-pointer">
+                <option value="newest" @selected($isQueueNewestFirst)>Newest to Oldest</option>
+                <option value="oldest" @selected(! $isQueueNewestFirst)>Oldest to Newest</option>
+            </select>
+        </div>
     </div>
 
     <div class="bg-surface rounded-3xl border border-border-subtle shadow-xs overflow-hidden">
         @if($orders->isEmpty())
             <div class="py-16 px-6 text-center space-y-2">
                 <h3 class="text-base font-bold text-text-main">No seller orders found</h3>
-                <p class="text-xs text-text-muted">Active orders appear at the top in First-In, First-Out (FIFO) sequence, while completed or cancelled orders move to the bottom.</p>
+                <p class="text-xs text-text-muted">
+                    @if($isQueueNewestFirst)
+                        Active orders appear at the top in Last-In, First-Out (LIFO) sequence, while completed or cancelled orders move to the bottom.
+                    @else
+                        Active orders appear at the top in First-In, First-Out (FIFO) sequence, while completed or cancelled orders move to the bottom.
+                    @endif
+                </p>
             </div>
         @else
             <div class="overflow-x-auto">

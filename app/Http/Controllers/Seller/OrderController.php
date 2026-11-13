@@ -61,6 +61,10 @@ class OrderController extends Controller
         $statusTab = $request->query('status', 'all');
         $search = trim((string) $request->query('search', ''));
 
+        // [Queue sort] Read and validate the "Sort by" option (defaults to FIFO / "oldest").
+        $sortInput = $request->query('sort');
+        $queueSort = SellerOrder::normalizeQueueSort(is_string($sortInput) ? $sortInput : null);
+
         $baseQuery = SellerOrder::where('seller_id', $user->id);
 
         $counts = [
@@ -110,8 +114,9 @@ class OrderController extends Controller
             });
         }
 
+        // [Queue sort] Apply the chosen sort (FIFO / LIFO) before paginating.
         $orders = $query
-            ->orderByOperationalQueue()
+            ->orderByOperationalQueue($queueSort)
             ->paginate(10)
             ->withQueryString();
 
@@ -119,7 +124,8 @@ class OrderController extends Controller
             'orders',
             'statusTab',
             'search',
-            'counts'
+            'counts',
+            'queueSort'
         ));
     }
 

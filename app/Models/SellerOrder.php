@@ -20,6 +20,14 @@ class SellerOrder extends Model
         'returned_to_seller',
     ];
 
+    /**
+     * Queue sort options.
+     * 'oldest' = First In, First Out (FIFO) - "Oldest to Newest" (default).
+     * 'newest' = Last In, First Out (LIFO)  - "Newest to Oldest".
+     */
+    public const QUEUE_SORT_OLDEST = 'oldest';
+    public const QUEUE_SORT_NEWEST = 'newest';
+
     protected $fillable = [
         'order_id',
         'seller_order_number',
@@ -82,24 +90,47 @@ class SellerOrder extends Model
         ];
     }
 
-    public function scopeOrderByOperationalQueue(Builder $query): Builder
+    /**
+     * Normalize any incoming value to a supported queue sort option.
+     * Anything unknown falls back to FIFO ("oldest").
+     */
+    public static function normalizeQueueSort(?string $sort): string
+    {
+        return $sort === self::QUEUE_SORT_NEWEST
+            ? self::QUEUE_SORT_NEWEST
+            : self::QUEUE_SORT_OLDEST;
+    }
+
+    /**
+     * Operational queue ordering.
+     *
+     * Active orders always stay on top and closed orders always sink to the bottom.
+     * The chosen sort only reverses the order WITHIN each group:
+     *  - 'oldest' (FIFO): active by placed date ASC, closed by close date DESC (original behaviour).
+     *  - 'newest' (LIFO): active by placed date DESC, closed by close date ASC.
+     */
+    public function scopeOrderByOperationalQueue(Builder $query, ?string $sort = self::QUEUE_SORT_OLDEST): Builder
     {
         $table = $this->getTable();
+
+        $isNewestFirst = self::normalizeQueueSort($sort) === self::QUEUE_SORT_NEWEST;
+        $activeDirection = $isNewestFirst ? 'DESC' : 'ASC';
+        $closedDirection = $isNewestFirst ? 'ASC' : 'DESC';
 
         return $query
             ->orderByRaw(
                 "CASE WHEN {$table}.status IN ('completed', 'cancelled', 'rejected', 'returned_to_seller') THEN 1 ELSE 0 END ASC"
             )
             ->orderByRaw(
-                "CASE WHEN {$table}.status NOT IN ('completed', 'cancelled', 'rejected', 'returned_to_seller') THEN {$table}.created_at END ASC"
+                "CASE WHEN {$table}.status NOT IN ('completed', 'cancelled', 'rejected', 'returned_to_seller') THEN {$table}.created_at END {$activeDirection}"
             )
             ->orderByRaw(
-                "CASE WHEN {$table}.status NOT IN ('completed', 'cancelled', 'rejected', 'returned_to_seller') THEN {$table}.id END ASC"
+                "CASE WHEN {$table}.status NOT IN ('completed', 'cancelled', 'rejected', 'returned_to_seller') THEN {$table}.id END {$activeDirection}"
             )
             ->orderByRaw(
-                "CASE WHEN {$table}.status IN ('completed', 'cancelled', 'rejected', 'returned_to_seller') THEN COALESCE({$table}.completed_at, {$table}.cancelled_at, {$table}.rejected_at, {$table}.dispute_resolved_at, {$table}.updated_at) END DESC"
+                "CASE WHEN {$table}.status IN ('completed', 'cancelled', 'rejected', 'returned_to_seller') THEN COALESCE({$table}.completed_at, {$table}.cancelled_at, {$table}.rejected_at, {$table}.dispute_resolved_at, {$table}.updated_at) END {$closedDirection}"
             )
-            ->orderByDesc("{$table}.id");
+            ->orderBy("{$table}.id", strtolower($closedDirection));
     }
 
     public function isTerminalStatus(): bool

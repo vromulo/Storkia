@@ -46,6 +46,9 @@ class DashboardController extends Controller
         $periodLabel = $window['periodLabel'];
         $dateRangeLabel = $window['dateRangeLabel'];
 
+        $sortInput = $request->query('sort');
+        $queueSort = SellerOrder::normalizeQueueSort(is_string($sortInput) ? $sortInput : null);
+
         $walletAvailable = 0.0;
         $walletPendingEscrow = 0.0;
         $kpis = [
@@ -104,7 +107,7 @@ class DashboardController extends Controller
 
             $recentOrders = SellerOrder::with(['buyer', 'items', 'shipment'])
                 ->where('seller_id', $user->id)
-                ->orderByOperationalQueue()
+                ->orderByOperationalQueue($queueSort)
                 ->limit(8)
                 ->get();
 
@@ -130,7 +133,8 @@ class DashboardController extends Controller
             'kpis',
             'chartSeries',
             'recentOrders',
-            'lowStockItems'
+            'lowStockItems',
+            'queueSort'
         ));
     }
 
