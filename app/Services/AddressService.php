@@ -4,24 +4,67 @@ namespace App\Services;
 
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 
 class AddressService
 {
     protected const CACHE_TTL_HOURS = 24;
+    protected const STALE_TTL_DAYS = 30;
     public const NCR_PROVINCE_CODE = '130000000';
+
+    protected function fetchJson(string $url): ?array
+    {
+        try {
+            $response = Http::withoutVerifying()->timeout(10)->retry(2, 200)->get($url);
+            if ($response->successful() && is_array($response->json())) {
+                return $response->json();
+            }
+            Log::warning('PSGC request returned an unusable response', [
+                'url'    => $url,
+                'status' => $response->status(),
+            ]);
+        } catch (\Throwable $e) {
+            Log::warning('PSGC request failed', [
+                'url'     => $url,
+                'message' => $e->getMessage(),
+            ]);
+        }
+
+        return null;
+    }
+
+    protected function rememberList(string $key, callable $loader): array
+    {
+        $cached = Cache::get($key);
+        if (is_array($cached) && ! empty($cached)) {
+            return $cached;
+        }
+
+        $fresh = $loader();
+        if (is_array($fresh) && ! empty($fresh)) {
+            Cache::put($key, $fresh, now()->addHours(self::CACHE_TTL_HOURS));
+            Cache::put($key . '_stale', $fresh, now()->addDays(self::STALE_TTL_DAYS));
+            return $fresh;
+        }
+
+        $stale = Cache::get($key . '_stale');
+
+        return is_array($stale) ? $stale : [];
+    }
+
+    protected function sortByName(array $items): array
+    {
+        usort($items, fn ($a, $b) => strcasecmp((string) ($a['name'] ?? ''), (string) ($b['name'] ?? '')));
+
+        return $items;
+    }
 
     public function getProvinces(): array
     {
-        return Cache::remember('psgc_provinces_v3', now()->addHours(self::CACHE_TTL_HOURS), function () {
-            $provinces = [];
-
-            try {
-                $response = Http::withoutVerifying()->timeout(10)->get('https://psgc.gitlab.io/api/provinces');
-                if ($response->successful() && is_array($response->json())) {
-                    $provinces = $response->json();
-                }
-            } catch (\Throwable $e) {
-                $provinces = [];
+        $provinces = $this->rememberList('psgc_provinces_v4', function () {
+            $provinces = $this->fetchJson('https://psgc.gitlab.io/api/provinces');
+            if (empty($provinces)) {
+                return [];
             }
 
             $hasNcr = collect($provinces)->contains(function ($prov) {
@@ -33,18 +76,27 @@ class AddressService
             });
 
             if (! $hasNcr) {
-                array_unshift($provinces, [
+                $provinces[] = [
                     'code'            => self::NCR_PROVINCE_CODE,
                     'name'            => 'Metro Manila',
                     'regionCode'      => self::NCR_PROVINCE_CODE,
                     'islandGroupCode' => 'luzon',
-                ]);
+                ];
             }
 
-            usort($provinces, fn ($a, $b) => strcasecmp((string) ($a['name'] ?? ''), (string) ($b['name'] ?? '')));
-
-            return $provinces;
+            return $this->sortByName($provinces);
         });
+
+        if (empty($provinces)) {
+            return [[
+                'code'            => self::NCR_PROVINCE_CODE,
+                'name'            => 'Metro Manila',
+                'regionCode'      => self::NCR_PROVINCE_CODE,
+                'islandGroupCode' => 'luzon',
+            ]];
+        }
+
+        return $provinces;
     }
 
     public function getMunicipalities(string $provinceCode): array
@@ -54,64 +106,51 @@ class AddressService
             return [];
         }
 
-        return Cache::remember("psgc_municipalities_v3_{$cleanCode}", now()->addHours(self::CACHE_TTL_HOURS), function () use ($cleanCode) {
-            $normalizedInput = $this->normalizeName($cleanCode);
+        $normalizedInput = $this->normalizeName($cleanCode);
+        $isNcr = $cleanCode === self::NCR_PROVINCE_CODE
+            || in_array($normalizedInput, ['metro manila', 'ncr', 'national capital region', 'manila'], true);
 
-            if (
-                $cleanCode === self::NCR_PROVINCE_CODE
-                || in_array($normalizedInput, ['metro manila', 'ncr', 'national capital region', 'manila'], true)
-            ) {
-                return $this->getNcrCitiesAndMunicipalities();
+        if ($isNcr) {
+            $items = $this->rememberList('psgc_municipalities_v4_ncr', function () {
+                $items = $this->fetchJson('https://psgc.gitlab.io/api/regions/130000000/cities-municipalities');
+
+                return empty($items) ? [] : $this->sortByName($items);
+            });
+
+            return empty($items) ? $this->ncrFallbackCities() : $items;
+        }
+
+        return $this->rememberList("psgc_municipalities_v4_{$cleanCode}", function () use ($cleanCode) {
+            $municipalities = $this->fetchJson("https://psgc.gitlab.io/api/provinces/{$cleanCode}/cities-municipalities");
+            if (empty($municipalities)) {
+                return [];
             }
 
-            $municipalities = [];
+            $matchedProv = collect($this->getProvinces())->firstWhere('code', $cleanCode);
+            $regionCode = $matchedProv['regionCode'] ?? null;
 
-            try {
-                $provResponse = Http::withoutVerifying()->timeout(10)->get("https://psgc.gitlab.io/api/provinces/{$cleanCode}/cities-municipalities");
-                if ($provResponse->successful() && is_array($provResponse->json())) {
-                    $municipalities = $provResponse->json();
-                }
-
-                $matchedProv = collect($this->getProvinces())->firstWhere('code', $cleanCode);
-                $regionCode = $matchedProv['regionCode'] ?? null;
-
-                // Merge Independent Cities (HUCs / ICCs) in the same region that have provinceCode === false
-                if ($regionCode) {
-                    $regResponse = Http::withoutVerifying()->timeout(10)->get("https://psgc.gitlab.io/api/regions/{$regionCode}/cities-municipalities");
-                    if ($regResponse->successful() && is_array($regResponse->json())) {
-                        $existingCodes = collect($municipalities)->pluck('code')->all();
-                        foreach ($regResponse->json() as $cityItem) {
-                            $itemProvCode = $cityItem['provinceCode'] ?? null;
-                            if (
-                                ($itemProvCode === false || $itemProvCode === null || $itemProvCode === $cleanCode)
-                                && ! in_array($cityItem['code'] ?? '', $existingCodes, true)
-                            ) {
-                                $municipalities[] = $cityItem;
-                            }
+            if ($regionCode) {
+                $regionItems = $this->fetchJson("https://psgc.gitlab.io/api/regions/{$regionCode}/cities-municipalities");
+                if (is_array($regionItems)) {
+                    $existingCodes = collect($municipalities)->pluck('code')->all();
+                    foreach ($regionItems as $cityItem) {
+                        $itemProvCode = $cityItem['provinceCode'] ?? null;
+                        if (
+                            ($itemProvCode === false || $itemProvCode === null || $itemProvCode === $cleanCode)
+                            && ! in_array($cityItem['code'] ?? '', $existingCodes, true)
+                        ) {
+                            $municipalities[] = $cityItem;
                         }
                     }
                 }
-            } catch (\Throwable $e) {
             }
 
-            usort($municipalities, fn ($a, $b) => strcasecmp((string) ($a['name'] ?? ''), (string) ($b['name'] ?? '')));
-
-            return $municipalities;
+            return $this->sortByName($municipalities);
         });
     }
 
-    protected function getNcrCitiesAndMunicipalities(): array
+    protected function ncrFallbackCities(): array
     {
-        try {
-            $response = Http::withoutVerifying()->timeout(10)->get('https://psgc.gitlab.io/api/regions/130000000/cities-municipalities');
-            if ($response->successful() && is_array($response->json()) && ! empty($response->json())) {
-                $items = $response->json();
-                usort($items, fn ($a, $b) => strcasecmp((string) ($a['name'] ?? ''), (string) ($b['name'] ?? '')));
-                return $items;
-            }
-        } catch (\Throwable $e) {
-        }
-
         return [
             ['code' => '137501000', 'name' => 'City of Caloocan'],
             ['code' => '137601000', 'name' => 'City of Las Piñas'],
@@ -140,7 +179,7 @@ class AddressService
             return [];
         }
 
-        return Cache::remember("psgc_barangays_v3_{$cleanCode}", now()->addHours(self::CACHE_TTL_HOURS), function () use ($cleanCode) {
+        return $this->rememberList("psgc_barangays_v4_{$cleanCode}", function () use ($cleanCode) {
             $endpoints = [
                 "https://psgc.gitlab.io/api/cities-municipalities/{$cleanCode}/barangays",
                 "https://psgc.gitlab.io/api/cities/{$cleanCode}/barangays",
@@ -149,14 +188,9 @@ class AddressService
             ];
 
             foreach ($endpoints as $url) {
-                try {
-                    $response = Http::withoutVerifying()->timeout(10)->get($url);
-                    if ($response->successful() && is_array($response->json()) && ! empty($response->json())) {
-                        $barangays = $response->json();
-                        usort($barangays, fn ($a, $b) => strcasecmp((string) ($a['name'] ?? ''), (string) ($b['name'] ?? '')));
-                        return $barangays;
-                    }
-                } catch (\Throwable $e) {
+                $barangays = $this->fetchJson($url);
+                if (! empty($barangays)) {
+                    return $this->sortByName($barangays);
                 }
             }
 
