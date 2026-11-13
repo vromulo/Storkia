@@ -101,6 +101,8 @@
             'appliedShippingCode'     => $appliedShippingCodeStr,
         ],
         'liveVoucherNotices'    => array_values($voucherNotices ?? []),
+        'bestVouchers'          => $bestVouchers ?? ['store' => [], 'platform' => '', 'shipping' => ''],
+        'touchedSlots'          => array_values($touchedSlots ?? []),
         'livePriceSignature'    => (string) $priceSignature,
         'topupUrl'              => route('user.points.wallet-topup'),
         'checkoutIndexUrl'      => route('checkout.index'),
@@ -138,6 +140,24 @@
             summary: cfg.summary || {},
             liveVoucherNotices: Array.isArray(cfg.liveVoucherNotices) ? cfg.liveVoucherNotices : [],
             livePriceSignature: cfg.livePriceSignature || '',
+            bestVouchers: cfg.bestVouchers || { store: {}, platform: '', shipping: '' },
+            touchedSlots: Array.isArray(cfg.touchedSlots) ? cfg.touchedSlots : [],
+
+            touchSlot(slot) {
+                if (!this.touchedSlots.includes(slot)) {
+                    this.touchedSlots.push(slot);
+                }
+            },
+
+            isBestVoucher(type, code, spId = null) {
+                if (!code) return false;
+                const best = this.bestVouchers || {};
+                if (type === 'store') {
+                    const storeMap = best.store || {};
+                    return String(storeMap[spId] || '') === String(code);
+                }
+                return String(best[type] || '') === String(code);
+            },
 
             formatMoney(amount) {
                 return Number(amount || 0).toLocaleString('en-US', {
@@ -286,6 +306,9 @@
                 if (this.useStorkiaCoins) {
                     params.set('use_storkia_coins', '1');
                 }
+                this.touchedSlots.forEach((slot) => {
+                    params.append('touched_slots[]', slot);
+                });
                 return params;
             },
 
@@ -335,6 +358,9 @@
                     }
 
                     this.liveVoucherNotices = Array.isArray(data.voucher_notices) ? data.voucher_notices : [];
+                    if (data.best_vouchers) {
+                        this.bestVouchers = data.best_vouchers;
+                    }
                     if (data.price_signature) {
                         this.livePriceSignature = data.price_signature;
                     }
@@ -515,14 +541,14 @@
 
                                     @if($storeVouchersForSeller->isNotEmpty())
                                         <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                                            <label @click.prevent="if (storeVoucherInputs[{{ $spId }}] !== '') { storeVoucherInputs[{{ $spId }}] = ''; applyVouchersReload('Store voucher removed.'); }"
+                                            <label @click.prevent="touchSlot('store_{{ $spId }}'); if (storeVoucherInputs[{{ $spId }}] !== '') { storeVoucherInputs[{{ $spId }}] = ''; applyVouchersReload('Store voucher removed.'); }"
                                                    :class="!storeVoucherInputs[{{ $spId }}] ? 'border-primary bg-primary/5' : 'border-border-subtle bg-surface'"
                                                    class="p-3 rounded-2xl border flex items-center gap-2.5 cursor-pointer transition-all">
                                                 <input type="radio" name="radio_store_voucher_{{ $spId }}" value="" :checked="!storeVoucherInputs[{{ $spId }}]" class="text-primary pointer-events-none">
                                                 <span class="font-bold text-text-muted">No Store Voucher</span>
                                             </label>
                                             @foreach($storeVouchersForSeller as $sv)
-                                                <label @click.prevent="if (storeVoucherInputs[{{ $spId }}] !== '{{ $sv->code }}') { storeVoucherInputs[{{ $spId }}] = '{{ $sv->code }}'; applyVouchersReload('Store voucher {{ $sv->code }} applied!'); }"
+                                                <label @click.prevent="touchSlot('store_{{ $spId }}'); if (storeVoucherInputs[{{ $spId }}] !== '{{ $sv->code }}') { storeVoucherInputs[{{ $spId }}] = '{{ $sv->code }}'; applyVouchersReload('Store voucher {{ $sv->code }} applied!'); }"
                                                        :class="storeVoucherInputs[{{ $spId }}] === '{{ $sv->code }}' ? 'border-primary ring-2 ring-primary/20 bg-surface' : 'border-border-subtle bg-surface hover:border-primary/40'"
                                                        class="flex rounded-2xl border overflow-hidden cursor-pointer shadow-2xs transition-all">
                                                     <div class="w-24 bg-gradient-to-br from-primary to-primary-dark text-white p-2.5 flex flex-col items-center justify-center text-center shrink-0 border-r-2 border-dashed border-white/40">
@@ -535,6 +561,10 @@
                                                             <span class="font-mono font-extrabold text-primary-dark block">{{ $sv->code }}</span>
                                                             <span class="text-[11px] text-text-main font-semibold truncate block">{{ $sv->title }}</span>
                                                             <span class="text-[10px] text-text-muted block">Exp {{ $sv->ends_at?->format('M d, Y') }}</span>
+                                                            <span x-show="isBestVoucher('store', '{{ $sv->code }}', {{ $spId }})" x-cloak
+                                                                  class="inline-flex items-center gap-1 mt-1 px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-300 text-[9px] font-extrabold uppercase tracking-wide">
+                                                                &#9733; Most Preferred
+                                                            </span>
                                                         </div>
                                                         <input type="radio" name="radio_store_voucher_{{ $spId }}" value="{{ $sv->code }}" :checked="storeVoucherInputs[{{ $spId }}] === '{{ $sv->code }}'" class="text-primary shrink-0 pointer-events-none">
                                                     </div>
@@ -546,12 +576,12 @@
                                     <div class="flex items-center gap-2">
                                         <input type="text"
                                                x-model="storeVoucherInputs[{{ $spId }}]"
-                                               @keydown.enter.prevent="applyVouchersReload('Store voucher code applied.')"
+                                               @keydown.enter.prevent="touchSlot('store_{{ $spId }}'); applyVouchersReload('Store voucher code applied.')"
                                                placeholder="Or enter secret store voucher code..."
                                                class="flex-1 p-2.5 rounded-xl border border-border-subtle bg-surface font-mono uppercase text-xs outline-none focus:border-primary">
                                         <button type="button"
                                                 :disabled="isSyncingCheckout"
-                                                @click="applyVouchersReload('Store voucher code applied.')"
+                                                @click="touchSlot('store_{{ $spId }}'); applyVouchersReload('Store voucher code applied.')"
                                                 class="px-4 py-2.5 rounded-xl bg-primary-dark text-white font-bold cursor-pointer disabled:opacity-50">
                                             Apply Code
                                         </button>
@@ -615,7 +645,7 @@
                     <div class="bg-surface rounded-2xl border border-border-subtle p-5 sm:p-6 shadow-xs space-y-5 text-xs">
                         <div>
                             <h3 class="text-base font-bold text-primary-dark">Platform &amp; Free Shipping Vouchers</h3>
-                            <p class="text-xs text-text-muted">Select your claimed ticket voucher below or type a voucher code manually.</p>
+                            <p class="text-xs text-text-muted">Select your claimed ticket voucher below or type a voucher code manually. The voucher marked <strong class="text-amber-800">Most Preferred</strong> saves you the most and is applied automatically when your order qualifies.</p>
                         </div>
 
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
@@ -623,14 +653,14 @@
                                 <label class="block font-bold uppercase tracking-wider text-purple-900">Platform Voucher (Admin-Sponsored)</label>
                                 @if($platformVouchers->isNotEmpty())
                                     <div class="space-y-2">
-                                        <label @click.prevent="if (platformVoucherInput !== '') { platformVoucherInput = ''; applyVouchersReload('Platform voucher removed.'); }"
+                                        <label @click.prevent="touchSlot('platform'); if (platformVoucherInput !== '') { platformVoucherInput = ''; applyVouchersReload('Platform voucher removed.'); }"
                                                :class="!platformVoucherInput ? 'border-purple-700 bg-purple-50/50' : 'border-border-subtle bg-surface'"
                                                class="p-2.5 rounded-xl border flex items-center gap-2 cursor-pointer transition-all">
                                             <input type="radio" name="radio_platform_voucher" value="" :checked="!platformVoucherInput" class="pointer-events-none">
                                             <span class="font-bold text-text-muted">No Platform Voucher</span>
                                         </label>
                                         @foreach($platformVouchers as $pv)
-                                            <label @click.prevent="if (platformVoucherInput !== '{{ $pv->code }}') { platformVoucherInput = '{{ $pv->code }}'; applyVouchersReload('Platform voucher {{ $pv->code }} applied!'); }"
+                                            <label @click.prevent="touchSlot('platform'); if (platformVoucherInput !== '{{ $pv->code }}') { platformVoucherInput = '{{ $pv->code }}'; applyVouchersReload('Platform voucher {{ $pv->code }} applied!'); }"
                                                    :class="platformVoucherInput === '{{ $pv->code }}' ? 'border-purple-700 ring-2 ring-purple-200 bg-surface' : 'border-border-subtle bg-surface'"
                                                    class="flex rounded-2xl border overflow-hidden cursor-pointer transition-all">
                                                 <div class="w-24 bg-gradient-to-br from-purple-700 to-indigo-900 text-white p-2.5 flex flex-col items-center justify-center text-center shrink-0 border-r-2 border-dashed border-white/40">
@@ -643,6 +673,10 @@
                                                         <span class="font-mono font-extrabold text-purple-900 block">{{ $pv->code }}</span>
                                                         <span class="text-[11px] font-semibold text-text-main truncate block">{{ $pv->title }}</span>
                                                         <span class="text-[10px] text-text-muted block">Exp {{ $pv->ends_at?->format('M d, Y') }}</span>
+                                                        <span x-show="isBestVoucher('platform', '{{ $pv->code }}')" x-cloak
+                                                              class="inline-flex items-center gap-1 mt-1 px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-300 text-[9px] font-extrabold uppercase tracking-wide">
+                                                            &#9733; Most Preferred
+                                                        </span>
                                                     </div>
                                                     <input type="radio" name="radio_platform_voucher" value="{{ $pv->code }}" :checked="platformVoucherInput === '{{ $pv->code }}'" class="pointer-events-none">
                                                 </div>
@@ -653,12 +687,12 @@
                                 <div class="flex items-center gap-2">
                                     <input type="text"
                                            x-model="platformVoucherInput"
-                                           @keydown.enter.prevent="applyVouchersReload('Platform voucher code applied.')"
+                                           @keydown.enter.prevent="touchSlot('platform'); applyVouchersReload('Platform voucher code applied.')"
                                            placeholder="Enter Platform Code..."
                                            class="flex-1 p-2.5 rounded-xl border border-border-subtle font-mono uppercase">
                                     <button type="button"
                                             :disabled="isSyncingCheckout"
-                                            @click="applyVouchersReload('Platform voucher code applied.')"
+                                            @click="touchSlot('platform'); applyVouchersReload('Platform voucher code applied.')"
                                             class="px-3.5 py-2.5 rounded-xl bg-purple-800 text-white font-bold cursor-pointer disabled:opacity-50">
                                         Apply
                                     </button>
@@ -669,14 +703,14 @@
                                 <label class="block font-bold uppercase tracking-wider text-emerald-900">Free Shipping Voucher</label>
                                 @if($shippingVouchers->isNotEmpty())
                                     <div class="space-y-2">
-                                        <label @click.prevent="if (shippingVoucherInput !== '') { shippingVoucherInput = ''; applyVouchersReload('Free shipping voucher removed.'); }"
+                                        <label @click.prevent="touchSlot('shipping'); if (shippingVoucherInput !== '') { shippingVoucherInput = ''; applyVouchersReload('Free shipping voucher removed.'); }"
                                                :class="!shippingVoucherInput ? 'border-emerald-700 bg-emerald-50/50' : 'border-border-subtle bg-surface'"
                                                class="p-2.5 rounded-xl border flex items-center gap-2 cursor-pointer transition-all">
                                             <input type="radio" name="radio_shipping_voucher" value="" :checked="!shippingVoucherInput" class="pointer-events-none">
                                             <span class="font-bold text-text-muted">No Free Shipping Voucher</span>
                                         </label>
                                         @foreach($shippingVouchers as $shv)
-                                            <label @click.prevent="if (shippingVoucherInput !== '{{ $shv->code }}') { shippingVoucherInput = '{{ $shv->code }}'; applyVouchersReload('Free shipping voucher {{ $shv->code }} applied!'); }"
+                                            <label @click.prevent="touchSlot('shipping'); if (shippingVoucherInput !== '{{ $shv->code }}') { shippingVoucherInput = '{{ $shv->code }}'; applyVouchersReload('Free shipping voucher {{ $shv->code }} applied!'); }"
                                                    :class="shippingVoucherInput === '{{ $shv->code }}' ? 'border-emerald-700 ring-2 ring-emerald-200 bg-surface' : 'border-border-subtle bg-surface'"
                                                    class="flex rounded-2xl border overflow-hidden cursor-pointer transition-all">
                                                 <div class="w-24 bg-gradient-to-br from-emerald-600 to-teal-700 text-white p-2.5 flex flex-col items-center justify-center text-center shrink-0 border-r-2 border-dashed border-white/40">
@@ -689,6 +723,10 @@
                                                         <span class="font-mono font-extrabold text-emerald-900 block">{{ $shv->code }}</span>
                                                         <span class="text-[11px] font-semibold text-text-main truncate block">{{ $shv->title }}</span>
                                                         <span class="text-[10px] text-text-muted block">Exp {{ $shv->ends_at?->format('M d, Y') }}</span>
+                                                        <span x-show="isBestVoucher('shipping', '{{ $shv->code }}')" x-cloak
+                                                              class="inline-flex items-center gap-1 mt-1 px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-300 text-[9px] font-extrabold uppercase tracking-wide">
+                                                            &#9733; Most Preferred
+                                                        </span>
                                                     </div>
                                                     <input type="radio" name="radio_shipping_voucher" value="{{ $shv->code }}" :checked="shippingVoucherInput === '{{ $shv->code }}'" class="pointer-events-none">
                                                 </div>
@@ -699,12 +737,12 @@
                                 <div class="flex items-center gap-2">
                                     <input type="text"
                                            x-model="shippingVoucherInput"
-                                           @keydown.enter.prevent="applyVouchersReload('Shipping voucher code applied.')"
+                                           @keydown.enter.prevent="touchSlot('shipping'); applyVouchersReload('Shipping voucher code applied.')"
                                            placeholder="Enter Shipping Code..."
                                            class="flex-1 p-2.5 rounded-xl border border-border-subtle font-mono uppercase">
                                     <button type="button"
                                             :disabled="isSyncingCheckout"
-                                            @click="applyVouchersReload('Shipping voucher code applied.')"
+                                            @click="touchSlot('shipping'); applyVouchersReload('Shipping voucher code applied.')"
                                             class="px-3.5 py-2.5 rounded-xl bg-emerald-700 text-white font-bold cursor-pointer disabled:opacity-50">
                                         Apply
                                     </button>

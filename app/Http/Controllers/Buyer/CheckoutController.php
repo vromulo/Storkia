@@ -17,6 +17,7 @@ use App\Models\StorkVoucher;
 use App\Notifications\OrderLifecycleNotification;
 use App\Services\BuyerCancellationGuardService;
 use App\Services\BuyerRewardService;
+use App\Services\CheckoutVoucherRecommender;
 use App\Services\InventoryStockService;
 use App\Services\RoleWalletService;
 use App\Services\ShippingCalculatorService;
@@ -24,6 +25,7 @@ use App\Services\StorkSchemaBootstrapService;
 use App\Services\SuperDealPricingService;
 use App\Services\VoucherService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
@@ -38,7 +40,8 @@ class CheckoutController extends Controller
         protected BuyerCancellationGuardService $cancellationGuardService,
         protected SuperDealPricingService $superDealPricingService,
         protected RoleWalletService $roleWalletService,
-        protected BuyerRewardService $buyerRewardService
+        protected BuyerRewardService $buyerRewardService,
+        protected CheckoutVoucherRecommender $voucherRecommender
     ) {}
 
     protected function resolvePlatformGcashSettings(): ?object
@@ -191,15 +194,25 @@ class CheckoutController extends Controller
         $useStorkiaCoins = $request->boolean('use_storkia_coins');
         $requestedCoinsToUse = $request->filled('coins_to_use') ? (int) $request->query('coins_to_use') : null;
 
-        $checkoutSummary = $this->buildGroupedSellerPreview(
+        // Slots the buyer already decided on by hand (store_{sellerProfileId}, platform, shipping).
+        // Those are never overridden by the automatic "Most Preferred" voucher.
+        $touchedSlots = collect((array) $request->query('touched_slots', []))
+            ->filter(fn ($slot) => is_string($slot) && $slot !== '')
+            ->values()
+            ->all();
+
+        $availableVouchers = $this->voucherService->getBuyerAvailableVouchers((int) $user->id);
+
+        ['summary' => $checkoutSummary, 'best' => $bestVouchers] = $this->buildSummaryWithBestVouchers(
             rawLineItems: $rawLineItems,
             selectedAddress: $selectedAddress,
             buyerId: (int) $user->id,
+            availableVouchers: $availableVouchers,
             storeVoucherCodes: $requestedStoreVouchers,
             platformVoucherCode: $requestedPlatformVoucher,
             shippingVoucherCode: $requestedShippingVoucher,
+            touchedSlots: $touchedSlots,
             useStorkiaCoins: $useStorkiaCoins,
-            strictVoucherErrors: false,
             requestedCoinsToUse: $requestedCoinsToUse
         );
 
@@ -263,11 +276,11 @@ class CheckoutController extends Controller
                     'appliedShippingCode'     => $checkoutSummary['applied_shipping_voucher']?->code ?? '',
                 ],
                 'voucher_notices'        => array_values($checkoutSummary['voucher_notices']),
+                'best_vouchers'          => $bestVouchers,
                 'price_signature'        => $checkoutSummary['price_signature'],
             ]);
         }
 
-        $availableVouchers = $this->voucherService->getBuyerAvailableVouchers((int) $user->id);
         $platformGcash = $this->resolvePlatformGcashSettings();
         $recentWalletTopups = Schema::hasTable('buyer_wallet_topups')
             ? BuyerWalletTopup::where('buyer_id', $user->id)->orderByDesc('created_at')->limit(5)->get()
@@ -300,6 +313,8 @@ class CheckoutController extends Controller
             'voucherNotices'          => $checkoutSummary['voucher_notices'],
             'priceSignature'          => $checkoutSummary['price_signature'],
             'availableVouchers'       => $availableVouchers,
+            'bestVouchers'            => $bestVouchers,
+            'touchedSlots'            => $touchedSlots,
             'totalItemsCount'         => $checkoutSummary['total_items_count'],
             'selectedCartIds'         => $checkoutSummary['cart_ids'],
             'idempotencyKey'          => $idempotencyKey,
@@ -881,6 +896,89 @@ class CheckoutController extends Controller
         }
 
         return $lineItems;
+    }
+
+    /**
+     * Builds the checkout preview and automatically equips the "Most Preferred" voucher in every
+     * slot the buyer has not decided on yet. A slot is only filled when a voucher really applies to
+     * the order right now (e.g. minimum spend met); otherwise it stays empty.
+     *
+     * @return array{summary: array, best: array{store: array<int, string>, platform: string, shipping: string}}
+     */
+    protected function buildSummaryWithBestVouchers(
+        array $rawLineItems,
+        $selectedAddress,
+        int $buyerId,
+        Collection $availableVouchers,
+        array $storeVoucherCodes,
+        string $platformVoucherCode,
+        string $shippingVoucherCode,
+        array $touchedSlots,
+        bool $useStorkiaCoins,
+        ?int $requestedCoinsToUse
+    ): array {
+        $isTouched = fn (string $slot): bool => in_array($slot, $touchedSlots, true);
+
+        // First pass: only the vouchers the buyer picked (or typed) themselves.
+        $baseStoreCodes = [];
+        foreach ($storeVoucherCodes as $sellerProfileId => $code) {
+            if ($isTouched('store_' . $sellerProfileId)) {
+                $baseStoreCodes[$sellerProfileId] = $code;
+            }
+        }
+        $basePlatformCode = $isTouched('platform') ? $platformVoucherCode : '';
+        $baseShippingCode = $isTouched('shipping') ? $shippingVoucherCode : '';
+
+        $summary = $this->buildGroupedSellerPreview(
+            rawLineItems: $rawLineItems,
+            selectedAddress: $selectedAddress,
+            buyerId: $buyerId,
+            storeVoucherCodes: $baseStoreCodes,
+            platformVoucherCode: $basePlatformCode,
+            shippingVoucherCode: $baseShippingCode,
+            useStorkiaCoins: $useStorkiaCoins,
+            strictVoucherErrors: false,
+            requestedCoinsToUse: $requestedCoinsToUse
+        );
+
+        $best = $this->voucherRecommender->recommend($availableVouchers, $summary, $buyerId, $touchedSlots);
+
+        // Fill every untouched slot that has an eligible voucher.
+        $finalStoreCodes = $baseStoreCodes;
+        $finalPlatformCode = $basePlatformCode;
+        $finalShippingCode = $baseShippingCode;
+        $filledAnySlot = false;
+
+        foreach ($best['store'] as $sellerProfileId => $code) {
+            if (! $isTouched('store_' . $sellerProfileId)) {
+                $finalStoreCodes[$sellerProfileId] = $code;
+                $filledAnySlot = true;
+            }
+        }
+        if (! $isTouched('platform') && $best['platform'] !== '') {
+            $finalPlatformCode = $best['platform'];
+            $filledAnySlot = true;
+        }
+        if (! $isTouched('shipping') && $best['shipping'] !== '') {
+            $finalShippingCode = $best['shipping'];
+            $filledAnySlot = true;
+        }
+
+        if ($filledAnySlot) {
+            $summary = $this->buildGroupedSellerPreview(
+                rawLineItems: $rawLineItems,
+                selectedAddress: $selectedAddress,
+                buyerId: $buyerId,
+                storeVoucherCodes: $finalStoreCodes,
+                platformVoucherCode: $finalPlatformCode,
+                shippingVoucherCode: $finalShippingCode,
+                useStorkiaCoins: $useStorkiaCoins,
+                strictVoucherErrors: false,
+                requestedCoinsToUse: $requestedCoinsToUse
+            );
+        }
+
+        return ['summary' => $summary, 'best' => $best];
     }
 
     protected function buildGroupedSellerPreview(
