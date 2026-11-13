@@ -26,12 +26,12 @@ class EmailChangeRequest extends Model
 
     public static function generateCode(): string
     {
-        return (string) random_int(100000, 999999);
+        return str_pad((string) random_int(0, 999999), 6, '0', STR_PAD_LEFT);
     }
 
     public function isExpired(): bool
     {
-        return $this->code_expires_at->isPast();
+        return ! $this->code_expires_at || $this->code_expires_at->isPast();
     }
 
     public function secondsUntilResend(): int
@@ -39,7 +39,13 @@ class EmailChangeRequest extends Model
         if (! $this->last_sent_at) {
             return 0;
         }
+
         $unlock = $this->last_sent_at->copy()->addSeconds(self::RESEND_COOLDOWN_SECONDS);
-        return $unlock->isFuture() ? (int) now()->diffInSeconds($unlock) : 0;
+
+        if (! $unlock->isFuture()) {
+            return 0;
+        }
+
+        return max(1, (int) ceil(now()->diffInSeconds($unlock)));
     }
 }

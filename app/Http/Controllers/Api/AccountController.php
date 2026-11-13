@@ -6,14 +6,19 @@ use App\Http\Controllers\Controller;
 use App\Mail\RegistrationOtpMail;
 use App\Models\EmailChangeRequest;
 use App\Models\User;
+use App\Services\OtpService;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Hash;
-use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
 class AccountController extends Controller
 {
+    public function __construct(
+        protected OtpService $otpService
+    ) {}
+
     public function updateName(Request $request)
     {
         $validated = $request->validate([
@@ -30,16 +35,18 @@ class AccountController extends Controller
         return response()->json([
             'success' => true,
             'message' => 'Name updated successfully.',
-            'data'    => $user->fresh()
+            'data'    => $user->fresh(),
         ]);
     }
 
     public function updatePhone(Request $request)
     {
         $cleanContact = preg_replace('/\D/', '', (string) $request->input('contact_no'));
-        if (str_starts_with($cleanContact, '63')) $cleanContact = substr($cleanContact, 2);
+        if (str_starts_with($cleanContact, '63')) {
+            $cleanContact = substr($cleanContact, 2);
+        }
         $cleanContact = ltrim($cleanContact, '0');
-        
+
         $request->merge(['clean_contact' => $cleanContact]);
         $request->validate(['clean_contact' => ['required', 'regex:/^9\d{9}$/']]);
 
@@ -55,7 +62,7 @@ class AccountController extends Controller
         return response()->json([
             'success' => true,
             'message' => 'Phone number updated successfully.',
-            'data'    => $user->fresh()
+            'data'    => $user->fresh(),
         ]);
     }
 
@@ -63,8 +70,12 @@ class AccountController extends Controller
     {
         $user = $request->user();
         $newEmail = strtolower(trim((string) $request->input('email')));
-        
-        if ($newEmail === strtolower(trim($user->email))) {
+
+        if ($newEmail === '' || ! filter_var($newEmail, FILTER_VALIDATE_EMAIL)) {
+            return response()->json(['success' => false, 'message' => 'Please enter a valid email address.'], 422);
+        }
+
+        if ($newEmail === strtolower(trim((string) $user->email))) {
             return response()->json(['success' => false, 'message' => 'This is already your current email.'], 422);
         }
 
@@ -78,43 +89,61 @@ class AccountController extends Controller
         }
 
         $code = EmailChangeRequest::generateCode();
+
         try {
-            Mail::to($newEmail)->send(new RegistrationOtpMail($code, EmailChangeRequest::CODE_TTL_MINUTES));
+            $this->otpService->deliverMailable($newEmail, new RegistrationOtpMail($code, EmailChangeRequest::CODE_TTL_MINUTES));
         } catch (\Throwable $e) {
-            return response()->json(['success' => false, 'message' => 'Failed to send email.'], 500);
+            Log::error('API Email Change OTP Mail Error: ' . $e->getMessage());
+            return response()->json(['success' => false, 'message' => 'Failed to send verification email.'], 500);
         }
 
         EmailChangeRequest::updateOrCreate(
             ['user_id' => $user->id],
             [
-                'new_email' => $newEmail, 'code_hash' => Hash::make($code),
-                'attempts' => 0, 'last_sent_at' => now(),
+                'new_email'       => $newEmail,
+                'code_hash'       => Hash::make($code),
+                'attempts'        => 0,
+                'last_sent_at'    => now(),
                 'code_expires_at' => now()->addMinutes(EmailChangeRequest::CODE_TTL_MINUTES),
             ]
         );
 
-        return response()->json(['success' => true, 'message' => 'Verification code sent.']);
+        return response()->json([
+            'success'  => true,
+            'message'  => 'Verification code sent.',
+            'cooldown' => EmailChangeRequest::RESEND_COOLDOWN_SECONDS,
+        ]);
     }
 
     public function verifyEmailOtp(Request $request)
     {
+        $cleanCode = preg_replace('/\D/', '', (string) $request->input('code'));
+        $request->merge(['code' => $cleanCode]);
         $request->validate(['code' => ['required', 'digits:6']]);
+
         $user = $request->user();
         $changeRequest = EmailChangeRequest::where('user_id', $user->id)->first();
 
-        if (!$changeRequest || $changeRequest->isExpired()) {
+        if (! $changeRequest || $changeRequest->isExpired()) {
             return response()->json(['success' => false, 'message' => 'Code expired or invalid.'], 422);
         }
 
-        if (!Hash::check($request->code, $changeRequest->code_hash)) {
+        if (! Hash::check($cleanCode, $changeRequest->code_hash)) {
             $changeRequest->increment('attempts');
             return response()->json(['success' => false, 'message' => 'Invalid code.'], 422);
         }
 
-        $user->update(['email' => strtolower(trim($changeRequest->new_email))]);
+        $user->update([
+            'email'             => strtolower(trim($changeRequest->new_email)),
+            'email_verified_at' => now(),
+        ]);
         $changeRequest->delete();
 
-        return response()->json(['success' => true, 'message' => 'Email updated successfully.', 'data' => $user->fresh()]);
+        return response()->json([
+            'success' => true,
+            'message' => 'Email updated successfully.',
+            'data'    => $user->fresh(),
+        ]);
     }
 
     public function requestPasswordOtp(Request $request)
@@ -122,32 +151,39 @@ class AccountController extends Controller
         $user = $request->user();
         $cacheKey = "api_pwd_otp_{$user->id}";
 
-        if (Cache::has($cacheKey)) {
-            return response()->json(['success' => false, 'message' => 'Please wait before requesting a new code.'], 429);
-        }
+        $code = EmailChangeRequest::generateCode();
 
-        $code = (string) random_int(100000, 999999);
         try {
-            Mail::to($user->email)->send(new RegistrationOtpMail($code, 10));
+            $this->otpService->deliverMailable((string) $user->email, new RegistrationOtpMail($code, 10));
         } catch (\Throwable $e) {
-            return response()->json(['success' => false, 'message' => 'Failed to send email.'], 500);
+            Log::error('API Password OTP Mail Error: ' . $e->getMessage());
+            return response()->json(['success' => false, 'message' => 'Failed to send verification email.'], 500);
         }
 
         Cache::put($cacheKey, ['code_hash' => Hash::make($code), 'attempts' => 0], now()->addMinutes(10));
 
-        return response()->json(['success' => true, 'message' => 'Verification code sent.']);
+        return response()->json([
+            'success'  => true,
+            'message'  => 'Verification code sent.',
+            'cooldown' => EmailChangeRequest::RESEND_COOLDOWN_SECONDS,
+        ]);
     }
 
     public function verifyPasswordOtp(Request $request)
     {
+        $cleanCode = preg_replace('/\D/', '', (string) $request->input('code'));
+        $request->merge(['code' => $cleanCode]);
         $request->validate(['code' => ['required', 'digits:6']]);
+
         $user = $request->user();
         $cacheKey = "api_pwd_otp_{$user->id}";
         $data = Cache::get($cacheKey);
 
-        if (!$data) return response()->json(['success' => false, 'message' => 'Code expired or missing.'], 422);
+        if (! $data) {
+            return response()->json(['success' => false, 'message' => 'Code expired or missing.'], 422);
+        }
 
-        if (!Hash::check($request->code, $data['code_hash'])) {
+        if (! Hash::check($cleanCode, $data['code_hash'])) {
             $data['attempts']++;
             Cache::put($cacheKey, $data, now()->addMinutes(10));
             return response()->json(['success' => false, 'message' => 'Invalid code.'], 422);
@@ -157,7 +193,10 @@ class AccountController extends Controller
         $unlockToken = Str::random(40);
         Cache::put("api_pwd_unlock_{$user->id}", $unlockToken, now()->addMinutes(15));
 
-        return response()->json(['success' => true, 'unlock_token' => $unlockToken]);
+        return response()->json([
+            'success'      => true,
+            'unlock_token' => $unlockToken,
+        ]);
     }
 
     public function updatePassword(Request $request)
@@ -165,18 +204,25 @@ class AccountController extends Controller
         $user = $request->user();
         $validToken = Cache::get("api_pwd_unlock_{$user->id}");
 
-        if (!$validToken || $validToken !== $request->input('unlock_token')) {
+        if (! $validToken || $validToken !== $request->input('unlock_token')) {
             return response()->json(['success' => false, 'message' => 'Verification expired.'], 403);
         }
 
         $validated = $request->validate([
-            'password' => ['required', 'string', 'min:8', 'regex:/[A-Z]/', 'regex:/[0-9]/', 'regex:/[\W_]/'],
+            'password'              => ['required', 'string', 'min:8', 'regex:/[A-Z]/', 'regex:/[0-9]/', 'regex:/[\W_]/'],
             'password_confirmation' => ['required', 'same:password'],
         ]);
 
-        $user->update(['password' => Hash::make($validated['password']), 'password_changed_at' => now()]);
+        $user->update([
+            'password'            => Hash::make($validated['password']),
+            'password_changed_at' => now(),
+        ]);
+
         Cache::forget("api_pwd_unlock_{$user->id}");
 
-        return response()->json(['success' => true, 'message' => 'Password updated successfully.']);
+        return response()->json([
+            'success' => true,
+            'message' => 'Password updated successfully.',
+        ]);
     }
 }

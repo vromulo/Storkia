@@ -20,21 +20,19 @@ class SellerRegisterWizard extends Component
     public bool $codeSent = false;
     public bool $registrationSuccessful = false;
 
-    // Step 1: Email
     public string $email = '';
     public string $code = '';
     public ?string $verificationToken = null;
+    public ?string $otpNotice = null;
     public int $resendCooldown = 0;
     public int $attemptsRemaining = RegistrationOtp::MAX_ATTEMPTS;
 
-    // Step 2: Personal Info
     public string $first_name = '';
     public string $last_name = '';
     public string $middle_initial = '';
     public string $sex = '';
     public string $birthday = '';
 
-    // Step 3: Contact & Address
     public string $contact_no = '';
     public string $province_code = '';
     public string $municipality_code = '';
@@ -49,19 +47,15 @@ class SellerRegisterWizard extends Component
     public array $municipalities = [];
     public array $barangays = [];
 
-    // Step 4: Business Info
     public string $business_name = '';
     public string $line_of_business = '';
 
-    // Step 5: Documents
     public $valid_id;
     public $business_permit;
 
-    // Step 6: Password
     public string $password = '';
     public string $password_confirmation = '';
 
-    // Step 7: Terms & Privacy Policy Acceptance
     public bool $accept_terms = false;
 
     public function mount(AddressService $addressService)
@@ -77,7 +71,10 @@ class SellerRegisterWizard extends Component
     public function updated($propertyName)
     {
         if ($this->currentStep === 1 && $propertyName === 'email') {
-            $this->validateOnly('email', ['email' => ['required', 'email:rfc,dns']]);
+            $this->email = strtolower(trim($this->email));
+            $this->validateOnly('email', ['email' => ['required', 'email:rfc']]);
+        } elseif ($this->currentStep === 1 && $propertyName === 'code') {
+            $this->code = substr(preg_replace('/\D/', '', $this->code), 0, 6);
         } elseif ($this->currentStep === 2) {
             $this->validateOnly($propertyName, $this->getStep2Rules(), $this->getStep2Messages());
         } elseif ($this->currentStep === 3) {
@@ -93,7 +90,7 @@ class SellerRegisterWizard extends Component
         } elseif ($this->currentStep === 6) {
             if ($propertyName === 'password') {
                 $this->validateOnly('password', $this->getStep6Rules(), $this->getStep6Messages());
-                if (!empty($this->password_confirmation)) {
+                if (! empty($this->password_confirmation)) {
                     $this->validateOnly('password_confirmation', ['password_confirmation' => ['same:password']]);
                 }
             } elseif ($propertyName === 'password_confirmation') {
@@ -143,24 +140,25 @@ class SellerRegisterWizard extends Component
         $this->barangay = $brgy ? $brgy['name'] : '';
     }
 
-    public function sendCode(OtpService $otpService): void
+    public function sendCode(OtpService $otpService, bool $isResend = false): void
     {
+        $this->otpNotice = null;
         $this->email = strtolower(trim($this->email));
-
-        $this->validateOnly('email', ['email' => ['required', 'email:rfc,dns']]);
+        $this->validateOnly('email', ['email' => ['required', 'email:rfc']]);
 
         if (User::whereRaw('LOWER(TRIM(email)) = ?', [$this->email])->exists()) {
             $this->addError('email', 'This email address is already in use.');
             return;
         }
 
-        [$success, $error, $cooldown] = $otpService->sendOtp($this->email);
+        [$success, $error, $cooldown] = $otpService->sendOtp($this->email, $isResend);
 
         if (! $success) {
-            $this->addError($cooldown > 0 ? 'code' : 'email', $error);
+            $this->addError($cooldown > 0 || $this->codeSent ? 'code' : 'email', $error);
             if ($cooldown > 0) {
                 $this->resendCooldown = $cooldown;
                 $this->codeSent = true;
+                $this->dispatch('otp-cooldown-started', seconds: $cooldown);
             }
             return;
         }
@@ -170,16 +168,37 @@ class SellerRegisterWizard extends Component
         $this->attemptsRemaining = RegistrationOtp::MAX_ATTEMPTS;
         $this->resendCooldown = $cooldown;
         $this->resetErrorBag();
+        $this->otpNotice = $isResend
+            ? "A new 6-digit verification code has been sent to {$this->email}."
+            : "Verification code sent to {$this->email}. Please check your Inbox or Spam folder.";
+        $this->dispatch('otp-cooldown-started', seconds: $cooldown);
     }
 
     public function resendCode(OtpService $otpService): void
     {
-        $this->sendCode($otpService);
+        $this->sendCode($otpService, true);
+    }
+
+    public function changeEmail(OtpService $otpService): void
+    {
+        if ($this->email !== '') {
+            $otpService->releaseEmail($this->email);
+        }
+
+        $this->codeSent = false;
+        $this->code = '';
+        $this->verificationToken = null;
+        $this->otpNotice = null;
+        $this->resendCooldown = 0;
+        $this->attemptsRemaining = RegistrationOtp::MAX_ATTEMPTS;
+        $this->resetErrorBag();
     }
 
     public function verifyCode(OtpService $otpService): void
     {
+        $this->otpNotice = null;
         $this->email = strtolower(trim($this->email));
+        $this->code = preg_replace('/\D/', '', $this->code);
         $this->validateOnly('code', ['code' => ['required', 'digits:6']]);
 
         [$valid, $error, $token, $remaining] = $otpService->verifyOtp($this->email, $this->code);
@@ -202,7 +221,12 @@ class SellerRegisterWizard extends Component
             'last_name' => ['required', 'string', 'regex:/^[A-Za-z\s]+$/'],
             'middle_initial' => ['nullable', 'string', 'regex:/^[A-Za-z]$/'],
             'sex' => ['required', 'in:male,female'],
-            'birthday' => ['required', 'date', 'before_or_equal:' . now()->subYears(18)->format('Y-m-d'), 'after_or_equal:' . now()->subYears(100)->format('Y-m-d')],
+            'birthday' => [
+                'required',
+                'date',
+                'before_or_equal:' . now()->subYears(18)->format('Y-m-d'),
+                'after_or_equal:' . now()->subYears(100)->format('Y-m-d'),
+            ],
         ];
     }
 
@@ -223,7 +247,10 @@ class SellerRegisterWizard extends Component
 
     protected function getStep4Rules(): array
     {
-        return ['business_name' => ['required', 'string'], 'line_of_business' => ['required', 'string']];
+        return [
+            'business_name' => ['required', 'string'],
+            'line_of_business' => ['required', 'string'],
+        ];
     }
 
     protected function getStep5Rules(): array
@@ -238,11 +265,19 @@ class SellerRegisterWizard extends Component
     {
         return [
             'password' => [
-                'required', 'string', 'min:8',
+                'required',
+                'string',
+                'min:8',
                 function ($attr, $value, $fail) {
-                    if (!preg_match('/[A-Z]/', $value)) $fail('Password must contain at least 1 uppercase letter.');
-                    if (!preg_match('/[0-9]/', $value)) $fail('Password must contain at least 1 number.');
-                    if (!preg_match('/[\W_]/', $value)) $fail('Password must contain at least 1 special character.');
+                    if (! preg_match('/[A-Z]/', $value)) {
+                        $fail('Password must contain at least 1 uppercase letter.');
+                    }
+                    if (! preg_match('/[0-9]/', $value)) {
+                        $fail('Password must contain at least 1 number.');
+                    }
+                    if (! preg_match('/[\W_]/', $value)) {
+                        $fail('Password must contain at least 1 special character.');
+                    }
                 },
             ],
             'password_confirmation' => ['required', 'same:password'],
@@ -260,17 +295,30 @@ class SellerRegisterWizard extends Component
 
     public function nextStep(int $step)
     {
-        if ($step === 2) $this->validate($this->getStep2Rules(), $this->getStep2Messages());
-        if ($step === 3) $this->validate($this->getStep3Rules());
-        if ($step === 4) $this->validate($this->getStep4Rules());
-        if ($step === 5) $this->validate($this->getStep5Rules());
-        if ($step === 6) $this->validate($this->getStep6Rules(), $this->getStep6Messages());
+        if ($step === 2) {
+            $this->validate($this->getStep2Rules(), $this->getStep2Messages());
+        }
+        if ($step === 3) {
+            $this->validate($this->getStep3Rules());
+        }
+        if ($step === 4) {
+            $this->validate($this->getStep4Rules());
+        }
+        if ($step === 5) {
+            $this->validate($this->getStep5Rules());
+        }
+        if ($step === 6) {
+            $this->validate($this->getStep6Rules(), $this->getStep6Messages());
+        }
+
         $this->currentStep = $step + 1;
     }
 
     public function backToStep(int $step)
     {
-        if ($step < $this->currentStep) $this->currentStep = $step;
+        if ($step < $this->currentStep) {
+            $this->currentStep = $step;
+        }
     }
 
     public function register()
@@ -289,7 +337,7 @@ class SellerRegisterWizard extends Component
             ->first();
 
         if (! $record || ! $record->isVerified() || ! $record->isReservationActive()) {
-            $this->addError('password', 'Your email verification has expired. Please verify your email again.');
+            $this->addError('email', 'Your email verification has expired. Please verify your email again.');
             $this->currentStep = 1;
             $this->codeSent = false;
             $this->verificationToken = null;
@@ -313,6 +361,7 @@ class SellerRegisterWizard extends Component
                 'middle_initial' => $this->middle_initial ? strtoupper(trim($this->middle_initial)) : null,
                 'sex' => $this->sex,
                 'email' => $this->email,
+                'email_verified_at' => now(),
                 'contact_no' => $formattedContactNo,
                 'birthday' => $this->birthday,
                 'password' => Hash::make($this->password),

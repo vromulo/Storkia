@@ -12,6 +12,7 @@ use App\Services\ReturnShipmentService;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Validation\ValidationException;
 use Illuminate\View\View;
 
 class ReturnShipmentController extends Controller
@@ -100,6 +101,7 @@ class ReturnShipmentController extends Controller
 
         $returnShipment->load([
             'returnRequest',
+            'shipment.packages',
             'sellerOrder.order',
             'sellerOrder.items',
             'sellerOrder.buyer',
@@ -127,6 +129,7 @@ class ReturnShipmentController extends Controller
 
         if (in_array($returnShipment->status, [
             ReturnShipment::STATUS_RECEIVED_AT_HUB,
+            ReturnShipment::STATUS_DELIVERY_FAILED,
             ReturnShipment::STATUS_COURIER_ASSIGNED,
         ], true)) {
             $couriers = Courier::with('currentHubAssignment.hub')
@@ -180,22 +183,76 @@ class ReturnShipmentController extends Controller
         $this->authorizeShipment($user, $profile, $returnShipment);
 
         $validated = $request->validate([
-            'parcel_checked' => ['accepted'],
-            'notes'          => ['nullable', 'string', 'max:500'],
-        ], [
-            'parcel_checked.accepted' => 'Please confirm that you physically checked the returned parcel.',
+            'lookup_input'        => ['nullable', 'string', 'max:150'],
+            'verification_method' => ['nullable', 'in:qr,manual'],
+            'parcel_checked'      => ['nullable', 'boolean'],
+            'notes'               => ['nullable', 'string', 'max:500'],
         ]);
+
+        $lookupInput = strtoupper(trim((string) ($validated['lookup_input'] ?? '')));
+        $verificationMethod = strtolower((string) ($validated['verification_method'] ?? ($lookupInput !== '' ? 'manual' : 'manual')));
+        $parcelChecked = $request->boolean('parcel_checked');
+
+        if ($lookupInput === '' && ! $parcelChecked) {
+            throw ValidationException::withMessages([
+                'lookup_input' => 'Please scan the parcel QR Code, enter the Return / Package Reference code, or confirm physical inspection.',
+            ]);
+        }
+
+        if ($lookupInput !== '') {
+            $returnShipment->loadMissing(['returnRequest', 'sellerOrder.order', 'shipment.packages']);
+
+            $validTokens = array_filter([
+                strtoupper((string) $returnShipment->tracking_number),
+                strtoupper((string) ($returnShipment->returnRequest?->request_number ?? '')),
+                strtoupper((string) ($returnShipment->sellerOrder?->seller_order_number ?? '')),
+                strtoupper((string) ($returnShipment->sellerOrder?->order?->order_number ?? '')),
+                strtoupper((string) ($returnShipment->shipment?->tracking_number ?? '')),
+            ]);
+
+            foreach ($returnShipment->shipment?->packages ?? [] as $pkg) {
+                if (! empty($pkg->package_reference)) {
+                    $validTokens[] = strtoupper((string) $pkg->package_reference);
+                }
+                if (! empty($pkg->qr_token)) {
+                    $validTokens[] = strtoupper((string) $pkg->qr_token);
+                }
+            }
+
+            $isMatch = in_array($lookupInput, $validTokens, true);
+
+            if (! $isMatch) {
+                foreach ($validTokens as $token) {
+                    if ($token !== '' && str_contains($lookupInput, $token)) {
+                        $isMatch = true;
+                        break;
+                    }
+                }
+            }
+
+            if (! $isMatch) {
+                throw ValidationException::withMessages([
+                    'lookup_input' => 'The scanned QR code or entered reference does not match this return parcel.',
+                ]);
+            }
+        }
+
+        $verificationBadge = $lookupInput !== ''
+            ? '[Verified via ' . strtoupper($verificationMethod) . ': ' . $lookupInput . ']'
+            : '[Verified via Physical Inspection]';
+
+        $combinedNotes = trim($verificationBadge . (! empty($validated['notes']) ? ' ' . trim($validated['notes']) : ''));
 
         $updated = $this->returnShipmentService->receiveAtHub(
             $returnShipment,
             (int) $profile->id,
             (int) $user->id,
-            $validated['notes'] ?? null
+            $combinedNotes
         );
 
         return redirect()
             ->route('logistics.returns.show', $returnShipment->id)
-            ->with('success', "Return {$updated->tracking_number} was received at the sorting hub. The rider was paid for the pickup leg. You can now assign a courier to bring it back to the seller.");
+            ->with('success', "Return {$updated->tracking_number} verified (" . strtoupper($verificationMethod) . ") and received at the sorting hub. The rider was paid for the pickup leg. You can now assign a courier to bring it back to the seller.");
     }
 
     public function assignCourier(Request $request, ReturnShipment $returnShipment): RedirectResponse

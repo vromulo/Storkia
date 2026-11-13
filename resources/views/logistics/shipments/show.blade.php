@@ -24,12 +24,205 @@
     });
 @endphp
 
+<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
+
 <div x-data="{
     proofModalOpen: false,
     verificationMethod: 'manual',
     lookupInput: '',
-    isSubmittingConfirm: false
-}" class="max-w-6xl mx-auto space-y-6 select-none">
+    isSubmittingConfirm: false,
+    isSubmittingLookup: false,
+
+    qrScannerOpen: false,
+    cameraLoading: false,
+    noCameraAvailable: false,
+    cameraError: '',
+    scanStatusText: 'Align the parcel QR code within the frame to verify & confirm receipt automatically.',
+    cameras: [],
+    selectedCameraId: '',
+    mediaStream: null,
+    scanInterval: null,
+    barcodeDetector: null,
+
+    async openQrScanner() {
+        this.verificationMethod = 'qr';
+        this.qrScannerOpen = true;
+        this.cameraLoading = true;
+        this.noCameraAvailable = false;
+        this.cameraError = '';
+        this.scanStatusText = 'Starting camera...';
+
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            this.cameraLoading = false;
+            this.noCameraAvailable = true;
+            this.cameraError = 'Your device does not have a camera (or browser camera API is unavailable). Please fill in the verification code manually.';
+            return;
+        }
+
+        if ('BarcodeDetector' in window) {
+            try {
+                this.barcodeDetector = new window.BarcodeDetector({ formats: ['qr_code'] });
+            } catch (e) {
+                this.barcodeDetector = null;
+            }
+        }
+
+        try {
+            const devices = await navigator.mediaDevices.enumerateDevices();
+            const videoInputs = devices.filter(d => d.kind === 'videoinput');
+            this.cameras = videoInputs;
+        } catch (e) {
+            this.cameras = [];
+        }
+
+        await this.startCameraStream();
+    },
+
+    async startCameraStream() {
+        this.stopStreamOnly();
+        this.cameraLoading = true;
+        this.noCameraAvailable = false;
+        this.cameraError = '';
+
+        const constraints = this.selectedCameraId
+            ? { video: { deviceId: { exact: this.selectedCameraId }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false }
+            : { video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false };
+
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia(constraints);
+            this.mediaStream = stream;
+
+            try {
+                const devices = await navigator.mediaDevices.enumerateDevices();
+                this.cameras = devices.filter(d => d.kind === 'videoinput');
+                if (!this.selectedCameraId && stream.getVideoTracks().length > 0) {
+                    const settings = stream.getVideoTracks()[0].getSettings();
+                    if (settings && settings.deviceId) {
+                        this.selectedCameraId = settings.deviceId;
+                    }
+                }
+            } catch (err) {}
+
+            this.$nextTick(() => {
+                const videoEl = this.$refs.qrVideo;
+                if (videoEl) {
+                    videoEl.srcObject = stream;
+                    videoEl.setAttribute('playsinline', 'true');
+                    videoEl.play().catch(() => {});
+                }
+            });
+
+            this.cameraLoading = false;
+            this.scanStatusText = 'Align the parcel QR code inside the box. It will confirm automatically once detected.';
+            this.startQrScanLoop();
+        } catch (err) {
+            this.cameraLoading = false;
+            this.noCameraAvailable = true;
+            const errName = (err && err.name) ? err.name : '';
+
+            if (errName === 'NotFoundError' || errName === 'DevicesNotFoundError' || errName === 'OverconstrainedError') {
+                this.cameraError = 'Your device does not have a camera detected. Please fill in the Tracking / Package Reference code manually.';
+            } else if (errName === 'NotAllowedError' || errName === 'PermissionDeniedError') {
+                this.cameraError = 'Camera access was blocked or is unavailable on this device. Please fill in the Tracking / Package Reference code manually.';
+            } else {
+                this.cameraError = 'Your device does not have an accessible camera right now. Please fill in the Tracking / Package Reference code manually.';
+            }
+        }
+    },
+
+    startQrScanLoop() {
+        if (this.scanInterval) {
+            clearInterval(this.scanInterval);
+        }
+
+        this.scanInterval = setInterval(async () => {
+            if (!this.qrScannerOpen || this.isSubmittingLookup) return;
+            const video = this.$refs.qrVideo;
+            if (!video || video.readyState < 2 || !video.videoWidth || !video.videoHeight) return;
+
+            if (this.barcodeDetector) {
+                try {
+                    const codes = await this.barcodeDetector.detect(video);
+                    if (codes && codes.length > 0 && codes[0].rawValue) {
+                        this.handleQrDetected(codes[0].rawValue);
+                        return;
+                    }
+                } catch (e) {}
+            }
+
+            if (typeof window.jsQR === 'function') {
+                const canvas = this.$refs.qrCanvas;
+                if (!canvas) return;
+                const ctx = canvas.getContext('2d', { willReadFrequently: true });
+                if (!ctx) return;
+
+                canvas.width = video.videoWidth;
+                canvas.height = video.videoHeight;
+                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+                const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                const code = window.jsQR(imageData.data, imageData.width, imageData.height, {
+                    inversionAttempts: 'dontInvert'
+                });
+
+                if (code && code.data && code.data.trim() !== '') {
+                    this.handleQrDetected(code.data);
+                }
+            }
+        }, 180);
+    },
+
+    handleQrDetected(rawValue) {
+        const cleaned = String(rawValue || '').trim();
+        if (!cleaned || this.isSubmittingLookup) return;
+
+        this.isSubmittingLookup = true;
+        this.verificationMethod = 'qr';
+        this.lookupInput = cleaned;
+        this.scanStatusText = 'QR Code Detected (' + cleaned + ')! Confirming hub receipt...';
+
+        this.stopStreamOnly();
+
+        this.$nextTick(() => {
+            setTimeout(() => {
+                this.qrScannerOpen = false;
+                if (this.$refs.verifyLookupForm) {
+                    this.$refs.verifyLookupForm.submit();
+                }
+            }, 250);
+        });
+    },
+
+    stopStreamOnly() {
+        if (this.scanInterval) {
+            clearInterval(this.scanInterval);
+            this.scanInterval = null;
+        }
+        if (this.mediaStream) {
+            this.mediaStream.getTracks().forEach(track => track.stop());
+            this.mediaStream = null;
+        }
+        const videoEl = this.$refs.qrVideo;
+        if (videoEl) {
+            videoEl.srcObject = null;
+        }
+    },
+
+    closeQrScanner() {
+        this.stopStreamOnly();
+        this.qrScannerOpen = false;
+    },
+
+    switchToManualEntry() {
+        this.closeQrScanner();
+        this.verificationMethod = 'manual';
+        this.$nextTick(() => {
+            if (this.$refs.lookupInputEl) {
+                this.$refs.lookupInputEl.focus();
+            }
+        });
+    }
+}" @keydown.escape.window="if (qrScannerOpen) closeQrScanner()" class="max-w-6xl mx-auto space-y-6 select-none">
 
     <div class="flex flex-wrap items-center justify-between gap-4">
         <div class="flex items-center gap-3">
@@ -122,59 +315,80 @@
             <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-blue-200">
                 <div>
                     @if($isSelfDropOff)
-                        <h2 class="text-base font-bold text-blue-950">Step 1 & 2: Seller Self Drop-Off — Scan QR or Verify Manually & Confirm Hub Receipt</h2>
+                        <h2 class="text-base font-bold text-blue-950">Step 1 & 2: Seller Self Drop-Off — Scan QR Camera or Enter Code to Confirm Hub Receipt</h2>
                         <p class="text-xs text-blue-800 mt-0.5">
                             Seller <strong>{{ $shipment->sellerProfile->business_name ?? ($pickup['business_name'] ?? 'Seller') }}</strong> selected Self Drop-Off at <strong>{{ $primaryPackage?->logisticsHub?->hub_name ?? $profile->business_name }}</strong>.
-                            Scan the package QR Code or verify the tracking/package reference below before confirming physical receipt.
+                            Open your camera to scan the package QR Code (or enter the code manually) to confirm physical receipt at the hub.
                         </p>
                     @else
-                        <h2 class="text-base font-bold text-blue-950">Step 2: Courier Handover — Verify Package QR / Reference & Confirm Hub Arrival</h2>
+                        <h2 class="text-base font-bold text-blue-950">Step 2: Courier Handover — Scan QR Camera or Enter Code to Confirm Hub Arrival</h2>
                         <p class="text-xs text-blue-800 mt-0.5">
                             Courier <strong>{{ $shipment->currentCourier?->full_name }}</strong> picked up this parcel at {{ $shipment->picked_up_at?->format('M d, Y h:i A') }}.
-                            First verify the package via QR Code or Manual lookup, review the manifest, and then click <strong>Confirm Physical Receipt at Sorting Hub</strong>.
+                            Open your camera to scan the parcel QR code (or enter the Tracking / Package Reference manually) to confirm physical receipt at the Sorting Hub.
                         </p>
                     @endif
                 </div>
                 <span class="px-3 py-1 rounded-full text-xs font-bold {{ $allHubPackagesVerified ? 'bg-green-100 text-green-800 border border-green-300' : 'bg-yellow-100 text-yellow-800 border border-yellow-300' }} shrink-0">
-                    {{ $allHubPackagesVerified ? 'All Packages Verified — Ready to Receive' : 'Step 1 Required: Verify Package First' }}
+                    {{ $allHubPackagesVerified ? 'All Packages Verified — Ready to Receive' : 'Scan QR or Enter Code to Receive' }}
                 </span>
             </div>
 
             <div class="bg-white rounded-2xl border border-blue-200 p-4 space-y-4 text-xs">
                 <div class="flex flex-wrap items-center justify-between gap-2">
                     <span class="font-bold uppercase tracking-wider text-[11px] text-primary-dark">
-                        Unified Package Identification (QR Scan or Manual Lookup)
+                        Unified Package Identification (Camera QR Scan or Manual Code Entry)
                     </span>
-                    <div class="flex items-center gap-2">
+                    <div class="flex flex-wrap items-center gap-2">
                         <button type="button"
-                                @click="verificationMethod = 'qr'"
-                                :class="verificationMethod === 'qr' ? 'bg-primary-dark text-white' : 'bg-surface-subtle text-text-muted'"
-                                class="px-3 py-1 rounded-lg font-bold text-[11px] cursor-pointer transition-colors">
-                            1. QR Code Scan
+                                @click="openQrScanner()"
+                                :class="verificationMethod === 'qr' ? 'bg-primary text-white shadow-xs' : 'bg-primary/10 text-primary hover:bg-primary hover:text-white'"
+                                class="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl font-bold text-[11px] cursor-pointer transition-colors">
+                            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
+                            </svg>
+                            1. Open Camera (Scan QR Code)
                         </button>
                         <button type="button"
-                                @click="verificationMethod = 'manual'"
-                                :class="verificationMethod === 'manual' ? 'bg-primary-dark text-white' : 'bg-surface-subtle text-text-muted'"
-                                class="px-3 py-1 rounded-lg font-bold text-[11px] cursor-pointer transition-colors">
+                                @click="verificationMethod = 'manual'; $nextTick(() => $refs.lookupInputEl && $refs.lookupInputEl.focus())"
+                                :class="verificationMethod === 'manual' ? 'bg-primary-dark text-white' : 'bg-surface-subtle text-text-muted hover:text-text-main'"
+                                class="px-3.5 py-1.5 rounded-xl font-bold text-[11px] cursor-pointer transition-colors">
                             2. Manual Tracking / Ref Lookup
                         </button>
                     </div>
                 </div>
 
-                <form action="{{ route('logistics.shipments.verify-lookup', $shipment->id) }}" method="POST" class="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5">
+                <form x-ref="verifyLookupForm"
+                      action="{{ route('logistics.shipments.verify-lookup', $shipment->id) }}"
+                      method="POST"
+                      @submit="isSubmittingLookup = true"
+                      class="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5">
                     @csrf
                     <input type="hidden" name="verification_method" :value="verificationMethod">
-                    <div class="flex-1">
-                        <input type="text"
+                    <div class="flex-1 flex items-center gap-2">
+                        <input x-ref="lookupInputEl"
+                               type="text"
                                name="lookup_input"
                                x-model="lookupInput"
                                required
-                               :placeholder="verificationMethod === 'qr' ? 'Focus here and scan package QR Code token (e.g. STORK-QR-...)...' : 'Enter Tracking # ({{ $shipment->tracking_number }}) or Package Ref ({{ $primaryPackage?->package_reference }})...'"
+                               :placeholder="verificationMethod === 'qr' ? 'Scan QR with camera or hardware scanner (e.g. STORK-QR-...)...' : 'Enter Tracking # ({{ $shipment->tracking_number }}) or Package Ref ({{ $primaryPackage?->package_reference }})...'"
                                class="w-full p-3 rounded-xl border border-border-subtle bg-surface font-mono text-xs outline-none focus:border-primary">
+                        <button type="button"
+                                @click="openQrScanner()"
+                                title="Open Camera to Scan Parcel QR Code"
+                                class="px-3.5 py-3 rounded-xl bg-primary/10 hover:bg-primary text-primary hover:text-white border border-primary/20 font-bold text-xs transition-colors cursor-pointer shrink-0 inline-flex items-center gap-1.5">
+                            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
+                            </svg>
+                            <span class="hidden md:inline">Open Camera</span>
+                        </button>
                     </div>
                     <button type="submit"
-                            class="px-5 py-3 rounded-xl bg-primary hover:bg-primary-dark text-white font-bold cursor-pointer shrink-0">
-                        Verify & Inspect Package
+                            :disabled="isSubmittingLookup"
+                            class="px-5 py-3 rounded-xl bg-primary hover:bg-primary-dark text-white font-bold cursor-pointer shrink-0 disabled:opacity-60">
+                        <span x-show="!isSubmittingLookup">Verify & Confirm Hub Receipt</span>
+                        <span x-show="isSubmittingLookup" x-cloak>Confirming...</span>
                     </button>
                 </form>
 
@@ -215,9 +429,9 @@
             <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1">
                 <p class="text-xs text-blue-900">
                     @if(! $allHubPackagesVerified)
-                        <strong>Note:</strong> Scanning or looking up a package verifies its identity and displays its manifest below without advancing status automatically.
+                        <strong>Note:</strong> Scanning the parcel QR code via camera or verifying the code above immediately confirms physical receipt at the sorting hub once all packages are verified.
                     @else
-                        <strong>Verification Complete:</strong> Package identity and manifest have been reviewed. Click the button on the right to record physical receipt at the hub.
+                        <strong>Verification Complete:</strong> Package identity has been verified. Click the button on the right to record physical receipt at the hub.
                     @endif
                 </p>
 
@@ -485,6 +699,84 @@
             @endif
         </div>
     </div>
+
+    <template x-teleport="body">
+        <div x-show="qrScannerOpen"
+             x-cloak
+             class="fixed inset-0 z-[210] flex items-center justify-center p-4">
+            <div @click="closeQrScanner()" class="absolute inset-0 bg-black/75 backdrop-blur-xs cursor-pointer"></div>
+
+            <div @click.stop class="relative z-10 bg-surface rounded-3xl max-w-lg w-full p-6 shadow-2xl border border-border-subtle space-y-4">
+                <div class="flex items-center justify-between pb-3 border-b border-border-subtle">
+                    <div>
+                        <h3 class="text-base font-bold text-primary-dark">Scan Parcel QR Code</h3>
+                        <p class="text-xs text-text-muted">Shipment <span class="font-mono font-bold text-text-main">{{ $shipment->tracking_number }}</span></p>
+                    </div>
+                    <button type="button" @click="closeQrScanner()" class="p-1.5 rounded-xl text-text-muted hover:text-text-main hover:bg-surface-subtle cursor-pointer">
+                        <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                    </button>
+                </div>
+
+                <template x-if="cameras.length > 1 && !noCameraAvailable">
+                    <div class="flex items-center gap-2 text-xs">
+                        <label class="font-bold text-text-muted shrink-0">Camera:</label>
+                        <select x-model="selectedCameraId"
+                                @change="startCameraStream()"
+                                class="flex-1 p-2 rounded-xl border border-border-subtle bg-surface text-xs font-semibold outline-none focus:border-primary">
+                            <template x-for="(cam, idx) in cameras" :key="cam.deviceId || idx">
+                                <option :value="cam.deviceId" x-text="cam.label || ('Camera ' + (idx + 1))"></option>
+                            </template>
+                        </select>
+                    </div>
+                </template>
+
+                <div x-show="!noCameraAvailable" class="relative rounded-2xl overflow-hidden bg-black aspect-video flex items-center justify-center border border-border-subtle">
+                    <video x-ref="qrVideo" class="w-full h-full object-cover" playsinline muted></video>
+                    <canvas x-ref="qrCanvas" class="hidden"></canvas>
+
+                    <div class="pointer-events-none absolute inset-0 flex items-center justify-center p-6">
+                        <div class="w-48 h-48 rounded-2xl border-2 border-primary shadow-[0_0_0_9999px_rgba(0,0,0,0.45)] relative">
+                            <div class="absolute inset-x-2 top-1/2 h-0.5 bg-primary/80 animate-pulse"></div>
+                        </div>
+                    </div>
+
+                    <div x-show="cameraLoading" class="absolute inset-0 bg-black/70 flex flex-col items-center justify-center text-white text-xs gap-2">
+                        <span class="font-bold">Opening device camera...</span>
+                    </div>
+                </div>
+
+                <div x-show="!noCameraAvailable" class="p-3 rounded-2xl bg-brand-light/30 border border-border-subtle text-xs text-primary-dark font-semibold text-center" x-text="scanStatusText"></div>
+
+                <div x-show="noCameraAvailable" x-cloak class="p-5 rounded-2xl bg-red-50 border border-red-200 text-center space-y-3">
+                    <div class="w-12 h-12 rounded-full bg-red-100 text-red-600 flex items-center justify-center mx-auto">
+                        <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                        </svg>
+                    </div>
+                    <h4 class="text-sm font-bold text-red-900">Camera Unavailable on This Device</h4>
+                    <p class="text-xs text-red-800 leading-relaxed" x-text="cameraError"></p>
+                    <button type="button"
+                            @click="switchToManualEntry()"
+                            class="px-5 py-2.5 rounded-xl bg-primary hover:bg-primary-dark text-white text-xs font-bold shadow-xs cursor-pointer">
+                        Fill Code Manually Instead
+                    </button>
+                </div>
+
+                <div class="flex items-center justify-between pt-2 border-t border-border-subtle text-xs">
+                    <button type="button"
+                            @click="switchToManualEntry()"
+                            class="font-bold text-primary hover:underline cursor-pointer">
+                        Switch to Manual Code Entry
+                    </button>
+                    <button type="button"
+                            @click="closeQrScanner()"
+                            class="px-4 py-2 rounded-xl bg-surface-subtle hover:bg-gray-200 text-text-main font-bold cursor-pointer">
+                        Close
+                    </button>
+                </div>
+            </div>
+        </div>
+    </template>
 
     @if($latestProof)
         <template x-teleport="body">

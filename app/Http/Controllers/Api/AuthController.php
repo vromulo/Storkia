@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Api\Concerns\IssuesApiTokens;
 use App\Http\Controllers\Controller;
 use App\Models\BuyerBanAppeal;
+use App\Models\BuyerProfile;
 use App\Models\RegistrationOtp;
 use App\Models\User;
 use App\Services\BuyerAbandonmentService;
@@ -13,6 +14,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Schema;
 
 class AuthController extends Controller
 {
@@ -29,10 +31,10 @@ class AuthController extends Controller
         $request->merge(['email' => $cleanEmail]);
 
         $request->validate([
-            'email' => ['required', 'email:rfc,dns', 'max:255'],
+            'email' => ['required', 'email:rfc', 'max:255'],
         ]);
 
-        [$success, $error, $cooldown] = $this->otpService->sendOtp($cleanEmail);
+        [$success, $error, $cooldown] = $this->otpService->sendOtp($cleanEmail, $request->boolean('force_resend'));
 
         if (! $success) {
             return response()->json([
@@ -54,16 +56,20 @@ class AuthController extends Controller
     public function verifyOtp(Request $request): JsonResponse
     {
         $cleanEmail = strtolower(trim((string) $request->input('email')));
-        $request->merge(['email' => $cleanEmail]);
+        $cleanCode = preg_replace('/\D/', '', (string) $request->input('code'));
+        $request->merge([
+            'email' => $cleanEmail,
+            'code'  => $cleanCode,
+        ]);
 
         $request->validate([
-            'email' => ['required', 'email'],
+            'email' => ['required', 'email:rfc'],
             'code'  => ['required', 'digits:6'],
         ]);
 
         [$valid, $error, $verificationToken, $attemptsRemaining] = $this->otpService->verifyOtp(
             $cleanEmail,
-            (string) $request->input('code')
+            $cleanCode
         );
 
         if (! $valid) {
@@ -99,7 +105,7 @@ class AuthController extends Controller
                 'before_or_equal:' . now()->subYears(18)->format('Y-m-d'),
                 'after_or_equal:' . now()->subYears(100)->format('Y-m-d'),
             ],
-            'email'              => ['required', 'string', 'email', 'max:255', 'unique:users,email'],
+            'email'              => ['required', 'string', 'email:rfc', 'max:255', 'unique:users,email'],
             'verification_token' => ['nullable', 'string'],
             'password'           => [
                 'required',
@@ -141,18 +147,26 @@ class AuthController extends Controller
 
         $user = DB::transaction(function () use ($validated, $otpRecord) {
             $created = User::create([
-                'first_name'     => ucwords(strtolower(trim($validated['first_name']))),
-                'last_name'      => ucwords(strtolower(trim($validated['last_name']))),
-                'middle_initial' => ! empty($validated['middle_initial'])
+                'first_name'        => ucwords(strtolower(trim($validated['first_name']))),
+                'last_name'         => ucwords(strtolower(trim($validated['last_name']))),
+                'middle_initial'    => ! empty($validated['middle_initial'])
                     ? strtoupper(trim($validated['middle_initial']))
                     : null,
-                'sex'            => $validated['sex'],
-                'birthday'       => $validated['birthday'],
-                'email'          => $validated['email'],
-                'password'       => Hash::make($validated['password']),
-                'contact_no'     => null,
-                'role'           => 'Buyer',
+                'sex'               => $validated['sex'],
+                'birthday'          => $validated['birthday'],
+                'email'             => $validated['email'],
+                'email_verified_at' => now(),
+                'password'          => Hash::make($validated['password']),
+                'contact_no'        => null,
+                'role'              => 'Buyer',
             ]);
+
+            if (Schema::hasTable('buyer_profiles')) {
+                BuyerProfile::firstOrCreate(
+                    ['user_id' => $created->id],
+                    ['username' => BuyerProfile::generateUniqueUsername($created->email)]
+                );
+            }
 
             $otpRecord->delete();
 
@@ -179,6 +193,7 @@ class AuthController extends Controller
         ]);
 
         $normalizedEmail = strtolower(trim((string) $request->input('email')));
+
         $user = User::whereRaw('LOWER(TRIM(email)) = ?', [$normalizedEmail])->first();
 
         if (! $user || ! Hash::check((string) $request->input('password'), $user->password)) {
@@ -189,8 +204,6 @@ class AuthController extends Controller
             ], 401);
         }
 
-        // A deleted (archived) account can never sign in. Checked before the
-        // role check, same order as the web login in AuthService.
         if ($user->isArchived()) {
             return response()->json([
                 'status'  => 'error',
@@ -325,21 +338,21 @@ class AuthController extends Controller
         $latestAppeal = BuyerBanAppeal::where('buyer_id', $user->id)->latest('id')->first();
 
         return [
-            'id'                                    => $sanction->id,
-            'cod_abandonment_strikes'               => (int) $sanction->cod_abandonment_strikes,
-            'ban_level'                             => (int) $sanction->ban_level,
-            'account_status'                        => $sanction->account_status,
-            'temp_ban_started_at'                   => $sanction->temp_ban_started_at?->toISOString(),
-            'temp_ban_ends_at'                      => $sanction->temp_ban_ends_at?->toISOString(),
-            'appeal_required'                       => (bool) $sanction->appeal_required,
-            'permanently_banned_at'                 => $sanction->permanently_banned_at?->toISOString(),
-            'last_abandonment_reason'               => $sanction->last_abandonment_reason,
-            'strike_history'                        => $sanction->strike_history ?? [],
-            'is_permanently_banned'                 => $sanction->isPermanentlyBanned(),
-            'is_temporarily_banned_countdown_active'=> $sanction->isTemporarilyBannedCountdownActive(),
-            'can_submit_appeal_now'                 => $sanction->canSubmitAppealNow(),
-            'is_blocked_from_marketplace'           => $sanction->isBlockedFromMarketplace(),
-            'latest_appeal'                         => $latestAppeal ? [
+            'id'                                     => $sanction->id,
+            'cod_abandonment_strikes'                => (int) $sanction->cod_abandonment_strikes,
+            'ban_level'                              => (int) $sanction->ban_level,
+            'account_status'                         => $sanction->account_status,
+            'temp_ban_started_at'                    => $sanction->temp_ban_started_at?->toISOString(),
+            'temp_ban_ends_at'                       => $sanction->temp_ban_ends_at?->toISOString(),
+            'appeal_required'                        => (bool) $sanction->appeal_required,
+            'permanently_banned_at'                  => $sanction->permanently_banned_at?->toISOString(),
+            'last_abandonment_reason'                => $sanction->last_abandonment_reason,
+            'strike_history'                         => $sanction->strike_history ?? [],
+            'is_permanently_banned'                  => $sanction->isPermanentlyBanned(),
+            'is_temporarily_banned_countdown_active' => $sanction->isTemporarilyBannedCountdownActive(),
+            'can_submit_appeal_now'                  => $sanction->canSubmitAppealNow(),
+            'is_blocked_from_marketplace'            => $sanction->isBlockedFromMarketplace(),
+            'latest_appeal'                          => $latestAppeal ? [
                 'id'                 => $latestAppeal->id,
                 'status'             => $latestAppeal->status,
                 'appeal_explanation' => $latestAppeal->appeal_explanation,

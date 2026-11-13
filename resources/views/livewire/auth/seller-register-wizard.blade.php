@@ -15,7 +15,6 @@
             </a>
         </div>
     @else
-        <!-- Header Copy -->
         <div class="mb-8 text-center">
             <h1 class="text-2xl sm:text-3xl font-serif font-normal tracking-tight text-primary-dark">
                 Become a Seller
@@ -32,7 +31,6 @@
             </p>
         </div>
 
-        <!-- Minimalist Step Indicator -->
         <div class="flex items-center justify-center gap-1.5 mb-10 overflow-x-auto pb-2 [&::-webkit-scrollbar]:hidden">
             @foreach (['Email', 'Personal', 'Address', 'Business', 'Docs', 'Password', 'Review'] as $index => $label)
                 @php $num = $index + 1; @endphp
@@ -52,19 +50,31 @@
             @endforeach
         </div>
 
-        {{-- STEP 1: Email Verification --}}
         @if ($currentStep === 1)
             <div class="space-y-6">
                 <div>
-                    <label class="block text-xs uppercase tracking-wider font-bold text-text-muted mb-1.5">
-                        Email Address*
-                    </label>
+                    <div class="flex items-center justify-between mb-1.5">
+                        <label class="block text-xs uppercase tracking-wider font-bold text-text-muted">
+                            Email Address*
+                        </label>
+                        @if ($codeSent)
+                            <button
+                                type="button"
+                                wire:click="changeEmail"
+                                wire:loading.attr="disabled"
+                                class="text-xs font-bold text-primary hover:text-primary-dark underline cursor-pointer"
+                            >
+                                Change email
+                            </button>
+                        @endif
+                    </div>
                     <div class="relative flex items-center border-b {{ $errors->has('email') ? 'border-danger' : 'border-border-subtle focus-within:border-text-main' }} transition-colors">
                         <input 
                             type="email" 
                             wire:model.live.debounce.500ms="email" 
+                            wire:keydown.enter.prevent="sendCode"
                             @if ($codeSent) disabled @endif
-                            class="w-full py-3 bg-transparent text-text-main text-base outline-none placeholder:text-text-muted/40 disabled:text-text-muted/50"
+                            class="w-full py-3 bg-transparent text-text-main text-base outline-none placeholder:text-text-muted/40 disabled:text-text-muted/60"
                             placeholder="store@example.com"
                         >
                     </div>
@@ -85,6 +95,12 @@
                         </button>
                     </div>
                 @else
+                    @if ($otpNotice)
+                        <div class="p-3.5 rounded-2xl bg-green-50 border border-green-200 text-green-800 text-xs font-medium text-center">
+                            {{ $otpNotice }}
+                        </div>
+                    @endif
+
                     <div>
                         <label class="block text-xs uppercase tracking-wider font-bold text-text-muted mb-1.5">
                             Verification Code*
@@ -92,7 +108,8 @@
                         <div class="relative flex items-center border-b {{ $errors->has('code') ? 'border-danger' : 'border-border-subtle focus-within:border-text-main' }} transition-colors">
                             <input 
                                 type="text" 
-                                wire:model="code" 
+                                wire:model.live="code" 
+                                wire:keydown.enter.prevent="verifyCode"
                                 inputmode="numeric" 
                                 maxlength="6" 
                                 autocomplete="one-time-code"
@@ -118,18 +135,40 @@
                             <span wire:loading wire:target="verifyCode">Verifying...</span>
                         </button>
 
-                        <div class="text-center" x-data="{ seconds: {{ $resendCooldown }} }" 
-                             x-init="let t = setInterval(() => { if (seconds > 0) seconds--; else clearInterval(t); }, 1000)">
+                        <div class="text-center"
+                             x-data="{
+                                 seconds: {{ (int) $resendCooldown }},
+                                 timer: null,
+                                 startTimer(sec) {
+                                     this.seconds = Number(sec || 0);
+                                     if (this.timer) clearInterval(this.timer);
+                                     if (this.seconds > 0) {
+                                         this.timer = setInterval(() => {
+                                             if (this.seconds > 0) {
+                                                 this.seconds--;
+                                             } else {
+                                                 clearInterval(this.timer);
+                                                 this.timer = null;
+                                             }
+                                         }, 1000);
+                                     }
+                                 }
+                             }"
+                             x-init="startTimer({{ (int) $resendCooldown }})"
+                             @otp-cooldown-started.window="startTimer($event.detail.seconds)">
                             <button 
                                 type="button" 
                                 wire:click="resendCode" 
                                 wire:loading.attr="disabled" 
-                                wire:target="resendCode"
+                                wire:target="resendCode,sendCode"
                                 x-bind:disabled="seconds > 0"
                                 class="text-xs text-text-muted hover:text-primary transition-colors cursor-pointer disabled:text-text-muted/40 font-medium"
                             >
-                                <span x-show="seconds === 0">Resend Code</span>
-                                <span x-show="seconds > 0">Resend available in <span x-text="seconds"></span>s</span>
+                                <span wire:loading.remove wire:target="resendCode">
+                                    <span x-show="seconds === 0">Resend Code</span>
+                                    <span x-show="seconds > 0">Resend available in <span x-text="seconds"></span>s</span>
+                                </span>
+                                <span wire:loading wire:target="resendCode">Sending new code...</span>
                             </button>
                         </div>
                     </div>
@@ -137,7 +176,6 @@
             </div>
         @endif
 
-        {{-- STEP 2: Personal Information --}}
         @if ($currentStep === 2)
             <div class="space-y-5">
                 <div class="grid grid-cols-1 sm:grid-cols-4 gap-4">
@@ -221,7 +259,6 @@
             </div>
         @endif
 
-        {{-- STEP 3: Contact & Address --}}
         @if ($currentStep === 3)
             <div class="space-y-5">
                 <div>
@@ -304,7 +341,6 @@
             </div>
         @endif
 
-        {{-- STEP 4: Business Information --}}
         @if ($currentStep === 4)
             <div class="space-y-6">
                 <div>
@@ -333,10 +369,8 @@
             </div>
         @endif
 
-        {{-- STEP 5: Required Documents --}}
         @if ($currentStep === 5)
             <div class="space-y-6">
-                <!-- 1. Valid ID Dropzone -->
                 <div>
                     <div class="flex items-center justify-between mb-1.5">
                         <label class="block text-xs uppercase tracking-wider font-bold text-text-muted">
@@ -432,7 +466,6 @@
                     @error('valid_id') <p class="text-danger text-xs mt-1.5 font-medium">{{ $message }}</p> @enderror
                 </div>
 
-                <!-- 2. Business Permit Dropzone -->
                 <div>
                     <div class="flex items-center justify-between mb-1.5">
                         <label class="block text-xs uppercase tracking-wider font-bold text-text-muted">
@@ -528,7 +561,6 @@
                     @error('business_permit') <p class="text-danger text-xs mt-1.5 font-medium">{{ $message }}</p> @enderror
                 </div>
 
-                <!-- Navigation Controls -->
                 <div class="flex items-center gap-3 pt-4">
                     <button type="button" wire:click="backToStep(4)" class="py-3 px-5 text-text-muted hover:text-text-main text-sm font-medium transition-colors cursor-pointer">
                         Back
@@ -546,7 +578,6 @@
             </div>
         @endif
 
-        {{-- STEP 6: Password --}}
         @if ($currentStep === 6)
             <div class="space-y-5" x-data="{ showPass: false, showConfirm: false }">
                 <div>
@@ -583,7 +614,6 @@
                     @error('password_confirmation') <p class="text-danger text-xs mt-1.5 font-medium">{{ $message }}</p> @enderror
                 </div>
 
-                <!-- Password Requirements Indicator -->
                 <div class="pt-2 grid grid-cols-2 gap-1.5 text-[11px] text-text-muted">
                     <span class="flex items-center gap-1 {{ strlen($password) >= 8 ? 'text-success font-semibold' : '' }}">
                         <span>{{ strlen($password) >= 8 ? '✓' : '○' }}</span> 8+ characters
@@ -606,10 +636,8 @@
             </div>
         @endif
 
-        {{-- STEP 7: Review, Terms + Privacy Policy & Submit --}}
         @if ($currentStep === 7)
             <div class="space-y-6 text-xs" x-data="{ legalModalOpen: false, legalModalType: 'terms' }">
-                <!-- Summary List (Clean Line Separators) -->
                 <div class="space-y-5">
                     <div class="border-b border-border-subtle/70 pb-3">
                         <div class="flex justify-between items-center mb-2">
@@ -656,7 +684,6 @@
                     </div>
                 </div>
 
-                <!-- Seller Terms & Conditions + Privacy Policy Agreement Checkbox -->
                 <div class="p-3.5 rounded-2xl bg-surface-subtle/70 border border-border-subtle">
                     <label class="flex items-start gap-2.5 cursor-pointer select-none">
                         <input type="checkbox"
@@ -696,7 +723,6 @@
                     </button>
                 </div>
 
-                <!-- Unified Inline Seller Terms & Privacy Modal -->
                 <template x-teleport="body">
                     <div x-show="legalModalOpen"
                          x-cloak
@@ -760,7 +786,6 @@
             </div>
         @endif
 
-        <!-- Footer Redirection -->
         <div class="mt-8 pt-8 border-t border-border-subtle/50 text-center">
             <p class="text-xs text-text-muted">
                 Already registered as a seller? 

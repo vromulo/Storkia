@@ -19,6 +19,7 @@ class RegisterWizard extends Component
     public string $email = '';
     public string $code = '';
     public ?string $verificationToken = null;
+    public ?string $otpNotice = null;
     public int $resendCooldown = 0;
     public int $attemptsRemaining = RegistrationOtp::MAX_ATTEMPTS;
 
@@ -34,18 +35,21 @@ class RegisterWizard extends Component
 
     public function updated($propertyName)
     {
-        if (in_array($propertyName, ['first_name', 'last_name', 'middle_initial'])) {
+        if (in_array($propertyName, ['first_name', 'last_name', 'middle_initial'], true)) {
             $this->$propertyName = ltrim(preg_replace('/ {2,}/', ' ', $this->$propertyName));
         }
 
         if ($this->currentStep === 1 && $propertyName === 'email') {
-            $this->validateOnly('email', ['email' => ['required', 'email:rfc,dns']]);
+            $this->email = strtolower(trim($this->email));
+            $this->validateOnly('email', ['email' => ['required', 'email:rfc']]);
+        } elseif ($this->currentStep === 1 && $propertyName === 'code') {
+            $this->code = substr(preg_replace('/\D/', '', $this->code), 0, 6);
         } elseif ($this->currentStep === 2) {
             $this->validateOnly($propertyName, $this->getStep2Rules(), $this->getStep2Messages());
         } elseif ($this->currentStep === 3) {
             if ($propertyName === 'password') {
                 $this->validateOnly('password', $this->getStep3Rules(), $this->getStep3Messages());
-                if (!empty($this->password_confirmation)) {
+                if (! empty($this->password_confirmation)) {
                     $this->validateOnly('password_confirmation', ['password_confirmation' => ['same:password']]);
                 }
             } elseif ($propertyName === 'password_confirmation') {
@@ -56,24 +60,25 @@ class RegisterWizard extends Component
         }
     }
 
-    public function sendCode(OtpService $otpService): void
+    public function sendCode(OtpService $otpService, bool $isResend = false): void
     {
+        $this->otpNotice = null;
         $this->email = strtolower(trim($this->email));
-
-        $this->validateOnly('email', ['email' => ['required', 'email:rfc,dns']]);
+        $this->validateOnly('email', ['email' => ['required', 'email:rfc']]);
 
         if (User::whereRaw('LOWER(TRIM(email)) = ?', [$this->email])->exists()) {
             $this->addError('email', 'This email address is already in use.');
             return;
         }
 
-        [$success, $error, $cooldown] = $otpService->sendOtp($this->email);
+        [$success, $error, $cooldown] = $otpService->sendOtp($this->email, $isResend);
 
         if (! $success) {
-            $this->addError($cooldown > 0 ? 'code' : 'email', $error);
+            $this->addError($cooldown > 0 || $this->codeSent ? 'code' : 'email', $error);
             if ($cooldown > 0) {
                 $this->resendCooldown = $cooldown;
                 $this->codeSent = true;
+                $this->dispatch('otp-cooldown-started', seconds: $cooldown);
             }
             return;
         }
@@ -83,16 +88,37 @@ class RegisterWizard extends Component
         $this->resendCooldown = $cooldown;
         $this->attemptsRemaining = RegistrationOtp::MAX_ATTEMPTS;
         $this->resetErrorBag();
+        $this->otpNotice = $isResend
+            ? "A new 6-digit verification code has been sent to {$this->email}."
+            : "Verification code sent to {$this->email}. Please check your Inbox or Spam folder.";
+        $this->dispatch('otp-cooldown-started', seconds: $cooldown);
     }
 
     public function resendCode(OtpService $otpService): void
     {
-        $this->sendCode($otpService);
+        $this->sendCode($otpService, true);
+    }
+
+    public function changeEmail(OtpService $otpService): void
+    {
+        if ($this->email !== '') {
+            $otpService->releaseEmail($this->email);
+        }
+
+        $this->codeSent = false;
+        $this->code = '';
+        $this->verificationToken = null;
+        $this->otpNotice = null;
+        $this->resendCooldown = 0;
+        $this->attemptsRemaining = RegistrationOtp::MAX_ATTEMPTS;
+        $this->resetErrorBag();
     }
 
     public function verifyCode(OtpService $otpService): void
     {
+        $this->otpNotice = null;
         $this->email = strtolower(trim($this->email));
+        $this->code = preg_replace('/\D/', '', $this->code);
         $this->validateOnly('code', ['code' => ['required', 'digits:6']]);
 
         [$valid, $error, $token, $remaining] = $otpService->verifyOtp($this->email, $this->code);
@@ -115,7 +141,12 @@ class RegisterWizard extends Component
             'last_name' => ['required', 'string', 'regex:/^[A-Za-z\s]+$/'],
             'middle_initial' => ['nullable', 'string', 'regex:/^[A-Za-z]$/'],
             'sex' => ['required', 'in:male,female'],
-            'birthday' => ['required', 'date', 'before_or_equal:' . now()->subYears(18)->format('Y-m-d'), 'after_or_equal:' . now()->subYears(100)->format('Y-m-d')],
+            'birthday' => [
+                'required',
+                'date',
+                'before_or_equal:' . now()->subYears(18)->format('Y-m-d'),
+                'after_or_equal:' . now()->subYears(100)->format('Y-m-d'),
+            ],
         ];
     }
 
@@ -147,11 +178,19 @@ class RegisterWizard extends Component
     {
         return [
             'password' => [
-                'required', 'string', 'min:8',
+                'required',
+                'string',
+                'min:8',
                 function ($attribute, $value, $fail) {
-                    if (!preg_match('/[A-Z]/', $value)) $fail('Password must contain at least 1 uppercase letter.');
-                    if (!preg_match('/[0-9]/', $value)) $fail('Password must contain at least 1 number.');
-                    if (!preg_match('/[\W_]/', $value)) $fail('Password must contain at least 1 special character.');
+                    if (! preg_match('/[A-Z]/', $value)) {
+                        $fail('Password must contain at least 1 uppercase letter.');
+                    }
+                    if (! preg_match('/[0-9]/', $value)) {
+                        $fail('Password must contain at least 1 number.');
+                    }
+                    if (! preg_match('/[\W_]/', $value)) {
+                        $fail('Password must contain at least 1 special character.');
+                    }
                 },
             ],
             'password_confirmation' => ['required', 'same:password'],
@@ -180,7 +219,7 @@ class RegisterWizard extends Component
             ->first();
 
         if (! $record || ! $record->isVerified() || ! $record->isReservationActive()) {
-            $this->addError('password', 'Your email verification has expired. Please verify your email again.');
+            $this->addError('email', 'Your email verification has expired. Please verify your email again.');
             $this->currentStep = 1;
             $this->codeSent = false;
             $this->verificationToken = null;
@@ -194,27 +233,30 @@ class RegisterWizard extends Component
 
         DB::transaction(function () use ($record) {
             $user = User::create([
-                'first_name'     => ucwords(strtolower(trim($this->first_name))),
-                'last_name'      => ucwords(strtolower(trim($this->last_name))),
+                'first_name' => ucwords(strtolower(trim($this->first_name))),
+                'last_name' => ucwords(strtolower(trim($this->last_name))),
                 'middle_initial' => trim($this->middle_initial) ? strtoupper(trim($this->middle_initial)) : null,
-                'sex'            => $this->sex,
-                'email'          => $this->email,
-                'contact_no'     => null,
-                'birthday'       => $this->birthday,
-                'password'       => Hash::make($this->password),
-                'role'           => 'Buyer',
+                'sex' => $this->sex,
+                'email' => $this->email,
+                'email_verified_at' => now(),
+                'contact_no' => null,
+                'birthday' => $this->birthday,
+                'password' => Hash::make($this->password),
+                'role' => 'Buyer',
             ]);
 
             BuyerProfile::create([
-                'user_id'  => $user->id,
+                'user_id' => $user->id,
                 'username' => BuyerProfile::generateUniqueUsername($user->email),
             ]);
 
             $record->delete();
+
             Auth::login($user);
         });
 
         session()->flash('success', 'Your account has been created successfully.');
+
         $this->redirect(route('home'), navigate: false);
     }
 

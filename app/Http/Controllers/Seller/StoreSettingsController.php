@@ -3,23 +3,29 @@
 namespace App\Http\Controllers\Seller;
 
 use App\Http\Controllers\Controller;
-use App\Mail\OtpMail;
+use App\Mail\RegistrationOtpMail;
 use App\Models\EmailChangeRequest;
 use App\Models\SellerGcashAccount;
 use App\Models\User;
+use App\Services\OtpService;
 use App\Services\StorkSchemaBootstrapService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
-use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\Rules\Password;
+use Illuminate\Validation\ValidationException;
 use Intervention\Image\Drivers\Gd\Driver;
 use Intervention\Image\ImageManager;
 
 class StoreSettingsController extends Controller
 {
+    public function __construct(
+        protected OtpService $otpService
+    ) {}
+
     public function index(Request $request)
     {
         StorkSchemaBootstrapService::ensureTablesExist();
@@ -337,7 +343,32 @@ class StoreSettingsController extends Controller
             'email.unique' => 'This email address is already registered to another account.',
         ]);
 
-        $code = (string) random_int(100000, 999999);
+        if (strtolower((string) $user->email) === $newEmail) {
+            throw ValidationException::withMessages([
+                'email' => 'Please enter a different email address from your current one.',
+            ]);
+        }
+
+        $existing = EmailChangeRequest::where('user_id', $user->id)->first();
+        if ($existing && $existing->secondsUntilResend() > 0) {
+            $remaining = $existing->secondsUntilResend();
+            return response()->json([
+                'success'  => false,
+                'message'  => "Please wait {$remaining}s before requesting another code.",
+                'cooldown' => $remaining,
+            ], 429);
+        }
+
+        $code = EmailChangeRequest::generateCode();
+
+        try {
+            $this->otpService->deliverMailable($newEmail, new RegistrationOtpMail($code, EmailChangeRequest::CODE_TTL_MINUTES));
+        } catch (\Throwable $e) {
+            Log::error('Seller Email Change OTP Mail Error: ' . $e->getMessage());
+            throw ValidationException::withMessages([
+                'email' => 'Unable to send verification email right now. Please try again shortly.',
+            ]);
+        }
 
         EmailChangeRequest::updateOrCreate(
             ['user_id' => $user->id],
@@ -345,16 +376,10 @@ class StoreSettingsController extends Controller
                 'new_email'       => $newEmail,
                 'code_hash'       => Hash::make($code),
                 'last_sent_at'    => now(),
-                'code_expires_at' => now()->addMinutes(10),
+                'code_expires_at' => now()->addMinutes(EmailChangeRequest::CODE_TTL_MINUTES),
                 'attempts'        => 0,
             ]
         );
-
-        try {
-            Mail::to($newEmail)->send(new OtpMail($code, $user->first_name));
-        } catch (\Throwable $e) {
-            report($e);
-        }
 
         [$name, $domain] = explode('@', $newEmail, 2);
         $masked = substr($name, 0, 1) . str_repeat('*', max(strlen($name) - 2, 4)) . substr($name, -1) . '@' . $domain;
@@ -363,7 +388,7 @@ class StoreSettingsController extends Controller
             'success'      => true,
             'status'       => 'otp_sent',
             'masked_email' => $masked,
-            'cooldown'     => 60,
+            'cooldown'     => EmailChangeRequest::RESEND_COOLDOWN_SECONDS,
         ]);
     }
 
@@ -377,11 +402,11 @@ class StoreSettingsController extends Controller
         }
 
         $changeReq = EmailChangeRequest::where('user_id', $user->id)->first();
-        if (! $changeReq || ($changeReq->code_expires_at && $changeReq->code_expires_at->isPast())) {
+        if (! $changeReq || $changeReq->isExpired()) {
             return response()->json(['success' => false, 'message' => 'Verification code has expired.'], 422);
         }
 
-        if ($changeReq->attempts >= 5) {
+        if ($changeReq->attempts >= EmailChangeRequest::MAX_ATTEMPTS) {
             return response()->json(['success' => false, 'message' => 'Maximum verification attempts exceeded.'], 422);
         }
 
@@ -395,7 +420,10 @@ class StoreSettingsController extends Controller
             return response()->json(['success' => false, 'message' => 'Email already in use.'], 422);
         }
 
-        $user->update(['email' => $newEmail]);
+        $user->update([
+            'email'             => $newEmail,
+            'email_verified_at' => now(),
+        ]);
         $changeReq->delete();
 
         [$name, $domain] = explode('@', $newEmail, 2);
@@ -413,20 +441,24 @@ class StoreSettingsController extends Controller
     public function requestPasswordOtp(Request $request): JsonResponse
     {
         $user = $request->user();
-        $code = (string) random_int(100000, 999999);
+        $code = EmailChangeRequest::generateCode();
+
+        try {
+            $this->otpService->deliverMailable((string) $user->email, new RegistrationOtpMail($code, EmailChangeRequest::CODE_TTL_MINUTES));
+        } catch (\Throwable $e) {
+            Log::error('Seller Password OTP Mail Error: ' . $e->getMessage());
+            return response()->json([
+                'success' => false,
+                'message' => 'Unable to send verification code right now. Please try again shortly.',
+            ], 500);
+        }
 
         $request->session()->put('seller_password_otp', [
             'hash'       => Hash::make($code),
-            'expires_at' => now()->addMinutes(10)->timestamp,
+            'expires_at' => now()->addMinutes(EmailChangeRequest::CODE_TTL_MINUTES)->timestamp,
             'attempts'   => 0,
             'verified'   => false,
         ]);
-
-        try {
-            Mail::to($user->email)->send(new OtpMail($code, $user->first_name));
-        } catch (\Throwable $e) {
-            report($e);
-        }
 
         [$name, $domain] = explode('@', $user->email, 2);
         $masked = substr($name, 0, 1) . str_repeat('*', max(strlen($name) - 2, 4)) . substr($name, -1) . '@' . $domain;
@@ -435,7 +467,7 @@ class StoreSettingsController extends Controller
             'success'      => true,
             'status'       => 'otp_sent',
             'masked_email' => $masked,
-            'cooldown'     => 60,
+            'cooldown'     => EmailChangeRequest::RESEND_COOLDOWN_SECONDS,
         ]);
     }
 
@@ -453,7 +485,7 @@ class StoreSettingsController extends Controller
             return response()->json(['success' => false, 'message' => 'Verification code has expired.'], 422);
         }
 
-        if (($otpData['attempts'] ?? 0) >= 5) {
+        if (($otpData['attempts'] ?? 0) >= EmailChangeRequest::MAX_ATTEMPTS) {
             return response()->json(['success' => false, 'message' => 'Too many incorrect attempts.'], 422);
         }
 
@@ -492,7 +524,7 @@ class StoreSettingsController extends Controller
         ]);
 
         $user->update([
-            'password'            => $validated['password'],
+            'password'            => Hash::make($validated['password']),
             'password_changed_at' => now(),
         ]);
 

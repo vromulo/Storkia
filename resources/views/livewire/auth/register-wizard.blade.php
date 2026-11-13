@@ -1,5 +1,4 @@
 <div class="w-full">
-    <!-- Header Copy -->
     <div class="mb-8 text-center">
         <h1 class="text-2xl sm:text-3xl font-serif font-normal tracking-tight text-primary-dark">
             Create an Account
@@ -15,7 +14,6 @@
         </p>
     </div>
 
-    <!-- Step Indicator -->
     <div class="flex items-center justify-center gap-2 mb-10">
         @foreach ([1 => 'Verify Email', 2 => 'Personal Info', 3 => 'Password'] as $num => $label)
             <div class="flex items-center gap-2">
@@ -42,19 +40,31 @@
         @endforeach
     </div>
 
-    {{-- STEP 1: Verify Email --}}
     @if ($currentStep === 1)
         <div class="space-y-6">
             <div>
-                <label class="block text-xs uppercase tracking-wider font-bold text-text-muted mb-1.5">
-                    Email Address
-                </label>
+                <div class="flex items-center justify-between mb-1.5">
+                    <label class="block text-xs uppercase tracking-wider font-bold text-text-muted">
+                        Email Address
+                    </label>
+                    @if ($codeSent)
+                        <button
+                            type="button"
+                            wire:click="changeEmail"
+                            wire:loading.attr="disabled"
+                            class="text-xs font-bold text-primary hover:text-primary-dark underline cursor-pointer"
+                        >
+                            Change email
+                        </button>
+                    @endif
+                </div>
                 <div class="relative flex items-center border-b {{ $errors->has('email') ? 'border-danger' : 'border-border-subtle focus-within:border-text-main' }} transition-colors">
                     <input 
                         type="email" 
                         wire:model.live.debounce.500ms="email" 
+                        wire:keydown.enter.prevent="sendCode"
                         @if ($codeSent) disabled @endif
-                        class="w-full py-3 bg-transparent text-text-main text-base outline-none placeholder:text-text-muted/40 disabled:text-text-muted/50"
+                        class="w-full py-3 bg-transparent text-text-main text-base outline-none placeholder:text-text-muted/40 disabled:text-text-muted/60"
                         placeholder="name@example.com"
                     >
                 </div>
@@ -77,6 +87,12 @@
                     </button>
                 </div>
             @else
+                @if ($otpNotice)
+                    <div class="p-3.5 rounded-2xl bg-green-50 border border-green-200 text-green-800 text-xs font-medium text-center">
+                        {{ $otpNotice }}
+                    </div>
+                @endif
+
                 <div>
                     <label class="block text-xs uppercase tracking-wider font-bold text-text-muted mb-1.5">
                         Verification Code
@@ -84,7 +100,8 @@
                     <div class="relative flex items-center border-b {{ $errors->has('code') ? 'border-danger' : 'border-border-subtle focus-within:border-text-main' }} transition-colors">
                         <input 
                             type="text" 
-                            wire:model="code" 
+                            wire:model.live="code" 
+                            wire:keydown.enter.prevent="verifyCode"
                             inputmode="numeric" 
                             maxlength="6" 
                             autocomplete="one-time-code"
@@ -112,18 +129,40 @@
                         <span wire:loading wire:target="verifyCode">Verifying...</span>
                     </button>
 
-                    <div class="text-center" x-data="{ seconds: {{ $resendCooldown }} }" 
-                         x-init="let t = setInterval(() => { if (seconds > 0) seconds--; else clearInterval(t); }, 1000)">
+                    <div class="text-center"
+                         x-data="{
+                             seconds: {{ (int) $resendCooldown }},
+                             timer: null,
+                             startTimer(sec) {
+                                 this.seconds = Number(sec || 0);
+                                 if (this.timer) clearInterval(this.timer);
+                                 if (this.seconds > 0) {
+                                     this.timer = setInterval(() => {
+                                         if (this.seconds > 0) {
+                                             this.seconds--;
+                                         } else {
+                                             clearInterval(this.timer);
+                                             this.timer = null;
+                                         }
+                                     }, 1000);
+                                 }
+                             }
+                         }"
+                         x-init="startTimer({{ (int) $resendCooldown }})"
+                         @otp-cooldown-started.window="startTimer($event.detail.seconds)">
                         <button 
                             type="button" 
                             wire:click="resendCode" 
                             wire:loading.attr="disabled" 
-                            wire:target="resendCode"
+                            wire:target="resendCode,sendCode"
                             x-bind:disabled="seconds > 0"
                             class="text-xs text-text-muted hover:text-primary transition-colors cursor-pointer disabled:text-text-muted/40 disabled:cursor-not-allowed font-medium"
                         >
-                            <span x-show="seconds === 0">Resend Code</span>
-                            <span x-show="seconds > 0">Resend available in <span x-text="seconds"></span>s</span>
+                            <span wire:loading.remove wire:target="resendCode">
+                                <span x-show="seconds === 0">Resend Code</span>
+                                <span x-show="seconds > 0">Resend available in <span x-text="seconds"></span>s</span>
+                            </span>
+                            <span wire:loading wire:target="resendCode">Sending new code...</span>
                         </button>
                     </div>
                 </div>
@@ -131,11 +170,9 @@
         </div>
     @endif
 
-    {{-- STEP 2: Personal Info --}}
     @if ($currentStep === 2)
         <div class="space-y-5">
             <div class="grid grid-cols-1 sm:grid-cols-4 gap-4">
-                {{-- First Name --}}
                 <div class="sm:col-span-3">
                     <label class="block text-xs uppercase tracking-wider font-bold text-text-muted mb-1.5">
                         First Name*
@@ -152,7 +189,6 @@
                     @error('first_name') <p class="text-danger text-xs mt-1 font-medium">{{ $message }}</p> @enderror
                 </div>
 
-                {{-- Middle Initial --}}
                 <div class="sm:col-span-1">
                     <label class="block text-xs uppercase tracking-wider font-bold text-text-muted mb-1.5">
                         M.I.
@@ -171,7 +207,6 @@
                 </div>
             </div>
 
-            {{-- Last Name --}}
             <div>
                 <label class="block text-xs uppercase tracking-wider font-bold text-text-muted mb-1.5">
                     Last Name*
@@ -188,7 +223,6 @@
                 @error('last_name') <p class="text-danger text-xs mt-1 font-medium">{{ $message }}</p> @enderror
             </div>
 
-            {{-- Sex --}}
             <div>
                 <label class="block text-xs uppercase tracking-wider font-bold text-text-muted mb-2">
                     Sex*
@@ -216,7 +250,6 @@
                 @error('sex') <p class="text-danger text-xs mt-1 font-medium">{{ $message }}</p> @enderror
             </div>
 
-            {{-- Birthday --}}
             <div>
                 <label class="block text-xs uppercase tracking-wider font-bold text-text-muted mb-1.5">
                     Birthday*
@@ -254,10 +287,8 @@
         </div>
     @endif
 
-    {{-- STEP 3: Password & Legal Agreement (Terms + Privacy Policy) --}}
     @if ($currentStep === 3)
         <div class="space-y-5" x-data="{ showPass: false, showConfirm: false, legalModalOpen: false, legalModalType: 'terms' }">
-            {{-- Password --}}
             <div>
                 <label class="block text-xs uppercase tracking-wider font-bold text-text-muted mb-1.5">
                     Password*
@@ -285,7 +316,6 @@
                 @error('password') <p class="text-danger text-xs mt-1.5 font-medium">{{ $message }}</p> @enderror
             </div>
 
-            {{-- Confirm Password --}}
             <div>
                 <label class="block text-xs uppercase tracking-wider font-bold text-text-muted mb-1.5">
                     Confirm Password*
@@ -313,7 +343,6 @@
                 @error('password_confirmation') <p class="text-danger text-xs mt-1.5 font-medium">{{ $message }}</p> @enderror
             </div>
 
-            <!-- Password Requirements Indicator -->
             <div class="pt-2 grid grid-cols-2 gap-1.5 text-[11px] text-text-muted">
                 <span class="flex items-center gap-1 {{ strlen($password) >= 8 ? 'text-success font-semibold' : '' }}">
                     <span>{{ strlen($password) >= 8 ? '✓' : '○' }}</span> 8+ characters
@@ -329,7 +358,6 @@
                 </span>
             </div>
 
-            <!-- Terms & Conditions + Privacy Policy Checkbox -->
             <div class="pt-3 border-t border-border-subtle/70">
                 <label class="flex items-start gap-2.5 cursor-pointer select-none">
                     <input type="checkbox"
@@ -376,7 +404,6 @@
                 </button>
             </div>
 
-            <!-- Unified Inline Terms & Privacy Modal -->
             <template x-teleport="body">
                 <div x-show="legalModalOpen"
                      x-cloak
@@ -440,7 +467,6 @@
         </div>
     @endif
 
-    <!-- Sign-in Link -->
     <div class="mt-8 pt-8 border-t border-border-subtle/50 text-center">
         <p class="text-xs text-text-muted">
             Already have an account? 

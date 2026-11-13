@@ -6,15 +6,19 @@ use App\Http\Controllers\Controller;
 use App\Mail\OtpMail;
 use App\Mail\RegistrationOtpMail;
 use App\Models\Admin;
+use App\Services\OtpService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\Mail;
 use Illuminate\Validation\ValidationException;
 
 class AuthController extends Controller
 {
+    public function __construct(
+        protected OtpService $otpService
+    ) {}
+
     public function showLogin()
     {
         return view()->first(['admin.auth.login', 'admin.login']);
@@ -56,11 +60,11 @@ class AuthController extends Controller
         ]);
 
         try {
-            if (class_exists(OtpMail::class)) {
-                Mail::to($admin->email)->send(new OtpMail($otpCode, $admin->name ?? 'Admin'));
-            } else {
-                Mail::to($admin->email)->send(new RegistrationOtpMail($otpCode, 10));
-            }
+            $mailable = class_exists(OtpMail::class)
+                ? new OtpMail($otpCode, $admin->name ?? 'Admin')
+                : new RegistrationOtpMail($otpCode, 10);
+
+            $this->otpService->deliverMailable($admin->email, $mailable);
         } catch (\Throwable $e) {
             Log::error('Admin 2FA Mail Error: ' . $e->getMessage());
         }
@@ -168,11 +172,11 @@ class AuthController extends Controller
         ]);
 
         try {
-            if (class_exists(OtpMail::class)) {
-                Mail::to($admin->email)->send(new OtpMail($otpCode, $admin->name ?? 'Admin'));
-            } else {
-                Mail::to($admin->email)->send(new RegistrationOtpMail($otpCode, 10));
-            }
+            $mailable = class_exists(OtpMail::class)
+                ? new OtpMail($otpCode, $admin->name ?? 'Admin')
+                : new RegistrationOtpMail($otpCode, 10);
+
+            $this->otpService->deliverMailable($admin->email, $mailable);
         } catch (\Throwable $e) {
             Log::error('Admin Resend 2FA Mail Error: ' . $e->getMessage());
         }

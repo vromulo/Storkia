@@ -9,10 +9,10 @@ use App\Models\EmailChangeRequest;
 use App\Models\User;
 use App\Services\AccountArchiveService;
 use App\Services\AuditLoggerService;
+use App\Services\OtpService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\Rules\Password;
@@ -25,12 +25,10 @@ class AccountManagementController extends Controller
     public const OTP_MAX_ATTEMPTS = 5;
 
     public function __construct(
-        protected AccountArchiveService $accountArchiveService
+        protected AccountArchiveService $accountArchiveService,
+        protected OtpService $otpService
     ) {}
 
-    /**
-     * Display the Buyer Account Management & Security page (GET /user/account-management).
-     */
     public function index(Request $request)
     {
         /** @var User $user */
@@ -91,17 +89,11 @@ class AccountManagementController extends Controller
         );
     }
 
-    /**
-     * Alias for index() in case any route or caller invokes show().
-     */
     public function show(Request $request)
     {
         return $this->index($request);
     }
 
-    /**
-     * Update Buyer's First Name and Last Name (PATCH /user/account-management/name).
-     */
     public function updateName(Request $request)
     {
         /** @var User $user */
@@ -152,9 +144,6 @@ class AccountManagementController extends Controller
         return back()->with('success', 'Your name has been updated.');
     }
 
-    /**
-     * Update Buyer's Phone Number (PATCH /user/account-management/phone).
-     */
     public function updatePhone(Request $request)
     {
         /** @var User $user */
@@ -209,9 +198,6 @@ class AccountManagementController extends Controller
         return back()->with('success', 'Phone number updated successfully.');
     }
 
-    /**
-     * Request a 6-digit OTP to change the Buyer's Email Address (POST /user/account-management/email/request-otp).
-     */
     public function requestEmailOtp(Request $request)
     {
         /** @var User $user */
@@ -224,7 +210,7 @@ class AccountManagementController extends Controller
             'email' => [
                 'required',
                 'string',
-                'email',
+                'email:rfc',
                 'max:100',
                 Rule::unique('users', 'email')->ignore($user->id),
             ],
@@ -239,23 +225,20 @@ class AccountManagementController extends Controller
         }
 
         $existing = EmailChangeRequest::where('user_id', $user->id)->first();
-        if ($existing && $existing->last_sent_at) {
-            $elapsed = now()->diffInSeconds($existing->last_sent_at, true);
-            if ($elapsed < self::OTP_COOLDOWN_SECONDS) {
-                $remaining = max(1, (int) ceil(self::OTP_COOLDOWN_SECONDS - $elapsed));
-                return response()->json([
-                    'success'      => false,
-                    'message'      => "Please wait {$remaining}s before requesting another code.",
-                    'cooldown'     => $remaining,
-                    'masked_email' => $this->maskEmail($normalizedEmail),
-                ], 429);
-            }
+        if ($existing && $existing->secondsUntilResend() > 0) {
+            $remaining = $existing->secondsUntilResend();
+            return response()->json([
+                'success'      => false,
+                'message'      => "Please wait {$remaining}s before requesting another code.",
+                'cooldown'     => $remaining,
+                'masked_email' => $this->maskEmail($normalizedEmail),
+            ], 429);
         }
 
-        $code = str_pad((string) random_int(0, 999999), 6, '0', STR_PAD_LEFT);
+        $code = EmailChangeRequest::generateCode();
 
         try {
-            Mail::to($normalizedEmail)->send(new RegistrationOtpMail($code, self::OTP_TTL_MINUTES));
+            $this->otpService->deliverMailable($normalizedEmail, new RegistrationOtpMail($code, self::OTP_TTL_MINUTES));
         } catch (\Throwable $e) {
             Log::error('Buyer Email Change OTP Mail Error: ' . $e->getMessage());
             throw ValidationException::withMessages([
@@ -282,9 +265,6 @@ class AccountManagementController extends Controller
         ]);
     }
 
-    /**
-     * Verify the 6-digit Email OTP and update the Buyer's Email (POST /user/account-management/email/verify-otp).
-     */
     public function verifyEmailOtp(Request $request)
     {
         /** @var User $user */
@@ -307,7 +287,7 @@ class AccountManagementController extends Controller
             ], 422);
         }
 
-        if ($record->code_expires_at && now()->gt($record->code_expires_at)) {
+        if ($record->isExpired()) {
             return response()->json([
                 'success' => false,
                 'message' => 'This verification code has expired. Please request a new one.',
@@ -366,9 +346,6 @@ class AccountManagementController extends Controller
         ]);
     }
 
-    /**
-     * Request a 6-digit OTP to authorize a Password Change (POST /user/account-management/password/request-otp).
-     */
     public function requestPasswordOtp(Request $request)
     {
         /** @var User $user */
@@ -387,10 +364,10 @@ class AccountManagementController extends Controller
             ], 429);
         }
 
-        $code = str_pad((string) random_int(0, 999999), 6, '0', STR_PAD_LEFT);
+        $code = EmailChangeRequest::generateCode();
 
         try {
-            Mail::to($user->email)->send(new RegistrationOtpMail($code, self::OTP_TTL_MINUTES));
+            $this->otpService->deliverMailable((string) $user->email, new RegistrationOtpMail($code, self::OTP_TTL_MINUTES));
         } catch (\Throwable $e) {
             Log::error('Buyer Password OTP Mail Error: ' . $e->getMessage());
             return response()->json([
@@ -400,11 +377,11 @@ class AccountManagementController extends Controller
         }
 
         $request->session()->put([
-            'buyer_pwd_otp_hash'        => Hash::make($code),
-            'buyer_pwd_otp_expires_at'  => now()->addMinutes(self::OTP_TTL_MINUTES)->timestamp,
-            'buyer_pwd_otp_attempts'    => 0,
-            'buyer_pwd_otp_last_sent_at'=> time(),
-            'buyer_pwd_otp_verified'    => false,
+            'buyer_pwd_otp_hash'         => Hash::make($code),
+            'buyer_pwd_otp_expires_at'   => now()->addMinutes(self::OTP_TTL_MINUTES)->timestamp,
+            'buyer_pwd_otp_attempts'     => 0,
+            'buyer_pwd_otp_last_sent_at' => time(),
+            'buyer_pwd_otp_verified'     => false,
         ]);
 
         return response()->json([
@@ -415,9 +392,6 @@ class AccountManagementController extends Controller
         ]);
     }
 
-    /**
-     * Verify the 6-digit Password OTP (POST /user/account-management/password/verify-otp).
-     */
     public function verifyPasswordOtp(Request $request)
     {
         $code = preg_replace('/\D/', '', (string) ($request->input('code') ?? $request->input('otp') ?? ''));
@@ -467,9 +441,6 @@ class AccountManagementController extends Controller
         ]);
     }
 
-    /**
-     * Update Buyer's Password (PATCH /user/account-management/password).
-     */
     public function updatePassword(Request $request)
     {
         /** @var User $user */

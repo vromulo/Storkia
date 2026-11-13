@@ -34,12 +34,12 @@ class RegistrationOtp extends Model
 
     public static function generateCode(): string
     {
-        return (string) random_int(100000, 999999);
+        return str_pad((string) random_int(0, 999999), 6, '0', STR_PAD_LEFT);
     }
 
     public function isCodeExpired(): bool
     {
-        return $this->code_expires_at->isPast();
+        return ! $this->code_expires_at || $this->code_expires_at->isPast();
     }
 
     public function isVerified(): bool
@@ -52,15 +52,10 @@ class RegistrationOtp extends Model
         $this->attributes['email'] = strtolower(trim($value));
     }
 
-    /**
-     * Whether this email is currently "held" by a session that verified it
-     * but hasn't finished registration yet. Used to block a second session
-     * from restarting the flow for the same email in the meantime.
-     */
     public function isReservationActive(): bool
     {
         return $this->isVerified()
-            && $this->reservation_expires_at
+            && $this->reservation_expires_at !== null
             && $this->reservation_expires_at->isFuture();
     }
 
@@ -72,11 +67,15 @@ class RegistrationOtp extends Model
 
         $unlockAt = $this->last_sent_at->copy()->addSeconds(self::RESEND_COOLDOWN_SECONDS);
 
-        return $unlockAt->isFuture() ? now()->diffInSeconds($unlockAt) : 0;
+        if (! $unlockAt->isFuture()) {
+            return 0;
+        }
+
+        return max(1, (int) ceil(now()->diffInSeconds($unlockAt)));
     }
 
     public function attemptsRemaining(): int
     {
-        return max(0, self::MAX_ATTEMPTS - $this->attempts);
+        return max(0, self::MAX_ATTEMPTS - (int) $this->attempts);
     }
 }

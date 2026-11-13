@@ -267,12 +267,15 @@ class ShipmentController extends Controller
             'lookup_input.required' => 'Please scan the package QR Code or enter the Tracking / Package Reference.',
         ]);
 
-        $stage = $shipment->status === 'awaiting_seller_drop_off'
-            ? 'seller_drop_off'
-            : 'logistics_receiving';
+        $shipment->loadMissing('packages');
+        $firstPackage = $shipment->packages->first();
+        $isSelfDropOff = $shipment->status === 'awaiting_seller_drop_off'
+            || ($firstPackage?->handover_method === 'self_drop_off' && $shipment->status === 'pickup_requested');
+
+        $stage = $isSelfDropOff ? 'seller_drop_off' : 'logistics_receiving';
 
         $result = $this->shipmentVerificationService->lookupPackageForActor(
-            rawInput: $validated['lookup_input'],
+            rawInput: trim($validated['lookup_input']),
             verificationMethod: $validated['verification_method'],
             stage: $stage,
             actorType: 'Logistics',
@@ -290,11 +293,34 @@ class ShipmentController extends Controller
             'confirmed_at' => now(),
         ]);
 
+        $result['package']->update([
+            'hub_verification_method' => $validated['verification_method'],
+        ]);
+
+        $shipment->load('packages.verifications');
+        $allHubPackagesVerified = $shipment->packages->isNotEmpty() && $shipment->packages->every(function ($pkg) {
+            if ($pkg->hub_verified_at !== null) {
+                return true;
+            }
+
+            return $pkg->verifications
+                ->whereIn('stage', ['logistics_receiving', 'seller_drop_off'])
+                ->where('actor_type', 'Logistics')
+                ->where('is_confirmed', true)
+                ->isNotEmpty();
+        });
+
+        $canAutoConfirmArrival = $isSelfDropOff || in_array($shipment->status, ['picked_up_from_seller', 'in_transit_to_hub'], true);
+
+        if ($allHubPackagesVerified && $canAutoConfirmArrival) {
+            return $this->verifyHubArrival($request, $shipment);
+        }
+
         $orderNo = $shipment->sellerOrder?->seller_order_number ?? 'N/A';
 
         return back()->with(
             'success',
-            "QR/Package Identified: {$result['package']->package_reference} (Order #{$orderNo}, Tracking #{$shipment->tracking_number}) verified via " . strtoupper($validated['verification_method']) . ". Please review the manifest and click Confirm Physical Receipt at Sorting Hub."
+            "QR/Package Identified: {$result['package']->package_reference} (Order #{$orderNo}, Tracking #{$shipment->tracking_number}) verified via " . strtoupper($validated['verification_method']) . ". Please scan/verify the remaining package(s) to confirm physical receipt at the Sorting Hub."
         );
     }
 
@@ -460,8 +486,9 @@ class ShipmentController extends Controller
         $notifiableCourier = null;
         $creditedPayInfo = null;
         $isCod = true;
+        $verificationMethodUsed = strtoupper((string) $request->input('verification_method', 'MANUAL'));
 
-        DB::transaction(function () use ($shipment, $profile, $user, &$notifiableCourier, &$creditedPayInfo, &$isCod) {
+        DB::transaction(function () use ($shipment, $profile, $user, &$notifiableCourier, &$creditedPayInfo, &$isCod, &$verificationMethodUsed) {
             $locked = Shipment::with([
                 'sellerOrder.order',
                 'sellerOrder.payment',
@@ -496,10 +523,13 @@ class ShipmentController extends Controller
                     ]);
                 }
 
+                $methodForPkg = $verifiedRecord?->verification_method ?? ($pkg->hub_verification_method ?: 'manual');
+                $verificationMethodUsed = strtoupper((string) $methodForPkg);
+
                 $pkg->update([
                     'hub_verified_at'         => now(),
                     'hub_verified_by'         => $user->id,
-                    'hub_verification_method' => $verifiedRecord?->verification_method ?? ($pkg->hub_verification_method ?: 'manual'),
+                    'hub_verification_method' => $methodForPkg,
                     'seller_dropped_off_at'   => $isSelfDropOff ? now() : $pkg->seller_dropped_off_at,
                 ]);
             }
@@ -550,7 +580,7 @@ class ShipmentController extends Controller
                     'seller_order_id' => $locked->seller_order_id,
                     'status'          => 'received_at_hub',
                     'title'           => 'Seller Dropped Off Package — Verified & Received at Hub',
-                    'description'     => "Seller personally dropped off the package at {$hubName}. Logistics verified package identification and confirmed physical receipt.",
+                    'description'     => "Seller personally dropped off the package at {$hubName}. Logistics verified package identification ({$verificationMethodUsed}) and confirmed physical receipt.",
                     'location'        => $hubLocation,
                     'actor_type'      => 'Logistics',
                     'actor_id'        => $user->id,
@@ -562,7 +592,7 @@ class ShipmentController extends Controller
                     'seller_order_id' => $locked->seller_order_id,
                     'status'          => 'received_at_hub',
                     'title'           => 'Arrived at Logistics Sorting Facility',
-                    'description'     => "Package verified and received at {$hubName} from Courier {$locked->currentCourier?->full_name}.",
+                    'description'     => "Package verified ({$verificationMethodUsed}) and received at {$hubName} from Courier {$locked->currentCourier?->full_name}.",
                     'location'        => $hubLocation,
                     'actor_type'      => 'Logistics',
                     'actor_id'        => $user->id,
@@ -578,8 +608,8 @@ class ShipmentController extends Controller
                 'actor_type'      => 'Logistics',
                 'actor_id'        => $user->id,
                 'remarks'         => $isSelfDropOff
-                    ? "Seller drop-off verified and received at {$hubName}."
-                    : "Courier handover verified and received at {$hubName}.",
+                    ? "Seller drop-off verified ({$verificationMethodUsed}) and received at {$hubName}."
+                    : "Courier handover verified ({$verificationMethodUsed}) and received at {$hubName}.",
             ]);
         });
 
@@ -603,7 +633,7 @@ class ShipmentController extends Controller
 
         $this->buyerNotifications->arrivedAtHub($shipment);
 
-        return back()->with('success', "Shipment #{$shipment->tracking_number} physical receipt verified at sorting hub. You can now assign a last-mile Rider.");
+        return back()->with('success', "Shipment #{$shipment->tracking_number} verified ({$verificationMethodUsed}) and physical receipt confirmed at sorting hub. You can now assign a last-mile Rider.");
     }
 
     public function assignRider(Request $request, Shipment $shipment)
