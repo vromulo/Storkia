@@ -13,7 +13,7 @@ return new class extends Migration
                 $table->id();
                 $table->string('topup_reference', 50)->unique();
                 $table->unsignedBigInteger('buyer_id');
-                $table->unsignedBigInteger('role_wallet_id');
+                $table->unsignedBigInteger('role_wallet_id')->index();
                 $table->string('admin_gcash_name', 120)->nullable();
                 $table->string('admin_gcash_number', 30)->nullable();
                 $table->string('sender_account_name', 120);
@@ -32,11 +32,6 @@ return new class extends Migration
                 $table->foreign('buyer_id', 'bwt_buyer_id_fk')
                     ->references('id')
                     ->on('users')
-                    ->cascadeOnDelete();
-
-                $table->foreign('role_wallet_id', 'bwt_wallet_id_fk')
-                    ->references('id')
-                    ->on('role_wallets')
                     ->cascadeOnDelete();
 
                 $table->index(['buyer_id', 'status'], 'bwt_buyer_status_idx');
@@ -94,11 +89,6 @@ return new class extends Migration
                 $table->unsignedBigInteger('review_id');
                 $table->unsignedBigInteger('user_id');
                 $table->timestamps();
-
-                $table->foreign('review_id', 'pru_review_id_fk')
-                    ->references('id')
-                    ->on('order_item_reviews')
-                    ->cascadeOnDelete();
 
                 $table->foreign('user_id', 'pru_user_id_fk')
                     ->references('id')

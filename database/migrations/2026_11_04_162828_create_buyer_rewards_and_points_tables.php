@@ -29,7 +29,7 @@ return new class extends Migration
                 $table->foreignId('buyer_id')->constrained('users')->cascadeOnDelete();
                 $table->foreignId('reward_wallet_id')->constrained('buyer_reward_wallets')->cascadeOnDelete();
                 $table->foreignId('seller_order_id')->nullable()->constrained('seller_orders')->nullOnDelete();
-                $table->foreignId('voucher_id')->nullable()->constrained('stork_vouchers')->nullOnDelete();
+                $table->unsignedBigInteger('voucher_id')->nullable()->index();
                 $table->string('reference_code', 50)->unique();
                 $table->string('source_type', 40)->index();
                 $table->string('reward_type', 30)->default('coins');
