@@ -16,6 +16,7 @@ use App\Models\StorkVoucher;
 use App\Notifications\OrderLifecycleNotification;
 use App\Services\BuyerCancellationGuardService;
 use App\Services\BuyerRewardService;
+use App\Services\CheckoutVoucherRecommender;
 use App\Services\InventoryStockService;
 use App\Services\RoleWalletService;
 use App\Services\ShippingCalculatorService;
@@ -38,8 +39,11 @@ class CheckoutController extends Controller
         protected BuyerCancellationGuardService $cancellationGuardService,
         protected SuperDealPricingService $superDealPricingService,
         protected RoleWalletService $roleWalletService,
-        protected BuyerRewardService $buyerRewardService
-    ) {}
+        protected BuyerRewardService $buyerRewardService,
+        protected ?CheckoutVoucherRecommender $voucherRecommender = null
+    ) {
+        $this->voucherRecommender = $voucherRecommender ?? app(CheckoutVoucherRecommender::class);
+    }
 
     protected function resolvePlatformGcashSettings(): ?array
     {
@@ -91,20 +95,58 @@ class CheckoutController extends Controller
         }
     }
 
+    protected function toRecommenderPreview(array $summary): array
+    {
+        $copy = $summary;
+        $copy['seller_packages'] = array_map(function (array $pkg) {
+            $pkg['seller_profile'] = $pkg['seller_profile_model'] ?? $pkg['seller_profile'];
+            $pkg['items'] = $pkg['raw_items'] ?? $pkg['items'];
+            $pkg['store_voucher'] = $pkg['store_voucher_model'] ?? null;
+            return $pkg;
+        }, $summary['seller_packages'] ?? []);
+
+        return $copy;
+    }
+
+    protected function serializeSellerPackagesForJson(array $packages): array
+    {
+        return array_values(array_map(function (array $pkg) {
+            unset($pkg['seller_profile_model'], $pkg['raw_items'], $pkg['store_voucher_model']);
+            return $pkg;
+        }, $packages));
+    }
+
     public function preview(Request $request): JsonResponse
     {
         StorkSchemaBootstrapService::ensureTablesExist();
 
+        $this->normalizeMultipartArrays($request, [
+            'cart_ids',
+            'store_vouchers',
+            'store_voucher_codes',
+            'touched_slots',
+        ]);
+
+        if (! $request->filled('address_id') && $request->filled('user_address_id')) {
+            $request->merge(['address_id' => $request->input('user_address_id')]);
+        }
+
+        if (! $request->filled('store_vouchers') && $request->filled('store_voucher_codes')) {
+            $request->merge(['store_vouchers' => $request->input('store_voucher_codes')]);
+        }
+
         $validated = $request->validate([
             'mode'                  => ['required', 'in:cart,buy_now'],
             'address_id'            => ['nullable', 'integer', 'exists:user_addresses,id'],
-            'cart_ids'              => ['required_if:mode,cart', 'array'],
+            'cart_ids'              => ['nullable', 'array'],
             'cart_ids.*'            => ['integer'],
             'store_vouchers'        => ['nullable', 'array'],
             'store_vouchers.*'      => ['nullable', 'string', 'max:25'],
             'platform_voucher_code' => ['nullable', 'string', 'max:25'],
             'shipping_voucher_code' => ['nullable', 'string', 'max:25'],
             'voucher_code'          => ['nullable', 'string', 'max:25'],
+            'touched_slots'         => ['nullable', 'array'],
+            'touched_slots.*'       => ['nullable', 'string', 'max:40'],
             'use_storkia_coins'     => ['nullable', 'boolean'],
             'coins_to_use'          => ['nullable', 'integer', 'min:0'],
             'product_id'            => ['required_if:mode,buy_now', 'integer', 'exists:products,id'],
@@ -133,6 +175,7 @@ class CheckoutController extends Controller
         $storeVouchers = (array) ($validated['store_vouchers'] ?? []);
         $platformVoucherCode = trim((string) ($validated['platform_voucher_code'] ?? ''));
         $shippingVoucherCode = trim((string) ($validated['shipping_voucher_code'] ?? ''));
+        $touchedSlots = array_values(array_unique(array_filter(array_map('strval', (array) ($validated['touched_slots'] ?? [])))));
 
         if (! empty($validated['voucher_code']) && $platformVoucherCode === '' && $shippingVoucherCode === '' && empty($storeVouchers)) {
             $legacyCode = strtoupper(trim((string) $validated['voucher_code']));
@@ -140,10 +183,13 @@ class CheckoutController extends Controller
             if ($candidate) {
                 if ($candidate->scope === 'platform') {
                     $platformVoucherCode = $legacyCode;
+                    $touchedSlots[] = 'platform';
                 } elseif ($candidate->scope === 'shipping') {
                     $shippingVoucherCode = $legacyCode;
+                    $touchedSlots[] = 'shipping';
                 } elseif ($candidate->scope === 'store' && $candidate->seller_profile_id) {
                     $storeVouchers[$candidate->seller_profile_id] = $legacyCode;
+                    $touchedSlots[] = 'store_' . $candidate->seller_profile_id;
                 }
             }
         }
@@ -151,7 +197,9 @@ class CheckoutController extends Controller
         $useStorkiaCoins = $request->boolean('use_storkia_coins');
         $requestedCoinsToUse = isset($validated['coins_to_use']) ? (int) $validated['coins_to_use'] : null;
 
-        $checkoutSummary = $this->buildGroupedSellerPreview(
+        $availableVouchersCollection = $this->voucherService->getBuyerAvailableVouchers((int) $user->id);
+
+        $initialSummary = $this->buildGroupedSellerPreview(
             rawLineItems: $rawLineItems,
             selectedAddress: $selectedAddress,
             buyerId: (int) $user->id,
@@ -163,12 +211,75 @@ class CheckoutController extends Controller
             requestedCoinsToUse: $requestedCoinsToUse
         );
 
+        $recommended = ['store' => [], 'platform' => '', 'shipping' => ''];
+        if ($this->voucherRecommender) {
+            try {
+                $recommended = $this->voucherRecommender->recommend(
+                    availableVouchers: $availableVouchersCollection,
+                    preview: $this->toRecommenderPreview($initialSummary),
+                    buyerId: (int) $user->id,
+                    touchedSlots: $touchedSlots
+                );
+            } catch (\Throwable $e) {
+                $recommended = ['store' => [], 'platform' => '', 'shipping' => ''];
+            }
+        }
+
+        $needsRecompute = false;
+
+        foreach ((array) ($recommended['store'] ?? []) as $spId => $recCode) {
+            $slotKey = 'store_' . $spId;
+            if (! in_array($slotKey, $touchedSlots, true) && empty($storeVouchers[$spId]) && empty($storeVouchers[(string) $spId]) && $recCode !== '') {
+                $storeVouchers[$spId] = $recCode;
+                $needsRecompute = true;
+            }
+        }
+
+        if (! in_array('platform', $touchedSlots, true) && $platformVoucherCode === '' && ! empty($recommended['platform'])) {
+            $platformVoucherCode = (string) $recommended['platform'];
+            $needsRecompute = true;
+        }
+
+        if (! in_array('shipping', $touchedSlots, true) && $shippingVoucherCode === '' && ! empty($recommended['shipping'])) {
+            $shippingVoucherCode = (string) $recommended['shipping'];
+            $needsRecompute = true;
+        }
+
+        $checkoutSummary = $needsRecompute
+            ? $this->buildGroupedSellerPreview(
+                rawLineItems: $rawLineItems,
+                selectedAddress: $selectedAddress,
+                buyerId: (int) $user->id,
+                storeVoucherCodes: $storeVouchers,
+                platformVoucherCode: $platformVoucherCode,
+                shippingVoucherCode: $shippingVoucherCode,
+                useStorkiaCoins: $useStorkiaCoins,
+                strictVoucherErrors: false,
+                requestedCoinsToUse: $requestedCoinsToUse
+            )
+            : $initialSummary;
+
         $buyerWallet = $this->roleWalletService->getOrCreateBuyerWallet($user);
 
-        $availableVouchers = $this->voucherService->getBuyerAvailableVouchers((int) $user->id)
-            ->map(function (StorkVoucher $v) {
+        $recommendedStoreCodes = array_map('strtoupper', (array) ($recommended['store'] ?? []));
+        $recommendedPlatformCode = strtoupper((string) ($recommended['platform'] ?? ''));
+        $recommendedShippingCode = strtoupper((string) ($recommended['shipping'] ?? ''));
+
+        $availableVouchers = $availableVouchersCollection
+            ->map(function (StorkVoucher $v) use ($recommendedStoreCodes, $recommendedPlatformCode, $recommendedShippingCode) {
+                $upperCode = strtoupper((string) $v->code);
+                $isPreferred = false;
+                if ($v->scope === 'store' && $v->seller_profile_id) {
+                    $isPreferred = (($recommendedStoreCodes[(int) $v->seller_profile_id] ?? '') === $upperCode);
+                } elseif ($v->scope === 'platform') {
+                    $isPreferred = ($recommendedPlatformCode !== '' && $recommendedPlatformCode === $upperCode);
+                } elseif ($v->scope === 'shipping') {
+                    $isPreferred = ($recommendedShippingCode !== '' && $recommendedShippingCode === $upperCode);
+                }
+
                 return array_merge($v->toArray(), [
-                    'badge_label' => $v->badge_label,
+                    'badge_label'       => $v->badge_label,
+                    'is_most_preferred' => $isPreferred,
                 ]);
             })
             ->values();
@@ -182,7 +293,7 @@ class CheckoutController extends Controller
                 'is_address_serviceable'    => $checkoutSummary['is_address_serviceable'],
                 'buyer_wallet_balance'      => round((float) $buyerWallet->available_balance, 2),
                 'platform_gcash'            => $this->resolvePlatformGcashSettings(),
-                'seller_packages'           => $checkoutSummary['seller_packages'],
+                'seller_packages'           => $this->serializeSellerPackagesForJson($checkoutSummary['seller_packages']),
                 'overall_subtotal'          => $checkoutSummary['overall_subtotal'],
                 'overall_shipping'          => $checkoutSummary['overall_shipping'],
                 'overall_store_discount'    => $checkoutSummary['overall_store_discount'],
@@ -200,6 +311,8 @@ class CheckoutController extends Controller
                 'overall_net_subtotal'      => $checkoutSummary['overall_net_subtotal'],
                 'overall_net_shipping'      => $checkoutSummary['overall_net_shipping'],
                 'overall_total'             => $checkoutSummary['overall_total'],
+                'recommended_vouchers'      => $recommended,
+                'touched_slots'             => $touchedSlots,
                 'applied_platform_voucher'  => $checkoutSummary['applied_platform_voucher']
                     ? array_merge($checkoutSummary['applied_platform_voucher']->toArray(), [
                         'badge_label' => $checkoutSummary['applied_platform_voucher']->badge_label,
@@ -228,13 +341,22 @@ class CheckoutController extends Controller
             'cart_ids',
             'seller_notes',
             'store_voucher_codes',
+            'store_vouchers',
             'payment_methods',
         ]);
+
+        if (! $request->filled('user_address_id') && $request->filled('address_id')) {
+            $request->merge(['user_address_id' => $request->input('address_id')]);
+        }
+
+        if (! $request->filled('store_voucher_codes') && $request->filled('store_vouchers')) {
+            $request->merge(['store_voucher_codes' => $request->input('store_vouchers')]);
+        }
 
         $validated = $request->validate([
             'user_address_id'       => ['required', 'integer', 'exists:user_addresses,id'],
             'mode'                  => ['required', 'in:cart,buy_now'],
-            'cart_ids'              => ['required_if:mode,cart', 'array'],
+            'cart_ids'              => ['nullable', 'array'],
             'cart_ids.*'            => ['integer'],
             'idempotency_key'       => ['required', 'string', 'max:64'],
             'price_signature'       => ['nullable', 'string'],
@@ -612,7 +734,8 @@ class CheckoutController extends Controller
                             type: 'info',
                             url: route('seller.orders.show', $sellerOrder->id),
                             orderId: $parentOrder->id,
-                            sellerOrderId: $sellerOrder->id                         ),
+                            sellerOrderId: $sellerOrder->id
+                        ),
                     ];
                 }
             }
@@ -731,11 +854,16 @@ class CheckoutController extends Controller
             return $lineItems;
         }
 
-        $cartRecords = Cart::with(['product.approval', 'product.sellerProfile', 'product.user.sellerProfile'])
+        $requestedIds = array_values(array_filter(array_map('intval', (array) ($validated['cart_ids'] ?? []))));
+        $cartQuery = Cart::with(['product.approval', 'product.sellerProfile', 'product.user.sellerProfile'])
             ->where('user_id', $user->id)
-            ->whereIn('id', array_map('intval', (array) ($validated['cart_ids'] ?? [])))
-            ->orderBy('id', 'asc')
-            ->get();
+            ->orderBy('id', 'asc');
+
+        if (! empty($requestedIds)) {
+            $cartQuery->whereIn('id', $requestedIds);
+        }
+
+        $cartRecords = $cartQuery->get();
 
         foreach ($cartRecords as $cartItem) {
             $product = $cartItem->product;
@@ -851,9 +979,9 @@ class CheckoutController extends Controller
             $grouped[$sellerProfileId]['total_weight'] = round($grouped[$sellerProfileId]['total_weight'] + $line['line_weight'], 3);
         }
 
-        $buyerProvince = $selectedAddress->province ?? '';
-        $buyerMunicipality = $selectedAddress->municipality ?? '';
-        $buyerBarangay = $selectedAddress->barangay ?? '';
+        $buyerProvince = $selectedAddress?->province ?? '';
+        $buyerMunicipality = $selectedAddress?->municipality ?? '';
+        $buyerBarangay = $selectedAddress?->barangay ?? '';
 
         $isAddressServiceable = $selectedAddress
             ? $this->shippingCalculatorService->isAddressServiceable($buyerProvince, $buyerMunicipality)
@@ -965,28 +1093,29 @@ class CheckoutController extends Controller
             }, $package['items']);
 
             $sellerPackages[] = [
-                'seller_profile_model' => $sellerProfile,
-                'seller_profile'       => $sellerProfile->toArray(),
-                'wallet_enabled'       => true,
-                'raw_items'            => $package['items'],
-                'items'                => $serializedItems,
-                'subtotal'             => $package['subtotal'],
-                'bundle_discount'      => $bundleDiscount,
-                'bundle_title'         => $bundleResult['bundle_title'],
-                'store_voucher_model'  => $appliedStoreVoucher,
-                'store_voucher'        => $appliedStoreVoucher ? array_merge($appliedStoreVoucher->toArray(), [
+                'seller_profile_model'  => $sellerProfile,
+                'seller_profile'        => $sellerProfile->toArray(),
+                'wallet_enabled'        => true,
+                'raw_items'             => $package['items'],
+                'items'                 => $serializedItems,
+                'subtotal'              => $package['subtotal'],
+                'bundle_discount'       => $bundleDiscount,
+                'bundle_title'          => $bundleResult['bundle_title'],
+                'store_voucher_model'   => $appliedStoreVoucher,
+                'store_voucher'         => $appliedStoreVoucher ? array_merge($appliedStoreVoucher->toArray(), [
                     'badge_label' => $appliedStoreVoucher->badge_label,
                 ]) : null,
-                'store_discount'       => $storeDiscount,
-                'platform_discount'    => 0.0,
-                'shipping_discount'    => 0.0,
-                'coins_used'           => 0,
-                'coins_discount'       => 0.0,
-                'net_subtotal'         => max(0.0, round($package['subtotal'] - $combinedSellerFundedDiscount, 2)),
-                'total_weight'         => $package['total_weight'],
-                'shipping'             => $shipping,
-                'net_shipping_fee'     => $shipping['shipping_fee'],
-                'total'                => round(max(0.0, $package['subtotal'] - $combinedSellerFundedDiscount) + $shipping['shipping_fee'], 2),
+                'store_discount'        => $storeDiscount,
+                'platform_discount'     => 0.0,
+                'shipping_discount'     => 0.0,
+                'coins_used'            => 0,
+                'coins_discount'        => 0.0,
+                'net_subtotal'          => max(0.0, round($package['subtotal'] - $combinedSellerFundedDiscount, 2)),
+                'total_weight'          => $package['total_weight'],
+                'shipping'              => $shipping,
+                'original_shipping_fee' => $shipping['shipping_fee'],
+                'net_shipping_fee'      => $shipping['shipping_fee'],
+                'total'                 => round(max(0.0, $package['subtotal'] - $combinedSellerFundedDiscount) + $shipping['shipping_fee'], 2),
             ];
         }
 

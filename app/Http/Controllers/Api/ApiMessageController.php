@@ -24,9 +24,9 @@ class ApiMessageController extends Controller
 
         $contactIds = $sentTo->merge($receivedFrom)->unique()->filter();
 
-        $activeContactId = $request->query('contact');
-        if ($activeContactId && ! $contactIds->contains($activeContactId)) {
-            $contactIds->push($activeContactId);
+        $activeContactId = $request->query('contact') ?? $request->query('contact_id');
+        if ($activeContactId && ! $contactIds->contains((int) $activeContactId)) {
+            $contactIds->push((int) $activeContactId);
         }
 
         $contacts = User::with('sellerProfile')->whereIn('id', $contactIds)->get();
@@ -43,28 +43,35 @@ class ApiMessageController extends Controller
                 ->where('is_read', false)
                 ->count();
 
-            $displayName = $contact->sellerProfile
-                ? $contact->sellerProfile->business_name
-                : trim($contact->first_name . ' ' . $contact->last_name);
-
-            $logoUrl = ($contact->sellerProfile && $contact->sellerProfile->logo_path)
-                ? asset('storage/' . $contact->sellerProfile->logo_path)
+            $businessName = $contact->sellerProfile?->business_name;
+            $displayName = $businessName ?: trim($contact->first_name . ' ' . $contact->last_name);
+            $logoPath = $contact->sellerProfile?->logo_path;
+            $logoUrl = $logoPath
+                ? asset('storage/' . ltrim($logoPath, '/'))
                 : $contact->avatar_url;
 
             return [
-                'id'           => $contact->id,
-                'name'         => $displayName,
-                'role'         => $contact->role,
-                'avatar_url'   => $logoUrl,
-                'unread_count' => $unreadCount,
-                'last_message' => $lastMessage ? [
-                    'id'             => $lastMessage->id,
-                    'message'        => $lastMessage->message,
-                    'attachment_url' => ! empty($lastMessage->attachment_path) ? asset('storage/' . $lastMessage->attachment_path) : null,
-                    'sender_id'      => $lastMessage->user_id,
-                    'created_at'     => $lastMessage->created_at?->toIso8601String(),
+                'id'                => (int) $contact->id,
+                'name'              => $displayName,
+                'display_name'      => $displayName,
+                'business_name'     => $businessName,
+                'first_name'        => (string) ($contact->first_name ?? ''),
+                'last_name'         => (string) ($contact->last_name ?? ''),
+                'role'              => (string) ($contact->role ?? 'Seller'),
+                'logo_path'         => $logoPath,
+                'avatar_url'        => $logoUrl,
+                'unread_count'      => $unreadCount,
+                'latest_message'    => $lastMessage?->message,
+                'latest_message_at' => $lastMessage?->created_at?->toIso8601String(),
+                'last_message'      => $lastMessage ? [
+                    'id'              => $lastMessage->id,
+                    'message'         => $lastMessage->message,
+                    'attachment_path' => $lastMessage->attachment_path,
+                    'attachment_url'  => ! empty($lastMessage->attachment_path) ? asset('storage/' . ltrim($lastMessage->attachment_path, '/')) : null,
+                    'sender_id'       => $lastMessage->user_id,
+                    'created_at'      => $lastMessage->created_at?->toIso8601String(),
                 ] : null,
-                '_sort_ts'     => $lastMessage?->created_at?->timestamp ?? 0,
+                '_sort_ts'          => $lastMessage?->created_at?->timestamp ?? 0,
             ];
         })->sortByDesc('_sort_ts')->values()->map(function ($item) {
             unset($item['_sort_ts']);
@@ -86,6 +93,23 @@ class ApiMessageController extends Controller
             ->where('is_read', false)
             ->update(['is_read' => true]);
 
+        $contactUser = User::with('sellerProfile')->find($contactId);
+        $contactPayload = null;
+        if ($contactUser) {
+            $businessName = $contactUser->sellerProfile?->business_name;
+            $logoPath = $contactUser->sellerProfile?->logo_path;
+            $contactPayload = [
+                'id'            => (int) $contactUser->id,
+                'name'          => $businessName ?: trim($contactUser->first_name . ' ' . $contactUser->last_name),
+                'business_name' => $businessName,
+                'first_name'    => (string) ($contactUser->first_name ?? ''),
+                'last_name'     => (string) ($contactUser->last_name ?? ''),
+                'role'          => (string) ($contactUser->role ?? 'Seller'),
+                'logo_path'     => $logoPath,
+                'avatar_url'    => $logoPath ? asset('storage/' . ltrim($logoPath, '/')) : $contactUser->avatar_url,
+            ];
+        }
+
         $messages = Message::where(function ($q) use ($userId, $contactId) {
             $q->where('user_id', $userId)->where('receiver_id', $contactId);
         })->orWhere(function ($q) use ($userId, $contactId) {
@@ -96,7 +120,7 @@ class ApiMessageController extends Controller
                 $prod = Product::find($msg->product_id);
                 if ($prod) {
                     $firstPic = (! empty($prod->pictures) && is_array($prod->pictures))
-                        ? asset('storage/' . $prod->pictures[0])
+                        ? asset('storage/' . ltrim($prod->pictures[0], '/'))
                         : null;
                     $productCard = [
                         'id'    => $prod->id,
@@ -108,26 +132,34 @@ class ApiMessageController extends Controller
             }
 
             return [
-                'id'             => $msg->id,
-                'user_id'        => $msg->user_id,
-                'receiver_id'    => $msg->receiver_id,
-                'message'        => $msg->message,
-                'product_id'     => $msg->product_id ?? null,
-                'product_card'   => $productCard,
-                'attachment_url' => ! empty($msg->attachment_path) ? asset('storage/' . $msg->attachment_path) : null,
-                'is_read'        => (bool) $msg->is_read,
-                'created_at'     => $msg->created_at?->toIso8601String(),
+                'id'              => $msg->id,
+                'user_id'         => $msg->user_id,
+                'receiver_id'     => $msg->receiver_id,
+                'message'         => (string) ($msg->message ?? ''),
+                'product_id'      => $msg->product_id ?? null,
+                'product'         => $productCard,
+                'product_card'    => $productCard,
+                'attachment_path' => $msg->attachment_path,
+                'attachment_url'  => ! empty($msg->attachment_path) ? asset('storage/' . ltrim($msg->attachment_path, '/')) : null,
+                'is_read'         => (bool) $msg->is_read,
+                'time'            => $msg->created_at?->timezone('Asia/Manila')->format('h:i A') ?? '',
+                'created_at'      => $msg->created_at?->toIso8601String(),
             ];
         });
 
         return response()->json([
             'success' => true,
+            'contact' => $contactPayload,
             'data'    => $messages,
         ]);
     }
 
     public function store(Request $request)
     {
+        if (! $request->filled('receiver_id') && $request->filled('contact_id')) {
+            $request->merge(['receiver_id' => $request->input('contact_id')]);
+        }
+
         $validated = $request->validate([
             'receiver_id' => ['required', 'integer', 'exists:users,id'],
             'message'     => ['nullable', 'string', 'max:2000'],
@@ -170,6 +202,22 @@ class ApiMessageController extends Controller
 
         $message = Message::create($payload);
 
+        $productCard = null;
+        if (! empty($message->product_id)) {
+            $prod = Product::find($message->product_id);
+            if ($prod) {
+                $firstPic = (! empty($prod->pictures) && is_array($prod->pictures))
+                    ? asset('storage/' . ltrim($prod->pictures[0], '/'))
+                    : null;
+                $productCard = [
+                    'id'    => $prod->id,
+                    'name'  => $prod->name,
+                    'price' => number_format((float) $prod->price, 2),
+                    'image' => $firstPic,
+                ];
+            }
+        }
+
         try {
             broadcast(new MessageSent($message))->toOthers();
         } catch (\Throwable $e) {
@@ -178,14 +226,18 @@ class ApiMessageController extends Controller
         return response()->json([
             'success' => true,
             'data'    => [
-                'id'             => $message->id,
-                'user_id'        => $message->user_id,
-                'receiver_id'    => $message->receiver_id,
-                'message'        => $message->message,
-                'product_id'     => $message->product_id ?? null,
-                'attachment_url' => $attachmentPath ? asset('storage/' . $attachmentPath) : null,
-                'is_read'        => (bool) $message->is_read,
-                'created_at'     => $message->created_at?->toIso8601String(),
+                'id'              => $message->id,
+                'user_id'         => $message->user_id,
+                'receiver_id'     => $message->receiver_id,
+                'message'         => $message->message,
+                'product_id'      => $message->product_id ?? null,
+                'product'         => $productCard,
+                'product_card'    => $productCard,
+                'attachment_path' => $attachmentPath,
+                'attachment_url'  => $attachmentPath ? asset('storage/' . ltrim($attachmentPath, '/')) : null,
+                'is_read'         => (bool) $message->is_read,
+                'time'            => $message->created_at?->timezone('Asia/Manila')->format('h:i A') ?? '',
+                'created_at'      => $message->created_at?->toIso8601String(),
             ],
         ], 201);
     }

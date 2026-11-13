@@ -45,6 +45,16 @@ class ReturnRequestController extends Controller
         $identityStatus = $request->user()->identityVerification?->status;
         $identityVerified = $identityStatus === 'verified';
 
+        $reasonLabels = [
+            'damaged_item'     => 'Damaged or defective item',
+            'wrong_item'       => 'Wrong item or variation received',
+            'missing_parts'    => 'Missing parts or incomplete quantity',
+            'not_as_described' => 'Item does not match description/photos',
+            'did_not_receive'  => 'Parcel marked delivered but not received',
+            'empty_parcel'     => 'Received an empty package',
+            'counterfeit'      => 'Suspected counterfeit or fake item',
+        ];
+
         return response()->json([
             'success' => true,
             'data'    => [
@@ -71,16 +81,18 @@ class ReturnRequestController extends Controller
                 'reasons'              => collect(ReturnRequest::reasonCatalog())
                     ->map(fn (array $reason, string $key) => [
                         'key'                => $key,
+                        'label'              => $reason['label'] ?? ($reasonLabels[$key] ?? ucwords(str_replace('_', ' ', $key))),
                         'resolution'         => $reason['resolution'],
                         'hint'               => $reason['hint'],
                         'refund_only_forced' => $reason['resolution'] === ReturnRequest::RESOLUTION_REFUND_ONLY,
                     ])
                     ->values()
                     ->all(),
-                'default_account_name' => $request->user()->full_name,
-                'seller_reply_hours'   => ReturnRequest::SELLER_RESPONSE_HOURS,
-                'refund_payout_hours'  => ReturnRequest::REFUND_PAYOUT_HOURS,
-                'evidence'             => [
+                'default_account_name'   => $request->user()->full_name,
+                'default_account_number' => $this->normalizeMobileNumber((string) ($request->user()->contact_no ?? '')),
+                'seller_reply_hours'     => ReturnRequest::SELLER_RESPONSE_HOURS,
+                'refund_payout_hours'    => ReturnRequest::REFUND_PAYOUT_HOURS,
+                'evidence'               => [
                     'min'    => 1,
                     'max'    => 5,
                     'max_kb' => 5120,
@@ -109,32 +121,41 @@ class ReturnRequestController extends Controller
             return $this->failure($blocker, 422, 'not_eligible');
         }
 
+        $rawMethod = strtoupper(trim((string) ($request->input('refund_payout_method') ?? $request->input('refund_method') ?? 'WALLET')));
+        if (! in_array($rawMethod, ['WALLET', 'GCASH'], true)) {
+            $rawMethod = 'WALLET';
+        }
+
+        $normalizedNumber = $this->normalizeMobileNumber((string) $request->input('refund_account_number'));
+
         $request->merge([
-            'refund_account_number' => $this->normalizeMobileNumber((string) $request->input('refund_account_number')),
+            'refund_payout_method'  => $rawMethod,
+            'refund_account_number' => $normalizedNumber !== '' ? $normalizedNumber : null,
         ]);
 
         $validated = $request->validate([
             'reason_category'       => ['required', 'string', Rule::in(array_keys(ReturnRequest::reasonCatalog()))],
             'requested_resolution'  => ['nullable', Rule::in([ReturnRequest::RESOLUTION_RETURN_REFUND, ReturnRequest::RESOLUTION_REFUND_ONLY])],
             'reason'                => ['required', 'string', 'min:10', 'max:1000'],
-            'refund_account_name'   => ['required', 'string', 'max:120'],
-            'refund_account_number' => ['required', 'regex:/^09\d{9}$/'],
+            'refund_payout_method'  => ['required', 'in:WALLET,GCASH'],
+            'refund_account_name'   => ['required_if:refund_payout_method,GCASH', 'nullable', 'string', 'max:120'],
+            'refund_account_number' => ['required_if:refund_payout_method,GCASH', 'nullable', 'regex:/^09\d{9}$/'],
             'evidence_photos'       => ['required', 'array', 'min:1', 'max:5'],
             'evidence_photos.*'     => ['required', 'image', 'mimes:jpeg,png,jpg,webp', 'max:5120'],
         ], [
-            'reason_category.required'       => 'Please choose what went wrong with your order.',
-            'reason_category.in'             => 'Please choose one of the listed reasons.',
-            'reason.required'                => 'Please describe the problem.',
-            'reason.min'                     => 'Please provide at least 10 characters explaining the problem.',
-            'refund_account_name.required'   => 'Please enter the GCash account name for your refund.',
-            'refund_account_number.required' => 'Please enter your 11-digit GCash number starting with 09.',
-            'refund_account_number.regex'    => 'Your GCash number must be a valid 11-digit mobile number starting with 09.',
-            'evidence_photos.required'       => 'Please upload 1 to 5 photos as evidence.',
-            'evidence_photos.min'            => 'Please upload at least 1 evidence photo.',
-            'evidence_photos.max'            => 'You may upload a maximum of 5 evidence photos.',
-            'evidence_photos.*.image'        => 'Evidence files must be photos (JPG, PNG or WebP).',
-            'evidence_photos.*.mimes'        => 'Evidence photos must be JPG, PNG or WebP.',
-            'evidence_photos.*.max'          => 'Each evidence photo must not exceed 5MB.',
+            'reason_category.required'          => 'Please choose what went wrong with your order.',
+            'reason_category.in'                => 'Please choose one of the listed reasons.',
+            'reason.required'                   => 'Please describe the problem.',
+            'reason.min'                        => 'Please provide at least 10 characters explaining the problem.',
+            'refund_account_name.required_if'   => 'Please enter the GCash account holder name for your refund.',
+            'refund_account_number.required_if' => 'Please enter your GCash mobile number (09XXXXXXXXX or +63 9XXXXXXXXX).',
+            'refund_account_number.regex'       => 'Your GCash number must be a valid Philippine mobile number (09XXXXXXXXX or 9XXXXXXXXX).',
+            'evidence_photos.required'          => 'Please upload 1 to 5 photos as evidence.',
+            'evidence_photos.min'               => 'Please upload at least 1 evidence photo.',
+            'evidence_photos.max'               => 'You may upload a maximum of 5 evidence photos.',
+            'evidence_photos.*.image'           => 'Evidence files must be photos (JPG, PNG or WebP).',
+            'evidence_photos.*.mimes'           => 'Evidence photos must be JPG, PNG or WebP.',
+            'evidence_photos.*.max'             => 'Each evidence photo must not exceed 5MB.',
         ]);
 
         $storedPhotos = [];
@@ -148,8 +169,13 @@ class ReturnRequestController extends Controller
                 'reason'                => $validated['reason'],
                 'requested_resolution'  => $validated['requested_resolution'] ?? null,
                 'evidence_photos'       => $storedPhotos,
-                'refund_account_name'   => $validated['refund_account_name'],
-                'refund_account_number' => $validated['refund_account_number'],
+                'refund_payout_method'  => $validated['refund_payout_method'],
+                'refund_account_name'   => $validated['refund_payout_method'] === 'GCASH'
+                    ? $validated['refund_account_name']
+                    : $request->user()->full_name,
+                'refund_account_number' => $validated['refund_payout_method'] === 'GCASH'
+                    ? $validated['refund_account_number']
+                    : null,
             ]);
         } catch (ValidationException $e) {
             $this->deletePhotos($storedPhotos);
@@ -217,17 +243,7 @@ class ReturnRequestController extends Controller
 
     public function legacyReport(Request $request, $id): JsonResponse
     {
-        $sellerOrder = $this->findOwnedOrder($request, $id);
-        if (! $sellerOrder) {
-            return $this->failure('Order not found.', 404, 'order_not_found');
-        }
-
-        return response()->json([
-            'success'         => false,
-            'code'            => 'use_return_request',
-            'message'         => 'Return & Refund requests are now sent through the new request form. Please update the Storkia app and open the order to request it.',
-            'seller_order_id' => (int) $sellerOrder->id,
-        ], 410);
+        return $this->store($request, $id);
     }
 
     public function legacyEscalate(Request $request, $id): JsonResponse
@@ -243,12 +259,7 @@ class ReturnRequestController extends Controller
             return $this->failure('There is no return or refund request to escalate for this order.', 404, 'request_not_found');
         }
 
-        return response()->json([
-            'success'           => false,
-            'code'              => 'use_return_request',
-            'message'           => 'Please escalate from the return request status page in the updated Storkia app.',
-            'return_request_id' => (int) $existing->id,
-        ], 410);
+        return $this->escalate($request, $existing->id);
     }
 
     protected function requestRelations(): array

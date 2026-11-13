@@ -13,9 +13,9 @@ use Illuminate\Validation\Rule;
 class IdentityVerificationController extends Controller
 {
     protected const ID_TYPES = [
-        'drivers_license' => ['label' => "Driver's License", 'requires_back' => true],
+        'drivers_license' => ['label' => "Driver's License", 'requires_back' => false],
         'passport'        => ['label' => 'Passport', 'requires_back' => false],
-        'identity_card'   => ['label' => 'National / Government ID', 'requires_back' => true],
+        'identity_card'   => ['label' => 'National / Government ID', 'requires_back' => false],
     ];
 
     public function show(Request $request): JsonResponse
@@ -33,31 +33,22 @@ class IdentityVerificationController extends Controller
         $validated = $request->validate([
             'id_type'     => ['required', Rule::in(array_keys(self::ID_TYPES))],
             'method'      => ['required', Rule::in(['upload', 'camera'])],
-            'front_image' => ['required', 'file', 'image', 'mimes:jpeg,jpg,png', 'max:10240'],
-            'back_image'  => [
-                Rule::requiredIf(fn () => (self::ID_TYPES[$request->input('id_type')]['requires_back'] ?? true)),
-                'nullable',
-                'file',
-                'image',
-                'mimes:jpeg,jpg,png',
-                'max:10240',
-            ],
+            'front_image' => ['required', 'file', 'image', 'mimes:jpeg,jpg,png,webp', 'max:10240'],
+            'back_image'  => ['nullable', 'file', 'image', 'mimes:jpeg,jpg,png,webp', 'max:10240'],
         ], [
             'id_type.required'     => 'Please choose the type of ID you want to submit.',
             'id_type.in'           => 'Please choose one of the listed ID types.',
             'method.required'      => 'Please choose how the ID was captured.',
             'front_image.required' => 'Please provide the front of your document.',
             'front_image.max'      => 'The front image must not exceed 10MB.',
-            'back_image.required'  => 'Please provide the back of your document.',
             'back_image.max'       => 'The back image must not exceed 10MB.',
         ]);
 
         $userId = (int) $request->user()->id;
-        $needsBack = self::ID_TYPES[$validated['id_type']]['requires_back'];
         $storedPaths = [];
 
         try {
-            $record = DB::transaction(function () use ($request, $validated, $userId, $needsBack, &$storedPaths) {
+            $record = DB::transaction(function () use ($request, $validated, $userId, &$storedPaths) {
                 $latest = IdentityVerification::where('user_id', $userId)
                     ->latest('id')
                     ->lockForUpdate()
@@ -83,7 +74,7 @@ class IdentityVerificationController extends Controller
                 $storedPaths[] = $frontPath;
 
                 $backPath = null;
-                if ($needsBack && $request->hasFile('back_image')) {
+                if ($request->hasFile('back_image')) {
                     $backPath = $request->file('back_image')->store('identity_documents/backs', 'local');
                     $storedPaths[] = $backPath;
                 }
@@ -103,7 +94,6 @@ class IdentityVerificationController extends Controller
             foreach ($storedPaths as $path) {
                 Storage::disk('local')->delete($path);
             }
-
             throw $e;
         }
 
@@ -125,7 +115,7 @@ class IdentityVerificationController extends Controller
 
         return [
             'status'       => $status,
-            'can_submit'   => $latest === null || $status === 'failed',
+            'can_submit'   => $latest === null || $status === 'failed' || $status === 'rejected',
             'verification' => $latest ? [
                 'id'               => (int) $latest->id,
                 'id_type'          => $latest->id_type,

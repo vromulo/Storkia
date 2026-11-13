@@ -27,6 +27,31 @@ class ReviewController extends Controller
         $this->buyerRewardService = $buyerRewardService ?? app(BuyerRewardService::class);
     }
 
+    protected function encodeReviewPhoto($file, string $prefix): string
+    {
+        $filename = $prefix . uniqid('', true) . '.webp';
+        $path = 'product_reviews/' . $filename;
+
+        try {
+            $img = ImageManager::usingDriver(Driver::class)->decode($file->getRealPath());
+            $img->scaleDown(width: 1200, height: 1200);
+            $encoded = $img->encode(new WebpEncoder(quality: 82));
+            Storage::disk('public')->put($path, $encoded->toString());
+            return $path;
+        } catch (\Throwable) {
+            try {
+                $encoded = (new ImageManager(new Driver()))
+                    ->read($file->getRealPath())
+                    ->scaleDown(1200, 1200)
+                    ->toWebp(82);
+                Storage::disk('public')->put($path, (string) $encoded);
+                return $path;
+            } catch (\Throwable) {
+                return $file->store('product_reviews', 'public');
+            }
+        }
+    }
+
     public function store(Request $request, $id): JsonResponse
     {
         StorkSchemaBootstrapService::ensureTablesExist();
@@ -100,10 +125,9 @@ class ReviewController extends Controller
             'rider_delivery_rating.required'   => 'Please rate the delivery rider service.',
         ]);
 
-        $manager = ImageManager::usingDriver(Driver::class);
         $totalReviewCoinsEarned = 0;
 
-        DB::transaction(function () use ($request, $user, $sellerOrder, $validated, $manager, &$totalReviewCoinsEarned) {
+        DB::transaction(function () use ($request, $user, $sellerOrder, $validated, &$totalReviewCoinsEarned) {
             $itemRatingValues = [];
 
             foreach ($sellerOrder->items as $item) {
@@ -113,18 +137,30 @@ class ReviewController extends Controller
 
                 $reviewText = trim((string) ($validated['item_reviews'][$item->id] ?? ($validated['item_reviews'][(string) $item->id] ?? '')));
 
-                $photoPath = null;
-                $file = $request->file("item_photos.{$item->id}") ?? $request->file("item_photo_{$item->id}");
-                if ($file && $file->isValid()) {
-                    $filename = 'rev_' . $sellerOrder->id . '_' . $item->id . '_' . time() . '.webp';
-                    $photoPath = 'product_reviews/' . $filename;
-
-                    $img = $manager->decode($file->getRealPath());
-                    $img->scaleDown(width: 1200, height: 1200);
-                    $encoded = $img->encode(new WebpEncoder(quality: 82));
-                    Storage::disk('public')->put($photoPath, $encoded->toString());
+                $uploadedFiles = [];
+                $multiKey = "item_photos_{$item->id}";
+                if ($request->hasFile($multiKey)) {
+                    $rawFiles = $request->file($multiKey);
+                    $uploadedFiles = is_array($rawFiles) ? $rawFiles : [$rawFiles];
+                } elseif ($request->hasFile("item_photos.{$item->id}")) {
+                    $rawFiles = $request->file("item_photos.{$item->id}");
+                    $uploadedFiles = is_array($rawFiles) ? $rawFiles : [$rawFiles];
+                } elseif ($request->hasFile("item_photo_{$item->id}")) {
+                    $rawFiles = $request->file("item_photo_{$item->id}");
+                    $uploadedFiles = is_array($rawFiles) ? $rawFiles : [$rawFiles];
                 }
 
+                $storedPhotos = [];
+                foreach (array_slice($uploadedFiles, 0, 5) as $file) {
+                    if ($file && $file->isValid()) {
+                        $storedPhotos[] = $this->encodeReviewPhoto(
+                            $file,
+                            "rev_{$sellerOrder->id}_{$item->id}_"
+                        );
+                    }
+                }
+
+                $firstPhotoPath = $storedPhotos[0] ?? null;
                 $variantLabel = implode(' / ', array_filter([$item->variant_name, $item->sub_variant_name])) ?: null;
 
                 $reviewAttributes = [
@@ -135,11 +171,11 @@ class ReviewController extends Controller
                     'buyer_id'          => $user->id,
                     'rating'            => $ratingVal,
                     'review_text'       => $reviewText !== '' ? $reviewText : ($validated['review_comment'] ?? null),
-                    'review_photo_path' => $photoPath,
+                    'review_photo_path' => $firstPhotoPath,
                 ];
 
-                if ($photoPath && Schema::hasColumn('order_item_reviews', 'review_photos')) {
-                    $reviewAttributes['review_photos'] = [$photoPath];
+                if (! empty($storedPhotos) && Schema::hasColumn('order_item_reviews', 'review_photos')) {
+                    $reviewAttributes['review_photos'] = $storedPhotos;
                 }
                 if (Schema::hasColumn('order_item_reviews', 'purchased_variant_label')) {
                     $reviewAttributes['purchased_variant_label'] = $variantLabel;
@@ -150,7 +186,7 @@ class ReviewController extends Controller
                     $reviewAttributes
                 );
 
-                $coinTx = $this->buyerRewardService?->awardProductReviewCoins($reviewModel, $photoPath !== null);
+                $coinTx = $this->buyerRewardService?->awardProductReviewCoins($reviewModel, $firstPhotoPath !== null);
                 if ($coinTx) {
                     $totalReviewCoinsEarned += (int) $coinTx->coins_delta;
                 }
@@ -212,7 +248,6 @@ class ReviewController extends Controller
     public function update(Request $request, OrderItemReview $review): JsonResponse
     {
         $user = $request->user();
-
         if ((int) $review->buyer_id !== (int) $user->id) {
             return response()->json([
                 'success' => false,
@@ -244,11 +279,10 @@ class ReviewController extends Controller
         ]);
 
         $photoPaths = is_array($review->review_photos) ? $review->review_photos : [];
-
         if ($request->hasFile('review_photos')) {
             $photoPaths = [];
             foreach ($request->file('review_photos') as $file) {
-                $photoPaths[] = $file->store('product_reviews', 'public');
+                $photoPaths[] = $this->encodeReviewPhoto($file, "rev_edit_{$review->id}_");
             }
         }
 

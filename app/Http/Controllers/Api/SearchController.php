@@ -2,11 +2,13 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Http\Controllers\Buyer\SellerController as BuyerSellerController;
 use App\Http\Controllers\Controller;
 use App\Models\BuyerWishlist;
 use App\Models\OrderItem;
 use App\Models\OrderItemReview;
 use App\Models\Product;
+use App\Models\SellerProfile;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Schema;
@@ -33,9 +35,16 @@ class SearchController extends Controller
 
     public function index(Request $request): JsonResponse
     {
-        $query = trim((string) $request->input('q', ''));
-        $category = $request->input('category');
-        $subcategory = $request->input('subcategory');
+        $query = trim((string) ($request->input('q') ?? $request->input('search') ?? ''));
+        $category = trim((string) $request->input('category', ''));
+        if (strcasecmp($category, 'All') === 0) {
+            $category = '';
+        }
+        $subcategory = trim((string) $request->input('subcategory', ''));
+        if (strcasecmp($subcategory, 'All') === 0) {
+            $subcategory = '';
+        }
+        $sort = strtolower(trim((string) $request->input('sort', 'relevance')));
 
         $productsQuery = Product::with(['approval', 'sellerProfile', 'user.sellerProfile'])
             ->where('stock_quantity', '>', 0)
@@ -49,32 +58,38 @@ class SearchController extends Controller
 
         if ($query !== '') {
             $words = array_filter(explode(' ', $query), fn ($w) => strlen($w) > 2);
-
             $productsQuery->where(function ($qBuilder) use ($query, $words) {
                 $qBuilder->where('name', 'LIKE', "%{$query}%")
-                    ->orWhere('category', 'LIKE', "%{$query}%");
-
+                    ->orWhere('category', 'LIKE', "%{$query}%")
+                    ->orWhere('subcategory', 'LIKE', "%{$query}%");
                 foreach ($words as $word) {
                     $qBuilder->orWhere('name', 'LIKE', "%{$word}%");
                 }
             });
         }
 
-        if (! empty($category)) {
+        if ($category !== '') {
             $productsQuery->where('category', $category);
         }
 
-        if (! empty($subcategory)) {
+        if ($subcategory !== '') {
             $productsQuery->where('subcategory', $subcategory);
         }
 
-        $products = $productsQuery->latest()->paginate(16);
+        if ($sort === 'price_asc') {
+            $productsQuery->orderByRaw('(price - (price * (COALESCE(discount, 0) / 100))) ASC');
+        } elseif ($sort === 'price_desc') {
+            $productsQuery->orderByRaw('(price - (price * (COALESCE(discount, 0) / 100))) DESC');
+        } else {
+            $productsQuery->latest()->latest('id');
+        }
+
+        $products = $productsQuery->paginate(16);
         $collection = $products->getCollection();
         $user = $request->user();
 
         if ($collection->isNotEmpty()) {
             $productIds = $collection->pluck('id')->all();
-
             $soldCounts = OrderItem::whereIn('product_id', $productIds)
                 ->whereHas('sellerOrder', fn ($q) => $q->whereIn('status', ['delivered', 'completed']))
                 ->selectRaw('product_id, SUM(quantity) as total_sold')
@@ -105,13 +120,38 @@ class SearchController extends Controller
             }
         }
 
+        $matchedSellers = collect();
+        if ($query !== '' || $category !== '') {
+            $sellerQuery = SellerProfile::query();
+            if ($query !== '') {
+                $sellerQuery->where(function ($sq) use ($query) {
+                    $sq->where('business_name', 'LIKE', "%{$query}%")
+                        ->orWhere('line_of_business', 'LIKE', "%{$query}%")
+                        ->orWhere('municipality', 'LIKE', "%{$query}%");
+                });
+            }
+            if ($category !== '') {
+                $sellerQuery->where('line_of_business', $category);
+            }
+            $matchedSellers = $sellerQuery->latest()->limit(8)->get()->map(function (SellerProfile $s) {
+                return array_merge($s->toArray(), [
+                    'stats' => BuyerSellerController::buildStoreMetrics($s),
+                ]);
+            })->values();
+        }
+
         $allCategories = $this->getAllCategories();
 
+        $paginatedArray = $products->toArray();
+        $paginatedArray['matched_sellers'] = $matchedSellers;
+        $paginatedArray['sellers'] = $matchedSellers;
+
         return response()->json([
-            'success'       => true,
-            'data'          => $products,
-            'categories'    => array_keys($allCategories),
-            'subcategories' => ($category && isset($allCategories[$category])) ? $allCategories[$category] : [],
+            'success'         => true,
+            'data'            => $paginatedArray,
+            'matched_sellers' => $matchedSellers,
+            'categories'      => array_keys($allCategories),
+            'subcategories'   => ($category !== '' && isset($allCategories[$category])) ? $allCategories[$category] : [],
         ]);
     }
 
@@ -142,19 +182,20 @@ class SearchController extends Controller
             }
         });
 
-        $topMatch = $productsQuery->select('name')->first();
-        $suggestedName = $topMatch ? $topMatch->name : $query;
+        $topMatches = $productsQuery->select('name')->distinct()->limit(6)->pluck('name');
 
         $suggestions = [];
-        $suggestions[] = [
-            'name'     => $suggestedName,
-            'category' => '',
-        ];
-
-        foreach (array_keys($this->getAllCategories()) as $cat) {
+        if ($topMatches->isNotEmpty()) {
+            foreach ($topMatches as $name) {
+                $suggestions[] = [
+                    'name'     => $name,
+                    'category' => '',
+                ];
+            }
+        } else {
             $suggestions[] = [
-                'name'     => $suggestedName,
-                'category' => $cat,
+                'name'     => $query,
+                'category' => '',
             ];
         }
 

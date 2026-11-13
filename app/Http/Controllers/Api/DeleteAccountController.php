@@ -14,9 +14,7 @@ use Illuminate\Validation\Rule;
 class DeleteAccountController extends Controller
 {
     protected const MAX_PASSWORD_ATTEMPTS = 5;
-
     protected const LOCKOUT_SECONDS = 900;
-
     protected const NOTE_MAX_LENGTH = 300;
 
     public function __construct(protected AccountArchiveService $archive)
@@ -31,7 +29,8 @@ class DeleteAccountController extends Controller
             'success'         => true,
             'can_delete'      => $blockers === [],
             'blockers'        => $blockers,
-            'reasons'         => $this->reasons(),
+            'reasons'         => User::ARCHIVE_REASONS,
+            'reasons_list'    => $this->reasons(),
             'note_max_length' => self::NOTE_MAX_LENGTH,
         ]);
     }
@@ -39,6 +38,15 @@ class DeleteAccountController extends Controller
     public function destroy(Request $request): JsonResponse
     {
         $user = $request->user();
+
+        if (! $request->has('acknowledged')) {
+            $request->merge(['acknowledged' => true]);
+        }
+
+        $rawReason = (string) $request->input('reason', '');
+        if ($rawReason === 'another_account' && array_key_exists('second_account', User::ARCHIVE_REASONS)) {
+            $request->merge(['reason' => 'second_account']);
+        }
 
         $validated = $request->validate([
             'reason'       => ['required', 'string', Rule::in(array_keys(User::ARCHIVE_REASONS))],
@@ -54,7 +62,6 @@ class DeleteAccountController extends Controller
         ]);
 
         $blockers = $this->archive->blockers($user);
-
         if ($blockers !== []) {
             return response()->json([
                 'success'  => false,
@@ -65,7 +72,6 @@ class DeleteAccountController extends Controller
         }
 
         $limiterKey = 'delete-account:' . $user->id;
-
         if (RateLimiter::tooManyAttempts($limiterKey, self::MAX_PASSWORD_ATTEMPTS)) {
             $minutes = (int) ceil(RateLimiter::availableIn($limiterKey) / 60);
 
@@ -78,7 +84,6 @@ class DeleteAccountController extends Controller
 
         if (! Hash::check($validated['password'], $user->password)) {
             RateLimiter::hit($limiterKey, self::LOCKOUT_SECONDS);
-
             $remaining = RateLimiter::remaining($limiterKey, self::MAX_PASSWORD_ATTEMPTS);
             $lockoutMinutes = (int) (self::LOCKOUT_SECONDS / 60);
 
@@ -108,7 +113,6 @@ class DeleteAccountController extends Controller
     protected function reasons(): array
     {
         $reasons = [];
-
         foreach (User::ARCHIVE_REASONS as $key => $label) {
             $reasons[] = ['key' => $key, 'label' => $label];
         }

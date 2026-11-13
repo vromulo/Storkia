@@ -47,7 +47,6 @@ class SellerReportController extends Controller
         }
 
         $perPage = min(max((int) $request->query('per_page', 10), 1), 30);
-
         $paginator = $reportsQuery->latest()->latest('id')->paginate($perPage);
 
         return response()->json([
@@ -72,8 +71,8 @@ class SellerReportController extends Controller
     public function context(Request $request, int $id): JsonResponse
     {
         $user = $request->user();
-
         $seller = SellerProfile::find($id);
+
         if (! $seller) {
             return $this->failure('This store could not be found.', 404, 'seller_not_found');
         }
@@ -125,10 +124,11 @@ class SellerReportController extends Controller
                     'status_label' => $openReport->status_label,
                 ] : null,
                 'orders'          => $orders->map(fn (SellerOrder $order) => [
-                    'id'        => (int) $order->id,
-                    'number'    => $order->seller_order_number,
-                    'status'    => Str::headline((string) $order->status),
-                    'placed_at' => $order->created_at?->format('M d, Y'),
+                    'id'                  => (int) $order->id,
+                    'number'              => $order->seller_order_number,
+                    'seller_order_number' => $order->seller_order_number,
+                    'status'              => Str::headline((string) $order->status),
+                    'placed_at'           => $order->created_at?->format('M d, Y'),
                 ])->values()->all(),
                 'reasons'         => $reasons,
                 'limits'          => [
@@ -144,8 +144,8 @@ class SellerReportController extends Controller
     public function store(Request $request, int $id): JsonResponse
     {
         $user = $request->user();
-
         $seller = SellerProfile::find($id);
+
         if (! $seller) {
             return $this->failure('This store could not be found.', 404, 'seller_not_found');
         }
@@ -185,12 +185,10 @@ class SellerReportController extends Controller
             });
         } catch (UniqueConstraintViolationException $e) {
             $this->deleteEvidencePhotos($storedPhotos);
-
             return $this->failure(self::DUPLICATE_MESSAGE, 409, 'open_report_exists');
         } catch (\Throwable $e) {
             $this->deleteEvidencePhotos($storedPhotos);
             report($e);
-
             return $this->failure('We could not submit your report right now. Please try again in a moment.', 500, 'report_failed');
         }
 
@@ -272,31 +270,47 @@ class SellerReportController extends Controller
         [$tone, $note] = $this->statusMeta((string) $report->status);
 
         return [
-            'id'              => (int) $report->id,
-            'report_number'   => $report->report_number,
-            'status'          => $report->status,
-            'status_label'    => $report->status_label,
-            'status_tone'     => $tone,
-            'status_note'     => $note,
-            'is_open'         => $report->isOpen(),
-            'is_closed'       => $report->isClosed(),
-            'reason_category' => $report->reason_category,
-            'category_label'  => $report->category_label,
-            'description'     => $report->description,
-            'evidence_urls'   => $report->evidence_urls,
-            'seller'          => $seller ? [
+            'id'                    => (int) $report->id,
+            'report_number'         => $report->report_number,
+            'status'                => $report->status,
+            'status_label'          => $report->status_label,
+            'status_tone'           => $tone,
+            'status_note'           => $note,
+            'admin_note'            => $report->admin_remarks ?? $report->admin_note ?? $note,
+            'admin_action'          => $report->admin_action ?? null,
+            'is_open'               => $report->isOpen(),
+            'is_closed'             => $report->isClosed(),
+            'reason_category'       => $report->reason_category,
+            'reason_label'          => $report->category_label,
+            'category_label'        => $report->category_label,
+            'description'           => $report->description,
+            'evidence_urls'         => $report->evidence_urls,
+            'evidence_photos'       => $report->evidence_urls,
+            'seller_name'           => $seller?->business_name ?? 'Reported Store',
+            'seller_profile'        => $seller ? [
                 'id'            => (int) $seller->id,
                 'business_name' => $seller->business_name,
                 'logo_url'      => $this->logoUrl($seller),
             ] : null,
-            'order'           => $order ? [
+            'seller'                => $seller ? [
+                'id'            => (int) $seller->id,
+                'business_name' => $seller->business_name,
+                'logo_url'      => $this->logoUrl($seller),
+            ] : null,
+            'seller_order_number'   => $order?->seller_order_number,
+            'seller_order'          => $order ? [
+                'id'                  => (int) $order->id,
+                'seller_order_number' => $order->seller_order_number,
+            ] : null,
+            'order'                 => $order ? [
                 'id'     => (int) $order->id,
                 'number' => $order->seller_order_number,
             ] : null,
-            'created_at'      => $report->created_at?->toIso8601String(),
-            'created_label'   => $report->created_at?->format('M d, Y \a\t h:i A'),
-            'resolved_at'     => $report->resolved_at?->toIso8601String(),
-            'resolved_label'  => $report->isClosed() && $report->resolved_at
+            'created_at'            => $report->created_at?->toIso8601String(),
+            'created_at_formatted'  => $report->created_at?->format('M d, Y \a\t h:i A'),
+            'created_label'         => $report->created_at?->format('M d, Y \a\t h:i A'),
+            'resolved_at'           => $report->resolved_at?->toIso8601String(),
+            'resolved_label'        => $report->isClosed() && $report->resolved_at
                 ? 'Closed on ' . $report->resolved_at->format('M d, Y')
                 : null,
         ];

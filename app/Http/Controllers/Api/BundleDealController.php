@@ -60,11 +60,9 @@ class BundleDealController extends Controller
         $poolIds = $rawBundles
             ->flatMap(function ($row) {
                 $ids = $this->decodeProductIds($row->applicable_product_ids);
-
                 if ($row->free_gift_product_id) {
                     $ids[] = (int) $row->free_gift_product_id;
                 }
-
                 return $ids;
             })
             ->unique()
@@ -73,7 +71,7 @@ class BundleDealController extends Controller
 
         $pool = $poolIds === []
             ? collect()
-            : $this->applyStorefrontVisibility(Product::with('approval')->whereIn('id', $poolIds))
+            : $this->applyStorefrontVisibility(Product::with(['approval', 'sellerProfile', 'user.sellerProfile'])->whereIn('id', $poolIds))
                 ->get()
                 ->keyBy('id');
 
@@ -180,6 +178,44 @@ class BundleDealController extends Controller
             return $this->storefrontFailure('You cannot purchase a bundle deal from your own store.', 403, 'own_store');
         }
 
+        $allowedProductIds = $this->decodeProductIds($bundle->applicable_product_ids);
+        $requiredQty = max(2, (int) $bundle->required_quantity);
+
+        if (! $request->has('selections') || empty($request->input('selections'))) {
+            $autoSelections = [];
+            $remainingNeeded = $requiredQty;
+            $eligibleProducts = $this->applyStorefrontVisibility(
+                Product::with('approval')->whereIn('id', $allowedProductIds)
+            )->get();
+
+            foreach ($eligibleProducts as $prod) {
+                if ($remainingNeeded <= 0) {
+                    break;
+                }
+                $defaultVar = $this->resolveDefaultOrSelectedGiftVariant($prod, null, null);
+                $avail = (int) $prod->stock_quantity;
+                if ($avail <= 0) {
+                    continue;
+                }
+                $qtyToTake = min($remainingNeeded, $avail);
+                if ($qtyToTake > 0) {
+                    $autoSelections[] = [
+                        'product_id'  => (int) $prod->id,
+                        'variant'     => $defaultVar['variant'],
+                        'sub_variant' => $defaultVar['sub_variant'],
+                        'quantity'    => $qtyToTake,
+                    ];
+                    $remainingNeeded -= $qtyToTake;
+                }
+            }
+
+            if ($remainingNeeded > 0 && ! empty($autoSelections)) {
+                $autoSelections[0]['quantity'] += $remainingNeeded;
+            }
+
+            $request->merge(['selections' => $autoSelections]);
+        }
+
         $validated = $request->validate([
             'selections'               => ['required', 'array', 'min:1'],
             'selections.*.product_id'  => ['required', 'integer', 'exists:products,id'],
@@ -191,15 +227,12 @@ class BundleDealController extends Controller
             'redirect_to'              => ['nullable', 'in:cart,checkout'],
         ]);
 
-        $allowedProductIds = $this->decodeProductIds($bundle->applicable_product_ids);
-
         $totalSelectedUnits = 0;
         $verifiedSelections = [];
 
         foreach ($validated['selections'] as $idx => $sel) {
             $productId = (int) $sel['product_id'];
             $quantity = (int) $sel['quantity'];
-
             if ($quantity <= 0) {
                 continue;
             }
@@ -211,7 +244,6 @@ class BundleDealController extends Controller
             }
 
             $product = Product::with('approval')->findOrFail($productId);
-
             if (! $this->isStorefrontVisible($product)) {
                 throw ValidationException::withMessages([
                     "selections.{$idx}.product_id" => "\"{$product->name}\" is currently unavailable.",
@@ -234,7 +266,6 @@ class BundleDealController extends Controller
             ];
         }
 
-        $requiredQty = max(2, (int) $bundle->required_quantity);
         if ($totalSelectedUnits < $requiredQty) {
             throw ValidationException::withMessages([
                 'selections' => "Please select at least {$requiredQty} qualifying item(s) to activate \"{$bundle->title}\" (you selected {$totalSelectedUnits}).",
@@ -246,7 +277,6 @@ class BundleDealController extends Controller
         DB::transaction(function () use ($user, $bundle, $verifiedSelections, $validated, &$touchedCartIds) {
             foreach ($verifiedSelections as $entry) {
                 $product = $entry['product'];
-
                 $cartItem = Cart::where('user_id', $user->id)
                     ->where('product_id', $product->id)
                     ->where('variant', $entry['variant'])
@@ -264,13 +294,11 @@ class BundleDealController extends Controller
                         'quantity'    => $entry['quantity'],
                     ]);
                 }
-
                 $touchedCartIds[] = (int) $cartItem->id;
             }
 
             if ($bundle->bundle_type === 'buy_x_get_y' && $bundle->free_gift_product_id) {
                 $giftProduct = Product::with('approval')->find((int) $bundle->free_gift_product_id);
-
                 if ($giftProduct && $this->isStorefrontVisible($giftProduct)) {
                     $giftVariant = $this->resolveDefaultOrSelectedGiftVariant(
                         product: $giftProduct,
@@ -293,7 +321,6 @@ class BundleDealController extends Controller
                             'quantity'    => 1,
                         ]);
                     }
-
                     $touchedCartIds[] = (int) $giftCart->id;
                 }
             }
@@ -324,11 +351,9 @@ class BundleDealController extends Controller
     protected function bundleHeadline(object $row): string
     {
         $required = max(2, (int) $row->required_quantity);
-
         if ($row->bundle_type === 'buy_x_get_y') {
             return "Buy {$required}, get a free gift";
         }
-
         $percent = rtrim(rtrim(number_format((float) $row->discount_percentage, 2, '.', ''), '0'), '.');
 
         return "Buy {$required}, get {$percent}% off";
@@ -350,6 +375,7 @@ class BundleDealController extends Controller
             'ends_at'             => $endsAt?->toIso8601String(),
             'seconds_left'        => $endsAt ? max(0, $endsAt->timestamp - now()->timestamp) : 0,
             'seller'              => $this->storefrontSeller($seller),
+            'seller_profile'      => $seller->toArray(),
             'category'            => $category,
             'products'            => $products->map(fn (Product $p) => $this->formatProductForBundleSelector($p))->values()->all(),
             'free_gift_product'   => $freeGift,
@@ -358,9 +384,8 @@ class BundleDealController extends Controller
 
     protected function formatProductForBundleSelector(Product $product): array
     {
-        $firstPic = (! empty($product->pictures) && is_array($product->pictures))
-            ? $this->storefrontUrl($product->pictures[0])
-            : null;
+        $rawPics = is_array($product->pictures) ? $product->pictures : [];
+        $firstPic = ! empty($rawPics) ? $this->storefrontUrl($rawPics[0]) : null;
 
         $variantsData = $product->variants ?? [];
         $items = [];
@@ -373,7 +398,6 @@ class BundleDealController extends Controller
 
                 $subs = [];
                 $hasSubs = ! empty($variant['subs']) && is_array($variant['subs']);
-
                 if ($hasSubs) {
                     foreach ($variant['subs'] as $sub) {
                         if (! empty($sub['is_archived']) || ($sub['status'] ?? 'Approved') !== 'Approved') {
@@ -382,7 +406,6 @@ class BundleDealController extends Controller
                         if ((int) ($sub['stock'] ?? 0) <= 0) {
                             continue;
                         }
-
                         $subs[] = [
                             'name'  => (string) ($sub['name'] ?? ''),
                             'price' => round((float) ($sub['price'] ?? ($variant['price'] ?? $product->price)), 2),
@@ -409,16 +432,32 @@ class BundleDealController extends Controller
             }
         }
 
+        $basePrice = round((float) $product->price, 2);
+        $discountPct = round((float) ($product->discount ?? 0), 2);
+        $discountedPrice = $discountPct > 0
+            ? round($basePrice - ($basePrice * ($discountPct / 100)), 2)
+            : $basePrice;
+        $seller = $product->user?->sellerProfile ?? $product->sellerProfile;
+
         return [
             'id'                => (int) $product->id,
             'name'              => $product->name,
-            'price'             => round((float) $product->price, 2),
+            'description'       => $product->description ?? '',
+            'category'          => $product->category,
+            'subcategory'       => $product->subcategory,
+            'price'             => $basePrice,
+            'discount'          => $discountPct,
+            'discounted_price'  => $discountedPrice,
             'stock'             => (int) $product->stock_quantity,
+            'stock_quantity'    => (int) $product->stock_quantity,
+            'weight'            => (float) ($product->weight ?? 0.5),
             'image'             => $firstPic,
+            'pictures'          => $rawPics,
             'has_variants'      => $items !== [],
             'variant_title'     => $variantsData['title'] ?? 'Variant',
             'sub_variant_title' => $variantsData['sub_title'] ?? 'Option',
-            'variants'          => $items,
+            'variants'          => $product->variants,
+            'seller_profile'    => $seller ? $seller->toArray() : null,
         ];
     }
 
@@ -441,12 +480,12 @@ class BundleDealController extends Controller
                     'selections' => "Only {$product->stock_quantity} unit(s) of \"{$product->name}\" are available in stock.",
                 ]);
             }
-
             return ['variant' => null, 'sub_variant' => null];
         }
 
         $cleanVariant = trim((string) $variantName);
-        $matchedVariant = $items->first(fn ($v) => strcasecmp(trim((string) ($v['name'] ?? '')), $cleanVariant) === 0);
+        $matchedVariant = $items->first(fn ($v) => strcasecmp(trim((string) ($v['name'] ?? '')), $cleanVariant) === 0)
+            ?? $items->first();
 
         if (! $matchedVariant) {
             $variantTitle = $variantsData['title'] ?? 'variant';
@@ -463,7 +502,9 @@ class BundleDealController extends Controller
 
         if ($subs->isNotEmpty()) {
             $cleanSub = trim((string) $subVariantName);
-            $matchedSub = $subs->first(fn ($s) => strcasecmp(trim((string) ($s['name'] ?? '')), $cleanSub) === 0);
+            $matchedSub = $subs->first(fn ($s) => strcasecmp(trim((string) ($s['name'] ?? '')), $cleanSub) === 0)
+                ?? $subs->first(fn ($s) => (int) ($s['stock'] ?? 0) >= $requestedQty)
+                ?? $subs->first();
 
             if (! $matchedSub) {
                 $subTitle = $variantsData['sub_title'] ?? 'sub-variant';
@@ -507,17 +548,16 @@ class BundleDealController extends Controller
             return $this->validateVariantSelectionAndStock($product, $variantName, $subVariantName, 1);
         } catch (\Throwable $e) {
             $formatted = $this->formatProductForBundleSelector($product);
-
-            if (! empty($formatted['variants'])) {
-                $firstVariant = $formatted['variants'][0];
-                $firstSub = ! empty($firstVariant['subs']) ? $firstVariant['subs'][0]['name'] : null;
-
+            if (! empty($formatted['variants']['items']) && is_array($formatted['variants']['items'])) {
+                $firstVariant = $formatted['variants']['items'][0];
+                $firstSub = (! empty($firstVariant['subs']) && is_array($firstVariant['subs']))
+                    ? ($firstVariant['subs'][0]['name'] ?? null)
+                    : null;
                 return [
-                    'variant'     => $firstVariant['name'],
+                    'variant'     => $firstVariant['name'] ?? null,
                     'sub_variant' => $firstSub,
                 ];
             }
-
             return ['variant' => null, 'sub_variant' => null];
         }
     }

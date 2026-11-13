@@ -24,6 +24,11 @@ class AccountController extends Controller
         $validated = $request->validate([
             'first_name' => ['required', 'string', 'max:50', 'regex:/^[A-Za-z\s]+$/'],
             'last_name'  => ['required', 'string', 'max:50', 'regex:/^[A-Za-z\s]+$/'],
+        ], [
+            'first_name.required' => 'First name is required.',
+            'first_name.regex'    => 'First name may only contain letters and spaces.',
+            'last_name.required'  => 'Last name is required.',
+            'last_name.regex'     => 'Last name may only contain letters and spaces.',
         ]);
 
         $user = $request->user();
@@ -41,20 +46,39 @@ class AccountController extends Controller
 
     public function updatePhone(Request $request)
     {
-        $cleanContact = preg_replace('/\D/', '', (string) $request->input('contact_no'));
-        if (str_starts_with($cleanContact, '63')) {
-            $cleanContact = substr($cleanContact, 2);
-        }
-        $cleanContact = ltrim($cleanContact, '0');
+        $rawDigits = preg_replace('/\D/', '', (string) $request->input('contact_no'));
 
-        $request->merge(['clean_contact' => $cleanContact]);
-        $request->validate(['clean_contact' => ['required', 'regex:/^9\d{9}$/']]);
+        if (str_starts_with($rawDigits, '63') && strlen($rawDigits) === 12) {
+            $cleanContact = substr($rawDigits, 2);
+        } elseif (str_starts_with($rawDigits, '09') && strlen($rawDigits) === 11) {
+            $cleanContact = substr($rawDigits, 1);
+        } else {
+            $cleanContact = ltrim($rawDigits, '0');
+        }
+
+        $request->merge(['contact_no' => $cleanContact]);
+        $request->validate([
+            'contact_no' => ['required', 'regex:/^9\d{9}$/'],
+        ], [
+            'contact_no.required' => 'Please enter your Philippine mobile number.',
+            'contact_no.regex'    => 'Please enter a valid Philippine mobile number (09XXXXXXXXX or +63 9XXXXXXXXX).',
+        ]);
 
         $formattedNumber = '+63' . $cleanContact;
+        $altZeroFormat = '0' . $cleanContact;
         $user = $request->user();
 
-        if (User::where('contact_no', $formattedNumber)->where('id', '!=', $user->id)->exists()) {
-            return response()->json(['success' => false, 'message' => 'Phone number is already registered.'], 422);
+        $duplicateExists = User::where(function ($q) use ($formattedNumber, $altZeroFormat) {
+            $q->where('contact_no', $formattedNumber)
+              ->orWhere('contact_no', $altZeroFormat);
+        })->where('id', '!=', $user->id)->exists();
+
+        if ($duplicateExists) {
+            return response()->json([
+                'success' => false,
+                'message' => 'This phone number is already registered to another account.',
+                'errors'  => ['contact_no' => ['This phone number is already registered to another account.']],
+            ], 422);
         }
 
         $user->update(['contact_no' => $formattedNumber]);
@@ -69,7 +93,7 @@ class AccountController extends Controller
     public function requestEmailOtp(Request $request)
     {
         $user = $request->user();
-        $newEmail = strtolower(trim((string) $request->input('email')));
+        $newEmail = strtolower(trim((string) ($request->input('email') ?? $request->input('new_email'))));
 
         if ($newEmail === '' || ! filter_var($newEmail, FILTER_VALIDATE_EMAIL)) {
             return response()->json(['success' => false, 'message' => 'Please enter a valid email address.'], 422);
@@ -85,7 +109,12 @@ class AccountController extends Controller
 
         $existing = EmailChangeRequest::where('user_id', $user->id)->where('new_email', $newEmail)->first();
         if ($existing && $existing->secondsUntilResend() > 0) {
-            return response()->json(['success' => false, 'message' => "Please wait {$existing->secondsUntilResend()}s."], 429);
+            $wait = $existing->secondsUntilResend();
+            return response()->json([
+                'success'  => false,
+                'message'  => "Please wait {$wait}s before requesting another code.",
+                'cooldown' => $wait,
+            ], 429);
         }
 
         $code = EmailChangeRequest::generateCode();
@@ -130,7 +159,7 @@ class AccountController extends Controller
 
         if (! Hash::check($cleanCode, $changeRequest->code_hash)) {
             $changeRequest->increment('attempts');
-            return response()->json(['success' => false, 'message' => 'Invalid code.'], 422);
+            return response()->json(['success' => false, 'message' => 'Invalid verification code.'], 422);
         }
 
         $user->update([
@@ -186,7 +215,7 @@ class AccountController extends Controller
         if (! Hash::check($cleanCode, $data['code_hash'])) {
             $data['attempts']++;
             Cache::put($cacheKey, $data, now()->addMinutes(10));
-            return response()->json(['success' => false, 'message' => 'Invalid code.'], 422);
+            return response()->json(['success' => false, 'message' => 'Invalid verification code.'], 422);
         }
 
         Cache::forget($cacheKey);
@@ -205,12 +234,16 @@ class AccountController extends Controller
         $validToken = Cache::get("api_pwd_unlock_{$user->id}");
 
         if (! $validToken || $validToken !== $request->input('unlock_token')) {
-            return response()->json(['success' => false, 'message' => 'Verification expired.'], 403);
+            return response()->json(['success' => false, 'message' => 'Verification expired. Please request a new OTP.'], 403);
         }
 
         $validated = $request->validate([
             'password'              => ['required', 'string', 'min:8', 'regex:/[A-Z]/', 'regex:/[0-9]/', 'regex:/[\W_]/'],
             'password_confirmation' => ['required', 'same:password'],
+        ], [
+            'password.min'                  => 'Password must be at least 8 characters.',
+            'password.regex'                => 'Password must include 1 uppercase letter, 1 number, and 1 special symbol.',
+            'password_confirmation.same'    => 'Password confirmation does not match.',
         ]);
 
         $user->update([
@@ -223,6 +256,7 @@ class AccountController extends Controller
         return response()->json([
             'success' => true,
             'message' => 'Password updated successfully.',
+            'data'    => $user->fresh(),
         ]);
     }
 }

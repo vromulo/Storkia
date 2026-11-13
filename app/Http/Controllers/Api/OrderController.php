@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Http\Controllers\Api\Concerns\FormatsReturnRequests;
 use App\Http\Controllers\Controller;
 use App\Models\Cart;
 use App\Models\DeliveryChatMessage;
@@ -31,6 +32,8 @@ use Intervention\Image\ImageManager;
 
 class OrderController extends Controller
 {
+    use FormatsReturnRequests;
+
     public function __construct(
         protected OrderCompletionService $orderCompletionService,
         protected InventoryStockService $inventoryStockService,
@@ -46,11 +49,11 @@ class OrderController extends Controller
     public function index(Request $request): JsonResponse
     {
         $user = $request->user();
-
         $this->orderCompletionService->runLifecycleMaintenance(buyerId: (int) $user->id);
 
         $statusTab = $request->query('status', 'all');
         $search = trim((string) $request->query('search', ''));
+        $perPage = max(1, min(50, (int) $request->query('per_page', 10)));
 
         $baseQuery = SellerOrder::where('buyer_id', $user->id);
 
@@ -65,7 +68,7 @@ class OrderController extends Controller
             'returns'    => (clone $baseQuery)->whereIn('status', ['disputed', 'rejected', 'cancelled', 'returned_to_seller'])->count(),
         ];
 
-        $query = SellerOrder::with([
+        $relations = [
             'order',
             'items',
             'sellerProfile',
@@ -77,7 +80,13 @@ class OrderController extends Controller
             'extra',
             'serviceRating',
             'itemReviews',
-        ])->where('buyer_id', $user->id);
+        ];
+        if (Schema::hasTable('return_requests')) {
+            $relations[] = 'returnRequest.returnShipment.events';
+            $relations[] = 'returnRequest.returnShipment.rider';
+        }
+
+        $query = SellerOrder::with($relations)->where('buyer_id', $user->id);
 
         match ($statusTab) {
             'unpaid'     => $query->whereIn('payment_status', ['unpaid', 'flagged'])->whereNotIn('status', ['rejected', 'cancelled', 'returned_to_seller']),
@@ -100,9 +109,10 @@ class OrderController extends Controller
         }
 
         $sellerOrders = $query
+            ->orderByRaw("CASE WHEN status IN ('completed', 'cancelled', 'rejected', 'returned_to_seller') THEN 1 ELSE 0 END ASC")
             ->orderByDesc('created_at')
             ->orderByDesc('id')
-            ->paginate(10);
+            ->paginate($perPage);
 
         $sellerOrders->getCollection()->transform(function (SellerOrder $so) {
             return $this->appendComputedOrderAttributes($so);
@@ -132,7 +142,7 @@ class OrderController extends Controller
         $this->orderCompletionService->runLifecycleMaintenance(buyerId: (int) $user->id);
         $sellerOrder->refresh();
 
-        $sellerOrder->load([
+        $relations = [
             'order',
             'items',
             'sellerProfile',
@@ -149,18 +159,34 @@ class OrderController extends Controller
             'shipment.currentRider',
             'shipment.deliveryAttempts',
             'shipment.deliveryProofs',
-        ]);
+        ];
+        if (Schema::hasTable('return_requests')) {
+            $relations[] = 'returnRequest.returnShipment.events';
+            $relations[] = 'returnRequest.returnShipment.rider';
+            $relations[] = 'returnRequest.sellerOrder.sellerProfile';
+        }
 
+        $sellerOrder->load($relations);
         $this->appendComputedOrderAttributes($sellerOrder);
+
+        $unreadDeliveryChatCount = 0;
+        if (Schema::hasTable('delivery_chat_messages')) {
+            $unreadDeliveryChatCount = DeliveryChatMessage::where('seller_order_id', $sellerOrder->id)
+                ->where('sender_type', 'rider')
+                ->where('is_read', false)
+                ->count();
+        }
+        $sellerOrder->setAttribute('unread_delivery_chat_count', $unreadDeliveryChatCount);
 
         $cancellationQuota = $this->cancellationGuardService->getBuyerQuotaSummary((int) $user->id);
         $isIdentityVerified = $user->identityVerification?->status === 'verified';
 
         return response()->json([
-            'success'              => true,
-            'data'                 => $sellerOrder,
-            'cancellation_quota'   => $cancellationQuota,
-            'is_identity_verified' => $isIdentityVerified,
+            'success'                    => true,
+            'data'                       => $sellerOrder,
+            'unread_delivery_chat_count' => $unreadDeliveryChatCount,
+            'cancellation_quota'         => $cancellationQuota,
+            'is_identity_verified'       => $isIdentityVerified,
         ]);
     }
 
@@ -548,7 +574,8 @@ class OrderController extends Controller
             if (! $locked->canBuyerCancelPreShipment()) {
                 throw ValidationException::withMessages([
                     'cancel' => 'This order can no longer be cancelled because the seller has already marked it Ready for Pickup or handed it over.',
-                ]);             }
+                ]);
+            }
 
             $prevStatus = $locked->status;
             $wasWalletPaid = strtoupper((string) $locked->effective_payment_method) === 'WALLET'
@@ -573,6 +600,7 @@ class OrderController extends Controller
                 'order_id'        => $locked->order_id,
                 'seller_order_id' => $locked->id,
             ]);
+
             $extra->update([
                 'buyer_cancel_reason'   => trim($validated['cancel_reason']),
                 'buyer_cancel_notes'    => ! empty($validated['cancel_notes']) ? trim($validated['cancel_notes']) : null,
@@ -602,7 +630,7 @@ class OrderController extends Controller
                 'actor_id'        => $user->id,
                 'remarks'         => 'Buyer cancelled order: ' . trim($validated['cancel_reason'])
                     . (! empty($validated['cancel_notes']) ? ' (' . trim($validated['cancel_notes']) . ')' : '')
-                    . ($refundedWalletAmount > 0 ? ' — ₱' . number_format($refundedWalletAmount, 2) . ' refunded immediately to Buyer E-Wallet.' : ''),
+                    . ($refundedWalletAmount > 0 ? ' ₱' . number_format($refundedWalletAmount, 2) . ' refunded immediately to Buyer E-Wallet.' : ''),
             ]);
 
             if ($locked->order) {
@@ -745,6 +773,7 @@ class OrderController extends Controller
                 'order_id'        => $locked->order_id,
                 'seller_order_id' => $locked->id,
             ]);
+
             $extra->update([
                 'buyer_cancel_reason'   => 'Cancelled after flagged online payment',
                 'cancelled_by_buyer_id' => $user->id,
@@ -846,7 +875,6 @@ class OrderController extends Controller
         foreach ($request->file('evidence_photos', []) as $file) {
             $filename = uniqid('dispute_') . '_' . time() . '.webp';
             $path = 'dispute_evidence/' . $filename;
-
             $img = $manager->decode($file->getRealPath());
             $img->scaleDown(width: 1200, height: 1200);
             $encoded = $img->encode(new WebpEncoder(quality: 85));
@@ -1003,12 +1031,13 @@ class OrderController extends Controller
 
     public function proofImage(Request $request, DeliveryProof $proof)
     {
-        $proof->loadMissing('sellerOrder');
-        $sellerOrder = $proof->sellerOrder;
+        $proof->loadMissing(['sellerOrder', 'shipment.sellerOrder']);
+        $sellerOrder = $proof->sellerOrder ?? $proof->shipment?->sellerOrder;
         $user = $request->user();
 
         if (
             ! $user ||
+            ! $sellerOrder ||
             (
                 (int) $sellerOrder->buyer_id !== (int) $user->id &&
                 (int) $sellerOrder->seller_id !== (int) $user->id
@@ -1017,12 +1046,36 @@ class OrderController extends Controller
             abort(403);
         }
 
-        $disk = Storage::disk('local')->exists($proof->photo_path) ? 'local' : 'public';
-        if (! Storage::disk($disk)->exists($proof->photo_path)) {
+        $rawPath = ltrim((string) $proof->photo_path, '/');
+        if (str_starts_with($rawPath, 'storage/')) {
+            $rawPath = substr($rawPath, strlen('storage/'));
+        }
+        if (str_starts_with($rawPath, 'public/')) {
+            $rawPath = substr($rawPath, strlen('public/'));
+        }
+
+        $fullPath = null;
+        if ($rawPath !== '') {
+            if (Storage::disk('public')->exists($rawPath)) {
+                $fullPath = Storage::disk('public')->path($rawPath);
+            } elseif (Storage::disk('local')->exists($rawPath)) {
+                $fullPath = Storage::disk('local')->path($rawPath);
+            } elseif (file_exists(public_path('storage/' . $rawPath))) {
+                $fullPath = public_path('storage/' . $rawPath);
+            }
+        }
+
+        if (! $fullPath || ! file_exists($fullPath)) {
             abort(404, 'Delivery proof photo not found.');
         }
 
-        return Storage::disk($disk)->response($proof->photo_path);
+        $mimeType = mime_content_type($fullPath) ?: 'image/webp';
+
+        return response()->file($fullPath, [
+            'Content-Type'        => $mimeType,
+            'Content-Disposition' => 'inline; filename="' . basename($fullPath) . '"',
+            'Cache-Control'       => 'private, max-age=3600',
+        ]);
     }
 
     protected function appendComputedOrderAttributes(SellerOrder $so): SellerOrder
@@ -1035,6 +1088,20 @@ class OrderController extends Controller
         if ($so->relationLoaded('paymentSubmission') && $so->paymentSubmission) {
             $so->paymentSubmission->setAttribute('screenshot_url', $so->paymentSubmission->screenshot_url);
         }
+
+        $formattedReturn = null;
+        if ($so->relationLoaded('returnRequest') && $so->returnRequest) {
+            try {
+                $formattedReturn = $this->formatReturnRequest($so->returnRequest);
+            } catch (\Throwable $e) {
+                $formattedReturn = null;
+            }
+        }
+        $so->setAttribute('formatted_return_request', $formattedReturn);
+
+        $hasUnresolvedDispute = $so->status === 'disputed'
+            || ($formattedReturn !== null && ! in_array($formattedReturn['status'] ?? '', ['resolved', 'rejected', 'closed'], true));
+        $so->setAttribute('has_unresolved_dispute', $hasUnresolvedDispute);
 
         return $so;
     }
