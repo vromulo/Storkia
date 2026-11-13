@@ -486,19 +486,19 @@
             @php
                 $developers = [
                     [
-                        'name' => 'Van Romulo',
+                        'name' => 'Van Justin S. Romulo',
                         'role' => 'Full-stack Website Developer',
                         'bio'  => 'Architecting the core systems and database relations to ensure seamless multi-portal integration.',
                         'icon' => 'M17.25 6.75L22.5 12l-5.25 5.25m-10.5 0L1.5 12l5.25-5.25m7.5-3l-4.5 16.5',
                     ],
                     [
-                        'name' => 'Mark Trilles',
+                        'name' => 'Mark M. Trilles',
                         'role' => 'Full-stack Web & Mobile',
                         'bio'  => 'Bridging web and mobile experiences by developing scalable APIs and responsive interfaces across all platforms.',
                         'icon' => 'M10.5 1.5H8.25A2.25 2.25 0 0 0 6 3.75v16.5a2.25 2.25 0 0 0 2.25 2.25h7.5A2.25 2.25 0 0 0 18 20.25V3.75a2.25 2.25 0 0 0-2.25-2.25H13.5m-3 0V3h3V1.5m-3 0h3m-3 18.75h3',
                     ],
                     [
-                        'name' => 'Genea Umali',
+                        'name' => 'Princess Genea R. Umali',
                         'role' => 'UI/UX Designer/QA Tester',
                         'bio'  => 'Crafting intuitive, user-centric designs and conducting rigorous quality assurance to guarantee a flawless shopping experience.',
                         'icon' => 'M4.098 19.902a3.75 3.75 0 0 0 5.304 0l6.401-6.402M6.75 21A3.75 3.75 0 0 1 3 17.25V4.125C3 3.504 3.504 3 4.125 3h5.25c.621 0 1.125.504 1.125 1.125v4.072M6.75 21a3.75 3.75 0 0 0 3.75-3.75V8.197M6.75 21h13.125c.621 0 1.125-.504 1.125-1.125v-5.25c0-.621-.504-1.125-1.125-1.125h-4.072M10.5 8.197l2.88-2.88c.438-.439 1.15-.439 1.59 0l3.712 3.713c.44.44.44 1.152 0 1.59l-2.879 2.88M6.75 17.25h.008v.008H6.75v-.008Z',
@@ -760,16 +760,26 @@
         .logi-viewport { overflow-y: auto; -webkit-mask-image: none; mask-image: none; }
     }
 
-    .scroll-reveal {
+    /*
+     * Scroll reveal.
+     * Sections are only hidden once JavaScript has added `reveal-ready` to <html>,
+     * so if the script ever fails the content stays visible instead of going blank.
+     */
+    .reveal-ready .scroll-reveal {
         opacity: 0;
         transform: translateY(50px);
         transition: opacity 0.8s cubic-bezier(0.2, 0.8, 0.2, 1), transform 0.8s cubic-bezier(0.2, 0.8, 0.2, 1);
-        will-change: opacity, transform;
     }
-    
-    .scroll-reveal.active {
+    .reveal-ready .scroll-reveal.active {
         opacity: 1;
         transform: translateY(0);
+    }
+    @media (prefers-reduced-motion: reduce) {
+        .reveal-ready .scroll-reveal {
+            opacity: 1;
+            transform: none;
+            transition: none;
+        }
     }
 </style>
 
@@ -903,30 +913,152 @@
         }));
     });
 
-    document.addEventListener('DOMContentLoaded', () => {
-        const observerOptions = {
-            root: null,
-            rootMargin: '0px 0px -50px 0px', 
-            threshold: 0.1 
-        };
+    /*
+     * Scroll reveal (self-healing).
+     *
+     * The old version relied on IntersectionObserver "enter/leave" events. When a navbar link jumps
+     * straight to a section (or the DOM gets swapped by page navigation), those events could be missed
+     * and the section stayed at opacity 0, which showed up as a blank page.
+     *
+     * This version looks at where every .scroll-reveal element actually is on each scroll, resize,
+     * hash change and link click, and re-queries the elements every time, so it can never get stuck.
+     *   - element is in view, or already scrolled past  -> shown
+     *   - element is fully below the fold               -> hidden again (so it can animate in later)
+     *   - anything in between                           -> unchanged (prevents flicker)
+     */
+    (function () {
+        if (window.__storkiaReveal) { window.__storkiaReveal.sync(); return; }
 
-        const observer = new IntersectionObserver((entries) => {
-            entries.forEach(entry => {
-                if (entry.isIntersecting) {
-                    entry.target.classList.add('active');
-                } else {
-                    if(entry.boundingClientRect.top > 0) {
-                        entry.target.classList.remove('active');
-                    }
+        const root = document.documentElement;
+        let ticking = false;
+
+        const sync = () => {
+            ticking = false;
+            const vh = window.innerHeight || root.clientHeight;
+
+            document.querySelectorAll('.scroll-reveal').forEach((el) => {
+                const top = el.getBoundingClientRect().top;
+                if (top < vh - 80) {
+                    el.classList.add('active');
+                } else if (top > vh) {
+                    el.classList.remove('active');
                 }
             });
-        }, observerOptions);
+        };
 
-        const revealElements = document.querySelectorAll('.scroll-reveal');
-        
-        revealElements.forEach((el) => {
-            observer.observe(el);
+        const request = () => {
+            if (ticking) return;
+            ticking = true;
+            requestAnimationFrame(sync);
+        };
+
+        // Navbar / in-page anchor links: re-check while and after the browser scrolls to the target
+        const settle = () => {
+            request();
+            [60, 250, 600, 1200, 2000].forEach((ms) => setTimeout(request, ms));
+        };
+
+        window.addEventListener('scroll', request, { passive: true });
+        window.addEventListener('scrollend', request, { passive: true });
+        window.addEventListener('resize', request, { passive: true });
+        window.addEventListener('hashchange', settle);
+        window.addEventListener('popstate', settle);
+        window.addEventListener('pageshow', settle);
+        window.addEventListener('load', settle);
+        document.addEventListener('livewire:navigated', settle);
+        document.addEventListener('turbo:load', settle);
+        document.addEventListener('click', (e) => {
+            const link = e.target.closest && e.target.closest('a[href*="#"]');
+            if (link) settle();
         });
-    });
+
+        window.__storkiaReveal = { sync };
+
+        // Only start hiding sections once the logic above is in place, then reveal whatever is on screen
+        root.classList.add('reveal-ready');
+        sync();
+        settle();
+    })();
+
+    /*
+     * In-page navigation (navbar, mobile menu, "Explore Shops").
+     *
+     * Letting the browser handle "#section" links meant anything else on the page (a router, a layout
+     * script, a layout shift while images load) could scroll the page back to where it was.
+     * Here we scroll to the section ourselves, keep the URL hash in sync without triggering a
+     * navigation, and re-check the position for a few seconds so the page stays on the section you tapped.
+     * Scrolling by hand (wheel, touch, keyboard) cancels the re-check immediately.
+     */
+    (function () {
+        if (window.__storkiaAnchors) return;
+        window.__storkiaAnchors = true;
+
+        const root = document.documentElement;
+        const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+        let pin = null;
+
+        const stopPin = () => { clearTimeout(pin); pin = null; };
+        ['wheel', 'touchstart', 'keydown', 'mousedown'].forEach((type) => {
+            window.addEventListener(type, stopPin, { passive: true });
+        });
+
+        // Layout position of an element. Ignores transforms, so the reveal slide-up offset can't skew it.
+        const docTop = (el) => {
+            let y = 0;
+            for (let n = el; n; n = n.offsetParent) y += n.offsetTop;
+            return y;
+        };
+
+        // Where the page should be scrolled to (respects the section's scroll-mt-* so the fixed navbar doesn't cover it)
+        const destination = (el) => {
+            const margin = parseFloat(getComputedStyle(el).scrollMarginTop) || 80;
+            const max = Math.max(0, root.scrollHeight - window.innerHeight);
+            return Math.min(max, Math.max(0, Math.round(docTop(el) - margin)));
+        };
+
+        const goTo = (el) => {
+            stopPin();
+            window.scrollTo({ top: destination(el), behavior: reduceMotion.matches ? 'instant' : 'smooth' });
+
+            // Once scrolling has stopped, make sure we really are on the section; if something moved us, put us back.
+            const until = Date.now() + 3000;
+            let last = window.scrollY;
+            let fixes = 0;
+            const watch = () => {
+                const y = window.scrollY;
+                const idle = y === last;
+                last = y;
+                if (idle && Math.abs(y - destination(el)) > 4 && fixes < 4) {
+                    fixes++;
+                    window.scrollTo({ top: destination(el), behavior: 'instant' });
+                    last = window.scrollY;
+                }
+                pin = Date.now() < until ? setTimeout(watch, 150) : null;
+            };
+            pin = setTimeout(watch, 150);
+        };
+
+        // Capture phase, so this runs before any router/layout click handler and can claim the click first.
+        document.addEventListener('click', (e) => {
+            if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+
+            const link = e.target.closest && e.target.closest('a[href]');
+            if (!link || link.target === '_blank' || link.hasAttribute('download')) return;
+
+            let url;
+            try { url = new URL(link.getAttribute('href'), window.location.href); } catch (err) { return; }
+
+            // Only same-page "#section" links
+            if (!url.hash || url.hash === '#') return;
+            if (url.origin !== window.location.origin || url.pathname !== window.location.pathname || url.search !== window.location.search) return;
+
+            const el = document.getElementById(decodeURIComponent(url.hash.slice(1)));
+            if (!el) return;
+
+            e.preventDefault();   // no native jump, no hashchange, no router visit
+            goTo(el);
+            history.replaceState(history.state, '', url.hash);
+        }, true);
+    })();
 </script>
 @endsection
