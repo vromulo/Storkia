@@ -9,6 +9,7 @@
         [$name, $domain] = explode('@', $rawEmail, 2);
         $maskedEmail = substr($name, 0, 1) . str_repeat('*', max(strlen($name) - 2, 4)) . substr($name, -1) . '@' . $domain;
     }
+
     $passwordLastUpdated = $user->formattedPasswordLastUpdated();
     $contact = $user->contact_no ?: ($profile->contact_no ?? '');
     $cleanContact = preg_replace('/\D/', '', $contact);
@@ -19,6 +20,7 @@
     $hasPhone = !empty($cleanContact);
     $maskedContact = 'Not provided';
     $formattedPhone = '';
+
     if ($hasPhone) {
         $fullDigits = '63' . $cleanContact;
         $maskedContact = strlen($fullDigits) >= 8
@@ -32,6 +34,7 @@
             $formattedPhone .= ' ' . substr($cleanContact, 6, 4);
         }
     }
+
     $photoUrl = $profile->logo_path ? asset('storage/' . $profile->logo_path) : '';
     $fullAddress = collect([
         $profile->house_details,
@@ -40,21 +43,23 @@
         $profile->municipality,
         $profile->province,
     ])->filter()->implode(', ');
+
     $idExt = strtolower(pathinfo($profile->id_path ?? '', PATHINFO_EXTENSION));
     $permitExt = strtolower(pathinfo($profile->permit_path ?? '', PATHINFO_EXTENSION));
+
     $sellerData = [
-        'business_name' => $profile->business_name ?? '',
-        'photo_url' => $photoUrl,
-        'first_name' => $user->first_name ?? '',
-        'last_name' => $user->last_name ?? '',
-        'full_name' => $initialFullName,
-        'email' => $rawEmail,
-        'masked_email' => $maskedEmail,
+        'business_name'         => $profile->business_name ?? '',
+        'photo_url'             => $photoUrl,
+        'first_name'            => $user->first_name ?? '',
+        'last_name'             => $user->last_name ?? '',
+        'full_name'             => $initialFullName,
+        'email'                 => $rawEmail,
+        'masked_email'          => $maskedEmail,
         'password_last_updated' => $passwordLastUpdated,
-        'phone_raw' => $cleanContact,
-        'formatted_phone' => $formattedPhone,
-        'masked_phone' => $maskedContact,
-        'has_phone' => $hasPhone
+        'phone_raw'             => $cleanContact,
+        'formatted_phone'       => $formattedPhone,
+        'masked_phone'          => $maskedContact,
+        'has_phone'             => $hasPhone,
     ];
 @endphp
 
@@ -64,25 +69,11 @@
     {{ json_encode($sellerData) }}
 )" class="max-w-5xl mx-auto select-none">
 
-    @if(session('success'))
-        <div class="mb-6 p-4 rounded-2xl bg-green-50 border border-green-200 text-green-700 text-xs sm:text-sm font-bold flex items-center justify-between">
-            <span>{{ session('success') }}</span>
-        </div>
-    @endif
-
-    @if($errors->any())
-        <div class="mb-6 p-4 rounded-2xl bg-red-50 border border-red-200 text-red-700 text-xs sm:text-sm space-y-1">
-            @foreach($errors->all() as $err)
-                <p class="font-semibold">{{ $err }}</p>
-            @endforeach
-        </div>
-    @endif
-
     <div class="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-8">
         <div>
             <div class="flex items-center gap-2.5">
-                <h1 class="text-3xl font-bold text-text-main">Store Settings</h1>
-                <span class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold bg-green-100 text-green-700 border border-green-200">
+                <h1 class="text-3xl font-bold text-primary-dark">Store Settings</h1>
+                <span class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold bg-success/15 text-success border border-success/25">
                     <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
                         <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
                     </svg>
@@ -131,7 +122,7 @@
 
         <div class="bg-surface rounded-3xl border border-border-subtle p-6 sm:p-8 shadow-xs space-y-6">
             <div class="border-b border-border-subtle pb-4">
-                <h2 class="text-lg font-bold text-text-main">Storefront Identity</h2>
+                <h2 class="text-lg font-bold text-primary-dark">Storefront Identity</h2>
                 <p class="text-xs text-text-muted mt-0.5">Customize your public shop avatar and store display name.</p>
             </div>
 
@@ -163,10 +154,11 @@
                             </template>
                         </div>
                     </div>
+
                     <div class="flex items-center gap-3 shrink-0">
                         <label for="seller_photo_input"
-                               :class="(isEditing() || isUploadingPhoto || isRemovingPhoto) ? 'pointer-events-none opacity-50' : 'cursor-pointer hover:bg-dark-grey active:scale-95'"
-                               class="px-4 py-2.5 bg-text-main text-surface text-xs font-semibold rounded-xl transition-all shadow-xs inline-flex items-center gap-2">
+                               :class="(isEditing() || isUploadingPhoto || isRemovingPhoto) ? 'pointer-events-none opacity-50' : 'cursor-pointer hover:bg-primary-dark active:scale-95'"
+                               class="px-4 py-2.5 bg-primary text-surface text-xs font-semibold rounded-xl transition-all shadow-xs inline-flex items-center gap-2">
                             <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                                 <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
                             </svg>
@@ -181,7 +173,7 @@
                             <button type="button"
                                     @click="removePhoto()"
                                     :disabled="isEditing() || isUploadingPhoto || isRemovingPhoto"
-                                    class="px-3.5 py-2.5 border border-border-subtle text-danger hover:bg-red-50 text-xs font-semibold rounded-xl transition-colors cursor-pointer disabled:opacity-50">
+                                    class="px-3.5 py-2.5 border border-border-subtle text-danger hover:bg-danger/10 text-xs font-semibold rounded-xl transition-colors cursor-pointer disabled:opacity-50">
                                 Remove
                             </button>
                         </template>
@@ -209,7 +201,7 @@
                                 @click="toggle('store_name')"
                                 :disabled="isDimmed('store_name') || isAnySaving()"
                                 :class="(isDimmed('store_name') || isAnySaving()) ? 'pointer-events-none cursor-not-allowed' : 'cursor-pointer'"
-                                class="text-sm font-light underline text-text-main hover:opacity-75 transition-opacity inline-block leading-none">
+                                class="text-sm font-bold text-primary hover:text-primary-dark underline transition-colors inline-block leading-none">
                             <span x-text="activeEdit === 'store_name' ? 'Cancel' : 'Edit'"></span>
                         </button>
                     </div>
@@ -224,7 +216,7 @@
                         @method('PATCH')
                         <div class="w-full max-w-lg">
                             <div class="border rounded-xl p-3 bg-surface transition-colors"
-                                 :class="storeNameError ? 'border-danger' : 'border-neutral-400 focus-within:border-text-main'">
+                                 :class="storeNameError ? 'border-danger' : 'border-border-subtle focus-within:border-primary'">
                                 <label for="business_name" class="block text-xs font-normal text-text-muted">
                                     Official Store / Business Name
                                 </label>
@@ -246,7 +238,7 @@
                             <button type="submit"
                                     :disabled="isSavingStoreName"
                                     :class="isSavingStoreName ? 'pointer-events-none opacity-80' : 'cursor-pointer active:scale-95'"
-                                    class="h-10 w-20 flex items-center justify-center bg-text-main hover:bg-dark-grey text-surface font-semibold text-sm rounded-xl transition-colors select-none">
+                                    class="h-10 w-24 flex items-center justify-center bg-primary hover:bg-primary-dark text-surface font-semibold text-sm rounded-xl transition-colors select-none">
                                 <span x-show="!isSavingStoreName">Save</span>
                                 <span x-show="isSavingStoreName" x-cloak class="inline-flex items-center justify-center gap-1">
                                     <span class="w-1.5 h-1.5 bg-surface rounded-full animate-bounce" style="animation-delay: -0.32s;"></span>
@@ -260,11 +252,10 @@
             </div>
         </div>
 
-        <!-- Centralized Admin GCash Escrow Information Banner -->
         <div class="bg-surface rounded-3xl border border-border-subtle p-6 sm:p-8 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div class="space-y-1.5">
                 <div class="flex items-center gap-2">
-                    <span class="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase bg-blue-100 text-blue-800 border border-blue-200">
+                    <span class="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase bg-primary/10 text-primary-dark border border-primary/25">
                         Storkia Admin Escrow
                     </span>
                     <h2 class="text-base font-bold text-primary-dark">Online Payment (GCash) &amp; 90% E-Wallet Settlement</h2>
@@ -274,7 +265,7 @@
                 </p>
             </div>
             <a href="{{ route('seller.settlements.index') }}"
-               class="px-5 py-3 rounded-2xl bg-primary hover:bg-primary-dark text-white text-xs font-bold shadow-xs transition-colors shrink-0 text-center">
+               class="px-5 py-3 rounded-2xl bg-primary hover:bg-primary-dark text-white text-xs font-bold shadow-xs transition-colors shrink-0 text-center cursor-pointer">
                 Open Seller E-Wallet &amp; Withdrawals &rarr;
             </a>
         </div>
@@ -302,7 +293,7 @@
                         <p class="text-sm font-bold text-text-main mt-1">{{ $profile->line_of_business }}</p>
                         <p class="text-[11px] text-text-muted mt-0.5">Determines eligible product subcategories.</p>
                     </div>
-                    <span class="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-green-100 text-green-700 border border-green-200 shrink-0">
+                    <span class="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-success/15 text-success border border-success/25 shrink-0">
                         Verified
                     </span>
                 </div>
@@ -313,7 +304,7 @@
                         <p class="text-sm font-bold text-text-main mt-1 leading-snug">{{ $fullAddress ?: 'Not specified' }}</p>
                         <p class="text-[11px] text-text-muted mt-0.5">Official pickup &amp; return facility location.</p>
                     </div>
-                    <span class="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-green-100 text-green-700 border border-green-200 shrink-0">
+                    <span class="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-success/15 text-success border border-success/25 shrink-0">
                         Verified
                     </span>
                 </div>
@@ -332,7 +323,7 @@
                             </div>
                             <div class="min-w-0">
                                 <p class="text-sm font-bold text-text-main truncate">Valid Government ID</p>
-                                <span class="inline-flex items-center gap-1 text-[11px] text-green-700 font-semibold">
+                                <span class="inline-flex items-center gap-1 text-[11px] text-success font-semibold">
                                     <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>
                                     Approved &amp; On File
                                 </span>
@@ -354,7 +345,7 @@
                             </div>
                             <div class="min-w-0">
                                 <p class="text-sm font-bold text-text-main truncate">Business / Mayor's Permit</p>
-                                <span class="inline-flex items-center gap-1 text-[11px] text-green-700 font-semibold">
+                                <span class="inline-flex items-center gap-1 text-[11px] text-success font-semibold">
                                     <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>
                                     Approved &amp; On File
                                 </span>
@@ -403,7 +394,7 @@
                             @click="toggle('username')"
                             :disabled="isDimmed('username') || isAnySaving()"
                             :class="(isDimmed('username') || isAnySaving()) ? 'pointer-events-none cursor-not-allowed' : 'cursor-pointer'"
-                            class="text-sm font-light underline text-text-main hover:opacity-75 transition-opacity inline-block leading-none">
+                            class="text-sm font-bold text-primary hover:text-primary-dark underline transition-colors inline-block leading-none">
                         <span x-text="activeEdit === 'username' ? 'Cancel' : 'Edit'"></span>
                     </button>
                 </div>
@@ -419,7 +410,7 @@
                     <div class="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
                         <div>
                             <div class="border rounded-xl p-3 bg-surface transition-colors"
-                                 :class="nameErrors.first_name ? 'border-danger' : 'border-neutral-400 focus-within:border-text-main'">
+                                 :class="nameErrors.first_name ? 'border-danger' : 'border-border-subtle focus-within:border-primary'">
                                 <label for="first_name" class="block text-xs font-normal text-text-muted">
                                     First name on ID
                                 </label>
@@ -438,7 +429,7 @@
                         </div>
                         <div>
                             <div class="border rounded-xl p-3 bg-surface transition-colors"
-                                 :class="nameErrors.last_name ? 'border-danger' : 'border-neutral-400 focus-within:border-text-main'">
+                                 :class="nameErrors.last_name ? 'border-danger' : 'border-border-subtle focus-within:border-primary'">
                                 <label for="last_name" class="block text-xs font-normal text-text-muted">
                                     Last name on ID
                                 </label>
@@ -460,7 +451,7 @@
                         <button type="submit"
                                 :disabled="isSavingName"
                                 :class="isSavingName ? 'pointer-events-none opacity-80' : 'cursor-pointer active:scale-95'"
-                                class="h-10 w-20 flex items-center justify-center bg-text-main hover:bg-dark-grey text-surface font-semibold text-sm rounded-xl transition-colors select-none">
+                                class="h-10 w-24 flex items-center justify-center bg-primary hover:bg-primary-dark text-surface font-semibold text-sm rounded-xl transition-colors select-none">
                             <span x-show="!isSavingName">Save</span>
                             <span x-show="isSavingName" x-cloak class="inline-flex items-center justify-center gap-1">
                                 <span class="w-1.5 h-1.5 bg-surface rounded-full animate-bounce" style="animation-delay: -0.32s;"></span>
@@ -493,7 +484,7 @@
                             @click="toggle('email')"
                             :disabled="isDimmed('email') || isAnySaving()"
                             :class="(isDimmed('email') || isAnySaving()) ? 'pointer-events-none cursor-not-allowed' : 'cursor-pointer'"
-                            class="text-sm font-light underline text-text-main hover:opacity-75 transition-opacity inline-block leading-none">
+                            class="text-sm font-bold text-primary hover:text-primary-dark underline transition-colors inline-block leading-none">
                         <span x-text="activeEdit === 'email' ? 'Cancel' : 'Edit'"></span>
                     </button>
                 </div>
@@ -507,7 +498,7 @@
                     @csrf
                     <div class="w-full">
                         <div class="border rounded-xl p-3 bg-surface transition-colors"
-                             :class="emailErrors.email ? 'border-danger' : 'border-neutral-400 focus-within:border-text-main'">
+                             :class="emailErrors.email ? 'border-danger' : 'border-border-subtle focus-within:border-primary'">
                             <input type="email"
                                    id="seller_email"
                                    name="email"
@@ -525,7 +516,7 @@
                         <button type="submit"
                                 :disabled="isSavingEmail"
                                 :class="isSavingEmail ? 'pointer-events-none opacity-80' : 'cursor-pointer active:scale-95'"
-                                class="h-10 w-20 flex items-center justify-center bg-text-main hover:bg-dark-grey text-surface font-semibold text-sm rounded-xl transition-colors select-none">
+                                class="h-10 w-24 flex items-center justify-center bg-primary hover:bg-primary-dark text-surface font-semibold text-sm rounded-xl transition-colors select-none">
                             <span x-show="!isSavingEmail">Save</span>
                             <span x-show="isSavingEmail" x-cloak class="inline-flex items-center justify-center gap-1">
                                 <span class="w-1.5 h-1.5 bg-surface rounded-full animate-bounce" style="animation-delay: -0.32s;"></span>
@@ -554,22 +545,11 @@
                     </p>
                 </div>
                 <div class="shrink-0 text-right flex items-center gap-2 leading-none">
-                    <template x-if="hasPhone && activeEdit !== 'phone'">
-                        <div class="flex items-center gap-2 leading-none">
-                            <button type="button"
-                                    tabindex="-1"
-                                    :disabled="true"
-                                    class="text-sm font-light underline text-text-main opacity-50 cursor-not-allowed pointer-events-none transition-opacity leading-none">
-                                Verify
-                            </button>
-                            <span class="text-text-muted text-xs font-light">|</span>
-                        </div>
-                    </template>
                     <button type="button"
                             @click="toggle('phone')"
                             :disabled="isDimmed('phone') || isAnySaving()"
                             :class="(isDimmed('phone') || isAnySaving()) ? 'pointer-events-none cursor-not-allowed' : 'cursor-pointer'"
-                            class="text-sm font-light underline text-text-main hover:opacity-75 transition-opacity inline-block leading-none">
+                            class="text-sm font-bold text-primary hover:text-primary-dark underline transition-colors inline-block leading-none">
                         <span x-text="activeEdit === 'phone' ? 'Cancel' : (hasPhone ? 'Edit' : 'Add')"></span>
                     </button>
                 </div>
@@ -584,7 +564,7 @@
                     @method('PATCH')
                     <div class="w-full">
                         <div class="border rounded-xl p-3 bg-surface transition-colors flex items-center"
-                             :class="phoneErrors.phone ? 'border-danger' : 'border-neutral-400 focus-within:border-text-main'">
+                             :class="phoneErrors.phone ? 'border-danger' : 'border-border-subtle focus-within:border-primary'">
                             <span class="text-base font-normal text-text-muted pr-2 select-none shrink-0">+63</span>
                             <input type="tel"
                                    id="seller_phone_number"
@@ -605,7 +585,7 @@
                         <button type="submit"
                                 :disabled="isSavingPhone"
                                 :class="isSavingPhone ? 'pointer-events-none opacity-80' : 'cursor-pointer active:scale-95'"
-                                class="h-10 w-20 flex items-center justify-center bg-text-main hover:bg-dark-grey text-surface font-semibold text-sm rounded-xl transition-colors select-none">
+                                class="h-10 w-24 flex items-center justify-center bg-primary hover:bg-primary-dark text-surface font-semibold text-sm rounded-xl transition-colors select-none">
                             <span x-show="!isSavingPhone">Save</span>
                             <span x-show="isSavingPhone" x-cloak class="inline-flex items-center justify-center gap-1">
                                 <span class="w-1.5 h-1.5 bg-surface rounded-full animate-bounce" style="animation-delay: -0.32s;"></span>
@@ -635,7 +615,7 @@
                             @click="handlePasswordClick()"
                             :disabled="isDimmed('password') || isAnySaving()"
                             :class="(isDimmed('password') || isAnySaving()) ? 'pointer-events-none cursor-not-allowed' : 'cursor-pointer'"
-                            class="text-sm font-light underline text-text-main hover:opacity-75 transition-opacity inline-block leading-none">
+                            class="text-sm font-bold text-primary hover:text-primary-dark underline transition-colors inline-block leading-none">
                         <span x-text="activeEdit === 'password' ? 'Cancel' : 'Update'"></span>
                     </button>
                 </div>
@@ -651,7 +631,7 @@
                     <div class="grid grid-cols-1 sm:grid-cols-2 gap-3.5" x-data="{ showNewPass: false, showConfirmPass: false }">
                         <div>
                             <div class="relative border rounded-xl p-3 bg-surface transition-colors"
-                                 :class="passwordErrors.password ? 'border-danger' : 'border-neutral-400 focus-within:border-text-main'">
+                                 :class="passwordErrors.password ? 'border-danger' : 'border-border-subtle focus-within:border-primary'">
                                 <label for="seller_new_password" class="block text-xs font-normal text-text-muted">
                                     New password
                                 </label>
@@ -676,22 +656,23 @@
                             </template>
                             <div class="mt-2 grid grid-cols-2 gap-1.5 text-[11px] text-text-muted">
                                 <span class="flex items-center gap-1" :class="newPassword.length >= 8 ? 'text-success font-semibold' : ''">
-                                    <span x-text="newPassword.length >= 8 ? '✓' : '•'"></span> 8+ characters
+                                    <span x-text="newPassword.length >= 8 ? '&#10003;' : '&bull;'"></span> 8+ characters
                                 </span>
                                 <span class="flex items-center gap-1" :class="/[A-Z]/.test(newPassword) ? 'text-success font-semibold' : ''">
-                                    <span x-text="/[A-Z]/.test(newPassword) ? '✓' : '•'"></span> 1 uppercase
+                                    <span x-text="/[A-Z]/.test(newPassword) ? '&#10003;' : '&bull;'"></span> 1 uppercase
                                 </span>
                                 <span class="flex items-center gap-1" :class="/[0-9]/.test(newPassword) ? 'text-success font-semibold' : ''">
-                                    <span x-text="/[0-9]/.test(newPassword) ? '✓' : '•'"></span> 1 number
+                                    <span x-text="/[0-9]/.test(newPassword) ? '&#10003;' : '&bull;'"></span> 1 number
                                 </span>
                                 <span class="flex items-center gap-1" :class="/[\W_]/.test(newPassword) ? 'text-success font-semibold' : ''">
-                                    <span x-text="/[\W_]/.test(newPassword) ? '✓' : '•'"></span> 1 special symbol
+                                    <span x-text="/[\W_]/.test(newPassword) ? '&#10003;' : '&bull;'"></span> 1 special symbol
                                 </span>
                             </div>
                         </div>
+
                         <div>
                             <div class="relative border rounded-xl p-3 bg-surface transition-colors"
-                                 :class="passwordErrors.password_confirmation ? 'border-danger' : 'border-neutral-400 focus-within:border-text-main'">
+                                 :class="passwordErrors.password_confirmation ? 'border-danger' : 'border-border-subtle focus-within:border-primary'">
                                 <label for="seller_confirm_password" class="block text-xs font-normal text-text-muted">
                                     Confirm password
                                 </label>
@@ -720,7 +701,7 @@
                         <button type="submit"
                                 :disabled="isSavingPassword"
                                 :class="isSavingPassword ? 'pointer-events-none opacity-80' : 'cursor-pointer active:scale-95'"
-                                class="h-10 px-5 min-w-[150px] flex items-center justify-center bg-text-main hover:bg-dark-grey text-surface font-semibold text-sm rounded-xl transition-colors select-none">
+                                class="h-10 px-5 min-w-[150px] flex items-center justify-center bg-primary hover:bg-primary-dark text-surface font-semibold text-sm rounded-xl transition-colors select-none">
                             <span x-show="!isSavingPassword">Update password</span>
                             <span x-show="isSavingPassword" x-cloak class="inline-flex items-center justify-center gap-1">
                                 <span class="w-1.5 h-1.5 bg-surface rounded-full animate-bounce" style="animation-delay: -0.32s;"></span>
@@ -744,10 +725,10 @@
                 <div class="flex items-center justify-between pb-3 border-b border-border-subtle">
                     <div class="flex items-center gap-2">
                         <h3 class="font-bold text-sm text-primary-dark truncate" x-text="docModalTitle"></h3>
-                        <span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-green-100 text-green-700">Verified</span>
+                        <span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-success/15 text-success">Verified</span>
                     </div>
                     <div class="flex items-center gap-3">
-                        <a :href="docModalUrl" target="_blank" class="text-xs font-bold text-primary hover:underline">Open in New Tab</a>
+                        <a :href="docModalUrl" target="_blank" class="text-xs font-bold text-primary hover:underline cursor-pointer">Open in New Tab</a>
                         <button type="button" @click="docModalOpen = false" class="p-1 rounded-lg hover:bg-surface-subtle text-text-muted hover:text-text-main cursor-pointer">
                             <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
                         </button>
