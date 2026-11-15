@@ -15,27 +15,22 @@
     $isProductsActive = request()->is('seller/products*');
     $isPromotionsActive = request()->is('seller/promotions*') || request()->is('seller/vouchers*');
     $isOrdersActive = request()->is('seller/orders*');
-    $isSalesActive = request()->is('seller/sales*');
+    $isSalesActive = request()->is('seller/sales*') || request()->is('seller/settlements*');
     $isRatingsActive = request()->is('seller/ratings*');
-
-    // Chat counters from ChatServiceProvider: 'messages' = unread direct chats (buyers + logistics),
-    // 'support' = unread replies from the Storkia support team.
     $chatBadges = $chatBadges ?? ['messages' => 0, 'support' => 0, 'total' => 0];
     $messagesBadge = (int) ($chatBadges['messages'] ?: ($badges['unread_messages'] ?? 0));
     $supportBadge = (int) ($chatBadges['support'] ?? 0);
     $isMessagesActive = request()->is('seller/messages*');
     $isHelpCenterActive = request()->is('seller/help-center*');
 @endphp
-
-<aside :class="sidebarOpen ? 'w-72' : 'w-20'" class="relative flex flex-col h-screen border-r border-border-subtle shadow-lg transition-all duration-300 ease-in-out bg-gradient-to-b from-surface via-surface to-brand-light/30 flex-shrink-0 z-40">
-
-    <button @click="sidebarOpen = !sidebarOpen" class="absolute -right-3.5 top-8 bg-surface border border-border-subtle text-primary rounded-full p-1.5 shadow-md hover:bg-brand-light/50 transition-colors z-50 focus:outline-none cursor-pointer">
+<aside :class="sidebarOpen ? 'w-64 lg:w-72' : 'w-20'" class="relative flex flex-col h-screen border-r border-border-subtle shadow-lg transition-all duration-300 ease-in-out bg-gradient-to-b from-surface via-surface to-brand-light/30 flex-shrink-0 z-40 select-none">
+    <button type="button" @click="sidebarOpen = !sidebarOpen" class="absolute -right-3.5 top-8 bg-surface border border-border-subtle text-primary rounded-full p-1.5 shadow-md hover:bg-brand-light/50 transition-colors z-50 focus:outline-none cursor-pointer">
         <svg class="w-4 h-4 transition-transform duration-300" :class="!sidebarOpen ? 'rotate-180' : ''" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
         </svg>
     </button>
 
-    <div class="h-20 flex items-center justify-center px-4 border-b border-border-subtle overflow-hidden">
+    <div class="h-18 lg:h-20 flex items-center justify-center px-4 border-b border-border-subtle overflow-hidden">
         <a href="{{ route('seller.seller-dashboard') }}"
             @click="if (window.location.href.split('?')[0] === '{{ route('seller.seller-dashboard') }}') { $event.preventDefault(); window.scrollTo({top: 0, behavior: 'smooth'}); }"
             class="flex items-center justify-center h-10 w-full overflow-hidden text-primary-dark transition-colors cursor-pointer">
@@ -45,7 +40,6 @@
     </div>
 
     <nav x-data="{ activeDropdown: '{{ $isProductsActive ? 'products' : ($isPromotionsActive ? 'promotions' : ($isOrdersActive ? 'orders' : ($isSalesActive ? 'sales' : (request()->is('seller/account*') ? 'account' : null)))) }}' }" class="flex-1 overflow-y-auto overflow-x-hidden p-3 space-y-1.5 custom-scrollbar">
-
         <a href="{{ route('seller.seller-dashboard') }}"
             @click="activeDropdown = null"
             class="flex items-center px-3 py-3 rounded-xl transition-all duration-200 font-bold group whitespace-nowrap relative text-sm cursor-pointer {{ request()->routeIs('seller.seller-dashboard') ? 'text-primary bg-brand-light/60 shadow-xs' : 'text-text-muted hover:bg-brand-light/30 hover:text-primary' }}"
@@ -58,8 +52,9 @@
 
         @if(auth()->user()->sellerProfile)
         <div>
-            <button @click="if(!sidebarOpen) { sidebarOpen = true; activeDropdown = 'products'; } else { activeDropdown = activeDropdown === 'products' ? null : 'products'; }"
-                    class="flex items-center justify-between w-full px-3 py-3 rounded-xl transition-all duration-200 font-medium group whitespace-nowrap text-sm cursor-pointer {{ $isProductsActive ? 'text-primary font-bold bg-brand-light/20' : 'text-text-muted hover:bg-brand-light/30 hover:text-primary' }}"
+            <button type="button"
+                    @click="if(!sidebarOpen) { sidebarOpen = true; activeDropdown = 'products'; } else { activeDropdown = activeDropdown === 'products' ? null : 'products'; }"
+                    class="flex items-center justify-between w-full px-3 py-3 rounded-xl transition-all duration-200 font-medium group whitespace-nowrap text-sm cursor-pointer {{ $isProductsActive ? 'text-primary font-bold bg-brand-light/30' : 'text-text-muted hover:bg-brand-light/30 hover:text-primary' }}"
                     :title="!sidebarOpen ? 'Products' : ''">
                 <div class="flex items-center">
                     <svg class="w-6 h-6 flex-shrink-0 transition-colors {{ $isProductsActive ? 'text-primary' : 'text-text-muted group-hover:text-primary' }}" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -69,7 +64,7 @@
                 </div>
                 <div class="flex items-center gap-1.5">
                     @if(($badges['products_total'] ?? 0) > 0)
-                        <span class="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-amber-500 text-white">
+                        <span class="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-primary text-white">
                             {{ $badges['products_total'] }}
                         </span>
                     @endif
@@ -82,13 +77,13 @@
                 <a href="{{ route('seller.products.index') }}" class="flex items-center justify-between px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ request()->routeIs('seller.products.index') || request()->routeIs('seller.products.create') ? 'bg-primary/10 text-primary font-bold shadow-xs' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">
                     <span>All Products &amp; Drafts</span>
                     @if(($badges['disapproved_prods'] ?? 0) > 0)
-                        <span class="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-red-100 text-danger">{{ $badges['disapproved_prods'] }}</span>
+                        <span class="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-danger/10 text-danger">{{ $badges['disapproved_prods'] }}</span>
                     @endif
                 </a>
                 <a href="{{ route('seller.products.inventory') }}" class="flex items-center justify-between px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ request()->routeIs('seller.products.inventory') ? 'bg-primary/10 text-primary font-bold shadow-xs' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">
                     <span>Inventory</span>
                     @if(($badges['low_stock'] ?? 0) > 0)
-                        <span class="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800">{{ $badges['low_stock'] }}</span>
+                        <span class="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-brand-light/80 text-primary-dark">{{ $badges['low_stock'] }}</span>
                     @endif
                 </a>
                 <a href="{{ route('seller.products.archived') }}" class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ request()->routeIs('seller.products.archived') ? 'bg-primary/10 text-primary font-bold shadow-xs' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">
@@ -98,8 +93,9 @@
         </div>
 
         <div>
-            <button @click="if(!sidebarOpen) { sidebarOpen = true; activeDropdown = 'promotions'; } else { activeDropdown = activeDropdown === 'promotions' ? null : 'promotions'; }"
-                    class="flex items-center justify-between w-full px-3 py-3 rounded-xl transition-all duration-200 font-medium group whitespace-nowrap text-sm cursor-pointer {{ $isPromotionsActive ? 'text-primary font-bold bg-brand-light/20' : 'text-text-muted hover:bg-brand-light/30 hover:text-primary' }}"
+            <button type="button"
+                    @click="if(!sidebarOpen) { sidebarOpen = true; activeDropdown = 'promotions'; } else { activeDropdown = activeDropdown === 'promotions' ? null : 'promotions'; }"
+                    class="flex items-center justify-between w-full px-3 py-3 rounded-xl transition-all duration-200 font-medium group whitespace-nowrap text-sm cursor-pointer {{ $isPromotionsActive ? 'text-primary font-bold bg-brand-light/30' : 'text-text-muted hover:bg-brand-light/30 hover:text-primary' }}"
                     :title="!sidebarOpen ? 'Promotions & Vouchers' : ''">
                 <div class="flex items-center">
                     <svg class="w-6 h-6 flex-shrink-0 transition-colors {{ $isPromotionsActive ? 'text-primary' : 'text-text-muted group-hover:text-primary' }}" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -122,8 +118,9 @@
         </div>
 
         <div>
-            <button @click="if(!sidebarOpen) { sidebarOpen = true; activeDropdown = 'orders'; } else { activeDropdown = activeDropdown === 'orders' ? null : 'orders'; }"
-                    class="flex items-center justify-between w-full px-3 py-3 rounded-xl transition-all duration-200 font-medium group whitespace-nowrap text-sm cursor-pointer {{ $isOrdersActive ? 'text-primary font-bold bg-brand-light/20' : 'text-text-muted hover:bg-brand-light/30 hover:text-primary' }}"
+            <button type="button"
+                    @click="if(!sidebarOpen) { sidebarOpen = true; activeDropdown = 'orders'; } else { activeDropdown = activeDropdown === 'orders' ? null : 'orders'; }"
+                    class="flex items-center justify-between w-full px-3 py-3 rounded-xl transition-all duration-200 font-medium group whitespace-nowrap text-sm cursor-pointer {{ $isOrdersActive ? 'text-primary font-bold bg-brand-light/30' : 'text-text-muted hover:bg-brand-light/30 hover:text-primary' }}"
                     :title="!sidebarOpen ? 'Orders' : ''">
                 <div class="flex items-center">
                     <svg class="w-6 h-6 flex-shrink-0 transition-colors {{ $isOrdersActive ? 'text-primary' : 'text-text-muted group-hover:text-primary' }}" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -133,7 +130,7 @@
                 </div>
                 <div class="flex items-center gap-1.5">
                     @if(($badges['orders_total'] ?? 0) > 0)
-                        <span class="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-red-500 text-white">
+                        <span class="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-danger text-white">
                             {{ $badges['orders_total'] > 99 ? '99+' : $badges['orders_total'] }}
                         </span>
                     @endif
@@ -147,25 +144,25 @@
                 <a href="{{ route('seller.orders.index', ['status' => 'new']) }}" class="flex items-center justify-between px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ request('status') === 'new' ? 'bg-primary/10 text-primary font-bold shadow-xs' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">
                     <span>New Orders</span>
                     @if(($badges['orders_new'] ?? 0) > 0)
-                        <span class="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-red-100 text-danger">{{ $badges['orders_new'] }}</span>
+                        <span class="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-danger/10 text-danger">{{ $badges['orders_new'] }}</span>
                     @endif
                 </a>
                 <a href="{{ route('seller.orders.index', ['status' => 'pending']) }}" class="flex items-center justify-between px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ request('status') === 'pending' ? 'bg-primary/10 text-primary font-bold shadow-xs' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">
                     <span>Pending Buyer Response</span>
                     @if(($badges['orders_pending'] ?? 0) > 0)
-                        <span class="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800">{{ $badges['orders_pending'] }}</span>
+                        <span class="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-brand-light/80 text-primary-dark">{{ $badges['orders_pending'] }}</span>
                     @endif
                 </a>
                 <a href="{{ route('seller.orders.index', ['status' => 'to_process']) }}" class="flex items-center justify-between px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ request('status') === 'to_process' ? 'bg-primary/10 text-primary font-bold shadow-xs' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">
                     <span>To Process</span>
                     @if(($badges['orders_to_process'] ?? 0) > 0)
-                        <span class="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 text-blue-800">{{ $badges['orders_to_process'] }}</span>
+                        <span class="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-primary/15 text-primary-dark">{{ $badges['orders_to_process'] }}</span>
                     @endif
                 </a>
                 <a href="{{ route('seller.orders.index', ['status' => 'to_ship']) }}" class="flex items-center justify-between px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ request('status') === 'to_ship' ? 'bg-primary/10 text-primary font-bold shadow-xs' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">
                     <span>To Ship</span>
                     @if(($badges['orders_to_ship'] ?? 0) > 0)
-                        <span class="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-indigo-100 text-indigo-800">{{ $badges['orders_to_ship'] }}</span>
+                        <span class="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-primary/15 text-primary">{{ $badges['orders_to_ship'] }}</span>
                     @endif
                 </a>
                 <a href="{{ route('seller.orders.index', ['status' => 'shipped']) }}" class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ request('status') === 'shipped' ? 'bg-primary/10 text-primary font-bold shadow-xs' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">Shipped</a>
@@ -173,15 +170,16 @@
                 <a href="{{ route('seller.orders.index', ['status' => 'cancelled']) }}" class="flex items-center justify-between px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ request('status') === 'cancelled' ? 'bg-primary/10 text-primary font-bold shadow-xs' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">
                     <span>Cancelled / Returned</span>
                     @if(($badges['orders_disputed'] ?? 0) > 0)
-                        <span class="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-red-100 text-danger">{{ $badges['orders_disputed'] }}</span>
+                        <span class="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-danger/10 text-danger">{{ $badges['orders_disputed'] }}</span>
                     @endif
                 </a>
             </div>
         </div>
 
         <div>
-            <button @click="if(!sidebarOpen) { sidebarOpen = true; activeDropdown = 'sales'; } else { activeDropdown = activeDropdown === 'sales' ? null : 'sales'; }"
-                    class="flex items-center justify-between w-full px-3 py-3 rounded-xl transition-all duration-200 font-medium group whitespace-nowrap text-sm cursor-pointer {{ $isSalesActive ? 'text-primary font-bold bg-brand-light/20' : 'text-text-muted hover:bg-brand-light/30 hover:text-primary' }}"
+            <button type="button"
+                    @click="if(!sidebarOpen) { sidebarOpen = true; activeDropdown = 'sales'; } else { activeDropdown = activeDropdown === 'sales' ? null : 'sales'; }"
+                    class="flex items-center justify-between w-full px-3 py-3 rounded-xl transition-all duration-200 font-medium group whitespace-nowrap text-sm cursor-pointer {{ $isSalesActive ? 'text-primary font-bold bg-brand-light/30' : 'text-text-muted hover:bg-brand-light/30 hover:text-primary' }}"
                     :title="!sidebarOpen ? 'Sales & Reports' : ''">
                 <div class="flex items-center">
                     <svg class="w-6 h-6 flex-shrink-0 transition-colors {{ $isSalesActive ? 'text-primary' : 'text-text-muted group-hover:text-primary' }}" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -201,7 +199,7 @@
 
         <a href="{{ route('seller.ratings.index') }}"
             @click="activeDropdown = null"
-            class="flex items-center justify-between px-3 py-3 rounded-xl transition-all duration-200 font-medium group whitespace-nowrap text-sm cursor-pointer {{ $isRatingsActive ? 'text-primary font-bold bg-brand-light/20' : 'text-text-muted hover:bg-brand-light/30 hover:text-primary' }}"
+            class="flex items-center justify-between px-3 py-3 rounded-xl transition-all duration-200 font-medium group whitespace-nowrap text-sm cursor-pointer {{ $isRatingsActive ? 'text-primary font-bold bg-brand-light/30' : 'text-text-muted hover:bg-brand-light/30 hover:text-primary' }}"
             :title="!sidebarOpen ? 'Store & Product Ratings' : ''">
             <div class="flex items-center">
                 <svg class="w-6 h-6 flex-shrink-0 transition-colors {{ $isRatingsActive ? 'text-primary' : 'text-text-muted group-hover:text-primary' }}" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -210,7 +208,7 @@
                 <span x-show="sidebarOpen" x-transition.opacity.duration.300ms class="ml-3">Store &amp; Product Ratings</span>
             </div>
             @if(($badges['unreplied_reviews'] ?? 0) > 0)
-                <span class="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-amber-500 text-white">
+                <span class="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-primary text-white">
                     {{ $badges['unreplied_reviews'] }}
                 </span>
             @endif
@@ -218,7 +216,7 @@
 
         <a href="{{ route('seller.messages.seller-messages') }}"
             @click="activeDropdown = null"
-            class="flex items-center justify-between px-3 py-3 rounded-xl transition-all duration-200 font-medium group whitespace-nowrap text-sm cursor-pointer {{ $isMessagesActive ? 'text-primary font-bold bg-brand-light/20' : 'text-text-muted hover:bg-brand-light/30 hover:text-primary' }}"
+            class="flex items-center justify-between px-3 py-3 rounded-xl transition-all duration-200 font-medium group whitespace-nowrap text-sm cursor-pointer {{ $isMessagesActive ? 'text-primary font-bold bg-brand-light/30' : 'text-text-muted hover:bg-brand-light/30 hover:text-primary' }}"
             :title="!sidebarOpen ? 'Messages' : ''">
             <div class="flex items-center">
                 <svg class="w-6 h-6 flex-shrink-0 transition-colors {{ $isMessagesActive ? 'text-primary' : 'text-text-muted group-hover:text-primary' }}" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -227,7 +225,7 @@
                 <span x-show="sidebarOpen" x-transition.opacity.duration.300ms class="ml-3">Messages</span>
             </div>
             @if($messagesBadge > 0)
-                <span class="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-red-500 text-white">
+                <span class="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-danger text-white">
                     {{ $messagesBadge > 99 ? '99+' : $messagesBadge }}
                 </span>
             @endif
@@ -245,7 +243,6 @@
         </a>
         @endif
 
-        {{-- Outside the seller profile check on purpose: pending or rejected sellers can still contact support. --}}
         <a href="{{ route('seller.help-center.index') }}"
             @click="activeDropdown = null"
             class="flex items-center justify-between px-3 py-3 rounded-xl transition-all duration-200 font-medium group whitespace-nowrap text-sm cursor-pointer {{ $isHelpCenterActive ? 'text-primary font-bold bg-brand-light/60 shadow-xs' : 'text-text-muted hover:bg-brand-light/30 hover:text-primary' }}"
@@ -257,7 +254,7 @@
                 <span x-show="sidebarOpen" x-transition.opacity.duration.300ms class="ml-3">Help Center</span>
             </div>
             @if($supportBadge > 0)
-                <span class="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-red-500 text-white">
+                <span class="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-danger text-white">
                     {{ $supportBadge > 99 ? '99+' : $supportBadge }}
                 </span>
             @endif
@@ -267,7 +264,7 @@
     <div class="p-3 border-t border-border-subtle bg-surface/50 backdrop-blur-sm">
         <form method="POST" action="{{ route('logout') }}" class="m-0">
             @csrf
-            <button type="submit" class="w-full flex items-center px-3 py-3 text-red-500 font-bold hover:bg-red-50 rounded-xl transition-colors whitespace-nowrap text-sm cursor-pointer" :title="!sidebarOpen ? 'Logout' : ''">
+            <button type="submit" class="w-full flex items-center px-3 py-3 text-danger font-bold hover:bg-danger/10 rounded-xl transition-colors whitespace-nowrap text-sm cursor-pointer" :title="!sidebarOpen ? 'Logout' : ''">
                 <svg class="w-6 h-6 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
                 </svg>

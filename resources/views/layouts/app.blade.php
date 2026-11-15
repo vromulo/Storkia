@@ -19,10 +19,8 @@
     @vite(['resources/css/app.css', 'resources/js/app.js'])
     @livewireStyles
 </head>
-<body class="overflow-x-clip max-w-full flex flex-col min-h-screen">
-
+<body class="overflow-x-clip max-w-full flex flex-col min-h-screen bg-surface text-text-main font-sans antialiased">
     <x-ui.preloader />
-
     <header
         x-data="{
             showHeader: true,
@@ -30,7 +28,6 @@
             onScroll() {
                 const y = Math.max(window.scrollY, 0);
                 const delta = y - this.lastScroll;
-
                 if (y <= 100) {
                     this.showHeader = true;
                 } else if (this.$el.matches(':hover') || this.$el.contains(document.activeElement)) {
@@ -42,7 +39,6 @@
                 } else {
                     return;
                 }
-
                 this.lastScroll = y;
             }
         }"
@@ -57,7 +53,6 @@
             <x-storefront.mega-menu />
         @endif
     </header>
-
     @auth
         <div class="md:hidden"
             x-data="{ mobileDrawerOpen: false }"
@@ -67,19 +62,15 @@
             <x-buyer.account-sidebar :is-global="true" />
         </div>
     @endauth
-
     <main id="storkia-main-content" class="flex-grow w-full min-w-0 overflow-x-clip">
         @yield('content')
         {{ $slot ?? '' }}
     </main>
-
     @if (!($hideFooter ?? false) && !request()->routeIs('user.*'))
         @include('components.storefront.footer')
     @endif
-
     <x-ui.scroll-to-top />
     <x-ui.toast-notification />
-
     @livewireScripts
 </body>
 </html>

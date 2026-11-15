@@ -2,7 +2,6 @@
     $user = auth()->user();
     $hasProfile = $user && $user->logisticsProfile !== null;
     $isMainLogistics = $user && $user->isMainLogisticsAccount();
-
     $badges = $logisticsSidebarBadges ?? [
         'shipments_to_pickup'       => 0,
         'shipments_in_transit_hub'  => 0,
@@ -16,14 +15,12 @@
         'pending_remittances'       => 0,
         'short_remittances'         => 0,
     ];
-
     $isRiderApplicationRoute = request()->routeIs('logistics.rider-applications*');
     $isCourierIndexRoute = request()->routeIs('logistics.couriers.index');
     $isCreateCourierRoute = request()->routeIs('logistics.couriers.create');
     $isCreateRiderRoute = request()->routeIs('rider.register') || request()->routeIs('logistics.riders.create');
     $isActiveRidersRoute = request()->routeIs('logistics.riders.active');
     $isEmployeesRoute = request()->routeIs('logistics.employees*');
-
     $isRiderRoute = $isRiderApplicationRoute || $isCourierIndexRoute || $isCreateCourierRoute || $isCreateRiderRoute || $isActiveRidersRoute || $isEmployeesRoute;
     $isBranchesRoute = request()->routeIs('logistics.branches*');
     $isShipmentsRoute = request()->routeIs('logistics.shipments*');
@@ -33,23 +30,18 @@
     $isRatingsRoute = request()->routeIs('logistics.ratings*');
     $isMessagesRoute = request()->routeIs('logistics.messages*');
     $isHelpCenterRoute = request()->routeIs('logistics.help-center*');
-
-    // Chat counters from ChatServiceProvider: 'messages' = unread seller chats,
-    // 'support' = unread replies from the Storkia support team.
     $chatBadges = $chatBadges ?? ['messages' => 0, 'support' => 0, 'total' => 0];
     $messagesBadge = (int) ($chatBadges['messages'] ?? 0);
     $supportBadge = (int) ($chatBadges['support'] ?? 0);
 @endphp
-
-<aside :class="sidebarOpen ? 'w-72' : 'w-20'" class="relative flex flex-col h-screen border-r border-border-subtle shadow-lg transition-all duration-300 ease-in-out bg-gradient-to-b from-surface via-surface to-brand-light/30 flex-shrink-0 z-40">
-
-    <button @click="sidebarOpen = !sidebarOpen" class="absolute -right-3.5 top-8 bg-surface border border-border-subtle text-primary rounded-full p-1.5 shadow-md hover:bg-brand-light/50 transition-colors z-50 focus:outline-none cursor-pointer">
+<aside :class="sidebarOpen ? 'w-64 lg:w-72' : 'w-20'" class="relative flex flex-col h-screen border-r border-border-subtle shadow-lg transition-all duration-300 ease-in-out bg-gradient-to-b from-surface via-surface to-brand-light/30 flex-shrink-0 z-40 select-none">
+    <button type="button" @click="sidebarOpen = !sidebarOpen" class="absolute -right-3.5 top-8 bg-surface border border-border-subtle text-primary rounded-full p-1.5 shadow-md hover:bg-brand-light/50 transition-colors z-50 focus:outline-none cursor-pointer">
         <svg class="w-4 h-4 transition-transform duration-300" :class="!sidebarOpen ? 'rotate-180' : ''" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
         </svg>
     </button>
 
-    <div class="h-20 flex items-center justify-center px-4 border-b border-border-subtle overflow-hidden">
+    <div class="h-18 lg:h-20 flex items-center justify-center px-4 border-b border-border-subtle overflow-hidden">
         <a href="{{ route('logistics.logistics-dashboard') }}"
             @click="if (window.location.href.split('?')[0] === '{{ route('logistics.logistics-dashboard') }}') { $event.preventDefault(); window.scrollTo({top: 0, behavior: 'smooth'}); }"
             class="flex items-center justify-center h-10 w-full overflow-hidden text-primary-dark transition-colors cursor-pointer">
@@ -59,7 +51,6 @@
     </div>
 
     <nav x-data="{ activeDropdown: '{{ $isRiderRoute ? 'riders' : ($isShipmentsRoute ? 'shipments' : ($isReturnsRoute ? 'returns' : ($isFinanceRoute ? 'finance' : ''))) }}' }" class="flex-1 overflow-y-auto overflow-x-hidden p-3 space-y-1.5 custom-scrollbar">
-
         <a href="{{ route('logistics.logistics-dashboard') }}"
             @click="activeDropdown = null"
             class="flex items-center px-3 py-3 rounded-xl transition-all duration-200 font-bold group whitespace-nowrap relative text-sm cursor-pointer {{ request()->routeIs('logistics.logistics-dashboard') ? 'bg-brand-light/60 text-primary shadow-xs' : 'text-text-muted hover:bg-brand-light/30 hover:text-primary' }}"
@@ -72,9 +63,10 @@
 
         @if($hasProfile)
         <div>
-            <button @click="if(!sidebarOpen) { sidebarOpen = true; activeDropdown = 'shipments'; } else { activeDropdown = activeDropdown === 'shipments' ? null : 'shipments'; }"
-                     class="flex items-center justify-between w-full px-3 py-3 rounded-xl transition-all duration-200 font-medium group whitespace-nowrap text-sm cursor-pointer {{ $isShipmentsRoute ? 'bg-brand-light/60 text-primary font-bold shadow-xs' : 'text-text-muted hover:bg-brand-light/30 hover:text-primary' }}"
-                     :title="!sidebarOpen ? 'Shipments' : ''">
+            <button type="button"
+                    @click="if(!sidebarOpen) { sidebarOpen = true; activeDropdown = 'shipments'; } else { activeDropdown = activeDropdown === 'shipments' ? null : 'shipments'; }"
+                    class="flex items-center justify-between w-full px-3 py-3 rounded-xl transition-all duration-200 font-medium group whitespace-nowrap text-sm cursor-pointer {{ $isShipmentsRoute ? 'bg-brand-light/60 text-primary font-bold shadow-xs' : 'text-text-muted hover:bg-brand-light/30 hover:text-primary' }}"
+                    :title="!sidebarOpen ? 'Shipments' : ''">
                 <div class="flex items-center">
                     <svg class="w-6 h-6 flex-shrink-0 {{ $isShipmentsRoute ? 'text-primary' : 'text-text-muted group-hover:text-primary' }} transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16V6a1 1 0 00-1-1H4a1 1 0 00-1 1v10a1 1 0 001 1h1m8-1a1 1 0 01-1 1H9m4-1V8a1 1 0 011-1h2.586a1 1 0 01.707.293l3.414 3.414a1 1 0 01.293.707V16a1 1 0 01-1 1h-1m-6-1a1 1 0 001 1h1M5 17a2 2 0 104 0m-4 0a2 2 0 114 0m6 0a2 2 0 104 0m-4 0a2 2 0 114 0" />
@@ -83,7 +75,7 @@
                 </div>
                 <div class="flex items-center gap-1.5">
                     @if(($badges['shipments_action_total'] ?? 0) > 0)
-                        <span class="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-red-500 text-white">
+                        <span class="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-danger text-white">
                             {{ $badges['shipments_action_total'] > 99 ? '99+' : $badges['shipments_action_total'] }}
                         </span>
                     @endif
@@ -93,40 +85,41 @@
                 </div>
             </button>
             <div x-show="activeDropdown === 'shipments' && sidebarOpen" x-collapse x-cloak class="ml-6 pl-4 my-1 border-l-2 border-border-subtle/70 space-y-1">
-                <a href="{{ route('logistics.shipments.index') }}" class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ request()->routeIs('logistics.shipments.index') && !request('status') ? 'text-primary font-bold bg-brand-light/40' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">All Shipments</a>
-                <a href="{{ route('logistics.shipments.index', ['status' => 'to_pickup']) }}" class="flex items-center justify-between px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ request('status') === 'to_pickup' ? 'text-primary font-bold bg-brand-light/40' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">
+                <a href="{{ route('logistics.shipments.index') }}" class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ request()->routeIs('logistics.shipments.index') && !request('status') ? 'text-primary font-bold bg-primary/10' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">All Shipments</a>
+                <a href="{{ route('logistics.shipments.index', ['status' => 'to_pickup']) }}" class="flex items-center justify-between px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ request('status') === 'to_pickup' ? 'text-primary font-bold bg-primary/10' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">
                     <span>To Pick Up / Drop-Off</span>
                     @if(($badges['shipments_to_pickup'] ?? 0) > 0)
-                        <span class="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-red-100 text-danger">{{ $badges['shipments_to_pickup'] }}</span>
+                        <span class="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-danger/10 text-danger">{{ $badges['shipments_to_pickup'] }}</span>
                     @endif
                 </a>
-                <a href="{{ route('logistics.shipments.index', ['status' => 'in_transit_hub']) }}" class="flex items-center justify-between px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ request('status') === 'in_transit_hub' ? 'text-primary font-bold bg-brand-light/40' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">
+                <a href="{{ route('logistics.shipments.index', ['status' => 'in_transit_hub']) }}" class="flex items-center justify-between px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ request('status') === 'in_transit_hub' ? 'text-primary font-bold bg-primary/10' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">
                     <span>In Transit to Hub</span>
                     @if(($badges['shipments_in_transit_hub'] ?? 0) > 0)
-                        <span class="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 text-blue-800">{{ $badges['shipments_in_transit_hub'] }}</span>
+                        <span class="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-primary/15 text-primary-dark">{{ $badges['shipments_in_transit_hub'] }}</span>
                     @endif
                 </a>
-                <a href="{{ route('logistics.shipments.index', ['status' => 'at_hub']) }}" class="flex items-center justify-between px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ request('status') === 'at_hub' ? 'text-primary font-bold bg-brand-light/40' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">
+                <a href="{{ route('logistics.shipments.index', ['status' => 'at_hub']) }}" class="flex items-center justify-between px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ request('status') === 'at_hub' ? 'text-primary font-bold bg-primary/10' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">
                     <span>At Sorting Hub</span>
                     @if(($badges['shipments_at_hub'] ?? 0) > 0)
-                        <span class="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800">{{ $badges['shipments_at_hub'] }}</span>
+                        <span class="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-brand-light/80 text-primary-dark">{{ $badges['shipments_at_hub'] }}</span>
                     @endif
                 </a>
-                <a href="{{ route('logistics.shipments.index', ['status' => 'out_for_delivery']) }}" class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ request('status') === 'out_for_delivery' ? 'text-primary font-bold bg-brand-light/40' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">Out for Delivery</a>
-                <a href="{{ route('logistics.shipments.index', ['status' => 'delivered']) }}" class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ request('status') === 'delivered' ? 'text-primary font-bold bg-brand-light/40' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">Delivered</a>
-                <a href="{{ route('logistics.shipments.index', ['status' => 'failed_returned']) }}" class="flex items-center justify-between px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ request('status') === 'failed_returned' ? 'text-primary font-bold bg-brand-light/40' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">
+                <a href="{{ route('logistics.shipments.index', ['status' => 'out_for_delivery']) }}" class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ request('status') === 'out_for_delivery' ? 'text-primary font-bold bg-primary/10' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">Out for Delivery</a>
+                <a href="{{ route('logistics.shipments.index', ['status' => 'delivered']) }}" class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ request('status') === 'delivered' ? 'text-primary font-bold bg-primary/10' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">Delivered</a>
+                <a href="{{ route('logistics.shipments.index', ['status' => 'failed_returned']) }}" class="flex items-center justify-between px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ request('status') === 'failed_returned' ? 'text-primary font-bold bg-primary/10' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">
                     <span>Failed / Returned</span>
                     @if(($badges['shipments_failed'] ?? 0) > 0)
-                        <span class="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-red-100 text-danger">{{ $badges['shipments_failed'] }}</span>
+                        <span class="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-danger/10 text-danger">{{ $badges['shipments_failed'] }}</span>
                     @endif
                 </a>
             </div>
         </div>
 
         <div>
-            <button @click="if(!sidebarOpen) { sidebarOpen = true; activeDropdown = 'returns'; } else { activeDropdown = activeDropdown === 'returns' ? null : 'returns'; }"
-                     class="flex items-center justify-between w-full px-3 py-3 rounded-xl transition-all duration-200 font-medium group whitespace-nowrap text-sm cursor-pointer {{ $isReturnsRoute ? 'bg-brand-light/60 text-primary font-bold shadow-xs' : 'text-text-muted hover:bg-brand-light/30 hover:text-primary' }}"
-                     :title="!sidebarOpen ? 'Return Shipments' : ''">
+            <button type="button"
+                    @click="if(!sidebarOpen) { sidebarOpen = true; activeDropdown = 'returns'; } else { activeDropdown = activeDropdown === 'returns' ? null : 'returns'; }"
+                    class="flex items-center justify-between w-full px-3 py-3 rounded-xl transition-all duration-200 font-medium group whitespace-nowrap text-sm cursor-pointer {{ $isReturnsRoute ? 'bg-brand-light/60 text-primary font-bold shadow-xs' : 'text-text-muted hover:bg-brand-light/30 hover:text-primary' }}"
+                    :title="!sidebarOpen ? 'Return Shipments' : ''">
                 <div class="flex items-center">
                     <svg class="w-6 h-6 flex-shrink-0 {{ $isReturnsRoute ? 'text-primary' : 'text-text-muted group-hover:text-primary' }} transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
@@ -135,7 +128,7 @@
                 </div>
                 <div class="flex items-center gap-1.5">
                     @if(($badges['returns_action_total'] ?? 0) > 0)
-                        <span class="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-red-500 text-white">
+                        <span class="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-danger text-white">
                             {{ $badges['returns_action_total'] > 99 ? '99+' : $badges['returns_action_total'] }}
                         </span>
                     @endif
@@ -145,27 +138,27 @@
                 </div>
             </button>
             <div x-show="activeDropdown === 'returns' && sidebarOpen" x-collapse x-cloak class="ml-6 pl-4 my-1 border-l-2 border-border-subtle/70 space-y-1">
-                <a href="{{ route('logistics.returns.index') }}" class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ request()->routeIs('logistics.returns.index') && !request('status') ? 'text-primary font-bold bg-brand-light/40' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">All Returns</a>
-                <a href="{{ route('logistics.returns.index', ['status' => 'needs_rider']) }}" class="flex items-center justify-between px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ request('status') === 'needs_rider' ? 'text-primary font-bold bg-brand-light/40' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">
+                <a href="{{ route('logistics.returns.index') }}" class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ request()->routeIs('logistics.returns.index') && !request('status') ? 'text-primary font-bold bg-primary/10' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">All Returns</a>
+                <a href="{{ route('logistics.returns.index', ['status' => 'needs_rider']) }}" class="flex items-center justify-between px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ request('status') === 'needs_rider' ? 'text-primary font-bold bg-primary/10' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">
                     <span>Needs Rider</span>
                     @if(($badges['returns_to_assign_rider'] ?? 0) > 0)
-                        <span class="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-red-100 text-danger">{{ $badges['returns_to_assign_rider'] }}</span>
+                        <span class="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-danger/10 text-danger">{{ $badges['returns_to_assign_rider'] }}</span>
                     @endif
                 </a>
-                <a href="{{ route('logistics.returns.index', ['status' => 'to_hub']) }}" class="flex items-center justify-between px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ request('status') === 'to_hub' ? 'text-primary font-bold bg-brand-light/40' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">
+                <a href="{{ route('logistics.returns.index', ['status' => 'to_hub']) }}" class="flex items-center justify-between px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ request('status') === 'to_hub' ? 'text-primary font-bold bg-primary/10' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">
                     <span>On the Way to Hub</span>
                     @if(($badges['returns_to_receive'] ?? 0) > 0)
-                        <span class="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 text-blue-800">{{ $badges['returns_to_receive'] }}</span>
+                        <span class="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-primary/15 text-primary-dark">{{ $badges['returns_to_receive'] }}</span>
                     @endif
                 </a>
-                <a href="{{ route('logistics.returns.index', ['status' => 'at_hub']) }}" class="flex items-center justify-between px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ request('status') === 'at_hub' ? 'text-primary font-bold bg-brand-light/40' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">
+                <a href="{{ route('logistics.returns.index', ['status' => 'at_hub']) }}" class="flex items-center justify-between px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ request('status') === 'at_hub' ? 'text-primary font-bold bg-primary/10' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">
                     <span>At Sorting Hub</span>
                     @if(($badges['returns_to_assign_courier'] ?? 0) > 0)
-                        <span class="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800">{{ $badges['returns_to_assign_courier'] }}</span>
+                        <span class="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-brand-light/80 text-primary-dark">{{ $badges['returns_to_assign_courier'] }}</span>
                     @endif
                 </a>
-                <a href="{{ route('logistics.returns.index', ['status' => 'to_seller']) }}" class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ request('status') === 'to_seller' ? 'text-primary font-bold bg-brand-light/40' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">Returning to Seller</a>
-                <a href="{{ route('logistics.returns.index', ['status' => 'delivered']) }}" class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ request()->routeIs('logistics.returns.index') && request('status') === 'delivered' ? 'text-primary font-bold bg-brand-light/40' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">Delivered to Seller</a>
+                <a href="{{ route('logistics.returns.index', ['status' => 'to_seller']) }}" class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ request('status') === 'to_seller' ? 'text-primary font-bold bg-primary/10' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">Returning to Seller</a>
+                <a href="{{ route('logistics.returns.index', ['status' => 'delivered']) }}" class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ request()->routeIs('logistics.returns.index') && request('status') === 'delivered' ? 'text-primary font-bold bg-primary/10' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">Delivered to Seller</a>
             </div>
         </div>
 
@@ -180,7 +173,7 @@
                 <span x-show="sidebarOpen" x-transition.opacity.duration.300ms class="ml-3">Zones, Rates &amp; Exceptions</span>
             </div>
             @if(($badges['short_remittances'] ?? 0) > 0)
-                <span class="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-amber-500 text-white">
+                <span class="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-primary text-white">
                     {{ $badges['short_remittances'] }}
                 </span>
             @endif
@@ -199,9 +192,10 @@
         @endif
 
         <div>
-            <button @click="if(!sidebarOpen) { sidebarOpen = true; activeDropdown = 'riders'; } else { activeDropdown = activeDropdown === 'riders' ? null : 'riders'; }"
-                     class="flex items-center justify-between w-full px-3 py-3 rounded-xl transition-all duration-200 font-medium group whitespace-nowrap text-sm cursor-pointer {{ $isRiderRoute ? 'bg-brand-light/60 text-primary font-bold shadow-xs' : 'text-text-muted hover:bg-brand-light/30 hover:text-primary' }}"
-                     :title="!sidebarOpen ? 'Employee Management' : ''">
+            <button type="button"
+                    @click="if(!sidebarOpen) { sidebarOpen = true; activeDropdown = 'riders'; } else { activeDropdown = activeDropdown === 'riders' ? null : 'riders'; }"
+                    class="flex items-center justify-between w-full px-3 py-3 rounded-xl transition-all duration-200 font-medium group whitespace-nowrap text-sm cursor-pointer {{ $isRiderRoute ? 'bg-brand-light/60 text-primary font-bold shadow-xs' : 'text-text-muted hover:bg-brand-light/30 hover:text-primary' }}"
+                    :title="!sidebarOpen ? 'Employee Management' : ''">
                 <div class="flex items-center">
                     <svg class="w-6 h-6 flex-shrink-0 {{ $isRiderRoute ? 'text-primary' : 'text-text-muted group-hover:text-primary' }} transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
@@ -213,12 +207,12 @@
                 </svg>
             </button>
             <div x-show="activeDropdown === 'riders' && sidebarOpen" x-collapse x-cloak class="ml-6 pl-4 my-1 border-l-2 border-border-subtle/70 space-y-1">
-                <a href="{{ route('logistics.employees.index') }}" class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ $isEmployeesRoute ? 'text-primary font-bold bg-brand-light/40' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">Hub &amp; Barangay Assignments</a>
-                <a href="{{ route('logistics.couriers.create') }}" class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ $isCreateCourierRoute ? 'text-primary font-bold bg-brand-light/40' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">Create Courier Account</a>
-                <a href="{{ route('logistics.riders.create') }}" class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ $isCreateRiderRoute ? 'text-primary font-bold bg-brand-light/40' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">Create Rider Account</a>
-                <a href="{{ route('logistics.couriers.index') }}" class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ $isCourierIndexRoute ? 'text-primary font-bold bg-brand-light/40' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">All Couriers (First-Mile)</a>
-                <a href="{{ route('logistics.riders.active') }}" class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ $isActiveRidersRoute ? 'text-primary font-bold bg-brand-light/40' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">All Approved Riders</a>
-                <a href="{{ route('logistics.rider-applications.index') }}" class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ $isRiderApplicationRoute ? 'text-primary font-bold bg-brand-light/40' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">Rider Directory &amp; Docs</a>
+                <a href="{{ route('logistics.employees.index') }}" class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ $isEmployeesRoute ? 'text-primary font-bold bg-primary/10' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">Hub &amp; Barangay Assignments</a>
+                <a href="{{ route('logistics.couriers.create') }}" class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ $isCreateCourierRoute ? 'text-primary font-bold bg-primary/10' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">Create Courier Account</a>
+                <a href="{{ route('logistics.riders.create') }}" class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ $isCreateRiderRoute ? 'text-primary font-bold bg-primary/10' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">Create Rider Account</a>
+                <a href="{{ route('logistics.couriers.index') }}" class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ $isCourierIndexRoute ? 'text-primary font-bold bg-primary/10' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">All Couriers (First-Mile)</a>
+                <a href="{{ route('logistics.riders.active') }}" class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ $isActiveRidersRoute ? 'text-primary font-bold bg-primary/10' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">All Approved Riders</a>
+                <a href="{{ route('logistics.rider-applications.index') }}" class="block px-3 py-2 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer {{ $isRiderApplicationRoute ? 'text-primary font-bold bg-primary/10' : 'text-text-muted hover:text-text-main hover:bg-brand-light/25' }}">Rider Directory &amp; Docs</a>
             </div>
         </div>
 
@@ -233,7 +227,7 @@
                 <span x-show="sidebarOpen" x-transition.opacity.duration.300ms class="ml-3">COD &amp; E-Wallet Reports</span>
             </div>
             @if(($badges['pending_remittances'] ?? 0) > 0)
-                <span class="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-red-500 text-white">
+                <span class="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-danger text-white">
                     {{ $badges['pending_remittances'] }}
                 </span>
             @endif
@@ -260,7 +254,7 @@
                 <span x-show="sidebarOpen" x-transition.opacity.duration.300ms class="ml-3">Seller Messages</span>
             </div>
             @if($messagesBadge > 0)
-                <span class="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-red-500 text-white">
+                <span class="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-danger text-white">
                     {{ $messagesBadge > 99 ? '99+' : $messagesBadge }}
                 </span>
             @endif
@@ -280,7 +274,6 @@
         @endif
         @endif
 
-        {{-- Outside the hub profile check on purpose: pending or rejected hubs can still contact support. --}}
         <a href="{{ route('logistics.help-center.index') }}"
             @click="activeDropdown = null"
             class="flex items-center justify-between px-3 py-3 rounded-xl transition-all duration-200 font-medium group whitespace-nowrap text-sm cursor-pointer {{ $isHelpCenterRoute ? 'text-primary font-bold bg-brand-light/60 shadow-xs' : 'text-text-muted hover:bg-brand-light/30 hover:text-primary' }}"
@@ -292,7 +285,7 @@
                 <span x-show="sidebarOpen" x-transition.opacity.duration.300ms class="ml-3">Help Center</span>
             </div>
             @if($supportBadge > 0)
-                <span class="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-red-500 text-white">
+                <span class="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-danger text-white">
                     {{ $supportBadge > 99 ? '99+' : $supportBadge }}
                 </span>
             @endif
@@ -302,7 +295,7 @@
     <div class="p-3 border-t border-border-subtle bg-surface/50 backdrop-blur-sm">
         <form method="POST" action="{{ route('logout') }}" class="m-0">
             @csrf
-            <button type="submit" class="w-full flex items-center px-3 py-3 text-red-500 font-bold hover:bg-red-50 rounded-xl transition-colors whitespace-nowrap text-sm cursor-pointer" :title="!sidebarOpen ? 'Logout' : ''">
+            <button type="submit" class="w-full flex items-center px-3 py-3 text-danger font-bold hover:bg-danger/10 rounded-xl transition-colors whitespace-nowrap text-sm cursor-pointer" :title="!sidebarOpen ? 'Logout' : ''">
                 <svg class="w-6 h-6 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
                 </svg>
