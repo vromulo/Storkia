@@ -7,12 +7,25 @@ use App\Models\SellerOrder;
 use App\Models\SellerOrderExtra;
 use App\Models\StorkVoucher;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Validation\ValidationException;
 
 class VoucherService
 {
+    protected static bool $expiredCheckedInProcess = false;
+
     public function expireOverdueVouchers(): int
     {
+        if (self::$expiredCheckedInProcess) {
+            return 0;
+        }
+
+        self::$expiredCheckedInProcess = true;
+
+        if (! Cache::add('storkia_expire_overdue_vouchers_lock', true, now()->addSeconds(60))) {
+            return 0;
+        }
+
         return StorkVoucher::where('status', 'active')
             ->whereNotNull('ends_at')
             ->where('ends_at', '<', now())
@@ -68,6 +81,17 @@ class VoucherService
             'claimed_at' => now(),
         ]);
 
+        RealtimeBroadcastService::send(
+            channels: ['user.' . $buyerId],
+            scope: 'voucher',
+            action: 'voucher.claimed',
+            payload: [
+                'voucher_id' => (int) $voucher->id,
+                'code'       => (string) $voucher->code,
+                'scope'      => (string) $voucher->scope,
+            ]
+        );
+
         return $voucher;
     }
 
@@ -118,9 +142,11 @@ class VoucherService
             ]);
         }
 
-        $claim = BuyerVoucherClaim::where('voucher_id', $voucher->id)
-            ->where('buyer_id', $buyerId)
-            ->first();
+        $claim = $voucher->relationLoaded('claims')
+            ? $voucher->claims->firstWhere('buyer_id', $buyerId)
+            : BuyerVoucherClaim::where('voucher_id', $voucher->id)
+                ->where('buyer_id', $buyerId)
+                ->first();
 
         if ($claim && (int) $claim->times_used >= (int) $voucher->per_buyer_limit) {
             throw ValidationException::withMessages([
@@ -292,13 +318,25 @@ class VoucherService
                 $claim->decrement('times_used');
             }
         }
+
+        if ($sellerOrder->buyer_id && ! empty($voucherIds)) {
+            RealtimeBroadcastService::send(
+                channels: ['user.' . (int) $sellerOrder->buyer_id],
+                scope: 'voucher',
+                action: 'voucher.restored',
+                payload: ['seller_order_id' => (int) $sellerOrder->id]
+            );
+        }
     }
 
     public function getBuyerAvailableVouchers(int $buyerId): Collection
     {
         $this->expireOverdueVouchers();
 
-        return StorkVoucher::with('sellerProfile')
+        return StorkVoucher::with([
+            'sellerProfile',
+            'claims' => fn ($q) => $q->where('buyer_id', $buyerId),
+        ])
             ->where('status', 'active')
             ->where('ends_at', '>=', now())
             ->whereColumn('used_count', '<', 'total_usage_limit')

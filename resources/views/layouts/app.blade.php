@@ -7,6 +7,7 @@
     <meta name="session-login-url" content="{{ route('login') }}">
     @auth
         <meta name="session-authenticated" content="1">
+        <meta name="reverb-channel" content="user.{{ auth()->id() }}">
     @endauth
     <title>
         {{ isset($title) ? $title . ' | ' . config('app.name') : config('app.name') }}
@@ -18,8 +19,8 @@
     @vite(['resources/css/app.css', 'resources/js/app.js'])
     @livewireStyles
 </head>
-
 <body class="overflow-x-clip max-w-full flex flex-col min-h-screen">
+
     <x-ui.preloader />
 
     <header
@@ -78,6 +79,7 @@
 
     <x-ui.scroll-to-top />
     <x-ui.toast-notification />
+
     @livewireScripts
 </body>
 </html>

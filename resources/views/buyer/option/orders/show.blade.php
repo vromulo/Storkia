@@ -112,7 +112,8 @@
             hubMarker: null,
             routeLine: null,
             liveTrackingData: null,
-            isPollingMap: false,
+            isFetchingMap: false,
+            _wsListener: null,
             chatMessages: @js($deliveryChatMessages->map(fn ($m) => [
                 'id'          => (int) $m->id,
                 'sender_type' => $m->sender_type,
@@ -124,20 +125,77 @@
             canSendChat: {{ $isRiderChatOpenable ? 'true' : 'false' }},
 
             initOrderShowPage() {
+                if (window.StorkiaRealtime && typeof window.StorkiaRealtime.subscribePrivate === 'function') {
+                    window.StorkiaRealtime.subscribePrivate('order.{{ (int) $sellerOrder->id }}');
+                    @if($shipment)
+                        window.StorkiaRealtime.subscribePrivate('shipment.{{ (int) $shipment->id }}');
+                    @endif
+                }
+
                 @if($shipment)
                     this.fetchLiveTracking();
-                    setInterval(() => {
-                        this.fetchLiveTracking();
-                    }, 12000);
                 @endif
+
+                this._wsListener = (event) => {
+                    const detail = (event && event.detail) || {};
+                    const orderId = Number(detail.seller_order_id || detail.order_id || 0);
+                    if (orderId > 0 && orderId !== {{ (int) $sellerOrder->id }}) {
+                        return;
+                    }
+
+                    if (detail.scope === 'location' || detail.scope === 'driver_location') {
+                        const lat = Number(detail.latitude);
+                        const lng = Number(detail.longitude);
+                        if (Number.isFinite(lat) && Number.isFinite(lng) && this.liveTrackingData && this.liveTrackingData.driver) {
+                            this.liveTrackingData.driver.latitude = lat;
+                            this.liveTrackingData.driver.longitude = lng;
+                            this.renderOrUpdateMap(this.liveTrackingData);
+                        }
+                        this.fetchLiveTracking();
+                        return;
+                    }
+
+                    if (detail.scope === 'delivery_chat' && detail.message) {
+                        const msg = detail.message;
+                        const exists = this.chatMessages.some(m => Number(m.id) === Number(msg.id));
+                        if (!exists) {
+                            this.chatMessages.push({
+                                id: Number(msg.id),
+                                sender_type: msg.sender_type || 'rider',
+                                message: msg.message || '',
+                                created_at: msg.created_at_formatted || 'Just now'
+                            });
+                        }
+                        return;
+                    }
+
+                    if (detail.scope === 'shipment' || detail.scope === 'order' || detail.scope === 'delivery' || detail.scope === 'pickup') {
+                        this.fetchLiveTracking();
+                        if (this.riderChatModalOpen) {
+                            this.refreshRiderChat();
+                        }
+                    }
+                };
+
+                window.addEventListener('storkia:ws-event', this._wsListener);
+            },
+
+            destroy() {
+                if (this._wsListener) {
+                    window.removeEventListener('storkia:ws-event', this._wsListener);
+                }
             },
 
             async fetchLiveTracking() {
-                if (this.isPollingMap) return;
-                this.isPollingMap = true;
+                if (this.isFetchingMap) return;
+                this.isFetchingMap = true;
                 try {
                     const res = await fetch('{{ route('user.orders.live-tracking', $sellerOrder->id) }}', {
-                        headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' }
+                        headers: {
+                            'Accept': 'application/json',
+                            'X-Requested-With': 'XMLHttpRequest',
+                            'X-Skip-Session-Guard': '1'
+                        }
                     });
                     const json = await res.json();
                     if (res.ok && json.success && json.data && json.data.has_shipment) {
@@ -148,7 +206,7 @@
                     }
                 } catch (e) {
                 } finally {
-                    this.isPollingMap = false;
+                    this.isFetchingMap = false;
                 }
             },
 
@@ -246,19 +304,27 @@
                 if (!text || this.isSendingChat || !this.canSendChat) return;
                 this.isSendingChat = true;
                 try {
+                    const socketId = window.Echo && typeof window.Echo.socketId === 'function' ? window.Echo.socketId() : null;
+                    const headers = {
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json',
+                        'X-Requested-With': 'XMLHttpRequest',
+                        'X-CSRF-TOKEN': '{{ csrf_token() }}'
+                    };
+                    if (socketId) {
+                        headers['X-Socket-ID'] = socketId;
+                    }
                     const res = await fetch('{{ route('user.orders.delivery-chat.send', $sellerOrder->id) }}', {
                         method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                            'Accept': 'application/json',
-                            'X-Requested-With': 'XMLHttpRequest',
-                            'X-CSRF-TOKEN': '{{ csrf_token() }}'
-                        },
+                        headers,
                         body: JSON.stringify({ message: text })
                     });
                     const data = await res.json();
                     if (res.ok && data.success && data.data) {
-                        this.chatMessages.push(data.data);
+                        const exists = this.chatMessages.some(m => Number(m.id) === Number(data.data.id));
+                        if (!exists) {
+                            this.chatMessages.push(data.data);
+                        }
                         this.chatInput = '';
                     }
                 } catch (e) {

@@ -8,19 +8,34 @@ use Illuminate\Support\Facades\Schema;
 
 class CourierMobileSchemaService
 {
-    protected const CACHE_KEY = 'storkia_courier_mobile_schema_v2_ready';
+    protected const CACHE_KEY = 'storkia_courier_mobile_schema_v4_ready';
+
+    protected static bool $verifiedInProcess = false;
 
     public static function ensureTablesExist(): void
     {
+        if (self::$verifiedInProcess) {
+            return;
+        }
+
+        if (Cache::get(self::CACHE_KEY) === true) {
+            self::$verifiedInProcess = true;
+            return;
+        }
+
         if (
-            Cache::get(self::CACHE_KEY) === true
-            && Schema::hasTable('courier_locations')
+            Schema::hasTable('courier_locations')
             && Schema::hasTable('courier_vehicle_updates')
             && Schema::hasTable('courier_shift_checklists')
             && Schema::hasTable('courier_trip_incidents')
             && Schema::hasColumn('couriers', 'current_latitude')
+            && Schema::hasColumn('couriers', 'avatar_path')
+            && Schema::hasColumn('couriers', 'password_changed_at')
             && Schema::hasColumn('pickup_assignments', 'decline_reason')
+            && Schema::hasColumn('courier_vehicle_updates', 'new_license_no')
         ) {
+            Cache::put(self::CACHE_KEY, true, now()->addHours(24));
+            self::$verifiedInProcess = true;
             return;
         }
 
@@ -31,7 +46,8 @@ class CourierMobileSchemaService
 
             self::applySchemaChanges();
 
-            Cache::put(self::CACHE_KEY, true, now()->addHours(12));
+            Cache::put(self::CACHE_KEY, true, now()->addHours(24));
+            self::$verifiedInProcess = true;
         } catch (\Throwable $e) {
             report($e);
         }
@@ -44,6 +60,7 @@ class CourierMobileSchemaService
         self::upgradeAddressCoordinatesColumns();
         self::createCourierLocationsTable();
         self::createCourierVehicleUpdatesTable();
+        self::upgradeCourierVehicleUpdatesTable();
         self::createCourierShiftChecklistsTable();
         self::createCourierTripIncidentsTable();
     }
@@ -64,6 +81,9 @@ class CourierMobileSchemaService
             if (! Schema::hasColumn('couriers', 'sla_strikes')) {
                 $table->unsignedSmallInteger('sla_strikes')->default(0);
             }
+            if (! Schema::hasColumn('couriers', 'avatar_path')) {
+                $table->string('avatar_path')->nullable()->after('contact_no');
+            }
             if (! Schema::hasColumn('couriers', 'current_latitude')) {
                 $table->decimal('current_latitude', 10, 7)->nullable();
             }
@@ -81,6 +101,9 @@ class CourierMobileSchemaService
             }
             if (! Schema::hasColumn('couriers', 'last_checklist_passed_at')) {
                 $table->timestamp('last_checklist_passed_at')->nullable();
+            }
+            if (! Schema::hasColumn('couriers', 'password_changed_at')) {
+                $table->timestamp('password_changed_at')->nullable()->after('password');
             }
         });
     }
@@ -190,6 +213,8 @@ class CourierMobileSchemaService
             $table->foreignId('logistics_profile_id')->constrained('logistics_profiles')->cascadeOnDelete();
             $table->string('previous_plate_number', 40)->nullable();
             $table->string('new_plate_number', 40);
+            $table->string('previous_license_no', 40)->nullable();
+            $table->string('new_license_no', 40)->nullable();
             $table->string('vehicle_type', 60)->nullable();
             $table->unsignedInteger('previous_load_capacity')->nullable();
             $table->unsignedInteger('new_load_capacity')->nullable();
@@ -199,9 +224,33 @@ class CourierMobileSchemaService
             $table->string('nbi_clearance_path')->nullable();
             $table->string('status', 30)->default('pending_verification')->index();
             $table->text('remarks')->nullable();
+            $table->unsignedBigInteger('reviewed_by')->nullable();
+            $table->timestamp('reviewed_at')->nullable();
             $table->timestamps();
 
             $table->index(['courier_id', 'status'], 'cvu_courier_status_idx');
+        });
+    }
+
+    protected static function upgradeCourierVehicleUpdatesTable(): void
+    {
+        if (! Schema::hasTable('courier_vehicle_updates')) {
+            return;
+        }
+
+        Schema::table('courier_vehicle_updates', function (Blueprint $table) {
+            if (! Schema::hasColumn('courier_vehicle_updates', 'previous_license_no')) {
+                $table->string('previous_license_no', 40)->nullable()->after('new_plate_number');
+            }
+            if (! Schema::hasColumn('courier_vehicle_updates', 'new_license_no')) {
+                $table->string('new_license_no', 40)->nullable()->after('previous_license_no');
+            }
+            if (! Schema::hasColumn('courier_vehicle_updates', 'reviewed_by')) {
+                $table->unsignedBigInteger('reviewed_by')->nullable()->after('remarks');
+            }
+            if (! Schema::hasColumn('courier_vehicle_updates', 'reviewed_at')) {
+                $table->timestamp('reviewed_at')->nullable()->after('reviewed_by');
+            }
         });
     }
 
@@ -387,9 +436,11 @@ class CourierMobileSchemaService
         $earthRadius = 6371000.0;
         $dLat = deg2rad($lat2 - $lat1);
         $dLon = deg2rad($lon2 - $lon1);
+
         $a = sin($dLat / 2) * sin($dLat / 2)
             + cos(deg2rad($lat1)) * cos(deg2rad($lat2))
             * sin($dLon / 2) * sin($dLon / 2);
+
         $c = 2 * atan2(sqrt($a), sqrt(1 - $a));
 
         return round($earthRadius * $c, 1);

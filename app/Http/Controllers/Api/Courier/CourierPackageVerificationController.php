@@ -8,6 +8,7 @@ use App\Models\PickupAssignment;
 use App\Models\ShipmentPackage;
 use App\Models\ShipmentVerification;
 use App\Services\CourierMobileSchemaService;
+use App\Services\RealtimeBroadcastService;
 use App\Services\ShipmentVerificationService;
 use App\Services\StorkSchemaBootstrapService;
 use Illuminate\Http\JsonResponse;
@@ -163,6 +164,13 @@ class CourierPackageVerificationController extends Controller
             'shipment.trackingLogs',
             'sellerOrder.items',
         ]);
+
+        if ($freshAssignment) {
+            RealtimeBroadcastService::forPickupAssignment($freshAssignment, 'pickup.package_verified');
+            if ($freshAssignment->shipment) {
+                RealtimeBroadcastService::forShipment($freshAssignment->shipment, 'shipment.package_verified');
+            }
+        }
 
         $formatted = $this->courierPickupController->formatAssignmentPayload($freshAssignment, true);
 

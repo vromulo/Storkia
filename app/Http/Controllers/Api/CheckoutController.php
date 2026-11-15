@@ -18,6 +18,7 @@ use App\Services\BuyerCancellationGuardService;
 use App\Services\BuyerRewardService;
 use App\Services\CheckoutVoucherRecommender;
 use App\Services\InventoryStockService;
+use App\Services\RealtimeBroadcastService;
 use App\Services\RoleWalletService;
 use App\Services\ShippingCalculatorService;
 use App\Services\StorkSchemaBootstrapService;
@@ -778,7 +779,16 @@ class CheckoutController extends Controller
         foreach ($order->sellerOrders as $so) {
             $so->setAttribute('status_label', $so->status_label);
             $so->setAttribute('effective_payment_method', $so->effective_payment_method);
+            RealtimeBroadcastService::forSellerOrder($so, 'order.placed');
         }
+
+        RealtimeBroadcastService::forCartUpdated((int) $user->id, 'cart.checked_out', [
+            'order_id' => (int) $order->id,
+        ]);
+
+        RealtimeBroadcastService::forWalletUpdate('Buyer', (int) $user->id, 'checkout.completed', [
+            'order_id' => (int) $order->id,
+        ]);
 
         return response()->json([
             'success'  => true,

@@ -7,26 +7,42 @@ use App\Http\Controllers\Buyer\BundleDealController;
 use App\Models\Admin;
 use App\Models\BuyerAccountSanction;
 use App\Models\BuyerBanAppeal;
+use App\Models\BuyerVoucherClaim;
+use App\Models\BuyerWalletTopup;
+use App\Models\Cart;
 use App\Models\CodCollection;
 use App\Models\CodRemittance;
 use App\Models\Courier;
+use App\Models\CourierLocation;
+use App\Models\DeliveryAssignment;
+use App\Models\DeliveryChatMessage;
 use App\Models\IdentityVerification;
+use App\Models\LogisticsAdminRemittance;
 use App\Models\LogisticsApplication;
 use App\Models\Message;
+use App\Models\OrderItemReview;
 use App\Models\OrderPaymentSubmission;
+use App\Models\PickupAssignment;
 use App\Models\Product;
+use App\Models\ProductApproval;
+use App\Models\ProductQuestion;
 use App\Models\ReturnRequest;
 use App\Models\ReturnShipment;
 use App\Models\Rider;
+use App\Models\RiderLocation;
 use App\Models\SellerApplication;
 use App\Models\SellerOrder;
 use App\Models\SellerReport;
 use App\Models\SellerRtsClaim;
 use App\Models\Shipment;
+use App\Models\StorkVoucher;
 use App\Models\User;
+use App\Models\WalletTransaction;
 use App\Models\WithdrawalRequest;
 use App\Observers\AccountSecurityObserver;
+use App\Observers\RealtimeLifecycleObserver;
 use App\Observers\ReturnRequestObserver;
+use App\Services\BuyerRewardService;
 use App\Services\CourierMobileSchemaService;
 use App\Services\RiderMobileSchemaService;
 use App\Services\StorkSchemaBootstrapService;
@@ -37,7 +53,6 @@ use Illuminate\Support\Facades\Blade;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Facades\Route;
-use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\URL;
 use Illuminate\Support\Facades\View;
 use Illuminate\Support\ServiceProvider;
@@ -55,7 +70,6 @@ class AppServiceProvider extends ServiceProvider
             URL::forceScheme('https');
         }
 
-        // Ensure Courier allowed statuses include active, on_delivery, and off_duty so Going Off Duty never revokes API tokens
         $existingCourierAllowed = (array) config('security.allowed_statuses.courier', []);
         config([
             'security.allowed_statuses.courier' => array_values(array_unique(array_merge(
@@ -72,6 +86,7 @@ class AppServiceProvider extends ServiceProvider
             StorkSchemaBootstrapService::ensureTablesExist();
             RiderMobileSchemaService::ensureTablesExist();
             CourierMobileSchemaService::ensureTablesExist();
+            BuyerRewardService::ensureTablesExist();
         }
 
         User::observe(AccountSecurityObserver::class);
@@ -81,6 +96,41 @@ class AppServiceProvider extends ServiceProvider
         BuyerAccountSanction::observe(AccountSecurityObserver::class);
         ReturnRequest::observe(ReturnRequestObserver::class);
 
+        $realtimeModels = [
+            SellerOrder::class,
+            Shipment::class,
+            PickupAssignment::class,
+            DeliveryAssignment::class,
+            DeliveryChatMessage::class,
+            ReturnRequest::class,
+            ReturnShipment::class,
+            WalletTransaction::class,
+            WithdrawalRequest::class,
+            BuyerWalletTopup::class,
+            LogisticsAdminRemittance::class,
+            CodRemittance::class,
+            CourierLocation::class,
+            RiderLocation::class,
+            Product::class,
+            ProductApproval::class,
+            SellerApplication::class,
+            LogisticsApplication::class,
+            IdentityVerification::class,
+            SellerReport::class,
+            BuyerBanAppeal::class,
+            Cart::class,
+            StorkVoucher::class,
+            BuyerVoucherClaim::class,
+            OrderItemReview::class,
+            ProductQuestion::class,
+        ];
+
+        foreach ($realtimeModels as $modelClass) {
+            if (class_exists($modelClass)) {
+                $modelClass::observe(RealtimeLifecycleObserver::class);
+            }
+        }
+
         $this->registerAdditiveStorefrontRoutes();
 
         View::composer('components.storefront.navbar', function ($view) {
@@ -88,32 +138,28 @@ class AppServiceProvider extends ServiceProvider
             $navAnnouncements = collect();
             $navAnnouncementReadIds = [];
             try {
-                if (Schema::hasTable('platform_announcements')) {
-                    $annQuery = DB::table('platform_announcements')->where('is_active', true);
-                    if (Schema::hasColumn('platform_announcements', 'target_audience')) {
-                        $annQuery->whereIn('target_audience', ['all', 'buyers']);
-                    }
-                    $activeIds = (clone $annQuery)->pluck('id')->map(fn ($id) => (int) $id)->all();
-                    if (! empty($activeIds)) {
-                        if (Auth::check() && Schema::hasTable('buyer_announcement_reads')) {
-                            $navAnnouncementReadIds = DB::table('buyer_announcement_reads')
-                                ->where('user_id', Auth::id())
-                                ->whereIn('announcement_id', $activeIds)
-                                ->pluck('announcement_id')
-                                ->map(fn ($id) => (int) $id)
-                                ->all();
-                            $unreadAnnouncementsCount = count(array_diff($activeIds, $navAnnouncementReadIds));
-                        } else {
-                            $unreadAnnouncementsCount = count($activeIds);
-                        }
+                $annQuery = DB::table('platform_announcements')
+                    ->where('is_active', true)
+                    ->whereIn('target_audience', ['all', 'buyers']);
 
-                        if (Auth::check()) {
-                            $navAnnouncements = (clone $annQuery)
-                                ->orderByDesc('created_at')
-                                ->orderByDesc('id')
-                                ->limit(6)
-                                ->get();
-                        }
+                $activeIds = (clone $annQuery)->pluck('id')->map(fn ($id) => (int) $id)->all();
+                if (! empty($activeIds)) {
+                    if (Auth::check()) {
+                        $navAnnouncementReadIds = DB::table('buyer_announcement_reads')
+                            ->where('user_id', Auth::id())
+                            ->whereIn('announcement_id', $activeIds)
+                            ->pluck('announcement_id')
+                            ->map(fn ($id) => (int) $id)
+                            ->all();
+                        $unreadAnnouncementsCount = count(array_diff($activeIds, $navAnnouncementReadIds));
+
+                        $navAnnouncements = (clone $annQuery)
+                            ->orderByDesc('created_at')
+                            ->orderByDesc('id')
+                            ->limit(6)
+                            ->get();
+                    } else {
+                        $unreadAnnouncementsCount = count($activeIds);
                     }
                 }
             } catch (\Throwable $e) {
@@ -138,65 +184,35 @@ class AppServiceProvider extends ServiceProvider
             ];
 
             try {
-                if (Schema::hasTable('identity_verifications')) {
-                    $badges['apps_identity'] = IdentityVerification::where('status', 'pending')->count();
-                }
-                if (Schema::hasTable('seller_applications')) {
-                    $badges['apps_sellers'] = SellerApplication::where('status', 'pending')->count();
-                }
-                if (Schema::hasTable('logistics_applications')) {
-                    $badges['apps_logistics'] = LogisticsApplication::where('status', 'pending')->count();
-                }
+                $badges['apps_identity'] = IdentityVerification::where('status', 'pending')->count();
+                $badges['apps_sellers'] = SellerApplication::where('status', 'pending')->count();
+                $badges['apps_logistics'] = LogisticsApplication::where('status', 'pending')->count();
                 $badges['apps_total'] = $badges['apps_identity'] + $badges['apps_sellers'] + $badges['apps_logistics'];
 
-                if (Schema::hasTable('buyer_ban_appeals')) {
-                    $badges['appeals'] = BuyerBanAppeal::where('status', 'pending')->count();
-                }
+                $badges['appeals'] = BuyerBanAppeal::where('status', 'pending')->count();
 
-                if (Schema::hasTable('products') && Schema::hasTable('product_approvals')) {
-                    $pendingProducts = Product::whereHas('approval', fn ($q) => $q->where('status', 'Pending'))->count();
-                    $pendingVariants = Schema::hasColumn('products', 'has_pending_variants')
-                        ? Product::where('has_pending_variants', true)->count()
-                        : 0;
-                    $badges['compliance'] = $pendingProducts + $pendingVariants;
-                }
+                $pendingProducts = Product::whereHas('approval', fn ($q) => $q->where('status', 'Pending'))->count();
+                $pendingVariants = Product::where('has_pending_variants', true)->count();
+                $badges['compliance'] = $pendingProducts + $pendingVariants;
 
-                if (Schema::hasTable('seller_orders')) {
-                    // Orders handled by the Return & Refund system are counted under "returns" instead.
-                    $unresolvedDisputes = SellerOrder::where(function ($q) {
-                        $q->where('status', 'disputed')->orWhere('has_unresolved_dispute', true);
-                    })->whereDoesntHave('returnRequest')->count();
+                $unresolvedDisputes = SellerOrder::where(function ($q) {
+                    $q->where('status', 'disputed')->orWhere('has_unresolved_dispute', true);
+                })->whereDoesntHave('returnRequest')->count();
 
-                    $pendingRtsClaims = Schema::hasTable('seller_rts_claims')
-                        ? SellerRtsClaim::where('reimbursement_status', 'pending_admin_review')->count()
-                        : 0;
+                $pendingRtsClaims = SellerRtsClaim::where('reimbursement_status', 'pending_admin_review')->count();
+                $badges['complaints'] = $unresolvedDisputes + $pendingRtsClaims;
 
-                    $badges['complaints'] = $unresolvedDisputes + $pendingRtsClaims;
-                }
+                $badges['returns'] = ReturnRequest::whereIn('status', [
+                    ReturnRequest::STATUS_ESCALATED,
+                    ReturnRequest::STATUS_RECEIPT_DISPUTED,
+                    ReturnRequest::STATUS_REFUND_PENDING,
+                ])->count();
 
-                if (Schema::hasTable('return_requests')) {
-                    // Only what Admin must act on: decide an escalation or a disputed parcel, or pay a refund.
-                    $badges['returns'] = ReturnRequest::whereIn('status', [
-                        ReturnRequest::STATUS_ESCALATED,
-                        ReturnRequest::STATUS_RECEIPT_DISPUTED,
-                        ReturnRequest::STATUS_REFUND_PENDING,
-                    ])->count();
-                }
+                $badges['seller_reports'] = SellerReport::where('status', SellerReport::STATUS_PENDING)->count();
 
-                if (Schema::hasTable('seller_reports')) {
-                    // Buyers' reports about sellers that no admin has opened yet.
-                    $badges['seller_reports'] = SellerReport::where('status', SellerReport::STATUS_PENDING)->count();
-                }
-
-                $pendingWithdrawals = Schema::hasTable('withdrawal_requests')
-                    ? WithdrawalRequest::where('status', 'pending')->count()
-                    : 0;
-                $pendingGcash = Schema::hasTable('order_payment_submissions')
-                    ? OrderPaymentSubmission::where('status', 'submitted')->count()
-                    : 0;
-                $pendingArrears = Schema::hasTable('seller_commission_remittances')
-                    ? DB::table('seller_commission_remittances')->where('status', 'pending')->count()
-                    : 0;
+                $pendingWithdrawals = WithdrawalRequest::where('status', 'pending')->count();
+                $pendingGcash = OrderPaymentSubmission::where('status', 'submitted')->count();
+                $pendingArrears = DB::table('seller_commission_remittances')->where('status', 'pending')->count();
 
                 $badges['commissions'] = $pendingWithdrawals + $pendingGcash + $pendingArrears;
             } catch (\Throwable $e) {
@@ -225,69 +241,57 @@ class AppServiceProvider extends ServiceProvider
                 $profile = $user?->sellerProfile;
 
                 if ($user && $profile) {
-                    if (Schema::hasTable('seller_orders')) {
-                        $badges['orders_new'] = SellerOrder::where('seller_profile_id', $profile->id)
-                            ->where('status', 'pending_seller_acceptance')
-                            ->count();
-                        $badges['orders_pending'] = SellerOrder::where('seller_profile_id', $profile->id)
-                            ->where('status', 'pending_buyer_response')
-                            ->count();
-                        $badges['orders_to_process'] = SellerOrder::where('seller_profile_id', $profile->id)
-                            ->whereIn('status', ['accepted', 'preparing'])
-                            ->count();
-                        $badges['orders_to_ship'] = SellerOrder::where('seller_profile_id', $profile->id)
-                            ->where('status', 'ready_for_pickup')
-                            ->count();
+                    $badges['orders_new'] = SellerOrder::where('seller_profile_id', $profile->id)
+                        ->where('status', 'pending_seller_acceptance')
+                        ->count();
+                    $badges['orders_pending'] = SellerOrder::where('seller_profile_id', $profile->id)
+                        ->where('status', 'pending_buyer_response')
+                        ->count();
+                    $badges['orders_to_process'] = SellerOrder::where('seller_profile_id', $profile->id)
+                        ->whereIn('status', ['accepted', 'preparing'])
+                        ->count();
+                    $badges['orders_to_ship'] = SellerOrder::where('seller_profile_id', $profile->id)
+                        ->where('status', 'ready_for_pickup')
+                        ->count();
 
-                        // Older disputes, plus return requests that are waiting for the seller to act
-                        // (answer the request, or confirm the parcel that came back).
-                        $legacyDisputes = SellerOrder::where('seller_profile_id', $profile->id)
-                            ->where(function ($q) {
-                                $q->where('status', 'disputed')->orWhere('has_unresolved_dispute', true);
-                            })
-                            ->whereDoesntHave('returnRequest')
-                            ->count();
+                    $legacyDisputes = SellerOrder::where('seller_profile_id', $profile->id)
+                        ->where(function ($q) {
+                            $q->where('status', 'disputed')->orWhere('has_unresolved_dispute', true);
+                        })
+                        ->whereDoesntHave('returnRequest')
+                        ->count();
 
-                        $returnsNeedingSeller = Schema::hasTable('return_requests')
-                            ? ReturnRequest::where('seller_profile_id', $profile->id)
-                                ->whereIn('status', [
-                                    ReturnRequest::STATUS_PENDING_SELLER_RESPONSE,
-                                    ReturnRequest::STATUS_AWAITING_SELLER_CONFIRM,
-                                ])
-                                ->count()
-                            : 0;
+                    $returnsNeedingSeller = ReturnRequest::where('seller_profile_id', $profile->id)
+                        ->whereIn('status', [
+                            ReturnRequest::STATUS_PENDING_SELLER_RESPONSE,
+                            ReturnRequest::STATUS_AWAITING_SELLER_CONFIRM,
+                        ])
+                        ->count();
 
-                        $badges['orders_disputed'] = $legacyDisputes + $returnsNeedingSeller;
+                    $badges['orders_disputed'] = $legacyDisputes + $returnsNeedingSeller;
 
-                        $badges['orders_total'] = $badges['orders_new']
-                            + $badges['orders_pending']
-                            + $badges['orders_to_process']
-                            + $badges['orders_to_ship']
-                            + $badges['orders_disputed'];
-                    }
+                    $badges['orders_total'] = $badges['orders_new']
+                        + $badges['orders_pending']
+                        + $badges['orders_to_process']
+                        + $badges['orders_to_ship']
+                        + $badges['orders_disputed'];
 
-                    if (Schema::hasTable('products')) {
-                        $badges['low_stock'] = Product::where('user_id', $user->id)
-                            ->where('stock_quantity', '<=', 5)
-                            ->count();
-                        $badges['disapproved_prods'] = Product::where('user_id', $user->id)
-                            ->whereHas('approval', fn ($q) => $q->where('status', 'Disapproved'))
-                            ->count();
-                        $badges['products_total'] = $badges['low_stock'] + $badges['disapproved_prods'];
-                    }
+                    $badges['low_stock'] = Product::where('user_id', $user->id)
+                        ->where('stock_quantity', '<=', 5)
+                        ->count();
+                    $badges['disapproved_prods'] = Product::where('user_id', $user->id)
+                        ->whereHas('approval', fn ($q) => $q->where('status', 'Disapproved'))
+                        ->count();
+                    $badges['products_total'] = $badges['low_stock'] + $badges['disapproved_prods'];
 
-                    if (Schema::hasTable('messages')) {
-                        $badges['unread_messages'] = Message::where('receiver_id', $user->id)
-                            ->where('is_read', false)
-                            ->count();
-                    }
+                    $badges['unread_messages'] = Message::where('receiver_id', $user->id)
+                        ->where('is_read', false)
+                        ->count();
 
-                    if (Schema::hasTable('order_item_reviews')) {
-                        $badges['unreplied_reviews'] = DB::table('order_item_reviews')
-                            ->where('seller_profile_id', $profile->id)
-                            ->whereNull('seller_reply')
-                            ->count();
-                    }
+                    $badges['unreplied_reviews'] = DB::table('order_item_reviews')
+                        ->where('seller_profile_id', $profile->id)
+                        ->whereNull('seller_reply')
+                        ->count();
                 }
             } catch (\Throwable $e) {
             }
@@ -315,66 +319,53 @@ class AppServiceProvider extends ServiceProvider
                 $profile = $user?->logisticsProfile;
 
                 if ($user && $profile) {
-                    if (Schema::hasTable('shipments')) {
-                        $badges['shipments_to_pickup'] = Shipment::where('logistics_profile_id', $profile->id)
-                            ->whereIn('status', ['pickup_requested', 'courier_assigned', 'awaiting_seller_drop_off', 'awaiting_seller_dropoff'])
-                            ->count();
-                        $badges['shipments_in_transit_hub'] = Shipment::where('logistics_profile_id', $profile->id)
-                            ->whereIn('status', ['picked_up_from_seller', 'in_transit_to_hub'])
-                            ->count();
-                        $badges['shipments_at_hub'] = Shipment::where('logistics_profile_id', $profile->id)
-                            ->whereIn('status', ['received_at_hub', 'scheduled_redelivery'])
-                            ->count();
-                        $badges['shipments_failed'] = Shipment::where('logistics_profile_id', $profile->id)
-                            ->where('status', 'delivery_failed')
-                            ->count();
+                    $badges['shipments_to_pickup'] = Shipment::where('logistics_profile_id', $profile->id)
+                        ->whereIn('status', ['pickup_requested', 'courier_assigned', 'awaiting_seller_drop_off', 'awaiting_seller_dropoff'])
+                        ->count();
+                    $badges['shipments_in_transit_hub'] = Shipment::where('logistics_profile_id', $profile->id)
+                        ->whereIn('status', ['picked_up_from_seller', 'in_transit_to_hub'])
+                        ->count();
+                    $badges['shipments_at_hub'] = Shipment::where('logistics_profile_id', $profile->id)
+                        ->whereIn('status', ['received_at_hub', 'scheduled_redelivery'])
+                        ->count();
+                    $badges['shipments_failed'] = Shipment::where('logistics_profile_id', $profile->id)
+                        ->where('status', 'delivery_failed')
+                        ->count();
 
-                        $badges['shipments_action_total'] = $badges['shipments_to_pickup']
-                            + $badges['shipments_in_transit_hub']
-                            + $badges['shipments_at_hub']
-                            + $badges['shipments_failed'];
-                    }
+                    $badges['shipments_action_total'] = $badges['shipments_to_pickup']
+                        + $badges['shipments_in_transit_hub']
+                        + $badges['shipments_at_hub']
+                        + $badges['shipments_failed'];
 
-                    if (Schema::hasTable('return_shipments')) {
-                        $badges['returns_to_assign_rider'] = ReturnShipment::where('logistics_profile_id', $profile->id)
-                            ->whereIn('status', [
-                                ReturnShipment::STATUS_AWAITING_RIDER,
-                                ReturnShipment::STATUS_PICKUP_FAILED,
-                            ])
-                            ->count();
-                        $badges['returns_to_receive'] = ReturnShipment::where('logistics_profile_id', $profile->id)
-                            ->where('status', ReturnShipment::STATUS_PICKED_UP_FROM_BUYER)
-                            ->count();
-                        $badges['returns_to_assign_courier'] = ReturnShipment::where('logistics_profile_id', $profile->id)
-                            ->where('status', ReturnShipment::STATUS_RECEIVED_AT_HUB)
-                            ->count();
+                    $badges['returns_to_assign_rider'] = ReturnShipment::where('logistics_profile_id', $profile->id)
+                        ->whereIn('status', [
+                            ReturnShipment::STATUS_AWAITING_RIDER,
+                            ReturnShipment::STATUS_PICKUP_FAILED,
+                        ])
+                        ->count();
+                    $badges['returns_to_receive'] = ReturnShipment::where('logistics_profile_id', $profile->id)
+                        ->where('status', ReturnShipment::STATUS_PICKED_UP_FROM_BUYER)
+                        ->count();
+                    $badges['returns_to_assign_courier'] = ReturnShipment::where('logistics_profile_id', $profile->id)
+                        ->where('status', ReturnShipment::STATUS_RECEIVED_AT_HUB)
+                        ->count();
 
-                        $badges['returns_action_total'] = $badges['returns_to_assign_rider']
-                            + $badges['returns_to_receive']
-                            + $badges['returns_to_assign_courier'];
-                    }
+                    $badges['returns_action_total'] = $badges['returns_to_assign_rider']
+                        + $badges['returns_to_receive']
+                        + $badges['returns_to_assign_courier'];
 
-                    if (Schema::hasTable('cod_remittances')) {
-                        $badges['pending_remittances'] = CodRemittance::where('logistics_profile_id', $profile->id)
-                            ->where('status', 'submitted')
-                            ->count();
-                    }
+                    $badges['pending_remittances'] = CodRemittance::where('logistics_profile_id', $profile->id)
+                        ->where('status', 'submitted')
+                        ->count();
 
-                    if (Schema::hasTable('cod_collections')) {
-                        $hasRemittedCol = Schema::hasColumn('cod_collections', 'remitted_amount');
-                        $badges['short_remittances'] = CodCollection::where('logistics_profile_id', $profile->id)
-                            ->where(function ($q) use ($hasRemittedCol) {
-                                if ($hasRemittedCol) {
-                                    $q->where(function ($sq) {
-                                        $sq->whereNotNull('remitted_amount')
-                                           ->whereColumn('remitted_amount', '<', 'expected_amount');
-                                    })->orWhereColumn('collected_amount', '<', 'expected_amount');
-                                } else {
-                                    $q->whereColumn('collected_amount', '<', 'expected_amount');
-                                }
-                            })
-                            ->count();
-                    }
+                    $badges['short_remittances'] = CodCollection::where('logistics_profile_id', $profile->id)
+                        ->where(function ($q) {
+                            $q->where(function ($sq) {
+                                $sq->whereNotNull('remitted_amount')
+                                   ->whereColumn('remitted_amount', '<', 'expected_amount');
+                            })->orWhereColumn('collected_amount', '<', 'expected_amount');
+                        })
+                        ->count();
                 }
             } catch (\Throwable $e) {
             }

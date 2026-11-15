@@ -6,6 +6,7 @@ use App\Events\CartQuantityUpdated;
 use App\Http\Controllers\Controller;
 use App\Models\Cart;
 use App\Models\Product;
+use App\Services\RealtimeBroadcastService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Schema;
@@ -36,7 +37,7 @@ class CartController extends Controller
             $suggestedQuery->whereNotIn('publish_status', ['draft', 'inactive']);
         }
 
-        $suggestedProducts = $suggestedQuery->inRandomOrder()->take(6)->get();
+        $suggestedProducts = $suggestedQuery->latest()->take(6)->get();
 
         return response()->json([
             'success'            => true,
@@ -68,7 +69,7 @@ class CartController extends Controller
         $perBuyerLimit = (int) ($product->per_buyer_limit ?? 0);
         $maxCap = $perBuyerLimit > 0 ? $perBuyerLimit : 1000000;
 
-        $userId = $request->user()->id;
+        $userId = (int) $request->user()->id;
         $variant = $request->input('variant');
         $subVariant = $request->input('sub_variant');
 
@@ -81,11 +82,6 @@ class CartController extends Controller
         if ($cart) {
             $newQuantity = min($cart->quantity + (int) $request->input('quantity'), $maxCap);
             $cart->update(['quantity' => $newQuantity]);
-
-            try {
-                broadcast(new CartQuantityUpdated($cart->id, $cart->user_id, $cart->quantity));
-            } catch (\Throwable $e) {
-            }
         } else {
             $cart = Cart::create([
                 'user_id'     => $userId,
@@ -96,18 +92,38 @@ class CartController extends Controller
             ]);
         }
 
+        $cartCount = Cart::where('user_id', $userId)->count();
+
+        try {
+            broadcast(new CartQuantityUpdated($cart->id, $cart->user_id, $cart->quantity))->toOthers();
+            RealtimeBroadcastService::send(
+                channels: ['user.' . $userId, 'cart.' . $userId],
+                scope: 'cart',
+                action: 'cart.updated',
+                payload: [
+                    'cart_id'    => (int) $cart->id,
+                    'user_id'    => $userId,
+                    'quantity'   => (int) $cart->quantity,
+                    'cart_count' => $cartCount,
+                ]
+            );
+        } catch (\Throwable $e) {
+        }
+
         $cart->load(['product.sellerProfile', 'product.user.sellerProfile']);
 
         return response()->json([
-            'success' => true,
-            'message' => 'Product added to your cart.',
-            'data'    => $cart,
+            'success'    => true,
+            'message'    => 'Product added to your cart.',
+            'cart_count' => $cartCount,
+            'data'       => $cart,
         ], 201);
     }
 
     public function update(Request $request, $id): JsonResponse
     {
-        $cart = Cart::with('product')->where('user_id', $request->user()->id)->findOrFail($id);
+        $userId = (int) $request->user()->id;
+        $cart = Cart::with('product')->where('user_id', $userId)->findOrFail($id);
 
         $request->validate([
             'quantity' => ['required', 'integer', 'min:1', 'max:1000000'],
@@ -123,30 +139,65 @@ class CartController extends Controller
         }
 
         $cart->update(['quantity' => $newQty]);
+        $cartCount = Cart::where('user_id', $userId)->count();
 
         try {
-            broadcast(new CartQuantityUpdated($cart->id, $cart->user_id, $cart->quantity));
+            broadcast(new CartQuantityUpdated($cart->id, $cart->user_id, $cart->quantity))->toOthers();
+            RealtimeBroadcastService::send(
+                channels: ['user.' . $userId, 'cart.' . $userId],
+                scope: 'cart',
+                action: 'cart.updated',
+                payload: [
+                    'cart_id'    => (int) $cart->id,
+                    'user_id'    => $userId,
+                    'quantity'   => (int) $cart->quantity,
+                    'cart_count' => $cartCount,
+                ]
+            );
         } catch (\Throwable $e) {
         }
 
         return response()->json([
-            'success'  => true,
-            'message'  => 'Cart quantity updated successfully.',
-            'data'     => $cart,
-            'id'       => $cart->id,
-            'user_id'  => $cart->user_id,
-            'quantity' => $cart->quantity,
+            'success'    => true,
+            'message'    => 'Cart quantity updated successfully.',
+            'data'       => $cart,
+            'id'         => $cart->id,
+            'user_id'    => $cart->user_id,
+            'quantity'   => $cart->quantity,
+            'cart_count' => $cartCount,
         ]);
     }
 
     public function destroy(Request $request, $id): JsonResponse
     {
-        $cart = Cart::where('user_id', $request->user()->id)->findOrFail($id);
+        $userId = (int) $request->user()->id;
+        $cart = Cart::where('user_id', $userId)->findOrFail($id);
+        $deletedId = (int) $cart->id;
         $cart->delete();
 
+        $cartCount = Cart::where('user_id', $userId)->count();
+
+        try {
+            broadcast(new CartQuantityUpdated($deletedId, $userId, 0))->toOthers();
+            RealtimeBroadcastService::send(
+                channels: ['user.' . $userId, 'cart.' . $userId],
+                scope: 'cart',
+                action: 'cart.removed',
+                payload: [
+                    'cart_id'    => $deletedId,
+                    'user_id'    => $userId,
+                    'quantity'   => 0,
+                    'cart_count' => $cartCount,
+                ]
+            );
+        } catch (\Throwable $e) {
+        }
+
         return response()->json([
-            'success' => true,
-            'message' => 'Item removed from your cart.',
+            'success'    => true,
+            'deleted_id' => $deletedId,
+            'cart_count' => $cartCount,
+            'message'    => 'Item removed from your cart.',
         ]);
     }
 }

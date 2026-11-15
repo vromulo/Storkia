@@ -20,6 +20,7 @@ use App\Services\BuyerOrderNotificationService;
 use App\Services\BuyerRewardService;
 use App\Services\InventoryStockService;
 use App\Services\OrderCompletionService;
+use App\Services\RealtimeBroadcastService;
 use App\Services\RoleWalletService;
 use App\Services\ShipmentVerificationService;
 use App\Services\VoucherService;
@@ -316,6 +317,8 @@ class ShipmentController extends Controller
             return $this->verifyHubArrival($request, $shipment);
         }
 
+        RealtimeBroadcastService::forShipment($shipment->fresh(), 'shipment.hub_package_verified');
+
         $orderNo = $shipment->sellerOrder?->seller_order_number ?? 'N/A';
 
         return back()->with(
@@ -370,7 +373,10 @@ class ShipmentController extends Controller
             ]);
         }
 
-        DB::transaction(function () use ($shipment, $courier, $profile, $user, $validated) {
+        $previousCourierId = $shipment->current_courier_id ? (int) $shipment->current_courier_id : null;
+        $createdAssignment = null;
+
+        DB::transaction(function () use ($shipment, $courier, $profile, $user, $validated, &$createdAssignment) {
             $locked = Shipment::with(['sellerOrder.order', 'packages'])->where('id', $shipment->id)->lockForUpdate()->firstOrFail();
 
             if (! in_array($locked->status, ['pickup_requested', 'courier_assigned'], true)) {
@@ -388,7 +394,7 @@ class ShipmentController extends Controller
                 ? '[Scheduled Pickup By: ' . \Carbon\Carbon::parse($validated['scheduled_pickup_by'])->format('M d, Y h:i A') . '] '
                 : '[SLA: Pickup within 2 hours] ';
 
-            PickupAssignment::updateOrCreate(
+            $createdAssignment = PickupAssignment::updateOrCreate(
                 [
                     'shipment_id' => $locked->id,
                     'courier_id'  => $courier->id,
@@ -402,6 +408,8 @@ class ShipmentController extends Controller
                     'accepted_at'          => null,
                     'picked_up_at'         => null,
                     'handed_over_at'       => null,
+                    'is_delayed'           => false,
+                    'delay_reason'         => null,
                     'notes'                => trim($scheduledNote . ($validated['notes'] ?? '')),
                 ]
             );
@@ -470,6 +478,28 @@ class ShipmentController extends Controller
         } catch (\Throwable $e) {
         }
 
+        $freshShipment = $shipment->fresh(['sellerOrder']);
+        if ($createdAssignment) {
+            RealtimeBroadcastService::forPickupAssignment($createdAssignment->fresh(), 'pickup.assigned');
+        }
+        if ($freshShipment) {
+            RealtimeBroadcastService::forShipment($freshShipment, 'shipment.courier_assigned');
+            if ($freshShipment->sellerOrder) {
+                RealtimeBroadcastService::forSellerOrder($freshShipment->sellerOrder, 'order.pickup_assigned');
+            }
+        }
+        if ($previousCourierId && $previousCourierId !== (int) $courier->id) {
+            RealtimeBroadcastService::send(
+                channels: ['courier.' . $previousCourierId],
+                scope: 'pickup',
+                action: 'pickup.reassigned',
+                payload: [
+                    'shipment_id'     => (int) $shipment->id,
+                    'tracking_number' => (string) $shipment->tracking_number,
+                ]
+            );
+        }
+
         return back()->with('success', "Courier {$courier->full_name} has been assigned to pick up Shipment #{$shipment->tracking_number}.");
     }
 
@@ -485,10 +515,11 @@ class ShipmentController extends Controller
 
         $notifiableCourier = null;
         $creditedPayInfo = null;
+        $completedPickupAssignment = null;
         $isCod = true;
         $verificationMethodUsed = strtoupper((string) $request->input('verification_method', 'MANUAL'));
 
-        DB::transaction(function () use ($shipment, $profile, $user, &$notifiableCourier, &$creditedPayInfo, &$isCod, &$verificationMethodUsed) {
+        DB::transaction(function () use ($shipment, $profile, $user, &$notifiableCourier, &$creditedPayInfo, &$completedPickupAssignment, &$isCod, &$verificationMethodUsed) {
             $locked = Shipment::with([
                 'sellerOrder.order',
                 'sellerOrder.payment',
@@ -547,6 +578,7 @@ class ShipmentController extends Controller
                     'hub_verified_by' => $user->id,
                     'hub_verified_at' => now(),
                 ]);
+                $completedPickupAssignment = $locked->latestPickupAssignment->fresh();
             }
 
             if ($locked->currentCourier) {
@@ -633,6 +665,24 @@ class ShipmentController extends Controller
 
         $this->buyerNotifications->arrivedAtHub($shipment);
 
+        $freshShipment = $shipment->fresh(['sellerOrder']);
+        if ($completedPickupAssignment) {
+            RealtimeBroadcastService::forPickupAssignment($completedPickupAssignment, 'pickup.completed');
+        }
+        if ($freshShipment) {
+            RealtimeBroadcastService::forShipment($freshShipment, 'shipment.received_at_hub');
+            if ($freshShipment->sellerOrder) {
+                RealtimeBroadcastService::forSellerOrder($freshShipment->sellerOrder, 'order.at_logistics_hub');
+            }
+        }
+        if ($notifiableCourier && $creditedPayInfo) {
+            RealtimeBroadcastService::forWalletUpdate('Courier', (int) $notifiableCourier->id, 'first_mile_pickup_pay.credited', [
+                'shipment_id' => (int) $shipment->id,
+                'total_pay'   => round((float) ($creditedPayInfo['total_pay'] ?? 0), 2),
+                'is_cod'      => $isCod,
+            ]);
+        }
+
         return back()->with('success', "Shipment #{$shipment->tracking_number} verified ({$verificationMethodUsed}) and physical receipt confirmed at sorting hub. You can now assign a last-mile Rider.");
     }
 
@@ -680,7 +730,10 @@ class ShipmentController extends Controller
             ]);
         }
 
-        DB::transaction(function () use ($shipment, $rider, $profile, $user, $validated) {
+        $previousRiderId = $shipment->current_rider_id ? (int) $shipment->current_rider_id : null;
+        $createdDeliveryAssignment = null;
+
+        DB::transaction(function () use ($shipment, $rider, $profile, $user, $validated, &$createdDeliveryAssignment) {
             $locked = Shipment::with(['sellerOrder', 'packages'])->where('id', $shipment->id)->lockForUpdate()->firstOrFail();
 
             if (! in_array($locked->status, ['received_at_hub', 'rider_assigned', 'scheduled_redelivery'], true)) {
@@ -700,7 +753,7 @@ class ShipmentController extends Controller
                 ? '[Scheduled Delivery By: ' . \Carbon\Carbon::parse($validated['scheduled_delivery_by'])->format('M d, Y h:i A') . '] '
                 : '[SLA: Dispatch within 2 hours] ';
 
-            DeliveryAssignment::updateOrCreate(
+            $createdDeliveryAssignment = DeliveryAssignment::updateOrCreate(
                 [
                     'shipment_id' => $locked->id,
                     'rider_id'    => $rider->id,
@@ -747,6 +800,25 @@ class ShipmentController extends Controller
             ]);
         });
 
+        if ($createdDeliveryAssignment) {
+            RealtimeBroadcastService::forDeliveryAssignment($createdDeliveryAssignment->fresh(), 'delivery.assigned');
+        }
+        $freshShipment = $shipment->fresh(['sellerOrder']);
+        if ($freshShipment) {
+            RealtimeBroadcastService::forShipment($freshShipment, 'shipment.rider_assigned');
+        }
+        if ($previousRiderId && $previousRiderId !== (int) $rider->id) {
+            RealtimeBroadcastService::send(
+                channels: ['rider.' . $previousRiderId],
+                scope: 'delivery',
+                action: 'delivery.reassigned',
+                payload: [
+                    'shipment_id'     => (int) $shipment->id,
+                    'tracking_number' => (string) $shipment->tracking_number,
+                ]
+            );
+        }
+
         return back()->with('success', "Rider {$rider->full_name} has been assigned to deliver Shipment #{$shipment->tracking_number}.");
     }
 
@@ -777,6 +849,7 @@ class ShipmentController extends Controller
         $abandonmentOrder = null;
         $abandonmentReasonText = '';
         $abandonmentAttempts = 1;
+        $createdRedeliveryAssignment = null;
 
         DB::transaction(function () use (
             $shipment,
@@ -787,7 +860,8 @@ class ShipmentController extends Controller
             &$abandonmentShipment,
             &$abandonmentOrder,
             &$abandonmentReasonText,
-            &$abandonmentAttempts
+            &$abandonmentAttempts,
+            &$createdRedeliveryAssignment
         ) {
             $locked = Shipment::with(['sellerOrder.order', 'sellerOrder.payment', 'sellerOrder.extra', 'deliveryAttempts', 'packages'])
                 ->where('id', $shipment->id)
@@ -833,7 +907,7 @@ class ShipmentController extends Controller
                         ->whereIn('status', ['assigned', 'accepted', 'collected'])
                         ->update(['status' => 'reassigned']);
 
-                    DeliveryAssignment::updateOrCreate(
+                    $createdRedeliveryAssignment = DeliveryAssignment::updateOrCreate(
                         [
                             'shipment_id' => $locked->id,
                             'rider_id'    => $newRider->id,
@@ -972,6 +1046,17 @@ class ShipmentController extends Controller
 
         if ($validated['resolution'] === 'schedule_redelivery') {
             $this->buyerNotifications->redeliveryScheduled($shipment);
+        }
+
+        if ($createdRedeliveryAssignment) {
+            RealtimeBroadcastService::forDeliveryAssignment($createdRedeliveryAssignment->fresh(), 'delivery.assigned');
+        }
+        $freshShipment = $shipment->fresh(['sellerOrder']);
+        if ($freshShipment) {
+            RealtimeBroadcastService::forShipment($freshShipment, 'shipment.failed_resolved');
+            if ($freshShipment->sellerOrder) {
+                RealtimeBroadcastService::forSellerOrder($freshShipment->sellerOrder, 'order.failed_resolved');
+            }
         }
 
         return back()->with('success', 'Failed delivery report resolved successfully.');

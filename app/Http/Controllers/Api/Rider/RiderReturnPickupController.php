@@ -92,6 +92,33 @@ class RiderReturnPickupController extends Controller
         ]);
     }
 
+    public function show(Request $request, int $id): JsonResponse
+    {
+        $rider = $request->user();
+        $with = array_unique(array_merge($this->returnShipmentRelations(), [
+            'returnRequest',
+            'sellerOrder.buyer',
+            'sellerOrder.items',
+            'sellerOrder.sellerProfile',
+            'sellerOrder.order.userAddress',
+            'events',
+        ]));
+
+        $returnShipment = ReturnShipment::with($with)->find($id);
+
+        if (! $returnShipment || (int) $returnShipment->current_rider_id !== (int) $rider->id) {
+            return $this->returnNotAssigned();
+        }
+
+        return response()->json([
+            'status' => 'success',
+            'data'   => [
+                'failure_reasons' => WebReturnPickupController::FAILURE_REASONS,
+                'return'          => $this->enrichReturnShipment($returnShipment, $rider),
+            ],
+        ]);
+    }
+
     public function confirmPickup(Request $request, int $id): JsonResponse
     {
         $rider = $request->user();
@@ -136,6 +163,7 @@ class RiderReturnPickupController extends Controller
             'sellerOrder.buyer',
             'sellerOrder.items',
             'sellerOrder.sellerProfile',
+            'sellerOrder.order.userAddress',
             'events',
         ])));
 
@@ -183,6 +211,7 @@ class RiderReturnPickupController extends Controller
             'sellerOrder.buyer',
             'sellerOrder.items',
             'sellerOrder.sellerProfile',
+            'sellerOrder.order.userAddress',
             'events',
         ])));
 
@@ -268,14 +297,19 @@ class RiderReturnPickupController extends Controller
             'picked_up_from_buyer_at' => $rs->picked_up_from_buyer_at?->toIso8601String(),
             'arrived_at_hub_at'       => $rs->arrived_at_hub_at?->toIso8601String(),
             'buyer'                   => [
-                'recipient_name' => (string) ($pickupSnap['recipient_name'] ?? ($order?->buyer?->full_name ?? 'Buyer')),
-                'phone_number'   => (string) ($pickupSnap['phone_number'] ?? ($order?->buyer?->contact_no ?? '')),
-                'barangay'       => (string) ($pickupSnap['barangay'] ?? ''),
-                'municipality'   => (string) ($pickupSnap['municipality'] ?? ''),
-                'province'       => (string) ($pickupSnap['province'] ?? ''),
-                'full_address'   => (string) $buyerAddress,
-                'latitude'       => (float) $buyerCoords['latitude'],
-                'longitude'      => (float) $buyerCoords['longitude'],
+                'recipient_name'   => (string) ($pickupSnap['recipient_name'] ?? ($order?->buyer?->full_name ?? 'Buyer')),
+                'phone_number'     => (string) ($pickupSnap['phone_number'] ?? ($order?->buyer?->contact_no ?? '')),
+                'house_details'    => (string) ($pickupSnap['building_details'] ?? ($pickupSnap['house_details'] ?? '')),
+                'street'           => (string) ($pickupSnap['street_address'] ?? ($pickupSnap['street'] ?? '')),
+                'barangay'         => (string) ($pickupSnap['barangay'] ?? ''),
+                'municipality'     => (string) ($pickupSnap['municipality'] ?? ''),
+                'province'         => (string) ($pickupSnap['province'] ?? ''),
+                'postcode'         => (string) ($pickupSnap['postcode'] ?? ''),
+                'full_address'     => (string) $buyerAddress,
+                'latitude'         => (float) $buyerCoords['latitude'],
+                'longitude'        => (float) $buyerCoords['longitude'],
+                'is_exact_pin'     => ! ($buyerCoords['is_approximate'] ?? false),
+                'coordinate_label' => ($buyerCoords['is_approximate'] ?? false) ? 'Barangay / Municipality Pin' : 'Saved Buyer Pin',
             ],
             'hub'                     => [
                 'hub_name'     => (string) ($hubSnap['hub_name'] ?? ($rider?->assigned_hub?->hub_name ?? 'Sorting Hub')),
@@ -286,18 +320,35 @@ class RiderReturnPickupController extends Controller
                 'full_address' => (string) $hubAddress,
                 'latitude'     => (float) $hubCoords['latitude'],
                 'longitude'    => (float) $hubCoords['longitude'],
+                'is_exact_pin' => ! ($hubCoords['is_approximate'] ?? false),
             ],
             'seller'                  => [
                 'business_name' => (string) ($order?->sellerProfile?->business_name ?? ($sellerSnap['business_name'] ?? 'Seller Store')),
+                'contact_no'    => (string) ($sellerSnap['contact_no'] ?? ($order?->sellerProfile?->contact_no ?? '')),
+                'barangay'      => (string) ($sellerSnap['barangay'] ?? ''),
                 'municipality'  => (string) ($sellerSnap['municipality'] ?? ''),
                 'province'      => (string) ($sellerSnap['province'] ?? ''),
+                'full_address'  => (string) ($sellerSnap['full_address'] ?? ''),
             ],
             'items'                   => ($order?->items ?? collect())->map(fn ($item) => [
-                'id'           => (int) $item->id,
-                'product_name' => (string) $item->product_name,
-                'variant_name' => $item->variant_name,
-                'quantity'     => (int) $item->quantity,
-                'line_weight'  => (float) $item->line_weight,
+                'id'                    => (int) $item->id,
+                'product_id'            => (int) $item->product_id,
+                'product_name'          => (string) $item->product_name,
+                'variant_name'          => $item->variant_name,
+                'sub_variant_name'      => $item->sub_variant_name,
+                'quantity'              => (int) $item->quantity,
+                'discounted_unit_price' => (float) ($item->discounted_unit_price ?? 0),
+                'line_total'            => (float) ($item->line_total ?? 0),
+                'line_weight'           => (float) $item->line_weight,
+                'image_url'             => $item->product_image ? asset('storage/' . ltrim($item->product_image, '/')) : null,
+            ])->values()->all(),
+            'events'                  => ($rs->events ?? collect())->map(fn ($ev) => [
+                'id'          => (int) $ev->id,
+                'status'      => (string) $ev->status,
+                'title'       => (string) $ev->title,
+                'description' => (string) ($ev->description ?? ''),
+                'location'    => (string) ($ev->location ?? ''),
+                'occurred_at' => $ev->occurred_at?->toIso8601String(),
             ])->values()->all(),
         ]);
     }

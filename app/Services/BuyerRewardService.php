@@ -9,6 +9,7 @@ use App\Models\OrderItemReview;
 use App\Models\SellerOrder;
 use App\Models\StorkVoucher;
 use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
@@ -17,16 +18,45 @@ use Illuminate\Validation\ValidationException;
 class BuyerRewardService
 {
     public const SLA_TIMEOUT_COMPENSATION_COINS = 50;
+
     public const COINS_PER_PESO = 10;
+
     public const COIN_TO_PESO_VALUE = 0.10;
+
     public const MIN_CHECKOUT_REDEEMABLE_COINS = 10;
+
     public const MAX_CHECKOUT_COIN_OFFSET_PERCENT = 25.00;
+
     public const PESOS_PER_CASHBACK_COIN = 100.00;
+
     public const TEXT_REVIEW_REWARD_COINS = 5;
+
     public const PHOTO_REVIEW_REWARD_COINS = 10;
+
+    protected const SCHEMA_CACHE_KEY = 'storkia_buyer_reward_schema_v2_ready';
+
+    protected static bool $verifiedInProcess = false;
 
     public static function ensureTablesExist(): void
     {
+        if (self::$verifiedInProcess) {
+            return;
+        }
+
+        if (Cache::get(self::SCHEMA_CACHE_KEY) === true) {
+            self::$verifiedInProcess = true;
+            return;
+        }
+
+        if (
+            Schema::hasTable('buyer_reward_wallets')
+            && Schema::hasTable('buyer_reward_transactions')
+        ) {
+            Cache::put(self::SCHEMA_CACHE_KEY, true, now()->addHours(24));
+            self::$verifiedInProcess = true;
+            return;
+        }
+
         try {
             if (! Schema::hasTable('users')) {
                 return;
@@ -43,7 +73,8 @@ class BuyerRewardService
                     $table->timestamp('last_daily_login_spin_at')->nullable()->index();
                     $table->timestamp('last_spin_played_at')->nullable()->index();
                     $table->timestamp('last_chest_opened_at')->nullable()->index();
-                    $table->timestamps();                 });
+                    $table->timestamps();
+                });
             }
 
             if (! Schema::hasTable('buyer_reward_transactions')) {
@@ -69,6 +100,9 @@ class BuyerRewardService
                     $table->index(['seller_order_id', 'source_type'], 'brt_order_source_idx');
                 });
             }
+
+            Cache::put(self::SCHEMA_CACHE_KEY, true, now()->addHours(24));
+            self::$verifiedInProcess = true;
         } catch (\Throwable $e) {
             report($e);
         }
@@ -111,7 +145,6 @@ class BuyerRewardService
         $maxSubtotalCoins = (int) floor(($cleanSubtotal + 0.0001) * self::COINS_PER_PESO);
 
         $maxRedeemableCoins = (int) min($balance, $maxCapCoins, $maxSubtotalCoins);
-
         if ($maxRedeemableCoins < self::MIN_CHECKOUT_REDEEMABLE_COINS) {
             $maxRedeemableCoins = 0;
         }
@@ -226,12 +259,11 @@ class BuyerRewardService
         string $sellerOrderNumber
     ): ?BuyerRewardTransaction {
         self::ensureTablesExist();
-
         if ($coinsToSpend <= 0) {
             return null;
         }
 
-        return DB::transaction(function () use ($buyerId, $coinsToSpend, $sellerOrderId, $sellerOrderNumber) {
+        $tx = DB::transaction(function () use ($buyerId, $coinsToSpend, $sellerOrderId, $sellerOrderNumber) {
             $wallet = $this->getOrCreateWallet($buyerId);
             $locked = BuyerRewardWallet::where('id', $wallet->id)->lockForUpdate()->firstOrFail();
 
@@ -271,12 +303,17 @@ class BuyerRewardService
                 ],
             ]);
         });
+
+        RealtimeBroadcastService::forWalletUpdate('Buyer', $buyerId, 'coins.updated', [
+            'coins_balance' => (int) ($tx?->coins_balance_after ?? 0),
+        ]);
+
+        return $tx;
     }
 
     public function restoreCoinsForSellerOrder(SellerOrder $sellerOrder): ?BuyerRewardTransaction
     {
         self::ensureTablesExist();
-
         $sellerOrder->loadMissing('extra');
         $coinsUsed = (int) ($sellerOrder->extra?->coins_used ?? 0);
         $buyerId = (int) $sellerOrder->buyer_id;
@@ -285,7 +322,7 @@ class BuyerRewardService
             return null;
         }
 
-        return DB::transaction(function () use ($sellerOrder, $buyerId, $coinsUsed) {
+        $tx = DB::transaction(function () use ($sellerOrder, $buyerId, $coinsUsed) {
             $alreadyRestored = BuyerRewardTransaction::where('seller_order_id', $sellerOrder->id)
                 ->where('source_type', 'checkout_coin_refund')
                 ->exists();
@@ -323,12 +360,19 @@ class BuyerRewardService
                 ],
             ]);
         });
+
+        if ($tx) {
+            RealtimeBroadcastService::forWalletUpdate('Buyer', $buyerId, 'coins.updated', [
+                'coins_balance' => (int) $tx->coins_balance_after,
+            ]);
+        }
+
+        return $tx;
     }
 
     public function awardOrderCompletionCashbackCoins(SellerOrder $sellerOrder): ?BuyerRewardTransaction
     {
         self::ensureTablesExist();
-
         $buyerId = (int) $sellerOrder->buyer_id;
         if ($buyerId <= 0) {
             return null;
@@ -341,7 +385,7 @@ class BuyerRewardService
 
         $coinsEarned = max(1, (int) floor($subtotal / self::PESOS_PER_CASHBACK_COIN));
 
-        return DB::transaction(function () use ($sellerOrder, $buyerId, $coinsEarned) {
+        $tx = DB::transaction(function () use ($sellerOrder, $buyerId, $coinsEarned) {
             $alreadyAwarded = BuyerRewardTransaction::where('seller_order_id', $sellerOrder->id)
                 ->where('source_type', 'order_completion_cashback')
                 ->exists();
@@ -386,12 +430,19 @@ class BuyerRewardService
                 ],
             ]);
         });
+
+        if ($tx) {
+            RealtimeBroadcastService::forWalletUpdate('Buyer', $buyerId, 'coins.updated', [
+                'coins_balance' => (int) $tx->coins_balance_after,
+            ]);
+        }
+
+        return $tx;
     }
 
     public function awardProductReviewCoins(OrderItemReview $review, bool $hasPhoto = false): ?BuyerRewardTransaction
     {
         self::ensureTablesExist();
-
         $buyerId = (int) $review->buyer_id;
         if ($buyerId <= 0) {
             return null;
@@ -408,7 +459,7 @@ class BuyerRewardService
 
         $coinsAwarded = $hasPhoto ? self::PHOTO_REVIEW_REWARD_COINS : self::TEXT_REVIEW_REWARD_COINS;
 
-        return DB::transaction(function () use ($review, $buyerId, $coinsAwarded, $hasPhoto) {
+        $tx = DB::transaction(function () use ($review, $buyerId, $coinsAwarded, $hasPhoto) {
             $lockedReview = OrderItemReview::where('id', $review->id)->lockForUpdate()->first();
             if (! $lockedReview) {
                 return null;
@@ -457,6 +508,14 @@ class BuyerRewardService
                 ],
             ]);
         });
+
+        if ($tx) {
+            RealtimeBroadcastService::forWalletUpdate('Buyer', $buyerId, 'coins.updated', [
+                'coins_balance' => (int) $tx->coins_balance_after,
+            ]);
+        }
+
+        return $tx;
     }
 
     public function grantDailyLoginSpinIfEligible(int $buyerId): array
@@ -503,13 +562,12 @@ class BuyerRewardService
     public function awardSellerTimeoutCompensation(SellerOrder $sellerOrder): ?BuyerRewardTransaction
     {
         self::ensureTablesExist();
-
         $buyerId = (int) $sellerOrder->buyer_id;
         if ($buyerId <= 0) {
             return null;
         }
 
-        return DB::transaction(function () use ($sellerOrder, $buyerId) {
+        $tx = DB::transaction(function () use ($sellerOrder, $buyerId) {
             $alreadyAwarded = BuyerRewardTransaction::where('seller_order_id', $sellerOrder->id)
                 ->where('source_type', 'sla_timeout_compensation')
                 ->exists();
@@ -548,6 +606,14 @@ class BuyerRewardService
                 ],
             ]);
         });
+
+        if ($tx) {
+            RealtimeBroadcastService::forWalletUpdate('Buyer', $buyerId, 'coins.updated', [
+                'coins_balance' => (int) $tx->coins_balance_after,
+            ]);
+        }
+
+        return $tx;
     }
 
     public function getWheelSegments(): array
@@ -750,10 +816,9 @@ class BuyerRewardService
     public function spinWheel(int $buyerId): array
     {
         self::ensureTablesExist();
-
         $this->grantDailyLoginSpinIfEligible($buyerId);
 
-        return DB::transaction(function () use ($buyerId) {
+        $result = DB::transaction(function () use ($buyerId) {
             $wallet = $this->getOrCreateWallet($buyerId);
             $locked = BuyerRewardWallet::where('id', $wallet->id)->lockForUpdate()->firstOrFail();
 
@@ -844,13 +909,20 @@ class BuyerRewardService
                 'transaction_id'      => $tx->id,
             ];
         });
+
+        RealtimeBroadcastService::forWalletUpdate('Buyer', $buyerId, 'coins.updated', [
+            'coins_balance' => (int) $result['coins_balance'],
+            'spin_tickets'  => (int) $result['spin_tickets'],
+        ]);
+
+        return $result;
     }
 
     public function openDailyChest(int $buyerId): array
     {
         self::ensureTablesExist();
 
-        return DB::transaction(function () use ($buyerId) {
+        $result = DB::transaction(function () use ($buyerId) {
             $wallet = $this->getOrCreateWallet($buyerId);
             $locked = BuyerRewardWallet::where('id', $wallet->id)->lockForUpdate()->firstOrFail();
 
@@ -930,13 +1002,19 @@ class BuyerRewardService
                 'message'        => $desc,
             ];
         });
+
+        RealtimeBroadcastService::forWalletUpdate('Buyer', $buyerId, 'coins.updated', [
+            'coins_balance' => (int) $result['coins_balance'],
+        ]);
+
+        return $result;
     }
 
     public function redeemCoinsForVoucher(int $buyerId, string $catalogKey): array
     {
         self::ensureTablesExist();
-
         $catalog = $this->getRedeemableVoucherCatalog();
+
         if (! isset($catalog[$catalogKey])) {
             throw ValidationException::withMessages([
                 'voucher' => 'Selected reward voucher package does not exist.',
@@ -946,7 +1024,7 @@ class BuyerRewardService
         $item = $catalog[$catalogKey];
         $cost = (int) $item['coins_cost'];
 
-        return DB::transaction(function () use ($buyerId, $item, $cost) {
+        $result = DB::transaction(function () use ($buyerId, $item, $cost) {
             $wallet = $this->getOrCreateWallet($buyerId);
             $locked = BuyerRewardWallet::where('id', $wallet->id)->lockForUpdate()->firstOrFail();
 
@@ -1003,6 +1081,13 @@ class BuyerRewardService
                 'message'       => "Successfully redeemed \"{$item['title']}\" (Code: {$voucher->code})! It is now in your Voucher Wallet and ready for checkout.",
             ];
         });
+
+        RealtimeBroadcastService::forWalletUpdate('Buyer', $buyerId, 'coins.updated', [
+            'coins_balance' => (int) $result['coins_balance'],
+            'voucher_code'  => (string) $result['voucher']->code,
+        ]);
+
+        return $result;
     }
 
     protected function issuePersonalBuyerVoucher(

@@ -14,9 +14,8 @@ const EXCLUDED_FORM_ACTIONS = [
 class StorkiaLiveDomEngine {
     constructor() {
         this.isNavigating = false;
-        this.pollTimer = null;
-        this.pollIntervalMs = 15000;
         this.abortController = null;
+        this.wsDebounceTimer = null;
         this.initialized = false;
     }
 
@@ -24,41 +23,27 @@ class StorkiaLiveDomEngine {
         if (this.initialized) return;
         this.initialized = true;
 
+        this.removeTopLineLoaders();
         this.bindGlobalFormInterceptor();
         this.bindGlobalLinkInterceptor();
         this.bindGlobalAutoSubmitInputs();
         this.bindPopState();
-        this.startRealtimePolling();
-    }
-
-    getProgressBar() {
-        return document.getElementById('storkia-live-progress');
+        this.bindRealtimeWebsocketListener();
     }
 
     startProgress() {
-        const bar = this.getProgressBar();
-        if (!bar) return;
-        bar.style.opacity = '1';
-        bar.style.width = '35%';
-        setTimeout(() => {
-            if (this.isNavigating && bar) {
-                bar.style.width = '75%';
-            }
-        }, 140);
+        this.removeTopLineLoaders();
     }
 
     finishProgress() {
-        const bar = this.getProgressBar();
-        if (!bar) return;
-        bar.style.width = '100%';
-        setTimeout(() => {
-            if (bar) {
-                bar.style.opacity = '0';
-                setTimeout(() => {
-                    if (bar) bar.style.width = '0%';
-                }, 220);
-            }
-        }, 180);
+        this.removeTopLineLoaders();
+    }
+
+    removeTopLineLoaders() {
+        const bar = document.getElementById('storkia-live-progress');
+        if (bar) {
+            bar.remove();
+        }
     }
 
     getCsrfToken() {
@@ -67,11 +52,17 @@ class StorkiaLiveDomEngine {
 
     showToast(message, type = 'success') {
         if (!message) return;
+
         window.dispatchEvent(new CustomEvent('notify', {
             detail: { message, type }
         }));
+
         window.dispatchEvent(new CustomEvent('toast', {
-            detail: { message, type }
+            detail: {
+                title: type === 'error' || type === 'danger' ? 'Error' : (type === 'warning' ? 'Notice' : 'Success'),
+                message,
+                type
+            }
         }));
 
         let container = document.getElementById('storkia-global-live-toasts');
@@ -110,7 +101,7 @@ class StorkiaLiveDomEngine {
             toast.style.opacity = '0';
             toast.style.transform = 'translateY(-8px)';
             setTimeout(() => toast.remove(), 300);
-        }, 4200);
+        }, 3500);
     }
 
     shouldInterceptForm(form, submitter = null) {
@@ -211,11 +202,13 @@ class StorkiaLiveDomEngine {
                     }
                 }
                 url.search = params.toString();
+
                 const isSamePage = url.pathname === window.location.pathname;
                 if (!isSamePage) {
                     window.location.href = url.toString();
                     return;
                 }
+
                 await this.visit(url.toString(), {
                     method: 'GET',
                     preserveScroll: true,
@@ -304,37 +297,47 @@ class StorkiaLiveDomEngine {
         return false;
     }
 
-    startRealtimePolling() {
-        if (this.pollTimer) clearInterval(this.pollTimer);
+    bindRealtimeWebsocketListener() {
+        window.addEventListener('storkia:ws-event', (event) => {
+            const detail = event.detail || {};
 
-        this.pollTimer = setInterval(() => {
-            if (document.hidden || this.isNavigating) return;
-            if (this.isUserBusyWithOverlayOrInput()) return;
+            if (detail.scope === 'notification' && detail.title) {
+                this.showToast(`${detail.title}: ${detail.message || ''}`.trim(), detail.type || 'info');
+            }
 
-            const path = window.location.pathname;
-            if (
-                path.includes('/create') ||
-                path.includes('/edit') ||
-                path.includes('/checkout') ||
-                path.includes('/settings') ||
-                path.includes('/profile')
-            ) {
-                this.refreshNotificationsOnly();
+            if (document.hidden || this.isNavigating) {
                 return;
             }
 
-            this.visit(window.location.href, {
-                method: 'GET',
-                preserveScroll: true,
-                pushState: false,
-                silentPoll: true
-            });
-        }, this.pollIntervalMs);
-
-        document.addEventListener('visibilitychange', () => {
-            if (!document.hidden && !this.isNavigating && !this.isUserBusyWithOverlayOrInput()) {
-                this.refreshNotificationsOnly();
+            if (this.wsDebounceTimer) {
+                clearTimeout(this.wsDebounceTimer);
             }
+
+            this.wsDebounceTimer = setTimeout(() => {
+                if (document.hidden || this.isNavigating) return;
+
+                const path = window.location.pathname;
+                if (
+                    this.isUserBusyWithOverlayOrInput() ||
+                    path.includes('/create') ||
+                    path.includes('/edit') ||
+                    path.includes('/checkout') ||
+                    path.includes('/settings') ||
+                    path.includes('/profile') ||
+                    path.includes('/messages') ||
+                    path.includes('/help-center')
+                ) {
+                    this.refreshNotificationsOnly();
+                    return;
+                }
+
+                this.visit(window.location.href, {
+                    method: 'GET',
+                    preserveScroll: true,
+                    pushState: false,
+                    silentPoll: true
+                });
+            }, 250);
         });
     }
 
@@ -348,7 +351,8 @@ class StorkiaLiveDomEngine {
                 headers: {
                     'Accept': 'text/html',
                     'X-Requested-With': 'XMLHttpRequest',
-                    'X-Storkia-Poll': '1'
+                    'X-Storkia-Realtime': '1',
+                    'X-Skip-Session-Guard': '1'
                 },
                 credentials: 'same-origin'
             });
@@ -367,7 +371,6 @@ class StorkiaLiveDomEngine {
             currentNotifs.forEach((el, idx) => {
                 const isDropdownOpen = el.__x?.$data?.notifOpen || el._x_dataStack?.[0]?.notifOpen;
                 if (isDropdownOpen) return;
-
                 const nextHtml = incomingNotifs[idx].innerHTML;
                 if (el.innerHTML.trim() !== nextHtml.trim()) {
                     el.innerHTML = nextHtml;
@@ -421,11 +424,11 @@ class StorkiaLiveDomEngine {
         if (this.abortController && !silentPoll) {
             this.abortController.abort();
         }
+
         const controller = new AbortController();
         if (!silentPoll) {
             this.abortController = controller;
             this.isNavigating = true;
-            this.startProgress();
         }
 
         const scrollContainer = document.querySelector('#storkia-main-scroll') || document.querySelector('main') || window;
@@ -438,6 +441,15 @@ class StorkiaLiveDomEngine {
                 'X-Requested-With': 'XMLHttpRequest',
                 'X-Storkia-Live': '1'
             };
+
+            if (silentPoll) {
+                headers['X-Skip-Session-Guard'] = '1';
+            }
+
+            const socketId = window.Echo && typeof window.Echo.socketId === 'function' ? window.Echo.socketId() : null;
+            if (socketId) {
+                headers['X-Socket-ID'] = socketId;
+            }
 
             if (method !== 'GET') {
                 headers['X-CSRF-TOKEN'] = this.getCsrfToken();
@@ -549,7 +561,6 @@ class StorkiaLiveDomEngine {
         } finally {
             if (!silentPoll) {
                 this.isNavigating = false;
-                this.finishProgress();
             }
         }
     }

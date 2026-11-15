@@ -19,18 +19,6 @@
         .animate-logo-fill {
             animation: fillUp 1.5s cubic-bezier(0.4, 0, 0.2, 1) infinite alternate;
         }
-        #storkia-live-progress {
-            position: fixed;
-            top: 0;
-            left: 0;
-            height: 3px;
-            width: 0%;
-            z-index: 10000;
-            background: linear-gradient(90deg, #CF4173, #F39399, #5D3140);
-            transition: width 0.25s ease, opacity 0.25s ease;
-            opacity: 0;
-            pointer-events: none;
-        }
     </style>
 
     <div class="relative w-24 h-24 md:w-32 md:h-32 flex items-center justify-center">
@@ -46,7 +34,6 @@
         />
     </div>
 </div>
-<div id="storkia-live-progress"></div>
 
 <script>
 (function () {

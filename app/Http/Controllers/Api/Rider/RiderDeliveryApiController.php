@@ -22,6 +22,7 @@ use App\Services\BuyerAbandonmentService;
 use App\Services\BuyerOrderNotificationService;
 use App\Services\OperationalSlaGuardService;
 use App\Services\OrderCompletionService;
+use App\Services\RealtimeBroadcastService;
 use App\Services\RiderMobileSchemaService;
 use App\Services\RoleWalletService;
 use App\Services\StorkSchemaBootstrapService;
@@ -322,6 +323,7 @@ class RiderDeliveryApiController extends Controller
 
         if (in_array($assignment->status, ['accepted', 'collected', 'out_for_delivery'], true)) {
             $assignment->load(['shipment.packages.verifications', 'sellerOrder.items', 'sellerOrder.payment', 'sellerOrder.extra']);
+
             return response()->json([
                 'status'  => 'success',
                 'message' => 'Delivery assignment is already accepted.',
@@ -403,6 +405,11 @@ class RiderDeliveryApiController extends Controller
             'sellerOrder.extra',
         ]);
 
+        RealtimeBroadcastService::forDeliveryAssignment($assignment, 'delivery.accepted');
+        if ($assignment->shipment) {
+            RealtimeBroadcastService::forShipment($assignment->shipment, 'shipment.rider_accepted');
+        }
+
         return response()->json([
             'status'  => 'success',
             'message' => 'Delivery assignment accepted! Proceed to Step 2: Scan the package QR code or enter the Tracking / Package Reference at the hub.',
@@ -472,6 +479,12 @@ class RiderDeliveryApiController extends Controller
                 ]);
             }
         });
+
+        $assignment->refresh()->load('shipment');
+        RealtimeBroadcastService::forDeliveryAssignment($assignment, 'delivery.declined');
+        if ($assignment->shipment) {
+            RealtimeBroadcastService::forShipment($assignment->shipment, 'shipment.rider_declined');
+        }
 
         return response()->json([
             'status'  => 'success',
@@ -567,6 +580,11 @@ class RiderDeliveryApiController extends Controller
             'sellerOrder.payment',
             'sellerOrder.extra',
         ]);
+
+        RealtimeBroadcastService::forDeliveryAssignment($assignment, 'delivery.delayed');
+        if ($assignment->shipment) {
+            RealtimeBroadcastService::forShipment($assignment->shipment, 'shipment.delayed');
+        }
 
         return response()->json([
             'status'  => 'success',
@@ -665,6 +683,11 @@ class RiderDeliveryApiController extends Controller
             'sellerOrder.extra',
         ]);
 
+        RealtimeBroadcastService::forDeliveryAssignment($assignment, 'delivery.breakdown');
+        if ($assignment->shipment) {
+            RealtimeBroadcastService::forShipment($assignment->shipment, 'shipment.breakdown');
+        }
+
         return response()->json([
             'status'  => 'success',
             'message' => 'Emergency / breakdown incident reported to your Logistics Sorting Hub.',
@@ -694,13 +717,32 @@ class RiderDeliveryApiController extends Controller
             ]);
         }
 
-        DeliveryChatMessage::where('seller_order_id', $assignment->seller_order_id)
+        $markedCount = DeliveryChatMessage::where('seller_order_id', $assignment->seller_order_id)
             ->where('sender_type', 'buyer')
             ->where('is_read', false)
             ->update([
                 'is_read' => true,
                 'read_at' => now(),
             ]);
+
+        if ($markedCount > 0 && $assignment->sellerOrder) {
+            RealtimeBroadcastService::send(
+                channels: [
+                    'user.' . (int) $assignment->sellerOrder->buyer_id,
+                    'rider.' . (int) $rider->id,
+                    'order.' . (int) $assignment->seller_order_id,
+                    'shipment.' . (int) $assignment->shipment_id,
+                ],
+                scope: 'delivery_chat',
+                action: 'delivery_chat.read',
+                payload: [
+                    'shipment_id'            => (int) $assignment->shipment_id,
+                    'seller_order_id'        => (int) $assignment->seller_order_id,
+                    'delivery_assignment_id' => (int) $assignment->id,
+                    'reader_type'            => 'rider',
+                ]
+            );
+        }
 
         $messages = DeliveryChatMessage::where('seller_order_id', $assignment->seller_order_id)
             ->orderBy('id', 'asc')
@@ -726,6 +768,55 @@ class RiderDeliveryApiController extends Controller
                 ],
                 'messages' => $messages,
             ],
+        ]);
+    }
+
+    public function markChatRead(Request $request, int $assignmentId): JsonResponse
+    {
+        StorkSchemaBootstrapService::ensureTablesExist();
+
+        /** @var Rider $rider */
+        $rider = $request->user();
+
+        $assignment = DeliveryAssignment::with('sellerOrder')->find($assignmentId);
+        if (! $assignment || (int) $assignment->rider_id !== (int) $rider->id) {
+            return response()->json(['status' => 'error', 'message' => 'Forbidden.'], 403);
+        }
+
+        $markedCount = 0;
+        if (Schema::hasTable('delivery_chat_messages')) {
+            $markedCount = DeliveryChatMessage::where('seller_order_id', $assignment->seller_order_id)
+                ->where('sender_type', 'buyer')
+                ->where('is_read', false)
+                ->update([
+                    'is_read' => true,
+                    'read_at' => now(),
+                ]);
+        }
+
+        if ($markedCount > 0 && $assignment->sellerOrder) {
+            RealtimeBroadcastService::send(
+                channels: [
+                    'user.' . (int) $assignment->sellerOrder->buyer_id,
+                    'rider.' . (int) $rider->id,
+                    'order.' . (int) $assignment->seller_order_id,
+                    'shipment.' . (int) $assignment->shipment_id,
+                ],
+                scope: 'delivery_chat',
+                action: 'delivery_chat.read',
+                payload: [
+                    'shipment_id'            => (int) $assignment->shipment_id,
+                    'seller_order_id'        => (int) $assignment->seller_order_id,
+                    'delivery_assignment_id' => (int) $assignment->id,
+                    'reader_type'            => 'rider',
+                ]
+            );
+        }
+
+        return response()->json([
+            'status'            => 'success',
+            'marked_read_count' => $markedCount,
+            'unread_chat_count' => 0,
         ]);
     }
 
@@ -778,6 +869,23 @@ class RiderDeliveryApiController extends Controller
             'is_read'                => false,
         ]);
 
+        $messagePayload = [
+            'id'             => (int) $chatMsg->id,
+            'sender_type'    => (string) $chatMsg->sender_type,
+            'message'        => (string) $chatMsg->message,
+            'attachment_url' => $attachmentPath ? asset('storage/' . ltrim($attachmentPath, '/')) : null,
+            'is_read'        => false,
+            'created_at'     => $chatMsg->created_at?->toIso8601String(),
+        ];
+
+        RealtimeBroadcastService::forDeliveryChat(
+            shipmentId: (int) $assignment->shipment_id,
+            sellerOrderId: (int) $assignment->seller_order_id,
+            buyerId: (int) $assignment->sellerOrder->buyer_id,
+            riderId: (int) $rider->id,
+            messagePayload: $messagePayload
+        );
+
         try {
             $assignment->sellerOrder?->buyer?->notify(new OrderLifecycleNotification(
                 title: "Message from Delivery Rider {$rider->full_name}",
@@ -794,14 +902,7 @@ class RiderDeliveryApiController extends Controller
         return response()->json([
             'status'  => 'success',
             'message' => 'Message sent to Buyer.',
-            'data'    => [
-                'id'             => (int) $chatMsg->id,
-                'sender_type'    => (string) $chatMsg->sender_type,
-                'message'        => (string) $chatMsg->message,
-                'attachment_url' => $attachmentPath ? asset('storage/' . ltrim($attachmentPath, '/')) : null,
-                'is_read'        => false,
-                'created_at'     => $chatMsg->created_at?->toIso8601String(),
-            ],
+            'data'    => $messagePayload,
         ]);
     }
 
@@ -923,6 +1024,11 @@ class RiderDeliveryApiController extends Controller
             'sellerOrder.payment',
             'sellerOrder.extra',
         ]);
+
+        RealtimeBroadcastService::forDeliveryAssignment($assignment, 'delivery.package_verified');
+        if ($assignment->shipment) {
+            RealtimeBroadcastService::forShipment($assignment->shipment, 'shipment.package_verified');
+        }
 
         return response()->json([
             'status'           => 'success',
@@ -1058,9 +1164,12 @@ class RiderDeliveryApiController extends Controller
             }
 
             try {
+                $otpNotice = ! empty($shipment->delivery_otp)
+                    ? " Your 6-digit Delivery OTP is {$shipment->delivery_otp}."
+                    : '';
                 $sellerOrder->buyer?->notify(new OrderLifecycleNotification(
                     title: 'Your Parcel is Out for Delivery!',
-                    message: "Order #{$sellerOrder->seller_order_number} (Tracking #{$shipment->tracking_number}) is out for delivery with Rider {$rider->full_name}.",
+                    message: "Order #{$sellerOrder->seller_order_number} (Tracking #{$shipment->tracking_number}) is out for delivery with Rider {$rider->full_name}.{$otpNotice}",
                     type: 'info',
                     url: route('user.orders.show', $sellerOrder->id),
                     orderId: $sellerOrder->order_id,
@@ -1081,10 +1190,99 @@ class RiderDeliveryApiController extends Controller
             'sellerOrder.extra',
         ]);
 
+        RealtimeBroadcastService::forDeliveryAssignment($assignment, 'delivery.out_for_delivery');
+        if ($assignment->shipment) {
+            RealtimeBroadcastService::forShipment($assignment->shipment, 'shipment.out_for_delivery');
+        }
+        if ($assignment->sellerOrder) {
+            RealtimeBroadcastService::forSellerOrder($assignment->sellerOrder, 'order.out_for_delivery');
+        }
+
         return response()->json([
             'status'  => 'success',
             'message' => "Shipment #{$shipment->tracking_number} is now Out for Delivery!",
             'data'    => $this->formatDeliveryAssignment($assignment, $rider, true),
+        ]);
+    }
+
+    public function resendDeliveryOtp(Request $request, int $assignmentId): JsonResponse
+    {
+        StorkSchemaBootstrapService::ensureTablesExist();
+        RiderMobileSchemaService::ensureTablesExist();
+
+        /** @var Rider $rider */
+        $rider = $request->user();
+
+        $assignment = DeliveryAssignment::with(['shipment.sellerOrder.buyer'])->find($assignmentId);
+
+        if (! $assignment || (int) $assignment->rider_id !== (int) $rider->id) {
+            return response()->json([
+                'status'  => 'error',
+                'message' => 'Forbidden: You are not assigned to this delivery.',
+            ], 403);
+        }
+
+        if ($assignment->status !== 'out_for_delivery') {
+            return response()->json([
+                'status'  => 'error',
+                'message' => 'Delivery OTP can only be resent while the parcel is Out for Delivery.',
+            ], 422);
+        }
+
+        $shipment = $assignment->shipment;
+        $sellerOrder = $shipment?->sellerOrder;
+
+        if (! $shipment || ! $sellerOrder) {
+            return response()->json([
+                'status'  => 'error',
+                'message' => 'Shipment or order record not found.',
+            ], 404);
+        }
+
+        $otpCode = ! empty($shipment->delivery_otp)
+            ? (string) $shipment->delivery_otp
+            : (string) random_int(100000, 999999);
+
+        if (Schema::hasColumn('shipments', 'delivery_otp')) {
+            $updates = ['delivery_otp' => $otpCode];
+            if (
+                Schema::hasColumn('shipments', 'delivery_otp_locked_until')
+                && $shipment->delivery_otp_locked_until
+                && Carbon::parse($shipment->delivery_otp_locked_until)->isPast()
+            ) {
+                $updates['delivery_otp_attempts'] = 0;
+                $updates['delivery_otp_locked_until'] = null;
+            }
+            $shipment->update($updates);
+        }
+
+        try {
+            $sellerOrder->buyer?->notify(new OrderLifecycleNotification(
+                title: "6-Digit Delivery OTP for Order #{$sellerOrder->seller_order_number}",
+                message: "Rider {$rider->full_name} is at your location for Shipment #{$shipment->tracking_number}. Your 6-digit Delivery OTP is: {$otpCode}.",
+                type: 'info',
+                url: route('user.orders.show', $sellerOrder->id),
+                orderId: $sellerOrder->order_id,
+                sellerOrderId: $sellerOrder->id,
+                shipmentId: $shipment->id
+            ));
+        } catch (\Throwable $e) {
+        }
+
+        if ($sellerOrder->buyer) {
+            RealtimeBroadcastService::forNotification($sellerOrder->buyer, [
+                'title'           => "6-Digit Delivery OTP: {$otpCode}",
+                'message'         => "Provide code {$otpCode} to Rider {$rider->full_name} for Order #{$sellerOrder->seller_order_number}.",
+                'type'            => 'info',
+                'order_id'        => $sellerOrder->order_id,
+                'seller_order_id' => $sellerOrder->id,
+                'shipment_id'     => $shipment->id,
+            ]);
+        }
+
+        return response()->json([
+            'status'  => 'success',
+            'message' => 'The 6-digit Delivery OTP has been resent to the Buyer\'s notifications and order screen.',
         ]);
     }
 
@@ -1383,6 +1581,18 @@ class RiderDeliveryApiController extends Controller
             'sellerOrder.extra',
         ]);
 
+        RealtimeBroadcastService::forDeliveryAssignment($assignment, 'delivery.completed');
+        if ($assignment->shipment) {
+            RealtimeBroadcastService::forShipment($assignment->shipment, 'shipment.delivered');
+        }
+        if ($assignment->sellerOrder) {
+            RealtimeBroadcastService::forSellerOrder($assignment->sellerOrder, 'order.delivered');
+        }
+        RealtimeBroadcastService::forWalletUpdate('Rider', (int) $rider->id, 'wallet.escrow_credited', [
+            'seller_order_id' => (int) $sellerOrder->id,
+            'shipment_id'     => (int) $shipment->id,
+        ]);
+
         return response()->json([
             'status'  => 'success',
             'message' => "Delivery completed! Your distance-scaled Rider Pay of ₱" . number_format((float) $payInfo['total_pay'], 2) . " ({$payInfo['distance_tier']}) has been credited to your Pending Escrow Wallet.",
@@ -1536,6 +1746,14 @@ class RiderDeliveryApiController extends Controller
             'sellerOrder.extra',
         ]);
 
+        RealtimeBroadcastService::forDeliveryAssignment($assignment, 'delivery.failed');
+        if ($assignment->shipment) {
+            RealtimeBroadcastService::forShipment($assignment->shipment, 'shipment.failed');
+        }
+        if ($assignment->sellerOrder) {
+            RealtimeBroadcastService::forSellerOrder($assignment->sellerOrder, 'order.delivery_failed');
+        }
+
         return response()->json([
             'status'  => 'success',
             'message' => $autoRtsTriggered
@@ -1662,29 +1880,43 @@ class RiderDeliveryApiController extends Controller
             }
         }
 
+        $hasDeliveryOtp = Schema::hasColumn('shipments', 'delivery_otp') && ! empty($shipment?->delivery_otp);
+        $otpLockedUntil = null;
+        if (Schema::hasColumn('shipments', 'delivery_otp_locked_until') && ! empty($shipment?->delivery_otp_locked_until)) {
+            try {
+                $parsedLock = Carbon::parse($shipment->delivery_otp_locked_until);
+                if ($parsedLock->isFuture()) {
+                    $otpLockedUntil = $parsedLock->toIso8601String();
+                }
+            } catch (\Throwable $e) {
+            }
+        }
+
         $payload = [
-            'id'                      => (int) $assignment->id,
-            'shipment_id'             => (int) $assignment->shipment_id,
-            'seller_order_id'         => (int) $assignment->seller_order_id,
-            'tracking_number'         => (string) ($shipment?->tracking_number ?? 'N/A'),
-            'seller_order_number'     => (string) ($sellerOrder?->seller_order_number ?? 'N/A'),
-            'attempt_number'          => max(1, (int) $assignment->attempt_number),
-            'max_attempts'            => self::MAX_DELIVERY_ATTEMPTS,
-            'status'                  => (string) $assignment->status,
-            'status_label'            => strtoupper(str_replace('_', ' ', (string) $assignment->status)),
-            'shipment_status'         => (string) ($shipment?->status ?? ''),
-            'shipment_status_label'   => (string) ($shipment?->status_label ?? ''),
-            'payment_method'          => $payMethod,
-            'is_cod'                  => $codAmount > 0,
-            'cod_amount'              => $codAmount,
-            'shipping_fee'            => round((float) ($shipment?->shipping_fee ?? 0), 2),
-            'total_weight'            => round((float) ($shipment?->total_weight ?? 0), 3),
-            'rider_pay'               => $payBreakdown,
-            'is_delayed'              => (bool) ($assignment->is_delayed ?? false),
-            'delay_reason'            => $assignment->delay_reason ?? null,
-            'estimated_arrival_at'    => $etaFormatted,
-            'unread_chat_count'       => $unreadChatCount,
-            'workflow_state'          => [
+            'id'                        => (int) $assignment->id,
+            'shipment_id'               => (int) $assignment->shipment_id,
+            'seller_order_id'           => (int) $assignment->seller_order_id,
+            'tracking_number'           => (string) ($shipment?->tracking_number ?? 'N/A'),
+            'seller_order_number'       => (string) ($sellerOrder?->seller_order_number ?? 'N/A'),
+            'attempt_number'            => max(1, (int) $assignment->attempt_number),
+            'max_attempts'              => self::MAX_DELIVERY_ATTEMPTS,
+            'status'                    => (string) $assignment->status,
+            'status_label'              => strtoupper(str_replace('_', ' ', (string) $assignment->status)),
+            'shipment_status'           => (string) ($shipment?->status ?? ''),
+            'shipment_status_label'     => (string) ($shipment?->status_label ?? ''),
+            'payment_method'            => $payMethod,
+            'is_cod'                    => $codAmount > 0,
+            'cod_amount'                => $codAmount,
+            'shipping_fee'              => round((float) ($shipment?->shipping_fee ?? 0), 2),
+            'total_weight'              => round((float) ($shipment?->total_weight ?? 0), 3),
+            'rider_pay'                 => $payBreakdown,
+            'is_delayed'                => (bool) ($assignment->is_delayed ?? false),
+            'delay_reason'              => $assignment->delay_reason ?? null,
+            'estimated_arrival_at'      => $etaFormatted,
+            'unread_chat_count'         => $unreadChatCount,
+            'has_delivery_otp'          => $hasDeliveryOtp,
+            'delivery_otp_locked_until' => $otpLockedUntil,
+            'workflow_state'            => [
                 'step_1_accepted'            => $isTaskAccepted,
                 'step_2_collection_verified' => $allCollectionVerified,
                 'step_3_out_for_delivery'    => $isOutForDelivery || $assignment->status === 'delivered',
@@ -1692,13 +1924,13 @@ class RiderDeliveryApiController extends Controller
                 'is_completed'               => $assignment->status === 'delivered',
                 'is_failed'                  => $assignment->status === 'failed',
             ],
-            'assigned_at'             => $assignment->assigned_at?->toIso8601String(),
-            'accepted_at'             => $assignment->accepted_at?->toIso8601String(),
-            'out_for_delivery_at'     => $assignment->out_for_delivery_at?->toIso8601String(),
-            'completed_at'            => $assignment->completed_at?->toIso8601String(),
-            'sla_deadline_at'         => $slaDeadlineAt?->toIso8601String(),
-            'failure_reason'          => $assignment->failure_reason ?? $shipment?->last_failure_reason,
-            'seller'                  => [
+            'assigned_at'               => $assignment->assigned_at?->toIso8601String(),
+            'accepted_at'               => $assignment->accepted_at?->toIso8601String(),
+            'out_for_delivery_at'       => $assignment->out_for_delivery_at?->toIso8601String(),
+            'completed_at'              => $assignment->completed_at?->toIso8601String(),
+            'sla_deadline_at'           => $slaDeadlineAt?->toIso8601String(),
+            'failure_reason'            => $assignment->failure_reason ?? $shipment?->last_failure_reason,
+            'seller'                    => [
                 'business_name' => $shipment?->sellerProfile?->business_name ?? ($pickupSnap['business_name'] ?? 'Seller Store'),
                 'contact_no'    => $pickupSnap['contact_no'] ?? ($shipment?->sellerProfile?->contact_no ?? ''),
                 'barangay'      => $pickupSnap['barangay'] ?? '',
@@ -1706,7 +1938,7 @@ class RiderDeliveryApiController extends Controller
                 'province'      => $pickupSnap['province'] ?? '',
                 'full_address'  => $pickupSnap['full_address'] ?? '',
             ],
-            'hub'                     => [
+            'hub'                       => [
                 'hub_name'     => $rider->assigned_hub?->hub_name ?? ($hubSnap['hub_name'] ?? ($shipment?->logisticsProfile?->business_name ?? 'Sorting Hub')),
                 'contact_no'   => $rider->assigned_hub?->contact_no ?? ($hubSnap['contact_no'] ?? ''),
                 'barangay'     => $rider->assigned_hub?->barangay ?? ($hubSnap['barangay'] ?? ''),
@@ -1717,7 +1949,7 @@ class RiderDeliveryApiController extends Controller
                 'longitude'    => $hubCoords['longitude'],
                 'is_exact_pin' => $hubCoords['is_exact'],
             ],
-            'buyer'                   => [
+            'buyer'                     => [
                 'recipient_name'   => $delivSnap['recipient_name'] ?? ($sellerOrder?->buyer?->full_name ?? 'Buyer'),
                 'phone_number'     => $delivSnap['phone_number'] ?? ($sellerOrder?->buyer?->contact_no ?? ''),
                 'house_details'    => $delivSnap['building_details'] ?? ($delivSnap['house_details'] ?? ''),
@@ -1738,7 +1970,7 @@ class RiderDeliveryApiController extends Controller
                 'is_exact_pin'     => $buyerCoords['is_exact'],
                 'coordinate_label' => $buyerCoords['source_label'],
             ],
-            'packages'                => $packages->map(function ($pkg) use ($allCollectionVerified, $allDoorstepVerified) {
+            'packages'                  => $packages->map(function ($pkg) use ($allCollectionVerified, $allDoorstepVerified) {
                 return [
                     'id'                           => (int) $pkg->id,
                     'package_reference'            => (string) $pkg->package_reference,
@@ -1845,7 +2077,7 @@ class RiderDeliveryApiController extends Controller
             'pasig'             => [14.5764, 121.0851],
             'manila'            => [14.5995, 120.9842],
             'taguig'            => [14.5176, 121.0509],
-            'mandaluyong'      => [14.5794, 121.0359],
+            'mandaluyong'       => [14.5794, 121.0359],
             'cebu city'         => [10.3157, 123.8854],
             'davao city'        => [7.1907, 125.4553],
             'imus|cavite'       => [14.4297, 120.9367],

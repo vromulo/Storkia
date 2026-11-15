@@ -7,6 +7,10 @@
     <meta name="session-login-url" content="{{ route('seller.login') }}">
     @auth
         <meta name="session-authenticated" content="1">
+        <meta name="reverb-channel" content="user.{{ auth()->id() }}">
+        @if(auth()->user()->sellerProfile)
+            <meta name="reverb-role-channel" content="seller.{{ auth()->user()->sellerProfile->id }}">
+        @endif
     @endauth
     <title>{{ $title ?? 'Storkia - Seller Portal' }}</title>
     <link rel="icon" type="image/webp" href="{{ asset('assets/pink-storkia-minimized.webp') }}">
@@ -14,6 +18,7 @@
     @livewireStyles
 </head>
 <body class="m-0 p-0 h-screen w-screen font-sans antialiased text-text-main overflow-hidden bg-gradient-to-b from-surface via-surface to-brand-light/30 relative">
+
     <x-ui.preloader />
 
     <div class="mobile-view absolute inset-0 bg-surface/80 backdrop-blur-md z-40"></div>
@@ -91,7 +96,6 @@
                              x-transition:leave-start="opacity-100 scale-100 translate-y-0"
                              x-transition:leave-end="opacity-0 scale-95 -translate-y-1"
                              class="absolute right-0 mt-3 w-80 sm:w-96 bg-surface border border-border-subtle rounded-2xl shadow-2xl z-50 overflow-hidden">
-
                             <div class="p-4 border-b border-border-subtle flex items-center justify-between bg-surface-subtle">
                                 <span class="font-bold text-sm text-primary-dark">Notifications</span>
                                 @if($unreadCount > 0)

@@ -10,6 +10,7 @@ use App\Notifications\OrderLifecycleNotification;
 use App\Services\AuditLoggerService;
 use App\Services\CourierMobileSchemaService;
 use App\Services\OperationalSlaGuardService;
+use App\Services\RealtimeBroadcastService;
 use App\Services\RoleWalletService;
 use App\Services\StorkSchemaBootstrapService;
 use Carbon\Carbon;
@@ -19,6 +20,9 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Validation\Rules\Password;
+use Intervention\Image\Drivers\Gd\Driver;
+use Intervention\Image\ImageManager;
 
 class AuthApiController extends Controller
 {
@@ -201,6 +205,20 @@ class AuthApiController extends Controller
                 'last_seen_at' => now(),
             ])->save();
 
+            RealtimeBroadcastService::send(
+                channels: array_values(array_filter([
+                    'courier.' . $courier->id,
+                    $courier->logistics_profile_id ? 'logistics.' . $courier->logistics_profile_id : null,
+                ])),
+                scope: 'courier',
+                action: 'courier.availability.updated',
+                payload: [
+                    'courier_id' => (int) $courier->id,
+                    'is_online'  => false,
+                    'status'     => 'off_duty',
+                ]
+            );
+
             return response()->json([
                 'status'  => 'success',
                 'message' => 'You are now Off Duty and will not receive new pickup assignments.',
@@ -272,6 +290,15 @@ class AuthApiController extends Controller
 
         $courier->refresh();
 
+        RealtimeBroadcastService::forDriverLocation(
+            driverType: 'courier',
+            driverId: (int) $courier->id,
+            logisticsProfileId: $courier->logistics_profile_id ? (int) $courier->logistics_profile_id : null,
+            latitude: (float) $validated['latitude'],
+            longitude: (float) $validated['longitude'],
+            accuracy: isset($validated['accuracy']) ? (float) $validated['accuracy'] : 10.0
+        );
+
         return response()->json([
             'status'  => 'success',
             'message' => 'You are now On Duty and ready for first-mile pickup assignments.',
@@ -318,15 +345,27 @@ class AuthApiController extends Controller
             ->whereIn('status', ['accepted', 'picked_up', 'in_transit_to_hub'])
             ->exists();
 
+        $lat = round((float) $request->input('latitude'), 7);
+        $lng = round((float) $request->input('longitude'), 7);
+
         $courier->forceFill([
             'is_online'                => true,
             'status'                   => $hasActiveTask ? 'on_delivery' : 'active',
             'last_seen_at'             => now(),
-            'current_latitude'         => round((float) $request->input('latitude'), 7),
-            'current_longitude'        => round((float) $request->input('longitude'), 7),
+            'current_latitude'         => $lat,
+            'current_longitude'        => $lng,
             'location_updated_at'      => now(),
             'last_checklist_passed_at' => now(),
         ])->save();
+
+        RealtimeBroadcastService::forDriverLocation(
+            driverType: 'courier',
+            driverId: (int) $courier->id,
+            logisticsProfileId: $courier->logistics_profile_id ? (int) $courier->logistics_profile_id : null,
+            latitude: $lat,
+            longitude: $lng,
+            accuracy: $request->filled('accuracy') ? (float) $request->input('accuracy') : 10.0
+        );
 
         return response()->json([
             'status'  => 'success',
@@ -485,6 +524,144 @@ class AuthApiController extends Controller
         return null;
     }
 
+    public function updateAvatar(Request $request): JsonResponse
+    {
+        StorkSchemaBootstrapService::ensureTablesExist();
+        CourierMobileSchemaService::ensureTablesExist();
+
+        /** @var Courier $courier */
+        $courier = $request->user();
+
+        $request->validate([
+            'avatar'      => ['nullable', 'file', 'mimetypes:image/jpeg,image/png,image/webp', 'mimes:jpg,jpeg,png,webp', 'max:5120'],
+            'avatar_file' => ['nullable', 'file', 'mimetypes:image/jpeg,image/png,image/webp', 'mimes:jpg,jpeg,png,webp', 'max:5120'],
+        ]);
+
+        $file = $request->file('avatar') ?? $request->file('avatar_file');
+        if (! $file) {
+            return response()->json([
+                'status'  => 'error',
+                'message' => 'Please select a valid JPG, PNG, or WEBP image file (max 5.0 MB).',
+            ], 422);
+        }
+
+        $filename = $this->storeOptimizedCourierAvatar($file, (int) $courier->id);
+
+        if ($courier->avatar_path && Storage::disk('public')->exists($courier->avatar_path)) {
+            Storage::disk('public')->delete($courier->avatar_path);
+        }
+
+        $courier->forceFill([
+            'avatar_path' => $filename,
+        ])->save();
+
+        $payload = $this->formatCourierPayload($courier->fresh(['logisticsProfile', 'currentHubAssignment.hub']));
+
+        return response()->json([
+            'status'  => 'success',
+            'message' => 'Courier profile photo updated successfully.',
+            'data'    => [
+                'avatar_url' => $payload['avatar_url'],
+                'user'       => $payload,
+            ],
+        ]);
+    }
+
+    public function removeAvatar(Request $request): JsonResponse
+    {
+        StorkSchemaBootstrapService::ensureTablesExist();
+        CourierMobileSchemaService::ensureTablesExist();
+
+        /** @var Courier $courier */
+        $courier = $request->user();
+
+        if ($courier->avatar_path && Storage::disk('public')->exists($courier->avatar_path)) {
+            Storage::disk('public')->delete($courier->avatar_path);
+        }
+
+        $courier->forceFill([
+            'avatar_path' => null,
+        ])->save();
+
+        $payload = $this->formatCourierPayload($courier->fresh(['logisticsProfile', 'currentHubAssignment.hub']));
+
+        return response()->json([
+            'status'  => 'success',
+            'message' => 'Courier profile photo removed.',
+            'data'    => [
+                'avatar_url' => null,
+                'user'       => $payload,
+            ],
+        ]);
+    }
+
+    public function updatePassword(Request $request): JsonResponse
+    {
+        StorkSchemaBootstrapService::ensureTablesExist();
+        CourierMobileSchemaService::ensureTablesExist();
+
+        /** @var Courier $courier */
+        $courier = $request->user();
+
+        $validated = $request->validate([
+            'current_password' => ['required', 'string'],
+            'password'         => ['required', 'string', 'confirmed', Password::min(8)->mixedCase()->numbers()->symbols()],
+        ], [
+            'current_password.required' => 'Please enter your current password.',
+            'password.confirmed'        => 'New password confirmation does not match.',
+        ]);
+
+        if (! Hash::check($validated['current_password'], $courier->password)) {
+            return response()->json([
+                'status'  => 'error',
+                'message' => 'Your current password is incorrect.',
+                'errors'  => [
+                    'current_password' => ['Your current password is incorrect.'],
+                ],
+            ], 422);
+        }
+
+        if (Hash::check($validated['password'], $courier->password)) {
+            return response()->json([
+                'status'  => 'error',
+                'message' => 'Your new password must be different from your current password.',
+                'errors'  => [
+                    'password' => ['New password must be different from your current password.'],
+                ],
+            ], 422);
+        }
+
+        $updatePayload = [
+            'password' => Hash::make($validated['password']),
+        ];
+        if (Schema::hasColumn('couriers', 'password_changed_at')) {
+            $updatePayload['password_changed_at'] = now();
+        }
+
+        $courier->forceFill($updatePayload)->save();
+
+        AuditLoggerService::log(
+            action: 'courier_password_changed',
+            targetType: 'Courier',
+            targetId: (int) $courier->id,
+            targetReference: $courier->email,
+            oldValues: null,
+            newValues: ['password_changed_at' => now()->toDateTimeString()],
+            reason: 'Courier updated password via Storkia Courier Mobile App',
+            actorType: 'Courier',
+            actorId: (int) $courier->id,
+            actorName: $courier->full_name
+        );
+
+        return response()->json([
+            'status'  => 'success',
+            'message' => 'Password updated successfully!',
+            'data'    => [
+                'user' => $this->formatCourierPayload($courier->fresh(['logisticsProfile', 'currentHubAssignment.hub'])),
+            ],
+        ]);
+    }
+
     public function updateVehicleAndDocuments(Request $request): JsonResponse
     {
         StorkSchemaBootstrapService::ensureTablesExist();
@@ -507,6 +684,11 @@ class AuthApiController extends Controller
         if ($request->filled('plate_number')) {
             $request->merge([
                 'plate_number' => strtoupper(trim((string) $request->input('plate_number'))),
+            ]);
+        }
+        if ($request->filled('license_no')) {
+            $request->merge([
+                'license_no' => strtoupper(trim((string) $request->input('license_no'))),
             ]);
         }
 
@@ -533,6 +715,30 @@ class AuthApiController extends Controller
 
                     if ($existsInCouriers || $existsInRiders) {
                         $fail("Plate number \"{$value}\" is already registered to another Courier or Rider across Storkia.");
+                    }
+                },
+            ],
+            'license_no'          => [
+                'nullable',
+                'string',
+                'min:6',
+                'max:35',
+                'regex:/^[A-Z0-9\-]+$/',
+                function (string $attribute, mixed $value, \Closure $fail) use ($courier) {
+                    $normalizedLic = strtoupper(preg_replace('/[\s\-]+/', '', trim((string) $value)));
+                    if ($normalizedLic === '') {
+                        return;
+                    }
+
+                    $existsInCouriers = Courier::where('id', '!=', $courier->id)
+                        ->whereRaw("UPPER(REPLACE(REPLACE(TRIM(license_no), ' ', ''), '-', '')) = ?", [$normalizedLic])
+                        ->exists();
+
+                    $existsInRiders = Rider::whereRaw("UPPER(REPLACE(REPLACE(TRIM(license_no), ' ', ''), '-', '')) = ?", [$normalizedLic])
+                        ->exists();
+
+                    if ($existsInCouriers || $existsInRiders) {
+                        $fail("Driver's license number \"{$value}\" is already registered to another Courier or Rider across Storkia.");
                     }
                 },
             ],
@@ -569,6 +775,7 @@ class AuthApiController extends Controller
             'remarks'             => ['nullable', 'string', 'max:300'],
         ], [
             'plate_number.regex'                 => 'Plate number may only contain uppercase letters, numbers, spaces, and hyphens.',
+            'license_no.regex'                   => 'Driver\'s license number may only contain uppercase letters, numbers, and hyphens.',
             'license_expiry_date.after_or_equal' => 'Driver\'s license expiry date cannot be in the past. Please enter today\'s date or a future expiry date.',
             'load_capacity.min'                  => 'Vehicle load capacity must be at least 50 kg.',
             'load_capacity.max'                  => 'Vehicle load capacity cannot exceed 20,000 kg.',
@@ -584,6 +791,7 @@ class AuthApiController extends Controller
         ]);
 
         $previousPlate = $courier->plate_number;
+        $previousLicenseNo = $courier->license_no;
         $previousCapacity = (int) $courier->load_capacity;
 
         $avatarPath = $courier->avatar_path;
@@ -593,7 +801,11 @@ class AuthApiController extends Controller
         $flaggedForReverification = false;
 
         if ($request->hasFile('avatar_file') && Schema::hasColumn('couriers', 'avatar_path')) {
-            $avatarPath = $request->file('avatar_file')->store('courier_avatars', 'public');
+            $newAvatarPath = $this->storeOptimizedCourierAvatar($request->file('avatar_file'), (int) $courier->id);
+            if ($courier->avatar_path && Storage::disk('public')->exists($courier->avatar_path)) {
+                Storage::disk('public')->delete($courier->avatar_path);
+            }
+            $avatarPath = $newAvatarPath;
         }
         if ($request->hasFile('license_file')) {
             $licensePath = $request->file('license_file')->store('courier_documents/licenses', 'public');
@@ -609,12 +821,14 @@ class AuthApiController extends Controller
         }
 
         $newPlate = $validated['plate_number'] ?? $courier->plate_number;
+        $newLicenseNo = $validated['license_no'] ?? $courier->license_no;
         $newCapacity = isset($validated['load_capacity']) ? (int) $validated['load_capacity'] : (int) $courier->load_capacity;
         $newVehicleType = $validated['vehicle_type'] ?? $courier->vehicle_type;
         $newExpiry = $validated['license_expiry_date'] ?? $courier->license_expiry_date?->toDateString();
 
         if (
             $newPlate !== $previousPlate
+            || $newLicenseNo !== $previousLicenseNo
             || $newCapacity !== $previousCapacity
             || $newVehicleType !== $courier->vehicle_type
         ) {
@@ -624,8 +838,10 @@ class AuthApiController extends Controller
         DB::transaction(function () use (
             $courier,
             $previousPlate,
+            $previousLicenseNo,
             $previousCapacity,
             $newPlate,
+            $newLicenseNo,
             $newCapacity,
             $newVehicleType,
             $newExpiry,
@@ -639,6 +855,7 @@ class AuthApiController extends Controller
             $updateData = [
                 'vehicle_type'        => $newVehicleType,
                 'plate_number'        => $newPlate,
+                'license_no'          => $newLicenseNo,
                 'load_capacity'       => $newCapacity,
                 'license_expiry_date' => $newExpiry,
                 'license_path'        => $licensePath,
@@ -657,7 +874,7 @@ class AuthApiController extends Controller
             $courier->update($updateData);
 
             if (Schema::hasTable('courier_vehicle_updates') && $flaggedForReverification) {
-                DB::table('courier_vehicle_updates')->insert([
+                $insertRow = [
                     'courier_id'             => $courier->id,
                     'logistics_profile_id'   => $courier->logistics_profile_id,
                     'previous_plate_number'  => $previousPlate,
@@ -673,7 +890,14 @@ class AuthApiController extends Controller
                     'remarks'                => $validated['remarks'] ?? 'Updated via Storkia Courier Mobile App',
                     'created_at'             => now(),
                     'updated_at'             => now(),
-                ]);
+                ];
+
+                if (Schema::hasColumn('courier_vehicle_updates', 'previous_license_no')) {
+                    $insertRow['previous_license_no'] = $previousLicenseNo;
+                    $insertRow['new_license_no'] = $newLicenseNo;
+                }
+
+                DB::table('courier_vehicle_updates')->insert($insertRow);
             }
 
             AuditLoggerService::log(
@@ -683,10 +907,12 @@ class AuthApiController extends Controller
                 targetReference: $courier->full_name . ' (' . $newPlate . ')',
                 oldValues: [
                     'plate_number'  => $previousPlate,
+                    'license_no'    => $previousLicenseNo,
                     'load_capacity' => $previousCapacity,
                 ],
                 newValues: [
                     'plate_number'                => $newPlate,
+                    'license_no'                  => $newLicenseNo,
                     'load_capacity'               => $newCapacity,
                     'license_expiry_date'         => $newExpiry,
                     'vehicle_verification_status' => $flaggedForReverification ? 'pending_verification' : 'verified',
@@ -702,7 +928,7 @@ class AuthApiController extends Controller
             try {
                 $courier->logisticsProfile->user->notify(new OrderLifecycleNotification(
                     title: "Courier Vehicle/Document Update Pending Verification ({$courier->full_name})",
-                    message: "Courier {$courier->full_name} updated vehicle/documents (Plate: {$newPlate}, Capacity: " . number_format($newCapacity) . " kg). Flagged for re-verification.",
+                    message: "Courier {$courier->full_name} updated vehicle/documents (Plate: {$newPlate}, License: {$newLicenseNo}, Capacity: " . number_format($newCapacity) . " kg). Flagged for re-verification.",
                     type: 'info',
                     url: route('logistics.couriers.index')
                 ));
@@ -721,6 +947,19 @@ class AuthApiController extends Controller
                 'user' => $this->formatCourierPayload($courier->load(['logisticsProfile', 'currentHubAssignment.hub'])),
             ],
         ]);
+    }
+
+    protected function storeOptimizedCourierAvatar($file, int $courierId): string
+    {
+        $filename = 'courier_avatars/courier_' . $courierId . '_' . uniqid('', true) . '.webp';
+        try {
+            $manager = new ImageManager(new Driver());
+            $encoded = $manager->read($file->getRealPath())->cover(400, 400)->toWebp(84);
+            Storage::disk('public')->put($filename, (string) $encoded);
+            return $filename;
+        } catch (\Throwable $e) {
+            return $file->store('courier_avatars', 'public');
+        }
     }
 
     public function viewDocument(Request $request, string $type)
@@ -856,6 +1095,8 @@ class AuthApiController extends Controller
             'load_capacity'               => (int) ($courier->load_capacity ?? 800),
             'load_capacity_formatted'     => number_format((int) ($courier->load_capacity ?? 800)) . ' kg',
             'vehicle_verification_status' => (string) ($courier->vehicle_verification_status ?? 'verified'),
+            'password_changed_at'         => $courier->password_changed_at?->toIso8601String(),
+            'password_last_updated'       => $courier->formattedPasswordLastUpdated(),
             'last_checklist_passed_at'    => $courier->last_checklist_passed_at
                 ? Carbon::parse($courier->last_checklist_passed_at)->toIso8601String()
                 : null,

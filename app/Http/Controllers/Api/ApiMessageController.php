@@ -7,6 +7,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Message;
 use App\Models\Product;
 use App\Models\User;
+use App\Services\RealtimeBroadcastService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
@@ -88,10 +89,27 @@ class ApiMessageController extends Controller
     {
         $userId = $request->user()->id;
 
-        Message::where('user_id', $contactId)
+        $markedCount = Message::where('user_id', $contactId)
             ->where('receiver_id', $userId)
             ->where('is_read', false)
             ->update(['is_read' => true]);
+
+        if ($markedCount > 0) {
+            RealtimeBroadcastService::send(
+                channels: [
+                    'user.' . (int) $userId,
+                    'user.' . (int) $contactId,
+                    'chat.' . (int) $userId,
+                    'chat.' . (int) $contactId,
+                ],
+                scope: 'chat',
+                action: 'chat.read',
+                payload: [
+                    'reader_id'  => (int) $userId,
+                    'contact_id' => (int) $contactId,
+                ]
+            );
+        }
 
         $contactUser = User::with('sellerProfile')->find($contactId);
         $contactPayload = null;
@@ -218,36 +236,71 @@ class ApiMessageController extends Controller
             }
         }
 
+        $formattedMessage = [
+            'id'              => $message->id,
+            'user_id'         => $message->user_id,
+            'receiver_id'     => $message->receiver_id,
+            'message'         => $message->message,
+            'product_id'      => $message->product_id ?? null,
+            'product'         => $productCard,
+            'product_card'    => $productCard,
+            'attachment_path' => $attachmentPath,
+            'attachment_url'  => $attachmentPath ? asset('storage/' . ltrim($attachmentPath, '/')) : null,
+            'is_read'         => (bool) $message->is_read,
+            'time'            => $message->created_at?->timezone('Asia/Manila')->format('h:i A') ?? '',
+            'created_at'      => $message->created_at?->toIso8601String(),
+        ];
+
         try {
             broadcast(new MessageSent($message))->toOthers();
         } catch (\Throwable $e) {
         }
 
+        RealtimeBroadcastService::send(
+            channels: [
+                'user.' . (int) $message->receiver_id,
+                'user.' . (int) $message->user_id,
+                'chat.' . (int) $message->receiver_id,
+                'chat.' . (int) $message->user_id,
+            ],
+            scope: 'chat',
+            action: 'chat.message_sent',
+            payload: [
+                'message' => $formattedMessage,
+            ]
+        );
+
         return response()->json([
             'success' => true,
-            'data'    => [
-                'id'              => $message->id,
-                'user_id'         => $message->user_id,
-                'receiver_id'     => $message->receiver_id,
-                'message'         => $message->message,
-                'product_id'      => $message->product_id ?? null,
-                'product'         => $productCard,
-                'product_card'    => $productCard,
-                'attachment_path' => $attachmentPath,
-                'attachment_url'  => $attachmentPath ? asset('storage/' . ltrim($attachmentPath, '/')) : null,
-                'is_read'         => (bool) $message->is_read,
-                'time'            => $message->created_at?->timezone('Asia/Manila')->format('h:i A') ?? '',
-                'created_at'      => $message->created_at?->toIso8601String(),
-            ],
+            'data'    => $formattedMessage,
         ], 201);
     }
 
     public function markAsRead(Request $request, int $contactId)
     {
-        Message::where('user_id', $contactId)
-            ->where('receiver_id', $request->user()->id)
+        $userId = (int) $request->user()->id;
+
+        $markedCount = Message::where('user_id', $contactId)
+            ->where('receiver_id', $userId)
             ->where('is_read', false)
             ->update(['is_read' => true]);
+
+        if ($markedCount > 0) {
+            RealtimeBroadcastService::send(
+                channels: [
+                    'user.' . $userId,
+                    'user.' . $contactId,
+                    'chat.' . $userId,
+                    'chat.' . $contactId,
+                ],
+                scope: 'chat',
+                action: 'chat.read',
+                payload: [
+                    'reader_id'  => $userId,
+                    'contact_id' => $contactId,
+                ]
+            );
+        }
 
         return response()->json([
             'success' => true,

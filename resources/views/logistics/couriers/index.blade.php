@@ -1,6 +1,10 @@
 @extends('layouts.logistics', ['title' => 'Storkia - All Couriers'])
 
 @section('content')
+@php
+    $pendingVehicleUpdates = $pendingVehicleUpdates ?? collect();
+    $openIncidents = $openIncidents ?? collect();
+@endphp
 <div x-data="{
     docModalOpen: false,
     docModalTitle: '',
@@ -51,7 +55,7 @@
                 </span>
             </div>
             <p class="text-sm text-text-muted mt-1">
-                Manage registered linehaul couriers, profile photos, assigned hubs, vehicles, and verification documents.
+                Manage registered linehaul couriers, profile photos, assigned hubs, vehicles, compliance re-verifications, and reported trip incidents.
             </p>
         </div>
 
@@ -96,6 +100,123 @@
             @foreach ($errors->all() as $err)
                 <p class="font-semibold">{{ $err }}</p>
             @endforeach
+        </div>
+    @endif
+
+    @if ($openIncidents->isNotEmpty())
+        <div class="p-5 rounded-3xl bg-red-50/90 border-2 border-red-200 space-y-3">
+            <div class="flex items-center justify-between">
+                <div class="flex items-center gap-2">
+                    <span class="px-2.5 py-0.5 rounded-full bg-danger text-white text-[10px] font-extrabold uppercase">
+                        {{ $openIncidents->count() }} Active Incident(s)
+                    </span>
+                    <h2 class="text-sm font-extrabold text-red-900">Reported Courier Breakdowns &amp; Route Delays</h2>
+                </div>
+            </div>
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                @foreach ($openIncidents as $inc)
+                    <div class="p-4 rounded-2xl bg-white border border-red-200 shadow-2xs flex flex-col justify-between gap-3 text-xs">
+                        <div class="space-y-1">
+                            <div class="flex flex-wrap items-center justify-between gap-2">
+                                <div class="font-extrabold text-primary-dark">
+                                    {{ $inc->first_name }} {{ $inc->last_name }} ({{ $inc->plate_number }})
+                                </div>
+                                <a href="{{ route('logistics.shipments.show', $inc->shipment_id) }}" class="font-mono font-bold text-primary hover:underline">
+                                    Shipment #{{ $inc->tracking_number }} &rarr;
+                                </a>
+                            </div>
+                            <div class="text-red-700 font-bold">
+                                {{ strtoupper(str_replace('_', ' ', $inc->incident_type)) }}: {{ $inc->reason }}
+                            </div>
+                            @if (! empty($inc->notes))
+                                <p class="text-text-main">{{ $inc->notes }}</p>
+                            @endif
+                            @if (! empty($inc->photo_path))
+                                <button type="button"
+                                        @click="openDocPreview('Breakdown Incident Photo - #{{ $inc->tracking_number }}', '{{ asset('storage/' . ltrim($inc->photo_path, '/')) }}', 'jpg')"
+                                        class="inline-flex items-center gap-1 text-[11px] font-bold text-primary hover:underline cursor-pointer mt-1">
+                                    View Attached Incident Photo
+                                </button>
+                            @endif
+                        </div>
+
+                        <form method="POST" action="{{ route('logistics.couriers.incidents.resolve', $inc->id) }}" class="pt-2 border-t border-border-subtle flex flex-wrap items-center justify-between gap-2">
+                            @csrf
+                            <label class="inline-flex items-center gap-1.5 text-[11px] font-semibold text-text-main cursor-pointer">
+                                <input type="checkbox" name="unassign_pickup" value="1" {{ $inc->incident_type === 'vehicle_breakdown' ? 'checked' : '' }} class="rounded text-primary">
+                                <span>Return Shipment to Unassigned Queue</span>
+                            </label>
+                            <div class="flex items-center gap-2">
+                                <input type="text" name="resolution_notes" placeholder="Resolution note..." class="px-2.5 py-1.5 rounded-xl border border-border-subtle text-xs bg-surface">
+                                <button type="submit" class="px-3.5 py-1.5 rounded-xl bg-primary-dark hover:bg-primary text-white font-bold text-xs cursor-pointer">
+                                    Resolve Incident
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                @endforeach
+            </div>
+        </div>
+    @endif
+
+    @if ($pendingVehicleUpdates->isNotEmpty())
+        <div class="p-5 rounded-3xl bg-amber-50/90 border-2 border-amber-200 space-y-3">
+            <div class="flex items-center gap-2">
+                <span class="px-2.5 py-0.5 rounded-full bg-amber-600 text-white text-[10px] font-extrabold uppercase">
+                    {{ $pendingVehicleUpdates->count() }} Pending Re-Verification
+                </span>
+                <h2 class="text-sm font-extrabold text-amber-950">Courier Mobile App Vehicle &amp; Document Updates</h2>
+            </div>
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                @foreach ($pendingVehicleUpdates as $vu)
+                    <div class="p-4 rounded-2xl bg-white border border-amber-200 shadow-2xs space-y-3 text-xs">
+                        <div class="flex items-start justify-between gap-2">
+                            <div>
+                                <div class="font-extrabold text-sm text-primary-dark">{{ $vu->first_name }} {{ $vu->last_name }}</div>
+                                <div class="text-[11px] text-text-muted font-mono">{{ $vu->email }} &bull; {{ $vu->home_hub }}</div>
+                            </div>
+                            <span class="px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 text-[10px] font-bold">Pending Review</span>
+                        </div>
+                        <div class="grid grid-cols-2 gap-2 p-2.5 rounded-xl bg-surface-subtle border border-border-subtle text-[11px]">
+                            <div>
+                                <span class="text-text-muted block">Vehicle Type:</span>
+                                <strong class="text-text-main">{{ $vu->vehicle_type }}</strong>
+                            </div>
+                            <div>
+                                <span class="text-text-muted block">Plate Number:</span>
+                                <strong class="font-mono text-primary-dark">{{ $vu->previous_plate_number }} &rarr; {{ $vu->new_plate_number }}</strong>
+                            </div>
+                            <div>
+                                <span class="text-text-muted block">Load Capacity:</span>
+                                <strong class="text-text-main">{{ number_format((int) $vu->previous_load_capacity) }} kg &rarr; {{ number_format((int) $vu->new_load_capacity) }} kg</strong>
+                            </div>
+                            @if (! empty($vu->new_license_no))
+                                <div>
+                                    <span class="text-text-muted block">License No.:</span>
+                                    <strong class="font-mono text-text-main">{{ $vu->previous_license_no ?? 'N/A' }} &rarr; {{ $vu->new_license_no }}</strong>
+                                </div>
+                            @endif
+                        </div>
+                        <div class="flex flex-wrap items-center justify-end gap-2 pt-1">
+                            <form method="POST" action="{{ route('logistics.couriers.decide-vehicle-verification', $vu->courier_id) }}" class="inline-flex items-center gap-1.5">
+                                @csrf
+                                <input type="hidden" name="decision" value="reject">
+                                <input type="text" name="remarks" required placeholder="Reject reason..." class="px-2.5 py-1.5 rounded-xl border border-border-subtle text-xs">
+                                <button type="submit" class="px-3 py-1.5 rounded-xl bg-red-50 hover:bg-red-100 text-danger border border-red-200 font-bold cursor-pointer">
+                                    Reject
+                                </button>
+                            </form>
+                            <form method="POST" action="{{ route('logistics.couriers.decide-vehicle-verification', $vu->courier_id) }}" class="m-0">
+                                @csrf
+                                <input type="hidden" name="decision" value="approve">
+                                <button type="submit" class="px-4 py-1.5 rounded-xl bg-green-600 hover:bg-green-700 text-white font-bold cursor-pointer">
+                                    Approve Update
+                                </button>
+                            </form>
+                        </div>
+                    </div>
+                @endforeach
+            </div>
         </div>
     @endif
 
@@ -190,10 +311,15 @@
                                             <div class="text-[11px] text-text-muted/80 mt-1">
                                                 DOB: {{ $courier->birthday?->format('M d, Y') }} ({{ $courier->birthday?->age }} yrs old)
                                             </div>
-                                            <div class="mt-1.5">
+                                            <div class="mt-1.5 flex flex-wrap items-center gap-1.5">
                                                 <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-bold bg-brand-light/40 text-primary-dark border border-border-subtle">
                                                     Home Hub: {{ $courier->home_hub }}
                                                 </span>
+                                                @if (($courier->vehicle_verification_status ?? 'verified') === 'pending_verification')
+                                                    <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-extrabold bg-amber-100 text-amber-800 border border-amber-300">
+                                                        Re-Verification Pending
+                                                    </span>
+                                                @endif
                                             </div>
                                         </div>
                                     </div>
@@ -339,6 +465,17 @@
                                                     </svg>
                                                     Edit Profile &amp; Photo
                                                 </button>
+
+                                                @if (($courier->vehicle_verification_status ?? 'verified') === 'pending_verification')
+                                                    <form method="POST" action="{{ route('logistics.couriers.decide-vehicle-verification', $courier->id) }}" class="m-0">
+                                                        @csrf
+                                                        <input type="hidden" name="decision" value="approve">
+                                                        <button type="submit" class="w-full text-left px-4 py-2.5 font-bold text-emerald-700 hover:bg-emerald-50 flex items-center gap-2 cursor-pointer">
+                                                            <span class="w-2 h-2 rounded-full bg-emerald-600"></span>
+                                                            Approve Vehicle Update
+                                                        </button>
+                                                    </form>
+                                                @endif
 
                                                 @if ($courier->status !== 'active')
                                                     <form method="POST" action="{{ route('logistics.couriers.update-status', $courier->id) }}" class="m-0">
@@ -497,12 +634,15 @@
                                         x-model="editingCourier.vehicle_type"
                                         required
                                         class="w-full px-3.5 py-2.5 rounded-xl border-2 border-gray-300 hover:border-primary/60 focus:border-primary focus:ring-4 focus:ring-primary/10 bg-white text-text-main font-bold text-xs outline-none transition-all cursor-pointer">
+                                    <option value="Motorcycle">Motorcycle</option>
+                                    <option value="Van">Van</option>
+                                    <option value="4-Wheeler Closed Van Truck">4-Wheeler Closed Van Truck</option>
+                                    <option value="6-Wheeler Truck">6-Wheeler Truck</option>
                                     <option value="L300 / Closed Van">L300 / Closed Van</option>
                                     <option value="Pickup Truck">Pickup Truck</option>
                                     <option value="4-Wheeler Box Truck">4-Wheeler Box Truck</option>
                                     <option value="6-Wheeler Cargo Truck">6-Wheeler Cargo Truck</option>
                                     <option value="MPV / Utility Van">MPV / Utility Van</option>
-                                    <option value="Motorcycle">Motorcycle</option>
                                 </select>
                             </div>
 

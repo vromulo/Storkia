@@ -125,6 +125,8 @@
             copiedAdminGcash: false,
             isSubmitting: false,
             isSyncingCheckout: false,
+            syncAbortController: null,
+            syncRequestId: 0,
             mode: cfg.mode || 'cart',
             selectedCartIdsCsv: cfg.selectedCartIdsCsv || '',
             buyerWalletBalance: Number(cfg.buyerWalletBalance || 0),
@@ -142,6 +144,35 @@
             livePriceSignature: cfg.livePriceSignature || '',
             bestVouchers: cfg.bestVouchers || { store: {}, platform: '', shipping: '' },
             touchedSlots: Array.isArray(cfg.touchedSlots) ? cfg.touchedSlots : [],
+            _wsHandler: null,
+
+            init() {
+                if (this.liveVoucherNotices.length > 0 && window.StorkiaLive) {
+                    window.StorkiaLive.showToast(this.liveVoucherNotices[0], 'warning');
+                }
+
+                this._wsHandler = (event) => {
+                    const detail = (event && event.detail) || {};
+                    if (
+                        detail.scope === 'wallet' ||
+                        detail.scope === 'voucher' ||
+                        detail.scope === 'address' ||
+                        (detail.scope === 'notification' && String(detail.title || '').toLowerCase().includes('top-up'))
+                    ) {
+                        this.syncCheckoutRealtime(null, '');
+                    }
+                };
+                window.addEventListener('storkia:ws-event', this._wsHandler);
+            },
+
+            destroy() {
+                if (this._wsHandler) {
+                    window.removeEventListener('storkia:ws-event', this._wsHandler);
+                }
+                if (this.syncAbortController) {
+                    this.syncAbortController.abort();
+                }
+            },
 
             touchSlot(slot) {
                 if (!this.touchedSlots.includes(slot)) {
@@ -267,6 +298,9 @@
                         this.topupScreenshotName = '';
                         this.topupPreviewUrl = '';
                         form.reset();
+                        if (window.StorkiaLive) {
+                            window.StorkiaLive.showToast(data.message, 'success');
+                        }
                     }
                 } catch (e) {
                     this.topupError = 'Network error while submitting top-up receipt.';
@@ -313,14 +347,18 @@
             },
 
             async syncCheckoutRealtime(overrideAddressId = null, actionFeedback = '') {
+                const requestId = ++this.syncRequestId;
+                if (this.syncAbortController) {
+                    this.syncAbortController.abort();
+                }
+                const controller = new AbortController();
+                this.syncAbortController = controller;
+
                 const cleanParams = this.buildSyncParams(overrideAddressId);
                 const fetchParams = new URLSearchParams(cleanParams.toString());
                 fetchParams.set('live_preview', '1');
 
                 this.isSyncingCheckout = true;
-                if (window.StorkiaLive) {
-                    window.StorkiaLive.startProgress();
-                }
 
                 try {
                     const response = await fetch(cfg.checkoutIndexUrl + '?' + fetchParams.toString(), {
@@ -329,12 +367,30 @@
                             'Accept': 'application/json',
                             'X-Requested-With': 'XMLHttpRequest'
                         },
-                        credentials: 'same-origin'
+                        credentials: 'same-origin',
+                        signal: controller.signal
                     });
 
-                    if (!response.ok) return;
-                    const data = await response.json();
-                    if (!data || !data.success) return;
+                    if (requestId !== this.syncRequestId) return;
+
+                    let data = null;
+                    try {
+                        data = await response.json();
+                    } catch (_) {
+                        data = null;
+                    }
+
+                    if (!response.ok || !data || !data.success) {
+                        if (data && data.redirect) {
+                            window.location.href = data.redirect;
+                            return;
+                        }
+                        const errMsg = (data && data.message) ? data.message : 'Unable to update checkout preview.';
+                        if (window.StorkiaLive) {
+                            window.StorkiaLive.showToast(errMsg, 'error');
+                        }
+                        return;
+                    }
 
                     if (typeof data.buyer_wallet_balance !== 'undefined') {
                         this.buyerWalletBalance = Number(data.buyer_wallet_balance || 0);
@@ -365,7 +421,8 @@
                         this.livePriceSignature = data.price_signature;
                     }
 
-                    const nextUrl = cfg.checkoutIndexUrl + '?' + cleanParams.toString();
+                    const rebuiltCleanParams = this.buildSyncParams(overrideAddressId);
+                    const nextUrl = cfg.checkoutIndexUrl + '?' + rebuiltCleanParams.toString();
                     window.history.replaceState({ storkiaLive: true }, document.title, nextUrl);
 
                     if (window.StorkiaLive) {
@@ -376,11 +433,17 @@
                         }
                     }
                 } catch (err) {
+                    if (err && err.name === 'AbortError') {
+                        return;
+                    }
                     console.error('Real-time checkout sync error:', err);
-                } finally {
-                    this.isSyncingCheckout = false;
                     if (window.StorkiaLive) {
-                        window.StorkiaLive.finishProgress();
+                        window.StorkiaLive.showToast('Network error while updating checkout.', 'error');
+                    }
+                } finally {
+                    if (requestId === this.syncRequestId) {
+                        this.isSyncingCheckout = false;
+                        this.syncAbortController = null;
                     }
                 }
             },
@@ -413,14 +476,6 @@
                 @endforeach
             </div>
         @endif
-
-        <template x-if="liveVoucherNotices.length > 0">
-            <div class="p-4 rounded-2xl bg-yellow-50 border border-yellow-200 text-yellow-800 text-xs sm:text-sm space-y-1">
-                <template x-for="(notice, nIdx) in liveVoucherNotices" :key="'vn_' + nIdx">
-                    <p class="font-semibold" x-text="notice"></p>
-                </template>
-            </div>
-        </template>
 
         <form action="{{ route('checkout.store') }}"
               method="POST"
@@ -756,9 +811,6 @@
                     <div class="bg-surface rounded-2xl border border-border-subtle p-6 shadow-xs sticky top-24 space-y-5">
                         <div class="flex items-center justify-between">
                             <h3 class="text-xl font-serif font-bold text-primary-dark">Checkout Summary</h3>
-                            <span x-show="isSyncingCheckout" x-cloak class="text-[11px] font-bold text-primary animate-pulse">
-                                Updating...
-                            </span>
                         </div>
 
                         <div class="p-3.5 rounded-2xl bg-emerald-50/70 border border-emerald-200 flex items-center justify-between gap-3 text-xs">
@@ -804,8 +856,7 @@
                             </button>
                         </div>
 
-                        <div class="space-y-2.5 pt-3 border-t border-border-subtle text-xs sm:text-sm"
-                             :class="isSyncingCheckout ? 'opacity-60 transition-opacity' : 'transition-opacity'">
+                        <div class="space-y-2.5 pt-3 border-t border-border-subtle text-xs sm:text-sm transition-opacity">
                             <div class="flex justify-between text-text-muted">
                                 <span>Merchandise Subtotal (<span x-text="summary.totalItemsCount"></span> items):</span>
                                 <span class="font-semibold text-text-main">₱<span x-text="formatMoney(summary.overallSubtotal)"></span></span>

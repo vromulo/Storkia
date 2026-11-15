@@ -5,9 +5,12 @@ namespace App\Http\Controllers\Api\Rider;
 use App\Http\Controllers\Api\Concerns\IssuesApiTokens;
 use App\Http\Controllers\Controller;
 use App\Models\Courier;
+use App\Models\DeliveryAssignment;
 use App\Models\Rider;
 use App\Models\RiderLocation;
+use App\Notifications\OrderLifecycleNotification;
 use App\Services\AuditLoggerService;
+use App\Services\RealtimeBroadcastService;
 use App\Services\RiderMobileSchemaService;
 use App\Services\StorkSchemaBootstrapService;
 use Carbon\Carbon;
@@ -16,6 +19,10 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Validation\Rules\Password;
+use Intervention\Image\Drivers\Gd\Driver;
+use Intervention\Image\ImageManager;
 
 class AuthApiController extends Controller
 {
@@ -64,13 +71,15 @@ class AuthApiController extends Controller
         ]);
 
         $token = $this->issueApiToken($rider, 'rider', 'rider_auth_token');
+        $reverbKey = (string) config('broadcasting.connections.reverb.key', env('REVERB_APP_KEY', 'bn93mdlba1frvyhfe5gf'));
 
         return response()->json([
-            'status'       => 'success',
-            'message'      => 'Login successful',
-            'access_token' => $token,
-            'token_type'   => 'Bearer',
-            'user'         => $this->formatRiderProfile($rider->fresh(['logisticsProfile', 'currentHubAssignment.hub', 'activeBarangayCoverages'])),
+            'status'         => 'success',
+            'message'        => 'Login successful',
+            'access_token'   => $token,
+            'token_type'     => 'Bearer',
+            'reverb_app_key' => $reverbKey,
+            'user'           => $this->formatRiderProfile($rider->fresh(['logisticsProfile', 'currentHubAssignment.hub', 'activeBarangayCoverages'])),
         ], 200);
     }
 
@@ -138,17 +147,18 @@ class AuthApiController extends Controller
         ]);
 
         $checks = [
-            'Tires'        => (bool) $validated['tires_ok'],
-            'Lights'       => (bool) $validated['lights_ok'],
-            'Brakes'       => (bool) $validated['brakes_ok'],
-            'Fuel'         => (bool) $validated['fuel_ok'],
-            'Helmet/Gear'  => (bool) ($validated['helmet_gear_ok'] ?? true),
-            'Thermal Bag'  => (bool) ($validated['thermal_bag_ok'] ?? true),
+            'Tires'       => (bool) $validated['tires_ok'],
+            'Lights'      => (bool) $validated['lights_ok'],
+            'Brakes'      => (bool) $validated['brakes_ok'],
+            'Fuel'        => (bool) $validated['fuel_ok'],
+            'Helmet/Gear' => (bool) ($validated['helmet_gear_ok'] ?? true),
+            'Thermal Bag' => (bool) ($validated['thermal_bag_ok'] ?? true),
         ];
 
         $failedItems = array_keys(array_filter($checks, fn ($passed) => ! $passed));
         $allPassed = empty($failedItems);
         $failedSummary = $allPassed ? null : ('Failed: ' . implode(', ', $failedItems));
+        $cleanNotes = ! empty($validated['notes']) ? trim($validated['notes']) : null;
 
         $checklistId = DB::table('rider_shift_checklists')->insertGetId([
             'rider_id'             => $rider->id,
@@ -161,7 +171,7 @@ class AuthApiController extends Controller
             'thermal_bag_ok'       => $checks['Thermal Bag'],
             'all_passed'           => $allPassed,
             'failed_items_summary' => $failedSummary,
-            'notes'                => ! empty($validated['notes']) ? trim($validated['notes']) : null,
+            'notes'                => $cleanNotes,
             'latitude'             => isset($validated['latitude']) ? round((float) $validated['latitude'], 7) : null,
             'longitude'            => isset($validated['longitude']) ? round((float) $validated['longitude'], 7) : null,
             'submitted_at'         => now(),
@@ -173,6 +183,45 @@ class AuthApiController extends Controller
             $rider->update(['last_checklist_passed_at' => now()]);
         } elseif (! $allPassed && Schema::hasColumn('riders', 'is_online')) {
             $rider->update(['is_online' => false]);
+
+            $logisticsUser = $rider->logisticsProfile?->user;
+            if ($logisticsUser) {
+                try {
+                    $logisticsUser->notify(new OrderLifecycleNotification(
+                        title: "Rider Pre-Shift Checklist Issue ({$rider->full_name})",
+                        message: "Rider {$rider->full_name} ({$rider->plate_number}) reported Not OK on: " . implode(', ', $failedItems) . ($cleanNotes ? ". Note: \"{$cleanNotes}\"." : '.') . ' Rider remains Offline.',
+                        type: 'warning',
+                        url: route('logistics.riders.active')
+                    ));
+                } catch (\Throwable $e) {
+                }
+            }
+
+            AuditLoggerService::log(
+                action: 'rider_preshift_checklist_failed',
+                targetType: 'Rider',
+                targetId: (int) $rider->id,
+                targetReference: "{$rider->full_name} ({$rider->plate_number})",
+                oldValues: ['is_online' => (bool) $rider->is_online],
+                newValues: ['is_online' => false, 'failed_items' => $failedItems],
+                reason: $cleanNotes ?? $failedSummary,
+                actorType: 'Rider',
+                actorId: (int) $rider->id,
+                actorName: $rider->full_name
+            );
+
+            RealtimeBroadcastService::send(
+                channels: array_values(array_filter([
+                    'rider.' . $rider->id,
+                    $rider->logistics_profile_id ? 'logistics.' . $rider->logistics_profile_id : null,
+                ])),
+                scope: 'rider',
+                action: 'rider.availability.updated',
+                payload: [
+                    'rider_id'  => (int) $rider->id,
+                    'is_online' => false,
+                ]
+            );
         }
 
         return response()->json([
@@ -253,6 +302,40 @@ class AuthApiController extends Controller
 
         $rider->refresh()->loadMissing(['logisticsProfile', 'currentHubAssignment.hub', 'activeBarangayCoverages']);
 
+        if ($wantsOnline && $rider->current_latitude !== null && $rider->current_longitude !== null) {
+            $activeAsg = DeliveryAssignment::where('rider_id', $rider->id)
+                ->whereIn('status', ['out_for_delivery', 'accepted', 'collected'])
+                ->orderByRaw("CASE WHEN status = 'out_for_delivery' THEN 0 ELSE 1 END")
+                ->first();
+
+            RealtimeBroadcastService::forDriverLocation(
+                driverType: 'rider',
+                driverId: (int) $rider->id,
+                logisticsProfileId: $rider->logistics_profile_id ? (int) $rider->logistics_profile_id : null,
+                latitude: (float) $rider->current_latitude,
+                longitude: (float) $rider->current_longitude,
+                accuracy: $rider->location_accuracy !== null ? (float) $rider->location_accuracy : null,
+                speed: null,
+                heading: null,
+                shipmentId: $activeAsg?->shipment_id ? (int) $activeAsg->shipment_id : null,
+                sellerOrderId: $activeAsg?->seller_order_id ? (int) $activeAsg->seller_order_id : null,
+                assignmentId: $activeAsg?->id ? (int) $activeAsg->id : null
+            );
+        } else {
+            RealtimeBroadcastService::send(
+                channels: array_values(array_filter([
+                    'rider.' . $rider->id,
+                    $rider->logistics_profile_id ? 'logistics.' . $rider->logistics_profile_id : null,
+                ])),
+                scope: 'rider',
+                action: 'rider.availability.updated',
+                payload: [
+                    'rider_id'  => (int) $rider->id,
+                    'is_online' => $wantsOnline,
+                ]
+            );
+        }
+
         return response()->json([
             'status'  => 'success',
             'message' => $wantsOnline
@@ -287,6 +370,19 @@ class AuthApiController extends Controller
                 'last_seen_at' => now(),
             ]);
 
+            RealtimeBroadcastService::send(
+                channels: array_values(array_filter([
+                    'rider.' . $rider->id,
+                    $rider->logistics_profile_id ? 'logistics.' . $rider->logistics_profile_id : null,
+                ])),
+                scope: 'rider',
+                action: 'rider.availability.updated',
+                payload: [
+                    'rider_id'  => (int) $rider->id,
+                    'is_online' => false,
+                ]
+            );
+
             return response()->json([
                 'status'  => 'warning',
                 'message' => 'Device GPS location was turned off. You have been marked Offline until location is re-enabled.',
@@ -295,19 +391,29 @@ class AuthApiController extends Controller
         }
 
         $assignmentId = $validated['delivery_assignment_id'] ?? null;
+        $activeAssignment = null;
+
         if ($assignmentId !== null) {
-            $ownsAssignment = $rider->deliveryAssignments()->where('id', $assignmentId)->exists();
-            if (! $ownsAssignment) {
+            $activeAssignment = $rider->deliveryAssignments()->where('id', $assignmentId)->first();
+            if (! $activeAssignment) {
                 return response()->json([
                     'status'  => 'error',
                     'message' => 'Unauthorized delivery assignment reference for location update.',
                 ], 403);
             }
+        } else {
+            $activeAssignment = DeliveryAssignment::where('rider_id', $rider->id)
+                ->whereIn('status', ['out_for_delivery', 'accepted', 'collected'])
+                ->orderByRaw("CASE WHEN status = 'out_for_delivery' THEN 0 ELSE 1 END")
+                ->first();
+            $assignmentId = $activeAssignment?->id;
         }
 
         $lat = round((float) $validated['latitude'], 7);
         $lng = round((float) $validated['longitude'], 7);
         $acc = isset($validated['accuracy']) ? round((float) $validated['accuracy'], 2) : null;
+        $spd = isset($validated['speed']) ? round((float) $validated['speed'], 2) : null;
+        $hdg = isset($validated['heading']) ? round((float) $validated['heading'], 2) : null;
         $recordedAt = ! empty($validated['recorded_at']) ? Carbon::parse($validated['recorded_at']) : now();
 
         if ($rider->location_updated_at && $recordedAt->lt($rider->location_updated_at)) {
@@ -342,11 +448,25 @@ class AuthApiController extends Controller
                 'latitude'               => $lat,
                 'longitude'              => $lng,
                 'accuracy'               => $acc,
-                'speed'                  => isset($validated['speed']) ? round((float) $validated['speed'], 2) : null,
-                'heading'                => isset($validated['heading']) ? round((float) $validated['heading'], 2) : null,
+                'speed'                  => $spd,
+                'heading'                => $hdg,
                 'recorded_at'            => $recordedAt,
             ]);
         }
+
+        RealtimeBroadcastService::forDriverLocation(
+            driverType: 'rider',
+            driverId: (int) $rider->id,
+            logisticsProfileId: $rider->logistics_profile_id ? (int) $rider->logistics_profile_id : null,
+            latitude: $lat,
+            longitude: $lng,
+            accuracy: $acc,
+            speed: $spd,
+            heading: $hdg,
+            shipmentId: $activeAssignment?->shipment_id ? (int) $activeAssignment->shipment_id : null,
+            sellerOrderId: $activeAssignment?->seller_order_id ? (int) $activeAssignment->seller_order_id : null,
+            assignmentId: $assignmentId ? (int) $assignmentId : null
+        );
 
         return response()->json([
             'status'  => 'success',
@@ -370,14 +490,14 @@ class AuthApiController extends Controller
         $rider = $request->user();
 
         $validated = $request->validate([
-            'locations'                            => ['required', 'array', 'min:1', 'max:100'],
-            'locations.*.latitude'                 => ['required', 'numeric', 'between:-90,90'],
-            'locations.*.longitude'                => ['required', 'numeric', 'between:-180,180'],
-            'locations.*.accuracy'                 => ['nullable', 'numeric', 'min:0'],
-            'locations.*.speed'                    => ['nullable', 'numeric', 'min:0'],
-            'locations.*.heading'                  => ['nullable', 'numeric', 'between:0,360'],
-            'locations.*.delivery_assignment_id'   => ['nullable', 'integer'],
-            'locations.*.recorded_at'              => ['nullable', 'date'],
+            'locations'                          => ['required', 'array', 'min:1', 'max:100'],
+            'locations.*.latitude'               => ['required', 'numeric', 'between:-90,90'],
+            'locations.*.longitude'              => ['required', 'numeric', 'between:-180,180'],
+            'locations.*.accuracy'               => ['nullable', 'numeric', 'min:0'],
+            'locations.*.speed'                  => ['nullable', 'numeric', 'min:0'],
+            'locations.*.heading'                => ['nullable', 'numeric', 'between:0,360'],
+            'locations.*.delivery_assignment_id' => ['nullable', 'integer'],
+            'locations.*.recorded_at'            => ['nullable', 'date'],
         ]);
 
         $ownedAssignmentIds = $rider->deliveryAssignments()->pluck('id')->map(fn ($id) => (int) $id)->all();
@@ -394,6 +514,8 @@ class AuthApiController extends Controller
             $lat = round((float) $pt['latitude'], 7);
             $lng = round((float) $pt['longitude'], 7);
             $acc = isset($pt['accuracy']) ? round((float) $pt['accuracy'], 2) : null;
+            $spd = isset($pt['speed']) ? round((float) $pt['speed'], 2) : null;
+            $hdg = isset($pt['heading']) ? round((float) $pt['heading'], 2) : null;
 
             $rows[] = [
                 'rider_id'               => $rider->id,
@@ -401,8 +523,8 @@ class AuthApiController extends Controller
                 'latitude'               => $lat,
                 'longitude'              => $lng,
                 'accuracy'               => $acc,
-                'speed'                  => isset($pt['speed']) ? round((float) $pt['speed'], 2) : null,
-                'heading'                => isset($pt['heading']) ? round((float) $pt['heading'], 2) : null,
+                'speed'                  => $spd,
+                'heading'                => $hdg,
                 'recorded_at'            => $ts,
                 'created_at'             => now(),
                 'updated_at'             => now(),
@@ -410,10 +532,13 @@ class AuthApiController extends Controller
 
             if (! $latestPoint || $ts->gte($latestPoint['recorded_at'])) {
                 $latestPoint = [
-                    'latitude'    => $lat,
-                    'longitude'   => $lng,
-                    'accuracy'    => $acc,
-                    'recorded_at' => $ts,
+                    'latitude'               => $lat,
+                    'longitude'              => $lng,
+                    'accuracy'               => $acc,
+                    'speed'                  => $spd,
+                    'heading'                => $hdg,
+                    'delivery_assignment_id' => $asgId,
+                    'recorded_at'            => $ts,
                 ];
             }
         }
@@ -430,12 +555,172 @@ class AuthApiController extends Controller
                 'location_updated_at' => now(),
                 'last_seen_at'        => now(),
             ]);
+
+            $activeAssignment = $latestPoint['delivery_assignment_id']
+                ? DeliveryAssignment::find($latestPoint['delivery_assignment_id'])
+                : DeliveryAssignment::where('rider_id', $rider->id)
+                    ->whereIn('status', ['out_for_delivery', 'accepted', 'collected'])
+                    ->orderByRaw("CASE WHEN status = 'out_for_delivery' THEN 0 ELSE 1 END")
+                    ->first();
+
+            RealtimeBroadcastService::forDriverLocation(
+                driverType: 'rider',
+                driverId: (int) $rider->id,
+                logisticsProfileId: $rider->logistics_profile_id ? (int) $rider->logistics_profile_id : null,
+                latitude: (float) $latestPoint['latitude'],
+                longitude: (float) $latestPoint['longitude'],
+                accuracy: $latestPoint['accuracy'] !== null ? (float) $latestPoint['accuracy'] : null,
+                speed: $latestPoint['speed'] !== null ? (float) $latestPoint['speed'] : null,
+                heading: $latestPoint['heading'] !== null ? (float) $latestPoint['heading'] : null,
+                shipmentId: $activeAssignment?->shipment_id ? (int) $activeAssignment->shipment_id : null,
+                sellerOrderId: $activeAssignment?->seller_order_id ? (int) $activeAssignment->seller_order_id : null,
+                assignmentId: $activeAssignment?->id ? (int) $activeAssignment->id : null
+            );
         }
 
         return response()->json([
             'status'         => 'success',
             'inserted_count' => count($rows),
             'message'        => count($rows) . ' GPS location packet(s) synced.',
+        ]);
+    }
+
+    public function updateAvatar(Request $request): JsonResponse
+    {
+        StorkSchemaBootstrapService::ensureTablesExist();
+        RiderMobileSchemaService::ensureTablesExist();
+
+        /** @var Rider $rider */
+        $rider = $request->user();
+
+        $request->validate([
+            'avatar' => ['required', 'file', 'mimetypes:image/jpeg,image/png,image/webp', 'mimes:jpg,jpeg,png,webp', 'max:5120'],
+        ], [
+            'avatar.required'  => 'Please select a profile photo to upload.',
+            'avatar.mimetypes' => 'Profile photo must be a JPG, PNG, or WEBP image.',
+            'avatar.max'       => 'Profile photo must not exceed 5 MB.',
+        ]);
+
+        $file = $request->file('avatar');
+        $oldPath = $rider->avatar_path;
+        $filename = 'riders/avatars/rider_' . $rider->id . '_' . uniqid('', true) . '.webp';
+
+        try {
+            $manager = new ImageManager(new Driver());
+            $encoded = $manager->read($file->getRealPath())->cover(512, 512)->toWebp(84);
+            Storage::disk('public')->put($filename, (string) $encoded);
+        } catch (\Throwable $e) {
+            $filename = $file->store('riders/avatars', 'public');
+        }
+
+        $rider->update([
+            'avatar_path' => $filename,
+        ]);
+
+        if ($oldPath && $oldPath !== $filename && Storage::disk('public')->exists($oldPath)) {
+            try {
+                Storage::disk('public')->delete($oldPath);
+            } catch (\Throwable $e) {
+            }
+        }
+
+        $rider->refresh()->loadMissing(['logisticsProfile', 'currentHubAssignment.hub', 'activeBarangayCoverages']);
+
+        return response()->json([
+            'status'  => 'success',
+            'message' => 'Rider profile photo updated successfully!',
+            'data'    => $this->formatRiderProfile($rider),
+        ]);
+    }
+
+    public function removeAvatar(Request $request): JsonResponse
+    {
+        StorkSchemaBootstrapService::ensureTablesExist();
+        RiderMobileSchemaService::ensureTablesExist();
+
+        /** @var Rider $rider */
+        $rider = $request->user();
+
+        $oldPath = $rider->avatar_path;
+        if ($oldPath && Storage::disk('public')->exists($oldPath)) {
+            try {
+                Storage::disk('public')->delete($oldPath);
+            } catch (\Throwable $e) {
+            }
+        }
+
+        $rider->update([
+            'avatar_path' => null,
+        ]);
+
+        $rider->refresh()->loadMissing(['logisticsProfile', 'currentHubAssignment.hub', 'activeBarangayCoverages']);
+
+        return response()->json([
+            'status'  => 'success',
+            'message' => 'Rider profile photo removed.',
+            'data'    => $this->formatRiderProfile($rider),
+        ]);
+    }
+
+    public function updatePassword(Request $request): JsonResponse
+    {
+        StorkSchemaBootstrapService::ensureTablesExist();
+        RiderMobileSchemaService::ensureTablesExist();
+
+        /** @var Rider $rider */
+        $rider = $request->user();
+
+        $validated = $request->validate([
+            'current_password' => ['required', 'string'],
+            'password'         => [
+                'required',
+                'string',
+                'confirmed',
+                Password::min(8)->mixedCase()->numbers()->symbols(),
+            ],
+        ], [
+            'current_password.required' => 'Please enter your current password.',
+            'password.confirmed'        => 'Password confirmation does not match.',
+        ]);
+
+        if (! Hash::check((string) $validated['current_password'], $rider->password)) {
+            return response()->json([
+                'status'  => 'error',
+                'message' => 'The current password you entered is incorrect.',
+                'errors'  => [
+                    'current_password' => ['The current password you entered is incorrect.'],
+                ],
+            ], 422);
+        }
+
+        $updates = [
+            'password' => $validated['password'],
+        ];
+        if (Schema::hasColumn('riders', 'password_changed_at')) {
+            $updates['password_changed_at'] = now();
+        }
+
+        $rider->update($updates);
+
+        AuditLoggerService::log(
+            action: 'rider_password_updated',
+            targetType: 'Rider',
+            targetId: (int) $rider->id,
+            targetReference: "{$rider->full_name} ({$rider->email})",
+            oldValues: null,
+            newValues: ['password_changed_at' => now()->toDateTimeString()],
+            reason: 'Rider updated account password via Storkia Rider mobile app.',
+            actorType: 'Rider',
+            actorId: (int) $rider->id,
+            actorName: $rider->full_name
+        );
+
+        $rider->refresh()->loadMissing(['logisticsProfile', 'currentHubAssignment.hub', 'activeBarangayCoverages']);
+
+        return response()->json([
+            'status'  => 'success',
+            'message' => 'Your Rider account password has been updated successfully.',
+            'data'    => $this->formatRiderProfile($rider),
         ]);
     }
 
@@ -549,7 +834,7 @@ class AuthApiController extends Controller
             $rider->update($updates);
 
             if ($hasVehicleOrDocChange && Schema::hasTable('rider_vehicle_updates')) {
-                DB::table('rider_vehicle_updates')->insert([
+                $insertData = [
                     'rider_id'              => $rider->id,
                     'logistics_profile_id'  => $rider->logistics_profile_id,
                     'previous_plate_number' => $oldPlate,
@@ -562,7 +847,14 @@ class AuthApiController extends Controller
                     'remarks'               => 'Updated by Rider via Storkia Rider Mobile App (Flagged for Logistics re-verification).',
                     'created_at'            => now(),
                     'updated_at'            => now(),
-                ]);
+                ];
+
+                if (Schema::hasColumn('rider_vehicle_updates', 'new_license_no')) {
+                    $insertData['previous_license_no'] = $oldLicenseNo;
+                    $insertData['new_license_no'] = $newLicenseNo;
+                }
+
+                DB::table('rider_vehicle_updates')->insert($insertData);
             }
 
             AuditLoggerService::log(
@@ -588,6 +880,31 @@ class AuthApiController extends Controller
             );
         });
 
+        if ($hasVehicleOrDocChange && $rider->logisticsProfile?->user) {
+            try {
+                $rider->logisticsProfile->user->notify(new OrderLifecycleNotification(
+                    title: "Rider Vehicle/Document Update Pending Verification ({$rider->full_name})",
+                    message: "Rider {$rider->full_name} updated vehicle/documents (Plate: {$newPlate}, License: {$newLicenseNo}). Flagged for re-verification.",
+                    type: 'info',
+                    url: route('logistics.riders.index')
+                ));
+            } catch (\Throwable $e) {
+            }
+        }
+
+        RealtimeBroadcastService::send(
+            channels: array_values(array_filter([
+                'rider.' . $rider->id,
+                $rider->logistics_profile_id ? 'logistics.' . $rider->logistics_profile_id : null,
+            ])),
+            scope: 'rider',
+            action: 'rider.profile.updated',
+            payload: [
+                'rider_id'                    => (int) $rider->id,
+                'vehicle_verification_status' => $hasVehicleOrDocChange ? 'pending_verification' : 'verified',
+            ]
+        );
+
         $rider->refresh()->loadMissing(['logisticsProfile', 'currentHubAssignment.hub', 'activeBarangayCoverages']);
 
         return response()->json([
@@ -603,6 +920,7 @@ class AuthApiController extends Controller
     {
         $hub = $rider->assigned_hub;
         $logistics = $rider->logisticsProfile;
+        $reverbKey = (string) config('broadcasting.connections.reverb.key', env('REVERB_APP_KEY', 'bn93mdlba1frvyhfe5gf'));
 
         return [
             'id'                          => (int) $rider->id,
@@ -629,6 +947,9 @@ class AuthApiController extends Controller
             'last_checklist_passed_at'    => Schema::hasColumn('riders', 'last_checklist_passed_at') && $rider->last_checklist_passed_at
                 ? Carbon::parse($rider->last_checklist_passed_at)->toIso8601String()
                 : null,
+            'password_last_updated'       => method_exists($rider, 'formattedPasswordLastUpdated')
+                ? $rider->formattedPasswordLastUpdated()
+                : 'Issued by Logistics Hub',
             'sla_strikes'                 => (int) ($rider->sla_strikes ?? 0),
             'current_latitude'            => $rider->current_latitude !== null ? (float) $rider->current_latitude : null,
             'current_longitude'           => $rider->current_longitude !== null ? (float) $rider->current_longitude : null,
@@ -638,6 +959,7 @@ class AuthApiController extends Controller
             'or_cr_url'                   => $rider->or_cr_path ? asset('storage/' . ltrim($rider->or_cr_path, '/')) : null,
             'covered_barangays'           => $rider->covered_barangay_names,
             'formatted_barangay_coverage' => $rider->formatted_barangay_coverage,
+            'reverb_app_key'              => $reverbKey,
             'logistics_company'           => [
                 'id'            => $logistics?->id,
                 'business_name' => $logistics?->business_name ?? 'Storkia Partner Logistics',

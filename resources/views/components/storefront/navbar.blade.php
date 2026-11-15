@@ -4,8 +4,6 @@
         $navAnnouncements = $navAnnouncements ?? collect();
         $navAnnouncementReadIds = $navAnnouncementReadIds ?? [];
 
-        // Chat counters from ChatServiceProvider: 'messages' = unread direct chats,
-        // 'support' = unread Help Center replies, 'total' = both (shown on the account icon).
         $chatBadges = $chatBadges ?? ['messages' => 0, 'support' => 0, 'total' => 0];
         $navMessagesBadge = (int) ($chatBadges['messages'] ?? 0);
         $navSupportBadge = (int) ($chatBadges['support'] ?? 0);
@@ -192,7 +190,7 @@
                                     </a>
                                 @endif
                                 <hr class="border-border-subtle my-1 mx-2">
-                                <form method="POST" action="{{ route('logout') }}" class="m-0">
+                                <form method="POST" action="{{ route('logout') }}" data-no-live class="m-0">
                                     @csrf
                                     <button type="submit" class="w-full text-left px-3 py-2 text-xs font-bold text-danger rounded-lg hover:bg-danger/10 transition-colors cursor-pointer">Logout</button>
                                 </form>
@@ -206,7 +204,8 @@
                         $unreadCount = auth()->user()->unreadNotifications()->count();
                         $recentNotifications = auth()->user()->notifications()->take(6)->get();
                     @endphp
-                    <div x-data="navDropdown('notif', 'notifOpen', 250, false, { notifTab: 'general' })"
+                    <div data-live-notifications
+                         x-data="navDropdown('notif', 'notifOpen', 250, false, { notifTab: 'general' })"
                          @mouseenter="enter()"
                          @mouseleave="leave()"
                          @click.away="close()"
@@ -367,6 +366,7 @@
 
                 @if(!auth()->check() || auth()->user()->role === 'Buyer')
                     <div
+                        data-cart-dropdown-wrapper
                         x-data="navDropdown('cart', 'cartOpen', 250)"
                         @mouseenter="enter()"
                         @mouseleave="leave()"
@@ -393,9 +393,6 @@
 
     <script>
         document.addEventListener('alpine:init', () => {
-            // Only one navbar icon dropdown (account / notifications / cart) may be open at a time.
-            // Hovering another icon while one is open does NOT open it; it opens only after the
-            // previous one has fully closed, and only if the pointer is still on that icon.
             Alpine.store('navDropdown', { active: null });
 
             Alpine.data('navDropdown', (name, key, delay = 250, desktopOnly = false, extra = {}) => {
@@ -409,7 +406,6 @@
                         clearTimeout(this.timer);
                         const store = Alpine.store('navDropdown');
                         if (store.active === null || store.active === name) store.active = name;
-                        // else: another dropdown is still open; init()'s watcher opens this one once it closes
                     },
                     leave() {
                         if (desktopOnly && window.innerWidth < 768) return;
@@ -423,7 +419,7 @@
                     },
                     close() {
                         clearTimeout(this.timer);
-                        this.hovering = false; // don't let the watcher re-open it while the pointer is still over it
+                        this.hovering = false;
                         this.release();
                     },
                     toggle() {
@@ -437,7 +433,6 @@
                         });
                     },
                 };
-                // Expose the open state under the name each template already uses (open / notifOpen / cartOpen)
                 Object.defineProperty(data, key, {
                     get: () => Alpine.store('navDropdown').active === name,
                     enumerable: true,
@@ -459,8 +454,8 @@
                     fetch(`/search/suggestions?q=${encodeURIComponent(this.query)}`)
                         .then(res => res.json())
                         .then(data => {
-                            this.suggestions = data;
-                            this.showSuggestions = data.length > 0;
+                            this.suggestions = Array.isArray(data) ? data : (data.data || []);
+                            this.showSuggestions = this.suggestions.length > 0;
                         });
                 },
                 submitSearch() {
@@ -469,6 +464,13 @@
                     }
                 }
             }));
+        });
+
+        window.addEventListener('storkia:ws-event', (event) => {
+            const detail = (event && event.detail) || {};
+            if (detail.scope === 'cart' && typeof detail.cart_count !== 'undefined' && typeof window.setCartBadge === 'function') {
+                window.setCartBadge(Number(detail.cart_count));
+            }
         });
     </script>
 </nav>

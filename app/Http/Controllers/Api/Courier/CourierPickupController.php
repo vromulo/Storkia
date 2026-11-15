@@ -18,6 +18,7 @@ use App\Services\AuditLoggerService;
 use App\Services\CourierMobileSchemaService;
 use App\Services\OperationalSlaGuardService;
 use App\Services\OrderCompletionService;
+use App\Services\RealtimeBroadcastService;
 use App\Services\RoleWalletService;
 use App\Services\ShipmentVerificationService;
 use App\Services\StorkSchemaBootstrapService;
@@ -441,6 +442,11 @@ class CourierPickupController extends Controller
                 'sellerOrder.extra',
             ]);
 
+            RealtimeBroadcastService::forPickupAssignment($fresh, 'pickup.accepted');
+            if ($fresh->shipment) {
+                RealtimeBroadcastService::forShipment($fresh->shipment, 'shipment.courier_accepted');
+            }
+
             return response()->json([
                 'status'  => 'success',
                 'message' => 'Pickup assignment accepted! Navigate to the Seller and scan the package QR code or verify the tracking number.',
@@ -567,6 +573,14 @@ class CourierPickupController extends Controller
                 actorId: (int) $courier->id,
                 actorName: $courier->full_name
             );
+
+            RealtimeBroadcastService::forPickupAssignment($locked, 'pickup.declined');
+            if ($shipment) {
+                RealtimeBroadcastService::forShipment($shipment->fresh(), 'shipment.pickup_declined');
+                if ($shipment->sellerOrder) {
+                    RealtimeBroadcastService::forSellerOrder($shipment->sellerOrder->fresh(), 'order.ready_for_pickup');
+                }
+            }
 
             return response()->json([
                 'status'  => 'success',
@@ -767,6 +781,14 @@ class CourierPickupController extends Controller
                 'sellerOrder.extra',
             ]);
 
+            RealtimeBroadcastService::forPickupAssignment($fresh, 'pickup.collected');
+            if ($fresh->shipment) {
+                RealtimeBroadcastService::forShipment($fresh->shipment, 'shipment.picked_up_from_seller');
+            }
+            if ($fresh->sellerOrder) {
+                RealtimeBroadcastService::forSellerOrder($fresh->sellerOrder, 'order.picked_up');
+            }
+
             return response()->json([
                 'status'  => 'success',
                 'message' => 'Package collection confirmed! Proceed to transport the parcel to the assigned Logistics Sorting Hub.',
@@ -920,6 +942,16 @@ class CourierPickupController extends Controller
                 'sellerOrder.extra',
             ]);
 
+            RealtimeBroadcastService::forPickupAssignment($fresh, 'pickup.handed_over');
+            if ($fresh->shipment) {
+                RealtimeBroadcastService::forShipment($fresh->shipment, 'shipment.in_transit_to_hub');
+            }
+            RealtimeBroadcastService::forWalletUpdate('Courier', (int) $courier->id, 'first_mile_pickup_pay.recorded', [
+                'shipment_id' => (int) $shipment->id,
+                'total_pay'   => round((float) ($payInfo['total_pay'] ?? 0), 2),
+                'is_cod'      => $isCod,
+            ]);
+
             return response()->json([
                 'status'  => 'success',
                 'message' => $isCod
@@ -1041,10 +1073,25 @@ class CourierPickupController extends Controller
             }
         }
 
+        $fresh = $assignment->fresh([
+            'shipment.sellerProfile',
+            'shipment.logisticsProfile',
+            'shipment.packages.logisticsHub',
+            'shipment.trackingLogs',
+            'sellerOrder.items',
+        ]);
+
+        if ($fresh) {
+            RealtimeBroadcastService::forPickupAssignment($fresh, 'pickup.delayed');
+            if ($fresh->shipment) {
+                RealtimeBroadcastService::forShipment($fresh->shipment, 'shipment.delayed');
+            }
+        }
+
         return response()->json([
             'status'  => 'success',
             'message' => 'Delay report submitted and Logistics has been notified with your updated ETA.',
-            'data'    => $this->formatAssignmentPayload($assignment->fresh(['shipment.sellerProfile', 'shipment.logisticsProfile', 'shipment.packages.logisticsHub', 'sellerOrder.items']), true),
+            'data'    => $this->formatAssignmentPayload($fresh, true),
         ]);
     }
 
@@ -1151,10 +1198,25 @@ class CourierPickupController extends Controller
             }
         }
 
+        $fresh = $assignment->fresh([
+            'shipment.sellerProfile',
+            'shipment.logisticsProfile',
+            'shipment.packages.logisticsHub',
+            'shipment.trackingLogs',
+            'sellerOrder.items',
+        ]);
+
+        if ($fresh) {
+            RealtimeBroadcastService::forPickupAssignment($fresh, 'pickup.breakdown');
+            if ($fresh->shipment) {
+                RealtimeBroadcastService::forShipment($fresh->shipment, 'shipment.breakdown');
+            }
+        }
+
         return response()->json([
             'status'  => 'success',
             'message' => 'Vehicle breakdown report and photo submitted to Logistics for immediate reassignment.',
-            'data'    => $this->formatAssignmentPayload($assignment->fresh(['shipment.sellerProfile', 'shipment.logisticsProfile', 'shipment.packages.logisticsHub', 'sellerOrder.items']), true),
+            'data'    => $this->formatAssignmentPayload($fresh, true),
         ]);
     }
 
@@ -1204,10 +1266,22 @@ class CourierPickupController extends Controller
             actorName: $courier->full_name
         );
 
+        $fresh = $assignment->fresh([
+            'shipment.sellerProfile',
+            'shipment.logisticsProfile',
+            'shipment.packages.logisticsHub',
+            'shipment.trackingLogs',
+            'sellerOrder.items',
+        ]);
+
+        if ($fresh) {
+            RealtimeBroadcastService::forPickupAssignment($fresh, 'pickup.discrepancy_noted');
+        }
+
         return response()->json([
             'status'  => 'success',
             'message' => 'Discrepancy note saved and recorded in the audit log.',
-            'data'    => $this->formatAssignmentPayload($assignment->fresh(['shipment.sellerProfile', 'shipment.logisticsProfile', 'shipment.packages.logisticsHub', 'sellerOrder.items']), true),
+            'data'    => $this->formatAssignmentPayload($fresh, true),
         ]);
     }
 

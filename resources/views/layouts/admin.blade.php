@@ -7,17 +7,16 @@
     <meta name="session-login-url" content="{{ route('admin.login') }}">
     @auth('admin')
         <meta name="session-authenticated" content="1">
+        <meta name="reverb-channel" content="admin">
+        <meta name="reverb-role-channel" content="support.admin">
     @endauth
     <title>{{ $title ?? 'Storkia - Admin Portal' }}</title>
     <link rel="icon" type="image/webp" href="{{ asset('assets/pink-storkia-minimized.webp') }}">
-
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0,1&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
-
     @vite(['resources/css/app.css', 'resources/js/app.js'])
     @livewireStyles
-
     <style>
         [x-cloak] { display: none !important; }
         .mobile-view { display: flex; }
@@ -29,6 +28,7 @@
     </style>
 </head>
 <body class="m-0 p-0 h-screen w-screen font-sans antialiased text-text-main overflow-hidden bg-gradient-to-b from-surface via-surface to-brand-light/30 relative">
+
     <x-ui.preloader />
 
     <div class="mobile-view fixed inset-0 bg-surface/80 backdrop-blur-md z-40"></div>
@@ -39,9 +39,7 @@
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
                 </svg>
             </div>
-
             <h2 class="text-2xl sm:text-3xl font-extrabold text-primary mb-4 tracking-tight">Desktop Only</h2>
-
             <div class="bg-brand-light/20 border border-border-subtle rounded-2xl p-5 mb-8 w-full shadow-sm">
                 <p class="text-text-main text-sm sm:text-base leading-relaxed font-medium">
                     You are accessing an <span class="font-bold text-primary">Administrative Account</span>.
@@ -49,7 +47,6 @@
                     <span class="text-text-muted">Please log in from a computer to access this dashboard interface.</span>
                 </p>
             </div>
-
             <form method="POST" action="{{ route('admin.logout') }}" data-no-live class="w-full">
                 @csrf
                 <button type="submit" class="w-full flex items-center justify-center px-6 py-4 bg-red-500 text-white text-lg font-bold rounded-2xl shadow-md hover:bg-red-600 transition-all duration-200 cursor-pointer active:scale-95">
@@ -183,6 +180,7 @@
     </div>
 
     <x-ui.toast-notification />
+
     @livewireScripts
 </body>
 </html>

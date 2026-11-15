@@ -29,11 +29,13 @@ class Rider extends Authenticatable
         'license_path',
         'or_cr_path',
         'password',
+        'password_changed_at',
         'status',
         'approved_at',
         'rejected_at',
         'is_online',
         'last_seen_at',
+        'last_checklist_passed_at',
         'sla_strikes',
         'current_latitude',
         'current_longitude',
@@ -50,19 +52,21 @@ class Rider extends Authenticatable
     protected function casts(): array
     {
         return [
-            'birthday'            => 'date',
-            'license_expiry_date' => 'date',
-            'email_verified_at'   => 'datetime',
-            'approved_at'         => 'datetime',
-            'rejected_at'         => 'datetime',
-            'password'            => 'hashed',
-            'is_online'           => 'boolean',
-            'last_seen_at'        => 'datetime',
-            'location_updated_at' => 'datetime',
-            'sla_strikes'         => 'integer',
-            'current_latitude'    => 'decimal:7',
-            'current_longitude'   => 'decimal:7',
-            'location_accuracy'   => 'decimal:2',
+            'birthday'                 => 'date',
+            'license_expiry_date'      => 'date',
+            'email_verified_at'        => 'datetime',
+            'approved_at'              => 'datetime',
+            'rejected_at'              => 'datetime',
+            'password'                 => 'hashed',
+            'password_changed_at'      => 'datetime',
+            'is_online'                => 'boolean',
+            'last_seen_at'             => 'datetime',
+            'last_checklist_passed_at' => 'datetime',
+            'location_updated_at'      => 'datetime',
+            'sla_strikes'              => 'integer',
+            'current_latitude'         => 'decimal:7',
+            'current_longitude'        => 'decimal:7',
+            'location_accuracy'        => 'decimal:2',
         ];
     }
 
@@ -197,5 +201,14 @@ class Rider extends Authenticatable
         }
 
         return null;
+    }
+
+    public function formattedPasswordLastUpdated(): string
+    {
+        if ($this->password_changed_at) {
+            return 'Last updated ' . $this->password_changed_at->diffForHumans();
+        }
+
+        return 'Issued by Logistics Hub';
     }
 }

@@ -52,6 +52,7 @@ class ReturnShipmentService
     public function assignRider(ReturnShipment $returnShipment, int $riderId, int $logisticsProfileId, int $assignedByUserId, ?string $notes = null): ReturnShipment
     {
         $pending = [];
+        $previousRiderId = $returnShipment->current_rider_id ? (int) $returnShipment->current_rider_id : null;
 
         DB::transaction(function () use ($returnShipment, $riderId, $logisticsProfileId, $assignedByUserId, $notes, &$pending) {
             $locked = $this->lockShipment($returnShipment->id);
@@ -122,7 +123,26 @@ class ReturnShipmentService
 
         $this->runAfterCommit($pending);
 
-        return $returnShipment->fresh(['rider', 'courier']);
+        $fresh = $returnShipment->fresh(['rider', 'courier', 'returnRequest']);
+        if ($fresh) {
+            RealtimeBroadcastService::forReturnShipment($fresh, 'return_shipment.rider_assigned');
+            if ($fresh->returnRequest) {
+                RealtimeBroadcastService::forReturnRequest($fresh->returnRequest, 'return.rider_assigned');
+            }
+            if ($previousRiderId && $previousRiderId !== (int) $fresh->current_rider_id) {
+                RealtimeBroadcastService::send(
+                    channels: ['rider.' . $previousRiderId],
+                    scope: 'return_shipment',
+                    action: 'return_shipment.reassigned',
+                    payload: [
+                        'return_shipment_id' => (int) $fresh->id,
+                        'tracking_number'    => (string) $fresh->tracking_number,
+                    ]
+                );
+            }
+        }
+
+        return $fresh ?? $returnShipment;
     }
 
     public function receiveAtHub(ReturnShipment $returnShipment, int $logisticsProfileId, int $verifiedByUserId, ?string $notes = null): ReturnShipment
@@ -180,7 +200,18 @@ class ReturnShipmentService
 
         $this->runAfterCommit($pending);
 
-        return $returnShipment->fresh(['rider', 'courier']);
+        $fresh = $returnShipment->fresh(['rider', 'courier', 'returnRequest']);
+        if ($fresh) {
+            RealtimeBroadcastService::forReturnShipment($fresh, 'return_shipment.received_at_hub');
+            if ($fresh->current_rider_id) {
+                RealtimeBroadcastService::forWalletUpdate('Rider', (int) $fresh->current_rider_id, 'return_pickup_pay.credited', [
+                    'return_shipment_id' => (int) $fresh->id,
+                    'rider_pay'          => (float) ($fresh->rider_pay ?? 0),
+                ]);
+            }
+        }
+
+        return $fresh ?? $returnShipment;
     }
 
     public function assignCourier(ReturnShipment $returnShipment, int $courierId, int $logisticsProfileId, int $assignedByUserId, ?string $notes = null): ReturnShipment
@@ -225,7 +256,6 @@ class ReturnShipmentService
             if (Schema::hasColumn('return_shipments', 'delivery_failure_reason')) {
                 $updates['delivery_failure_reason'] = null;
             }
-
             $locked->update($updates);
 
             $courier->update(['status' => 'on_delivery']);
@@ -267,7 +297,12 @@ class ReturnShipmentService
 
         $this->runAfterCommit($pending);
 
-        return $returnShipment->fresh(['rider', 'courier']);
+        $fresh = $returnShipment->fresh(['rider', 'courier', 'returnRequest']);
+        if ($fresh) {
+            RealtimeBroadcastService::forReturnShipment($fresh, 'return_shipment.courier_assigned');
+        }
+
+        return $fresh ?? $returnShipment;
     }
 
     public function riderConfirmPickup(ReturnShipment $returnShipment, Rider $rider, string $photoPath, ?string $notes = null): ReturnShipment
@@ -331,7 +366,12 @@ class ReturnShipmentService
 
         $this->runAfterCommit($pending);
 
-        return $returnShipment->fresh(['rider', 'courier']);
+        $fresh = $returnShipment->fresh(['rider', 'courier', 'returnRequest']);
+        if ($fresh) {
+            RealtimeBroadcastService::forReturnShipment($fresh, 'return_shipment.picked_up_from_buyer');
+        }
+
+        return $fresh ?? $returnShipment;
     }
 
     public function riderReportPickupFailed(ReturnShipment $returnShipment, Rider $rider, string $reason, ?string $notes = null): ReturnShipment
@@ -339,6 +379,7 @@ class ReturnShipmentService
         $pending = [];
         $closeMessage = null;
         $requestId = null;
+        $previousRiderId = (int) $rider->id;
 
         DB::transaction(function () use ($returnShipment, $rider, $reason, $notes, &$pending, &$closeMessage, &$requestId) {
             $locked = $this->lockShipment($returnShipment->id);
@@ -418,7 +459,24 @@ class ReturnShipmentService
             }
         }
 
-        return $returnShipment->fresh(['rider', 'courier']);
+        $fresh = $returnShipment->fresh(['rider', 'courier', 'returnRequest']);
+        if ($fresh) {
+            RealtimeBroadcastService::forReturnShipment($fresh, 'return_shipment.pickup_failed');
+            if ($previousRiderId > 0) {
+                RealtimeBroadcastService::send(
+                    channels: ['rider.' . $previousRiderId],
+                    scope: 'return_shipment',
+                    action: 'return_shipment.pickup_failed',
+                    payload: [
+                        'return_shipment_id' => (int) $fresh->id,
+                        'tracking_number'    => (string) $fresh->tracking_number,
+                        'status'             => (string) $fresh->status,
+                    ]
+                );
+            }
+        }
+
+        return $fresh ?? $returnShipment;
     }
 
     public function courierStartDelivery(ReturnShipment $returnShipment, Courier $courier): ReturnShipment
@@ -462,7 +520,12 @@ class ReturnShipmentService
 
         $this->runAfterCommit($pending);
 
-        return $returnShipment->fresh(['rider', 'courier']);
+        $fresh = $returnShipment->fresh(['rider', 'courier', 'returnRequest']);
+        if ($fresh) {
+            RealtimeBroadcastService::forReturnShipment($fresh, 'return_shipment.out_for_return_delivery');
+        }
+
+        return $fresh ?? $returnShipment;
     }
 
     public function courierReportDeliveryFailed(ReturnShipment $returnShipment, Courier $courier, string $reason, ?string $notes = null): ReturnShipment
@@ -495,8 +558,8 @@ class ReturnShipmentService
                 $updates['delivery_failure_reason'] = mb_substr($full, 0, 150);
                 $updates['delivery_failed_at'] = now();
             }
-
             $locked->update($updates);
+
             $this->releaseCourier((int) $courier->id, (int) $locked->id);
 
             $max = ReturnShipment::MAX_DELIVERY_ATTEMPTS;
@@ -532,7 +595,12 @@ class ReturnShipmentService
 
         $this->runAfterCommit($pending);
 
-        return $returnShipment->fresh(['rider', 'courier']);
+        $fresh = $returnShipment->fresh(['rider', 'courier', 'returnRequest']);
+        if ($fresh) {
+            RealtimeBroadcastService::forReturnShipment($fresh, 'return_shipment.delivery_failed');
+        }
+
+        return $fresh ?? $returnShipment;
     }
 
     public function courierConfirmDelivered(ReturnShipment $returnShipment, Courier $courier, string $photoPath, ?string $notes = null): ReturnShipment
@@ -558,7 +626,6 @@ class ReturnShipmentService
             ]);
 
             $this->ledger->creditReturnLegPay($locked, 'courier');
-
             $this->releaseCourier((int) $courier->id, (int) $locked->id);
 
             $note = $notes !== null && trim($notes) !== '' ? ' Note: ' . trim($notes) : '';
@@ -577,7 +644,16 @@ class ReturnShipmentService
             $this->returnRefundService->markReturnDelivered($request);
         }
 
-        return $returnShipment->fresh(['rider', 'courier']);
+        $fresh = $returnShipment->fresh(['rider', 'courier', 'returnRequest']);
+        if ($fresh) {
+            RealtimeBroadcastService::forReturnShipment($fresh, 'return_shipment.delivered_to_seller');
+            RealtimeBroadcastService::forWalletUpdate('Courier', (int) $courier->id, 'return_delivery_pay.credited', [
+                'return_shipment_id' => (int) $fresh->id,
+                'courier_pay'        => (float) ($fresh->courier_pay ?? 0),
+            ]);
+        }
+
+        return $fresh ?? $returnShipment;
     }
 
     protected function lockShipment(int $id): ReturnShipment
@@ -698,7 +774,6 @@ class ReturnShipmentService
         }
 
         $order = $returnShipment->sellerOrder;
-
         $pending[] = [
             $recipient,
             new OrderLifecycleNotification(

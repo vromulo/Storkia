@@ -57,6 +57,8 @@ Route::middleware('throttle:120,1')->group(function () {
             Route::post('/couriers', [CourierController::class, 'store'])->name('couriers.store');
             Route::patch('/couriers/{courier}/profile', [CourierController::class, 'updateProfile'])->name('couriers.update-profile');
             Route::patch('/couriers/{courier}/status', [CourierController::class, 'updateStatus'])->name('couriers.update-status');
+            Route::post('/couriers/{courier}/vehicle-verification', [CourierController::class, 'decideVehicleVerification'])->name('couriers.decide-vehicle-verification');
+            Route::post('/couriers/incidents/{incidentId}/resolve', [CourierController::class, 'resolveIncident'])->whereNumber('incidentId')->name('couriers.incidents.resolve');
             Route::get('/couriers/{courier}/documents/{type}', [CourierController::class, 'document'])->name('couriers.document');
 
             Route::get('/riders', [RiderApplicationController::class, 'index'])->name('riders.index');

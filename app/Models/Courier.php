@@ -34,6 +34,7 @@ class Courier extends Authenticatable
         'or_cr_path',
         'nbi_clearance_path',
         'password',
+        'password_changed_at',
         'status',
         'is_online',
         'last_seen_at',
@@ -60,6 +61,7 @@ class Courier extends Authenticatable
             'dl_codes'                 => 'array',
             'load_capacity'            => 'integer',
             'password'                 => 'hashed',
+            'password_changed_at'      => 'datetime',
             'is_online'                => 'boolean',
             'last_seen_at'             => 'datetime',
             'sla_strikes'              => 'integer',
@@ -145,5 +147,14 @@ class Courier extends Authenticatable
         }
 
         return null;
+    }
+
+    public function formattedPasswordLastUpdated(): string
+    {
+        if ($this->password_changed_at) {
+            return 'Last updated ' . $this->password_changed_at->diffForHumans();
+        }
+
+        return 'Issued by Logistics Hub';
     }
 }

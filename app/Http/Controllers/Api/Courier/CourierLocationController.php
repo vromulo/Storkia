@@ -7,6 +7,7 @@ use App\Models\Courier;
 use App\Models\CourierLocation;
 use App\Models\PickupAssignment;
 use App\Services\CourierMobileSchemaService;
+use App\Services\RealtimeBroadcastService;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -47,19 +48,19 @@ class CourierLocationController extends Controller
             $recordedAt = now();
         }
 
-        $assignmentId = null;
+        $activeAssignment = null;
         if (! empty($validated['pickup_assignment_id'])) {
-            $ownedAssignment = PickupAssignment::where('id', (int) $validated['pickup_assignment_id'])
+            $activeAssignment = PickupAssignment::where('id', (int) $validated['pickup_assignment_id'])
                 ->where('courier_id', $courier->id)
                 ->first();
-            $assignmentId = $ownedAssignment?->id;
         } else {
             $activeAssignment = PickupAssignment::where('courier_id', $courier->id)
                 ->whereIn('status', ['accepted', 'picked_up', 'in_transit_to_hub'])
                 ->orderByDesc('updated_at')
                 ->first();
-            $assignmentId = $activeAssignment?->id;
         }
+
+        $assignmentId = $activeAssignment?->id;
 
         $lat = round((float) $validated['latitude'], 7);
         $lng = round((float) $validated['longitude'], 7);
@@ -98,6 +99,20 @@ class CourierLocationController extends Controller
             }
             $courier->forceFill($updateCourier)->save();
         }
+
+        RealtimeBroadcastService::forDriverLocation(
+            driverType: 'courier',
+            driverId: (int) $courier->id,
+            logisticsProfileId: $courier->logistics_profile_id ? (int) $courier->logistics_profile_id : null,
+            latitude: $lat,
+            longitude: $lng,
+            accuracy: $acc,
+            speed: $spd,
+            heading: $hdg,
+            shipmentId: $activeAssignment?->shipment_id ? (int) $activeAssignment->shipment_id : null,
+            sellerOrderId: $activeAssignment?->seller_order_id ? (int) $activeAssignment->seller_order_id : null,
+            assignmentId: $assignmentId ? (int) $assignmentId : null
+        );
 
         return response()->json([
             'status'  => 'success',
@@ -179,6 +194,8 @@ class CourierLocationController extends Controller
                     'latitude'    => round((float) $ping['latitude'], 7),
                     'longitude'   => round((float) $ping['longitude'], 7),
                     'accuracy'    => isset($ping['accuracy']) ? round((float) $ping['accuracy'], 2) : 10.0,
+                    'speed'       => isset($ping['speed']) ? round((float) $ping['speed'], 2) : 0.0,
+                    'heading'     => isset($ping['heading']) ? round((float) $ping['heading'], 2) : 0.0,
                     'recorded_at' => $recordedAt,
                 ];
             }
@@ -196,6 +213,22 @@ class CourierLocationController extends Controller
                 }
             }
         });
+
+        if ($latestPing) {
+            RealtimeBroadcastService::forDriverLocation(
+                driverType: 'courier',
+                driverId: (int) $courier->id,
+                logisticsProfileId: $courier->logistics_profile_id ? (int) $courier->logistics_profile_id : null,
+                latitude: (float) $latestPing['latitude'],
+                longitude: (float) $latestPing['longitude'],
+                accuracy: (float) $latestPing['accuracy'],
+                speed: (float) $latestPing['speed'],
+                heading: (float) $latestPing['heading'],
+                shipmentId: $activeAssignment?->shipment_id ? (int) $activeAssignment->shipment_id : null,
+                sellerOrderId: $activeAssignment?->seller_order_id ? (int) $activeAssignment->seller_order_id : null,
+                assignmentId: $activeAssignment?->id ? (int) $activeAssignment->id : null
+            );
+        }
 
         return response()->json([
             'status'  => 'success',

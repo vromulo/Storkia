@@ -6,6 +6,7 @@ use App\Http\Controllers\Api\AddressController;
 use App\Http\Controllers\Api\AnnouncementController;
 use App\Http\Controllers\Api\ApiMessageController;
 use App\Http\Controllers\Api\AuthController;
+use App\Http\Controllers\Api\BroadcastAuthController;
 use App\Http\Controllers\Api\BundleDealController;
 use App\Http\Controllers\Api\CartController;
 use App\Http\Controllers\Api\CategoryController;
@@ -51,6 +52,8 @@ Route::prefix('v1')->group(function () {
         Route::post('/forgot-password', [PasswordResetController::class, 'forgot'])->middleware('throttle:5,1');
         Route::post('/reset-password', [PasswordResetController::class, 'reset'])->middleware('throttle:10,1');
     });
+
+    Route::middleware('auth:sanctum')->post('/broadcasting/auth', [BroadcastAuthController::class, 'authenticate']);
 
     Route::middleware(['auth:sanctum', 'api.actor:buyer'])->group(function () {
         Route::post('/logout', [AuthController::class, 'logout']);
@@ -174,8 +177,10 @@ Route::prefix('v1')->group(function () {
         Route::post('/account/password/request-otp', [AccountController::class, 'requestPasswordOtp'])->middleware('throttle:10,1');
         Route::post('/account/password/verify-otp', [AccountController::class, 'verifyPasswordOtp'])->middleware('throttle:15,1');
         Route::patch('/account/password', [AccountController::class, 'updatePassword']);
+
         Route::get('/account/identity-verification', [IdentityVerificationController::class, 'show']);
         Route::post('/account/identity-verification', [IdentityVerificationController::class, 'store'])->middleware('throttle:10,1');
+
         Route::get('/account/delete/eligibility', [DeleteAccountController::class, 'eligibility'])->middleware('throttle:30,1');
         Route::post('/account/delete', [DeleteAccountController::class, 'destroy'])->middleware('throttle:10,1');
     });
@@ -185,6 +190,7 @@ Route::prefix('v1/rider')->group(function () {
     Route::post('/login', [RiderAuthApiController::class, 'login'])->middleware('throttle:api-auth');
 
     Route::middleware(['auth:sanctum', 'api.actor:rider'])->group(function () {
+        Route::post('/broadcasting/auth', [BroadcastAuthController::class, 'authenticate']);
         Route::post('/logout', [RiderAuthApiController::class, 'logout']);
         Route::get('/user', [RiderAuthApiController::class, 'me']);
         Route::get('/profile', [RiderAuthApiController::class, 'me']);
@@ -197,6 +203,9 @@ Route::prefix('v1/rider')->group(function () {
             Route::post('/location', [RiderAuthApiController::class, 'updateLocation']);
             Route::post('/location/batch', [RiderAuthApiController::class, 'batchUpdateLocations']);
             Route::post('/profile/vehicle', [RiderAuthApiController::class, 'updateVehicleAndDocuments']);
+            Route::post('/profile/avatar', [RiderAuthApiController::class, 'updateAvatar']);
+            Route::delete('/profile/avatar', [RiderAuthApiController::class, 'removeAvatar']);
+            Route::patch('/profile/password', [RiderAuthApiController::class, 'updatePassword']);
 
             Route::get('/deliveries', [RiderDeliveryApiController::class, 'index']);
             Route::get('/deliveries/{assignmentId}', [RiderDeliveryApiController::class, 'show'])->whereNumber('assignmentId');
@@ -205,13 +214,16 @@ Route::prefix('v1/rider')->group(function () {
             Route::post('/deliveries/{assignmentId}/verify', [RiderDeliveryApiController::class, 'verifyPackage'])->whereNumber('assignmentId');
             Route::post('/deliveries/{assignmentId}/start', [RiderDeliveryApiController::class, 'startDelivery'])->whereNumber('assignmentId');
             Route::post('/deliveries/{assignmentId}/complete', [RiderDeliveryApiController::class, 'completeDelivery'])->whereNumber('assignmentId');
+            Route::post('/deliveries/{assignmentId}/resend-otp', [RiderDeliveryApiController::class, 'resendDeliveryOtp'])->whereNumber('assignmentId')->middleware('throttle:10,1');
             Route::post('/deliveries/{assignmentId}/fail', [RiderDeliveryApiController::class, 'failDelivery'])->whereNumber('assignmentId');
             Route::post('/deliveries/{assignmentId}/report-delay', [RiderDeliveryApiController::class, 'reportDelay'])->whereNumber('assignmentId');
             Route::post('/deliveries/{assignmentId}/report-breakdown', [RiderDeliveryApiController::class, 'reportBreakdown'])->whereNumber('assignmentId');
             Route::get('/deliveries/{assignmentId}/chat', [RiderDeliveryApiController::class, 'chatMessages'])->whereNumber('assignmentId');
             Route::post('/deliveries/{assignmentId}/chat', [RiderDeliveryApiController::class, 'sendChatMessage'])->whereNumber('assignmentId')->middleware('throttle:60,1');
+            Route::patch('/deliveries/{assignmentId}/chat/read', [RiderDeliveryApiController::class, 'markChatRead'])->whereNumber('assignmentId');
 
             Route::get('/returns', [RiderReturnPickupController::class, 'index']);
+            Route::get('/returns/{id}', [RiderReturnPickupController::class, 'show'])->whereNumber('id');
             Route::post('/returns/{id}/confirm-pickup', [RiderReturnPickupController::class, 'confirmPickup'])->whereNumber('id')->middleware('throttle:30,1');
             Route::post('/returns/{id}/report-failed', [RiderReturnPickupController::class, 'reportFailed'])->whereNumber('id')->middleware('throttle:30,1');
 
@@ -219,12 +231,10 @@ Route::prefix('v1/rider')->group(function () {
             Route::post('/cod/remit-all', [RiderFinanceApiController::class, 'remitAllCod']);
             Route::post('/cod/{codCollectionId}/remit', [RiderFinanceApiController::class, 'remitSingleCod'])->whereNumber('codCollectionId');
             Route::post('/cod/{remittanceId}/confirm', [RiderFinanceApiController::class, 'confirmRemittanceBlocked']);
-
             Route::get('/earnings', [RiderFinanceApiController::class, 'earningsAndWallet']);
             Route::post('/withdrawals', [RiderFinanceApiController::class, 'requestWithdrawal']);
             Route::get('/ratings', [RiderFinanceApiController::class, 'ratings']);
             Route::get('/reports', [RiderReportApiController::class, 'index']);
-
             Route::get('/notifications', [RiderFinanceApiController::class, 'notifications']);
             Route::patch('/notifications/read-all', [RiderFinanceApiController::class, 'markAllNotificationsRead']);
             Route::patch('/notifications/{id}/read', [RiderFinanceApiController::class, 'markNotificationRead']);
@@ -236,6 +246,7 @@ Route::prefix('v1/courier')->group(function () {
     Route::post('/login', [CourierAuthApiController::class, 'login'])->middleware('throttle:api-auth');
 
     Route::middleware(['auth:sanctum', 'api.actor:courier'])->group(function () {
+        Route::post('/broadcasting/auth', [BroadcastAuthController::class, 'authenticate']);
         Route::post('/logout', [CourierAuthApiController::class, 'logout']);
         Route::get('/user', [CourierAuthApiController::class, 'me']);
         Route::get('/profile', [CourierAuthApiController::class, 'me']);
@@ -248,6 +259,9 @@ Route::prefix('v1/courier')->group(function () {
             Route::post('/availability', [CourierAuthApiController::class, 'updateAvailability']);
             Route::post('/shift/checklist', [CourierAuthApiController::class, 'submitPreTripChecklist']);
             Route::post('/profile/vehicle', [CourierAuthApiController::class, 'updateVehicleAndDocuments']);
+            Route::post('/profile/avatar', [CourierAuthApiController::class, 'updateAvatar']);
+            Route::delete('/profile/avatar', [CourierAuthApiController::class, 'removeAvatar']);
+            Route::patch('/profile/password', [CourierAuthApiController::class, 'updatePassword']);
 
             Route::post('/location', [CourierLocationController::class, 'updateLocation']);
             Route::post('/location/batch', [CourierLocationController::class, 'batchUpdateLocations']);
@@ -266,6 +280,7 @@ Route::prefix('v1/courier')->group(function () {
             Route::post('/pickups/{id}/discrepancy-note', [CourierPickupController::class, 'submitDiscrepancyNote'])->whereNumber('id');
 
             Route::get('/returns', [CourierReturnDeliveryController::class, 'index']);
+            Route::get('/returns/{id}', [CourierReturnDeliveryController::class, 'show'])->whereNumber('id');
             Route::post('/returns/{id}/start-delivery', [CourierReturnDeliveryController::class, 'startDelivery'])->whereNumber('id')->middleware('throttle:30,1');
             Route::post('/returns/{id}/confirm-delivered', [CourierReturnDeliveryController::class, 'confirmDelivered'])->whereNumber('id')->middleware('throttle:30,1');
             Route::post('/returns/{id}/report-failed', [CourierReturnDeliveryController::class, 'reportFailed'])->whereNumber('id')->middleware('throttle:30,1');

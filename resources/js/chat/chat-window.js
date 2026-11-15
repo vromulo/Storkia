@@ -1,28 +1,6 @@
-/**
- * Shared chat window (Alpine component) used by every chat in Storkia:
- *
- *   mode "direct"        Buyer <-> Seller, Seller <-> Logistics (messages table)
- *   mode "support-user"  a Buyer / Seller / Logistics member talking to Storkia Support
- *   mode "support-admin" the admin Help Center inbox
- *
- * The page does not hold any chat logic itself: the controller builds one
- * config object (see HandlesUserChat::chatConfig and the Help Center
- * controllers) and the markup in components/chat/window.blade.php binds to the
- * state and methods below.
- *
- * Real-time: when Laravel Echo is available the component listens on a private
- * channel and only polls slowly as a safety net. Without Echo it polls every
- * few seconds, exactly like the original chat did.
- *
- * Ids are always compared as strings because the Help Center uses the id
- * "support" for the member's single conversation.
- */
-
 const MESSAGE_LIMIT = 1000;
 const MAX_FILE_BYTES = 5 * 1024 * 1024;
 const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
-const POLL_FAST_MS = 4000;
-const POLL_SLOW_MS = 20000;
 
 const DEFAULT_LABELS = {
     title: 'Messages',
@@ -37,7 +15,6 @@ const DEFAULT_LABELS = {
 
 function normalizeConfig(config) {
     const cfg = config || {};
-
     return {
         mode: cfg.mode || 'direct',
         single: !!cfg.single,
@@ -107,38 +84,28 @@ export default function chatWindow(config = {}) {
 
         echoConnected: false,
         now: new Date(),
-
         _tickTimer: null,
-        _pollTimer: null,
         _searchTimer: null,
         _echoTries: 0,
         _echoChannel: null,
         _echoSubscribed: false,
         _destroyed: false,
 
-        // ------------------------------------------------------------------
-        // Derived state
-        // ------------------------------------------------------------------
-
         get isAdminMode() {
             return this.mode === 'support-admin';
         },
-
         get isSupportUser() {
             return this.mode === 'support-user';
         },
-
         get hasGroups() {
             return !this.single && this.cfg.groups.length > 1;
         },
-
         get hasStatusFilters() {
             return this.isAdminMode && this.cfg.statusFilters.length > 0;
         },
 
         get filteredContacts() {
             const q = (this.contactSearch || '').trim().toLowerCase();
-
             return this.contacts
                 .filter((c) => {
                     if (this.hasGroups && this.activeGroup !== 'all' && c.group !== this.activeGroup) return false;
@@ -159,35 +126,25 @@ export default function chatWindow(config = {}) {
             if (this.isSupportUser) return this.supportStatus;
             return this.activeContact ? (this.activeContact.status || null) : null;
         },
-
         get isResolved() {
             return this.activeStatus === 'resolved';
         },
-
         get canResolve() {
             return this.isAdminMode && !!this.cfg.endpoints.status && !!this.activeContact;
         },
-
         get canAttachShipment() {
             return !!(this.cfg.allowShipment && this.cfg.endpoints.shipments && this.activeContact);
         },
-
         get canSend() {
             return !!this.activeContact
                 && !this.isSending
                 && (((this.newMessage || '').trim() !== '') || !!this.selectedFile || !!this.draft);
         },
-
         get quickReplies() {
             const all = this.cfg.quickReplies || {};
             const group = this.activeContact ? this.activeContact.group : null;
-
             return all[group] || all.default || [];
         },
-
-        // ------------------------------------------------------------------
-        // Lifecycle
-        // ------------------------------------------------------------------
 
         init() {
             this._tickTimer = setInterval(() => { this.now = new Date(); }, 30000);
@@ -207,38 +164,29 @@ export default function chatWindow(config = {}) {
             } else if (this.cfg.requestedContactId !== null && this.cfg.requestedContactId !== undefined) {
                 const requested = this.findContact(this.cfg.requestedContactId);
                 if (requested) {
-                    // A deep-linked resolved conversation must stay visible in the list.
                     if (this.hasStatusFilters && requested.status === 'resolved') this.statusFilter = 'all';
                     this.selectContact(requested);
                 }
             }
 
             this.subscribe();
-            this.schedulePoll();
         },
 
         destroy() {
             this._destroyed = true;
             clearInterval(this._tickTimer);
-            clearTimeout(this._pollTimer);
             clearTimeout(this._searchTimer);
-
             if (this._echoChannel && window.Echo) {
-                try { window.Echo.leave(this._echoChannel); } catch (e) { /* ignore */ }
+                try { window.Echo.leave(this._echoChannel); } catch (e) {}
             }
         },
-
-        // ------------------------------------------------------------------
-        // Real-time (Echo) with polling fallback
-        // ------------------------------------------------------------------
 
         subscribe() {
             const rt = this.cfg.realtime;
             if (!rt || !rt.channel || this._destroyed) return;
 
             if (!window.Echo) {
-                // The Echo bundle may finish loading a moment after Alpine starts.
-                if (this._echoTries++ < 5) setTimeout(() => this.subscribe(), 1500);
+                if (this._echoTries++ < 8) setTimeout(() => this.subscribe(), 800);
                 return;
             }
 
@@ -256,7 +204,15 @@ export default function chatWindow(config = {}) {
                 this._echoChannel = rt.channel;
 
                 const connection = this.echoConnection();
-                if (connection) connection.bind('state_change', () => this.updateEchoState());
+                if (connection) {
+                    connection.bind('state_change', (states) => {
+                        this.updateEchoState();
+                        if (states && states.current === 'connected') {
+                            this.refreshContacts();
+                            if (this.activeContact) this.loadMessages(false);
+                        }
+                    });
+                }
                 this.updateEchoState();
             } catch (e) {
                 this.echoConnected = false;
@@ -273,19 +229,6 @@ export default function chatWindow(config = {}) {
             this.echoConnected = this._echoSubscribed && (!connection || connection.state === 'connected');
         },
 
-        schedulePoll() {
-            if (this._destroyed) return;
-
-            const delay = this.echoConnected ? POLL_SLOW_MS : POLL_FAST_MS;
-            this._pollTimer = setTimeout(async () => {
-                if (!document.hidden) {
-                    await this.refreshContacts();
-                    if (this.activeContact) await this.loadMessages(false);
-                }
-                this.schedulePoll();
-            }, delay);
-        },
-
         handleIncoming(e) {
             const msg = e && e.payload;
             if (!msg) return;
@@ -299,7 +242,6 @@ export default function chatWindow(config = {}) {
 
             const contact = this.findContact(contactId);
             if (!contact) {
-                // Unknown sender (first message from a new contact): reload the list.
                 this.refreshContacts();
                 return;
             }
@@ -321,10 +263,6 @@ export default function chatWindow(config = {}) {
             }
         },
 
-        // ------------------------------------------------------------------
-        // Network
-        // ------------------------------------------------------------------
-
         csrf() {
             const meta = document.querySelector('meta[name="csrf-token"]');
             return meta ? meta.getAttribute('content') : '';
@@ -340,16 +278,12 @@ export default function chatWindow(config = {}) {
                 { Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
                 options.headers || {}
             );
-
             if (method !== 'GET') headers['X-CSRF-TOKEN'] = this.csrf();
 
-            // fetch() does not add the socket id the way axios does; without it
-            // the server's ->toOthers() would echo our own message back to us.
             const socketId = window.Echo && typeof window.Echo.socketId === 'function' ? window.Echo.socketId() : null;
             if (socketId) headers['X-Socket-ID'] = socketId;
 
             const response = await fetch(url, Object.assign({}, options, { method, headers, credentials: 'same-origin' }));
-
             let data = null;
             try { data = await response.json(); } catch (e) { data = null; }
 
@@ -357,7 +291,6 @@ export default function chatWindow(config = {}) {
                 const firstError = data && data.errors ? (Object.values(data.errors)[0] || [])[0] : null;
                 throw new Error(firstError || (data && data.message) || 'Something went wrong. Please try again.');
             }
-
             return data;
         },
 
@@ -381,19 +314,16 @@ export default function chatWindow(config = {}) {
             try {
                 const query = params.toString();
                 this.applyContacts(await this.request(url + (query ? '?' + query : '')));
-            } catch (e) {
-                // Silent: the next poll will try again.
-            }
+            } catch (e) {}
         },
 
         applyContacts(list) {
             const activeId = this.activeContact ? String(this.activeContact.id) : null;
             this.contacts = (Array.isArray(list) ? list : []).map(normalizeContact);
-
             if (activeId) {
                 const fresh = this.findContact(activeId);
                 if (fresh) {
-                    fresh.unread_count = 0; // we are looking at this conversation
+                    fresh.unread_count = 0;
                     this.activeContact = fresh;
                 }
             }
@@ -402,18 +332,15 @@ export default function chatWindow(config = {}) {
         async loadMessages(initial = false) {
             const contact = this.activeContact;
             if (!contact) return;
-
             const id = String(contact.id);
+
             if (initial) this.loadingMessages = true;
 
             try {
                 const data = await this.request(this.url(this.cfg.endpoints.messages, id));
-
-                // The user switched conversation while this request was in flight.
                 if (!this.activeContact || String(this.activeContact.id) !== id) return;
 
                 const list = Array.isArray(data) ? data : ((data && data.messages) || []);
-
                 if (data && !Array.isArray(data)) {
                     if (this.isSupportUser && data.status !== undefined) this.supportStatus = data.status;
                     if (data.contact) this.mergeContact(data.contact);
@@ -424,7 +351,6 @@ export default function chatWindow(config = {}) {
                     this.messages = list;
                     this.scrollToBottom(initial);
                 }
-
                 if (this.activeContact) this.activeContact.unread_count = 0;
             } catch (e) {
                 if (initial) this.errorBanner = e.message;
@@ -436,16 +362,10 @@ export default function chatWindow(config = {}) {
         markRead() {
             const contact = this.activeContact;
             if (!contact) return;
-
             contact.unread_count = 0;
             if (!this.cfg.endpoints.read) return;
-
             this.request(this.url(this.cfg.endpoints.read, contact.id), { method: 'PATCH' }).catch(() => {});
         },
-
-        // ------------------------------------------------------------------
-        // Contacts
-        // ------------------------------------------------------------------
 
         findContact(id) {
             return this.contacts.find((c) => String(c.id) === String(id)) || null;
@@ -458,7 +378,6 @@ export default function chatWindow(config = {}) {
         mergeContact(raw) {
             const contact = normalizeContact(raw);
             const isActive = this.activeContact && String(this.activeContact.id) === String(contact.id);
-
             if (isActive) contact.unread_count = 0;
 
             const index = this.contacts.findIndex((c) => String(c.id) === String(contact.id));
@@ -476,10 +395,10 @@ export default function chatWindow(config = {}) {
             this.mobileChatOpen = true;
             contact.unread_count = 0;
 
-            // A pending product / shipment card belongs to the deep-linked contact only.
             const requested = this.cfg.requestedContactId;
             const isRequested = requested !== null && requested !== undefined && String(requested) === String(contact.id);
             if (!isRequested) this.draft = null;
+
             if (this.draft && !(this.newMessage || '').trim()) this.newMessage = this.draftGreeting();
 
             this.loadMessages(true);
@@ -499,10 +418,6 @@ export default function chatWindow(config = {}) {
             return String((contact && (contact.display_name || contact.first_name)) || '?').trim().charAt(0).toUpperCase() || '?';
         },
 
-        // ------------------------------------------------------------------
-        // Sending
-        // ------------------------------------------------------------------
-
         draftGreeting() {
             if (!this.draft) return '';
             if (this.draft.type === 'product') return 'Hi! Is "' + this.draft.data.name + '" still available?';
@@ -512,12 +427,11 @@ export default function chatWindow(config = {}) {
 
         async sendMessage() {
             this.errorBanner = '';
-
             const contact = this.activeContact;
             const text = (this.newMessage || '').trim();
-
             if (!contact || this.isSending) return;
             if (!text && !this.selectedFile && !this.draft) return;
+
             if (text.length > MESSAGE_LIMIT) {
                 this.errorBanner = 'Chat message cannot exceed 1,000 characters.';
                 return;
@@ -539,7 +453,6 @@ export default function chatWindow(config = {}) {
 
             try {
                 const sent = await this.request(this.url(this.cfg.endpoints.send, contact.id), { method: 'POST', body: form });
-
                 this.appendMessage(sent);
                 this.draft = null;
                 this.clearAttachment();
@@ -547,7 +460,6 @@ export default function chatWindow(config = {}) {
                 contact.latest_message_at = sent.created_at;
                 contact.latest_message_preview = this.previewFor(sent);
 
-                // Writing to a resolved Help Center thread reopens it on the server.
                 if (this.isSupportUser) this.supportStatus = 'open';
 
                 this.scrollToBottom();
@@ -571,18 +483,12 @@ export default function chatWindow(config = {}) {
                 else if (msg.shipment_card) body = 'Shipment inquiry';
                 else body = '';
             }
-
             let prefix = '';
             if (this.isAdminMode) prefix = msg.sender_type === 'admin' ? 'Support: ' : '';
             else if (this.isMine(msg)) prefix = 'You: ';
             else if (this.isSupportUser) prefix = 'Support: ';
-
             return prefix + body;
         },
-
-        // ------------------------------------------------------------------
-        // Composer helpers
-        // ------------------------------------------------------------------
 
         useQuickReply(text) {
             this.newMessage = text;
@@ -591,7 +497,6 @@ export default function chatWindow(config = {}) {
 
         onSelectAttachment(event) {
             this.errorBanner = '';
-
             const file = event.target.files && event.target.files[0];
             if (!file) return;
 
@@ -605,7 +510,6 @@ export default function chatWindow(config = {}) {
                 event.target.value = '';
                 return;
             }
-
             this.selectedFile = file;
             this.selectedFileName = file.name;
         },
@@ -629,7 +533,6 @@ export default function chatWindow(config = {}) {
 
             this.shipmentPickerOpen = true;
             this.loadingShipments = true;
-
             try {
                 const rows = await this.request(this.url(this.cfg.endpoints.shipments, this.activeContact.id));
                 this.shipmentOptions = Array.isArray(rows) ? rows : [];
@@ -655,7 +558,6 @@ export default function chatWindow(config = {}) {
 
             this.statusBusy = true;
             this.errorBanner = '';
-
             try {
                 const next = contact.status === 'resolved' ? 'open' : 'resolved';
                 const data = await this.request(this.url(url, contact.id), {
@@ -663,7 +565,6 @@ export default function chatWindow(config = {}) {
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ status: next }),
                 });
-
                 if (data && data.contact) this.mergeContact(data.contact);
                 else contact.status = data.status;
             } catch (e) {
@@ -672,10 +573,6 @@ export default function chatWindow(config = {}) {
                 this.statusBusy = false;
             }
         },
-
-        // ------------------------------------------------------------------
-        // Message presentation
-        // ------------------------------------------------------------------
 
         isMine(msg) {
             return !!msg && msg.sender_key === this.selfKey;
@@ -699,22 +596,17 @@ export default function chatWindow(config = {}) {
 
         formatTimeAgo(dateString) {
             if (!dateString) return '';
-
             const date = new Date(dateString);
             if (isNaN(date.getTime())) return dateString;
 
             const seconds = Math.floor((this.now - date) / 1000);
             if (seconds < 60) return 'Just now';
-
             const minutes = Math.floor(seconds / 60);
             if (minutes < 60) return minutes + 'm ago';
-
             const hours = Math.floor(minutes / 60);
             if (hours < 24) return hours + 'h ago';
-
             const days = Math.floor(hours / 24);
             if (days < 7) return days + 'd ago';
-
             return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
         },
 

@@ -8,21 +8,36 @@ use Illuminate\Support\Facades\Schema;
 
 class RiderMobileSchemaService
 {
-    protected const CACHE_KEY = 'storkia_rider_mobile_schema_v2_ready';
+    protected const CACHE_KEY = 'storkia_rider_mobile_schema_v4_ready';
+
+    protected static bool $verifiedInProcess = false;
 
     public static function ensureTablesExist(): void
     {
+        if (self::$verifiedInProcess) {
+            return;
+        }
+
+        if (Cache::get(self::CACHE_KEY) === true) {
+            self::$verifiedInProcess = true;
+            return;
+        }
+
         if (
-            Cache::get(self::CACHE_KEY) === true
-            && Schema::hasTable('rider_locations')
+            Schema::hasTable('rider_locations')
             && Schema::hasTable('rider_vehicle_updates')
             && Schema::hasTable('rider_shift_checklists')
             && Schema::hasTable('rider_trip_incidents')
             && Schema::hasColumn('riders', 'current_latitude')
             && Schema::hasColumn('riders', 'last_checklist_passed_at')
+            && Schema::hasColumn('riders', 'password_changed_at')
             && Schema::hasColumn('delivery_assignments', 'accepted_at')
             && Schema::hasColumn('delivery_assignments', 'decline_reason')
+            && Schema::hasColumn('cod_remittances', 'proof_image_path')
+            && Schema::hasColumn('rider_vehicle_updates', 'new_license_no')
         ) {
+            Cache::put(self::CACHE_KEY, true, now()->addHours(24));
+            self::$verifiedInProcess = true;
             return;
         }
 
@@ -38,10 +53,12 @@ class RiderMobileSchemaService
             self::upgradeAddressCoordinatesColumns();
             self::createRiderLocationsTable();
             self::createRiderVehicleUpdatesTable();
+            self::upgradeRiderVehicleUpdatesTable();
             self::createRiderShiftChecklistsTable();
             self::createRiderTripIncidentsTable();
 
-            Cache::put(self::CACHE_KEY, true, now()->addHours(12));
+            Cache::put(self::CACHE_KEY, true, now()->addHours(24));
+            self::$verifiedInProcess = true;
         } catch (\Throwable $e) {
             report($e);
         }
@@ -54,6 +71,18 @@ class RiderMobileSchemaService
         }
 
         Schema::table('riders', function (Blueprint $table) {
+            if (! Schema::hasColumn('riders', 'is_online')) {
+                $table->boolean('is_online')->default(false)->index();
+            }
+            if (! Schema::hasColumn('riders', 'last_seen_at')) {
+                $table->timestamp('last_seen_at')->nullable();
+            }
+            if (! Schema::hasColumn('riders', 'sla_strikes')) {
+                $table->unsignedSmallInteger('sla_strikes')->default(0);
+            }
+            if (! Schema::hasColumn('riders', 'avatar_path')) {
+                $table->string('avatar_path')->nullable()->after('contact_no');
+            }
             if (! Schema::hasColumn('riders', 'current_latitude')) {
                 $table->decimal('current_latitude', 10, 7)->nullable();
             }
@@ -71,6 +100,9 @@ class RiderMobileSchemaService
             }
             if (! Schema::hasColumn('riders', 'last_checklist_passed_at')) {
                 $table->timestamp('last_checklist_passed_at')->nullable();
+            }
+            if (! Schema::hasColumn('riders', 'password_changed_at')) {
+                $table->timestamp('password_changed_at')->nullable()->after('password');
             }
         });
     }
@@ -139,6 +171,12 @@ class RiderMobileSchemaService
 
         if (Schema::hasTable('delivery_proofs')) {
             Schema::table('delivery_proofs', function (Blueprint $table) {
+                if (! Schema::hasColumn('delivery_proofs', 'recipient_relation')) {
+                    $table->string('recipient_relation', 80)->nullable()->after('recipient_name');
+                }
+                if (! Schema::hasColumn('delivery_proofs', 'cod_collected_amount')) {
+                    $table->decimal('cod_collected_amount', 12, 2)->default(0.00)->after('recipient_relation');
+                }
                 if (! Schema::hasColumn('delivery_proofs', 'latitude')) {
                     $table->decimal('latitude', 10, 7)->nullable()->after('notes');
                 }
@@ -164,6 +202,9 @@ class RiderMobileSchemaService
                 }
                 if (! Schema::hasColumn('cod_remittances', 'total_logistics_fee')) {
                     $table->decimal('total_logistics_fee', 12, 2)->default(0.00)->after('total_admin_commission');
+                }
+                if (! Schema::hasColumn('cod_remittances', 'proof_image_path')) {
+                    $table->string('proof_image_path')->nullable()->after('notes');
                 }
             });
         }
@@ -246,6 +287,8 @@ class RiderMobileSchemaService
             $table->foreignId('logistics_profile_id')->constrained('logistics_profiles')->cascadeOnDelete();
             $table->string('previous_plate_number', 40)->nullable();
             $table->string('new_plate_number', 40);
+            $table->string('previous_license_no', 40)->nullable();
+            $table->string('new_license_no', 40)->nullable();
             $table->string('vehicle_type', 60)->nullable();
             $table->date('license_expiry_date')->nullable();
             $table->string('license_path')->nullable();
@@ -255,6 +298,22 @@ class RiderMobileSchemaService
             $table->timestamps();
 
             $table->index(['rider_id', 'status']);
+        });
+    }
+
+    protected static function upgradeRiderVehicleUpdatesTable(): void
+    {
+        if (! Schema::hasTable('rider_vehicle_updates')) {
+            return;
+        }
+
+        Schema::table('rider_vehicle_updates', function (Blueprint $table) {
+            if (! Schema::hasColumn('rider_vehicle_updates', 'previous_license_no')) {
+                $table->string('previous_license_no', 40)->nullable()->after('new_plate_number');
+            }
+            if (! Schema::hasColumn('rider_vehicle_updates', 'new_license_no')) {
+                $table->string('new_license_no', 40)->nullable()->after('previous_license_no');
+            }
         });
     }
 

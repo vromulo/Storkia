@@ -9,6 +9,7 @@ use App\Models\Rider;
 use App\Models\SellerProfile;
 use App\Models\Shipment;
 use App\Models\ShipmentTracking;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Validation\ValidationException;
@@ -75,15 +76,11 @@ class OperationalSlaGuardService
                 'status'      => 'rejected',
                 'rejected_at' => now(),
             ];
-
             if (Schema::hasColumn('riders', 'is_online')) {
                 $updateData['is_online'] = false;
             }
-
             $rider->update($updateData);
 
-            // LOG-RIDER-003 & A34: Return not-yet-picked-up jobs ('assigned', 'accepted') to the Unassigned queue;
-            // parcels already picked up ('collected', 'out_for_delivery') stay with the rider.
             $uncollectedAssignments = DeliveryAssignment::with('shipment')
                 ->where('rider_id', $rider->id)
                 ->whereIn('status', ['assigned', 'accepted'])
@@ -139,9 +136,13 @@ class OperationalSlaGuardService
 
     public function sweepOverdueEmployeeAssignments(int $logisticsProfileId): void
     {
+        $throttleKey = 'storkia_sla_sweep_hub_' . $logisticsProfileId;
+        if (! Cache::add($throttleKey, true, now()->addSeconds(90))) {
+            return;
+        }
+
         $cutoff = now()->subHours(self::DISPATCH_SLA_HOURS);
 
-        // 1. Sweep Couriers who failed to accept/collect within 2 hours of assignment
         $overduePickups = PickupAssignment::with(['courier', 'shipment'])
             ->where('logistics_profile_id', $logisticsProfileId)
             ->where('status', 'assigned')
@@ -172,7 +173,6 @@ class OperationalSlaGuardService
                 if (Schema::hasColumn('couriers', 'sla_strikes')) {
                     $strikes = (int) $courier->sla_strikes + 1;
                     $shouldSuspend = $strikes >= self::MAX_SLA_STRIKES;
-
                     $courier->update([
                         'sla_strikes' => $strikes,
                         'status'      => $shouldSuspend ? 'suspended' : $courier->status,
@@ -182,7 +182,6 @@ class OperationalSlaGuardService
             });
         }
 
-        // 2. Sweep Riders who failed to accept/collect within 2 hours of assignment
         $overdueDeliveries = DeliveryAssignment::with(['rider', 'shipment'])
             ->where('logistics_profile_id', $logisticsProfileId)
             ->where('status', 'assigned')

@@ -9,6 +9,7 @@ use App\Models\ReturnRequest;
 use App\Models\SellerOrder;
 use App\Models\SellerOrderExtra;
 use App\Notifications\OrderLifecycleNotification;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Validation\ValidationException;
@@ -33,6 +34,17 @@ class OrderCompletionService
 
     public function runLifecycleMaintenance(?int $buyerId = null, ?int $sellerId = null, ?int $logisticsProfileId = null): void
     {
+        $scopeKey = sprintf(
+            'storkia_lifecycle_maint_%s_%s_%s',
+            $buyerId ?? 'all',
+            $sellerId ?? 'all',
+            $logisticsProfileId ?? 'all'
+        );
+
+        if (! Cache::add($scopeKey, true, now()->addSeconds(90))) {
+            return;
+        }
+
         $this->expireOverdueSellerAcceptanceOrders($buyerId, $sellerId);
         $this->autoApproveOverdueReturnRequests($buyerId, $sellerId);
         $this->autoCompleteExpiredDeliveredOrders($buyerId, $sellerId, $logisticsProfileId);
@@ -257,6 +269,7 @@ class OrderCompletionService
                     $this->inventoryStockService->restoreStockForSellerOrder($locked);
                     $this->voucherService->restoreVouchersForSellerOrder($locked);
                     $this->buyerRewardService?->restoreCoinsForSellerOrder($locked);
+
                     $rewardTx = $this->buyerRewardService?->awardSellerTimeoutCompensation($locked);
                     $coinsAwarded = $rewardTx ? (int) $rewardTx->coins_delta : BuyerRewardService::SLA_TIMEOUT_COMPENSATION_COINS;
 
@@ -324,9 +337,6 @@ class OrderCompletionService
 
     public function autoCompleteExpiredDeliveredOrders(?int $buyerId = null, ?int $sellerId = null, ?int $logisticsProfileId = null): int
     {
-        $this->expireOverdueSellerAcceptanceOrders($buyerId, $sellerId);
-        $this->autoApproveOverdueReturnRequests($buyerId, $sellerId);
-
         $query = SellerOrder::query()
             ->where('status', 'delivered')
             ->where('has_unresolved_dispute', false)
@@ -400,7 +410,6 @@ class OrderCompletionService
 
             $commissionRecord = $this->roleWalletService->releaseCompletedOrderEarnings($locked);
             $isSettledNow = $commissionRecord->status === 'settled';
-
             $cashbackTx = $this->buyerRewardService?->awardOrderCompletionCashbackCoins($locked);
             $cashbackCoins = $cashbackTx ? (int) $cashbackTx->coins_delta : 0;
 

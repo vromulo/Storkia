@@ -7,11 +7,17 @@ use App\Models\Courier;
 use App\Models\LogisticsEmployeeHubAssignment;
 use App\Models\LogisticsHub;
 use App\Models\PickupAssignment;
+use App\Models\Shipment;
+use App\Models\ShipmentTracking;
+use App\Notifications\OrderLifecycleNotification;
 use App\Services\AuditLoggerService;
+use App\Services\CourierMobileSchemaService;
+use App\Services\RealtimeBroadcastService;
 use App\Services\StorkSchemaBootstrapService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\Rules\Password;
@@ -23,6 +29,7 @@ class CourierController extends Controller
     public function index(Request $request)
     {
         StorkSchemaBootstrapService::ensureTablesExist();
+        CourierMobileSchemaService::ensureTablesExist();
 
         $user = $request->user();
         $profile = $user->logisticsProfile;
@@ -90,6 +97,46 @@ class CourierController extends Controller
             ->orderBy('hub_name')
             ->get();
 
+        $pendingVehicleUpdates = Schema::hasTable('courier_vehicle_updates')
+            ? collect(
+                DB::table('courier_vehicle_updates as cvu')
+                    ->join('couriers as c', 'c.id', '=', 'cvu.courier_id')
+                    ->where('cvu.logistics_profile_id', $profile->id)
+                    ->where('cvu.status', 'pending_verification')
+                    ->select([
+                        'cvu.*',
+                        'c.first_name',
+                        'c.last_name',
+                        'c.email',
+                        'c.home_hub',
+                    ])
+                    ->orderByDesc('cvu.id')
+                    ->limit(25)
+                    ->get()
+            )
+            : collect();
+
+        $openIncidents = Schema::hasTable('courier_trip_incidents')
+            ? collect(
+                DB::table('courier_trip_incidents as cti')
+                    ->join('couriers as c', 'c.id', '=', 'cti.courier_id')
+                    ->join('shipments as s', 's.id', '=', 'cti.shipment_id')
+                    ->where('cti.logistics_profile_id', $profile->id)
+                    ->whereIn('cti.status', ['reported', 'awaiting_reassignment'])
+                    ->select([
+                        'cti.*',
+                        'c.first_name',
+                        'c.last_name',
+                        'c.plate_number',
+                        'c.contact_no',
+                        's.tracking_number',
+                    ])
+                    ->orderByDesc('cti.id')
+                    ->limit(25)
+                    ->get()
+            )
+            : collect();
+
         return view('logistics.couriers.index', compact(
             'profile',
             'couriers',
@@ -98,13 +145,16 @@ class CourierController extends Controller
             'counts',
             'hubs',
             'activeHub',
-            'isBranchUser'
+            'isBranchUser',
+            'pendingVehicleUpdates',
+            'openIncidents'
         ));
     }
 
     public function create(Request $request)
     {
         StorkSchemaBootstrapService::ensureTablesExist();
+        CourierMobileSchemaService::ensureTablesExist();
 
         $user = $request->user();
         $profile = $user->logisticsProfile;
@@ -125,6 +175,7 @@ class CourierController extends Controller
     public function store(Request $request)
     {
         StorkSchemaBootstrapService::ensureTablesExist();
+        CourierMobileSchemaService::ensureTablesExist();
 
         $user = $request->user();
         $profile = $user->logisticsProfile;
@@ -196,26 +247,27 @@ class CourierController extends Controller
 
         $courier = DB::transaction(function () use ($profile, $user, $targetHub, $validated, $licensePath, $orCrPath, $nbiPath) {
             $created = Courier::create([
-                'logistics_profile_id' => $profile->id,
-                'first_name'           => $validated['first_name'],
-                'last_name'            => $validated['last_name'],
-                'birthday'             => $validated['birthday'] ?? now()->subYears(25)->toDateString(),
-                'email'                => $validated['email'],
-                'contact_no'           => $validated['contact_no'],
-                'password'             => Hash::make($validated['password']),
-                'vehicle_type'         => $validated['vehicle_type'],
-                'plate_number'         => $validated['plate_number'],
-                'load_capacity'        => (int) $validated['load_capacity'],
-                'home_hub'             => $targetHub->hub_name,
-                'license_no'           => $validated['license_no'],
-                'license_type'         => $validated['license_type'],
-                'dl_codes'             => array_values($validated['dl_codes']),
-                'license_expiry_date'  => $validated['license_expiry_date'],
-                'license_path'         => $licensePath,
-                'or_cr_path'           => $orCrPath,
-                'nbi_clearance_path'   => $nbiPath,
-                'status'               => 'active',
-                'is_online'            => true,
+                'logistics_profile_id'        => $profile->id,
+                'first_name'                  => $validated['first_name'],
+                'last_name'                   => $validated['last_name'],
+                'birthday'                    => $validated['birthday'] ?? now()->subYears(25)->toDateString(),
+                'email'                       => $validated['email'],
+                'contact_no'                  => $validated['contact_no'],
+                'password'                    => Hash::make($validated['password']),
+                'vehicle_type'                => $validated['vehicle_type'],
+                'plate_number'                => $validated['plate_number'],
+                'load_capacity'               => (int) $validated['load_capacity'],
+                'home_hub'                    => $targetHub->hub_name,
+                'license_no'                  => $validated['license_no'],
+                'license_type'                => $validated['license_type'],
+                'dl_codes'                    => array_values($validated['dl_codes']),
+                'license_expiry_date'         => $validated['license_expiry_date'],
+                'license_path'                => $licensePath,
+                'or_cr_path'                  => $orCrPath,
+                'nbi_clearance_path'          => $nbiPath,
+                'status'                      => 'active',
+                'is_online'                   => true,
+                'vehicle_verification_status' => 'verified',
             ]);
 
             LogisticsEmployeeHubAssignment::create([
@@ -238,13 +290,10 @@ class CourierController extends Controller
             ->with('success', "First-Mile Courier {$courier->full_name} ({$courier->email}) created and assigned to {$targetHub->hub_name}!");
     }
 
-    /**
-     * Update an existing Courier's profile picture, vehicle/license details, or documents.
-     * Name and personal details (first_name, last_name, birthday, email, contact_no) are strictly read-only.
-     */
     public function updateProfile(Request $request, Courier $courier)
     {
         StorkSchemaBootstrapService::ensureTablesExist();
+        CourierMobileSchemaService::ensureTablesExist();
 
         $user = $request->user();
         $profile = $user->logisticsProfile;
@@ -294,11 +343,12 @@ class CourierController extends Controller
         ]);
 
         $updates = [
-            'vehicle_type'        => $validated['vehicle_type'],
-            'plate_number'        => $validated['plate_number'],
-            'load_capacity'       => (int) $validated['load_capacity'],
-            'license_no'          => $validated['license_no'],
-            'license_expiry_date' => $validated['license_expiry_date'],
+            'vehicle_type'                => $validated['vehicle_type'],
+            'plate_number'                => $validated['plate_number'],
+            'load_capacity'               => (int) $validated['load_capacity'],
+            'license_no'                  => $validated['license_no'],
+            'license_expiry_date'         => $validated['license_expiry_date'],
+            'vehicle_verification_status' => 'verified',
         ];
 
         if (! empty($validated['dl_codes'])) {
@@ -340,19 +390,259 @@ class CourierController extends Controller
             'avatar_path'   => $courier->avatar_path,
         ];
 
-        $courier->update($updates);
+        DB::transaction(function () use ($courier, $updates, $oldValues, $user, $profile) {
+            $courier->update($updates);
 
-        AuditLoggerService::log(
-            action: 'courier_profile_updated_by_logistics',
-            targetType: 'Courier',
-            targetId: (int) $courier->id,
-            targetReference: $courier->email,
-            oldValues: $oldValues,
-            newValues: $updates,
-            reason: "Updated by Logistics ({$user->full_name}) — personal details locked"
+            if (Schema::hasTable('courier_vehicle_updates')) {
+                DB::table('courier_vehicle_updates')
+                    ->where('courier_id', $courier->id)
+                    ->where('status', 'pending_verification')
+                    ->update([
+                        'status'     => 'approved',
+                        'remarks'    => "Verified and updated by Logistics ({$user->full_name})",
+                        'updated_at' => now(),
+                    ]);
+            }
+
+            AuditLoggerService::log(
+                action: 'courier_profile_updated_by_logistics',
+                targetType: 'Courier',
+                targetId: (int) $courier->id,
+                targetReference: $courier->email,
+                oldValues: $oldValues,
+                newValues: $updates,
+                reason: "Updated by Logistics ({$user->full_name}) — personal details locked"
+            );
+
+            RealtimeBroadcastService::send(
+                channels: ['courier.' . $courier->id, 'logistics.' . $profile->id],
+                scope: 'courier',
+                action: 'courier.profile.updated',
+                payload: [
+                    'courier_id'                  => (int) $courier->id,
+                    'vehicle_verification_status' => 'verified',
+                ]
+            );
+        });
+
+        return back()->with('success', "Courier {$courier->full_name}'s profile and vehicle details have been updated and verified.");
+    }
+
+    public function decideVehicleVerification(Request $request, Courier $courier)
+    {
+        StorkSchemaBootstrapService::ensureTablesExist();
+        CourierMobileSchemaService::ensureTablesExist();
+
+        $user = $request->user();
+        $profile = $user->logisticsProfile;
+
+        if (! $profile || (int) $courier->logistics_profile_id !== (int) $profile->id) {
+            abort(403);
+        }
+
+        $validated = $request->validate([
+            'decision' => ['required', 'in:approve,reject'],
+            'remarks'  => ['nullable', 'string', 'max:300'],
+        ]);
+
+        $isApprove = $validated['decision'] === 'approve';
+        $remarks = trim((string) ($validated['remarks'] ?? ''));
+
+        if (! $isApprove && mb_strlen($remarks) < 5) {
+            return back()->withErrors([
+                'remarks' => 'Please provide a brief reason (at least 5 characters) when rejecting a vehicle/document update.',
+            ]);
+        }
+
+        DB::transaction(function () use ($courier, $profile, $user, $isApprove, $remarks) {
+            $latestUpdate = Schema::hasTable('courier_vehicle_updates')
+                ? DB::table('courier_vehicle_updates')
+                    ->where('courier_id', $courier->id)
+                    ->where('status', 'pending_verification')
+                    ->orderByDesc('id')
+                    ->first()
+                : null;
+
+            if ($isApprove) {
+                $courier->update([
+                    'vehicle_verification_status' => 'verified',
+                ]);
+
+                if ($latestUpdate) {
+                    $rowUpdate = [
+                        'status'     => 'approved',
+                        'remarks'    => $remarks !== '' ? $remarks : "Approved by Logistics ({$user->full_name})",
+                        'updated_at' => now(),
+                    ];
+                    if (Schema::hasColumn('courier_vehicle_updates', 'reviewed_by')) {
+                        $rowUpdate['reviewed_by'] = $user->id;
+                        $rowUpdate['reviewed_at'] = now();
+                    }
+                    DB::table('courier_vehicle_updates')
+                        ->where('courier_id', $courier->id)
+                        ->where('status', 'pending_verification')
+                        ->update($rowUpdate);
+                }
+            } else {
+                $revertFields = [
+                    'vehicle_verification_status' => 'rejected',
+                ];
+
+                if ($latestUpdate) {
+                    if (! empty($latestUpdate->previous_plate_number)) {
+                        $revertFields['plate_number'] = $latestUpdate->previous_plate_number;
+                    }
+                    if (! empty($latestUpdate->previous_load_capacity)) {
+                        $revertFields['load_capacity'] = (int) $latestUpdate->previous_load_capacity;
+                    }
+                    if (property_exists($latestUpdate, 'previous_license_no') && ! empty($latestUpdate->previous_license_no)) {
+                        $revertFields['license_no'] = $latestUpdate->previous_license_no;
+                    }
+
+                    $rowUpdate = [
+                        'status'     => 'rejected',
+                        'remarks'    => $remarks,
+                        'updated_at' => now(),
+                    ];
+                    if (Schema::hasColumn('courier_vehicle_updates', 'reviewed_by')) {
+                        $rowUpdate['reviewed_by'] = $user->id;
+                        $rowUpdate['reviewed_at'] = now();
+                    }
+                    DB::table('courier_vehicle_updates')
+                        ->where('id', $latestUpdate->id)
+                        ->update($rowUpdate);
+                }
+
+                $courier->update($revertFields);
+            }
+
+            try {
+                $courier->notify(new OrderLifecycleNotification(
+                    title: $isApprove
+                        ? 'Vehicle & Document Update Approved'
+                        : 'Vehicle & Document Update Rejected',
+                    message: $isApprove
+                        ? "Your updated vehicle and compliance documents ({$courier->vehicle_type} • {$courier->plate_number}) have been verified by {$profile->business_name}."
+                        : "Your vehicle/document update was rejected by {$profile->business_name}: {$remarks}. Previous verified vehicle details remain active.",
+                    type: $isApprove ? 'success' : 'danger',
+                    url: '/courier/dashboard'
+                ));
+            } catch (\Throwable $e) {
+            }
+
+            RealtimeBroadcastService::send(
+                channels: ['courier.' . $courier->id, 'logistics.' . $profile->id],
+                scope: 'courier',
+                action: 'courier.vehicle_verification.decided',
+                payload: [
+                    'courier_id'                  => (int) $courier->id,
+                    'decision'                    => $isApprove ? 'approved' : 'rejected',
+                    'vehicle_verification_status' => $isApprove ? 'verified' : 'rejected',
+                ]
+            );
+        });
+
+        return back()->with(
+            'success',
+            $isApprove
+                ? "Courier {$courier->full_name}'s vehicle and compliance document update has been approved!"
+                : "Courier {$courier->full_name}'s vehicle update was rejected and reverted."
         );
+    }
 
-        return back()->with('success', "Courier {$courier->full_name}'s profile and vehicle details have been updated.");
+    public function resolveIncident(Request $request, int $incidentId)
+    {
+        StorkSchemaBootstrapService::ensureTablesExist();
+        CourierMobileSchemaService::ensureTablesExist();
+
+        $user = $request->user();
+        $profile = $user->logisticsProfile;
+
+        if (! $profile || ! Schema::hasTable('courier_trip_incidents')) {
+            abort(403);
+        }
+
+        $incident = DB::table('courier_trip_incidents')
+            ->where('id', $incidentId)
+            ->where('logistics_profile_id', $profile->id)
+            ->first();
+
+        if (! $incident) {
+            abort(404, 'Courier trip incident not found.');
+        }
+
+        $validated = $request->validate([
+            'resolution_notes' => ['nullable', 'string', 'max:300'],
+            'unassign_pickup'  => ['nullable', 'boolean'],
+        ]);
+
+        $shouldUnassign = $request->boolean('unassign_pickup') || $incident->incident_type === 'vehicle_breakdown';
+        $notes = trim((string) ($validated['resolution_notes'] ?? 'Resolved by Logistics Hub'));
+
+        DB::transaction(function () use ($incident, $user, $profile, $shouldUnassign, $notes) {
+            DB::table('courier_trip_incidents')
+                ->where('id', $incident->id)
+                ->update([
+                    'status'     => 'resolved',
+                    'notes'      => trim(($incident->notes ? $incident->notes . ' | ' : '') . "Resolution: {$notes}"),
+                    'updated_at' => now(),
+                ]);
+
+            $assignment = PickupAssignment::with(['shipment.sellerOrder', 'courier'])->find($incident->pickup_assignment_id);
+
+            if ($assignment && $shouldUnassign && in_array($assignment->status, ['assigned', 'accepted', 'picked_up'], true)) {
+                $assignment->update([
+                    'status'     => 'reassigned',
+                    'is_delayed' => false,
+                    'notes'      => trim(($assignment->notes ? $assignment->notes . ' | ' : '') . "Reassigned after incident resolution: {$notes}"),
+                ]);
+
+                $shipment = $assignment->shipment;
+                if ($shipment && (int) $shipment->current_courier_id === (int) $incident->courier_id) {
+                    $shipment->update([
+                        'current_courier_id' => null,
+                        'status'             => 'pickup_requested',
+                    ]);
+
+                    $shipment->sellerOrder?->update([
+                        'status' => 'ready_for_pickup',
+                    ]);
+
+                    ShipmentTracking::create([
+                        'shipment_id'     => $shipment->id,
+                        'seller_order_id' => $shipment->seller_order_id,
+                        'status'          => 'pickup_requested',
+                        'title'           => 'Returned to Unassigned Queue (Courier Breakdown Resolved)',
+                        'description'     => "Logistics resolved Courier incident ({$incident->reason}: {$notes}) and returned shipment to Unassigned queue for re-dispatch.",
+                        'location'        => $profile->business_name,
+                        'actor_type'      => 'Logistics',
+                        'actor_id'        => $user->id,
+                        'occurred_at'     => now(),
+                    ]);
+                }
+
+                if ($assignment->courier) {
+                    $remaining = PickupAssignment::where('courier_id', $assignment->courier->id)
+                        ->whereIn('status', ['assigned', 'accepted', 'picked_up', 'in_transit_to_hub'])
+                        ->exists();
+                    if (! $remaining && $assignment->courier->status === 'on_delivery') {
+                        $assignment->courier->update(['status' => 'active']);
+                    }
+                }
+
+                RealtimeBroadcastService::forPickupAssignment($assignment, 'pickup.reassigned');
+                if ($shipment) {
+                    RealtimeBroadcastService::forShipment($shipment->fresh(), 'shipment.reassigned');
+                }
+            } elseif ($assignment) {
+                $assignment->update([
+                    'is_delayed' => false,
+                ]);
+                RealtimeBroadcastService::forPickupAssignment($assignment, 'pickup.incident_resolved');
+            }
+        });
+
+        return back()->with('success', 'Courier trip incident marked as resolved.');
     }
 
     public function updateStatus(Request $request, Courier $courier)
@@ -378,19 +668,53 @@ class CourierController extends Controller
         $oldStatus = $courier->status;
         $newStatus = $validated['status'];
 
-        DB::transaction(function () use ($courier, $oldStatus, $newStatus, $validated) {
+        DB::transaction(function () use ($courier, $profile, $user, $oldStatus, $newStatus, $validated) {
             $courier->update([
                 'status'    => $newStatus,
                 'is_online' => in_array($newStatus, ['active', 'on_delivery'], true),
             ]);
 
             if ($newStatus === 'suspended') {
-                PickupAssignment::where('courier_id', $courier->id)
+                $uncollectedAssignments = PickupAssignment::with(['shipment.sellerOrder'])
+                    ->where('courier_id', $courier->id)
                     ->whereIn('status', ['assigned', 'accepted'])
-                    ->update([
+                    ->lockForUpdate()
+                    ->get();
+
+                foreach ($uncollectedAssignments as $assignment) {
+                    $assignment->update([
                         'status' => 'reassigned',
-                        'notes'  => 'Courier status changed to ' . $newStatus,
+                        'notes'  => trim(($assignment->notes ? $assignment->notes . ' | ' : '') . 'Auto-unassigned due to Courier suspension'),
                     ]);
+
+                    $shipment = $assignment->shipment;
+                    if ($shipment && (int) $shipment->current_courier_id === (int) $courier->id && $shipment->status === 'courier_assigned') {
+                        $shipment->update([
+                            'current_courier_id' => null,
+                            'status'             => 'pickup_requested',
+                        ]);
+
+                        $shipment->sellerOrder?->update([
+                            'status' => 'ready_for_pickup',
+                        ]);
+
+                        ShipmentTracking::create([
+                            'shipment_id'     => $shipment->id,
+                            'seller_order_id' => $shipment->seller_order_id,
+                            'status'          => 'pickup_requested',
+                            'title'           => 'Returned to Unassigned Queue (Courier Suspended)',
+                            'description'     => "Courier {$courier->full_name} was suspended before collecting the package. Shipment returned to Logistics Unassigned queue.",
+                            'location'        => $courier->assigned_hub?->hub_name ?? $profile->business_name,
+                            'actor_type'      => 'Logistics',
+                            'actor_id'        => $user->id,
+                            'occurred_at'     => now(),
+                        ]);
+
+                        RealtimeBroadcastService::forShipment($shipment->fresh(), 'shipment.reassigned');
+                    }
+
+                    RealtimeBroadcastService::forPickupAssignment($assignment, 'pickup.reassigned');
+                }
             }
 
             AuditLoggerService::log(
@@ -401,6 +725,17 @@ class CourierController extends Controller
                 oldValues: ['status' => $oldStatus],
                 newValues: ['status' => $newStatus],
                 reason: $validated['reason'] ?? "Courier status changed from {$oldStatus} to {$newStatus}"
+            );
+
+            RealtimeBroadcastService::send(
+                channels: ['courier.' . $courier->id, 'logistics.' . $profile->id],
+                scope: 'courier',
+                action: 'courier.status.updated',
+                payload: [
+                    'courier_id' => (int) $courier->id,
+                    'status'     => $newStatus,
+                    'is_online'  => in_array($newStatus, ['active', 'on_delivery'], true),
+                ]
             );
         });
 

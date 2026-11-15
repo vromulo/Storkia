@@ -19,13 +19,23 @@ use Illuminate\Support\Str;
 
 class StorkSchemaBootstrapService
 {
-    protected const SCHEMA_VERSION_CACHE_KEY = 'storkia_additive_schema_v15_ready';
+    protected const SCHEMA_VERSION_CACHE_KEY = 'storkia_additive_schema_v16_ready';
+
+    protected static bool $verifiedInProcess = false;
 
     public static function ensureTablesExist(): void
     {
+        if (self::$verifiedInProcess) {
+            return;
+        }
+
+        if (Cache::get(self::SCHEMA_VERSION_CACHE_KEY) === true) {
+            self::$verifiedInProcess = true;
+            return;
+        }
+
         if (
-            Cache::get(self::SCHEMA_VERSION_CACHE_KEY) === true
-            && Schema::hasTable('super_deals')
+            Schema::hasTable('super_deals')
             && Schema::hasTable('bundle_deals')
             && Schema::hasTable('withdrawal_requests')
             && Schema::hasTable('platform_gcash_settings')
@@ -48,6 +58,8 @@ class StorkSchemaBootstrapService
             && Schema::hasColumn('bundle_deals', 'free_gift_variant_name')
             && Schema::hasColumn('return_shipments', 'delivery_attempts_count')
         ) {
+            Cache::put(self::SCHEMA_VERSION_CACHE_KEY, true, now()->addHours(24));
+            self::$verifiedInProcess = true;
             return;
         }
 
@@ -109,7 +121,8 @@ class StorkSchemaBootstrapService
             self::backfillMainHubsAndPackages();
             self::seedDefaultVouchers();
 
-            Cache::put(self::SCHEMA_VERSION_CACHE_KEY, true, now()->addHours(12));
+            Cache::put(self::SCHEMA_VERSION_CACHE_KEY, true, now()->addHours(24));
+            self::$verifiedInProcess = true;
         } catch (\Throwable $e) {
             report($e);
         }

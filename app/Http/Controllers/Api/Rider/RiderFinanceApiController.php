@@ -14,6 +14,7 @@ use App\Models\Rider;
 use App\Models\WalletTransaction;
 use App\Models\WithdrawalRequest;
 use App\Services\AuditLoggerService;
+use App\Services\RealtimeBroadcastService;
 use App\Services\RiderMobileSchemaService;
 use App\Services\RoleWalletService;
 use App\Services\StorkSchemaBootstrapService;
@@ -22,8 +23,11 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
+use Intervention\Image\Drivers\Gd\Driver;
+use Intervention\Image\ImageManager;
 
 class RiderFinanceApiController extends Controller
 {
@@ -100,6 +104,7 @@ class RiderFinanceApiController extends Controller
             'remitted_amount'      => ['nullable', 'numeric', 'min:0.01'],
             'remittance_reference' => ['nullable', 'string', 'max:80'],
             'shortfall_reason'     => ['nullable', 'string', 'max:255'],
+            'proof_image'          => ['nullable', 'file', 'mimetypes:image/jpeg,image/png,image/webp', 'mimes:jpg,jpeg,png,webp', 'max:5120'],
         ]);
 
         $collections = CodCollection::with(['shipment', 'commissionRecord'])
@@ -137,6 +142,8 @@ class RiderFinanceApiController extends Controller
             ? strtoupper(trim((string) $validated['remittance_reference']))
             : ('REM-' . now()->format('Ymd') . '-' . strtoupper(Str::random(6)));
 
+        $proofPath = $this->storeRemittanceProofImage($request, (int) $rider->id);
+
         $createdRemittance = DB::transaction(function () use (
             $rider,
             $collections,
@@ -145,7 +152,8 @@ class RiderFinanceApiController extends Controller
             $actualRemitted,
             $isShort,
             $shortfallAmount,
-            $validated
+            $validated,
+            $proofPath
         ) {
             $totalSellerShare = round((float) $collections->sum(fn ($c) => round((float) $c->product_subtotal * 0.90, 2)), 2);
             $totalAdminComm = round((float) $collections->sum(fn ($c) => round((float) $c->product_subtotal * 0.10, 2)), 2);
@@ -173,6 +181,9 @@ class RiderFinanceApiController extends Controller
                 $remittanceData['total_seller_share'] = $totalSellerShare;
                 $remittanceData['total_admin_commission'] = $totalAdminComm;
                 $remittanceData['total_logistics_fee'] = $totalLogisticsFee;
+            }
+            if ($proofPath && Schema::hasColumn('cod_remittances', 'proof_image_path')) {
+                $remittanceData['proof_image_path'] = $proofPath;
             }
 
             $remittance = CodRemittance::create($remittanceData);
@@ -232,6 +243,21 @@ class RiderFinanceApiController extends Controller
             return $remittance;
         });
 
+        RealtimeBroadcastService::forWalletUpdate('Rider', (int) $rider->id, 'cod.remitted', [
+            'remittance_id'        => (int) $createdRemittance->id,
+            'remittance_reference' => (string) $createdRemittance->remittance_reference,
+            'remitted_amount'      => $actualRemitted,
+        ]);
+
+        if ($rider->logistics_profile_id) {
+            RealtimeBroadcastService::forWalletUpdate('Logistics', (int) $rider->logistics_profile_id, 'cod.remitted', [
+                'rider_id'             => (int) $rider->id,
+                'remittance_id'        => (int) $createdRemittance->id,
+                'remittance_reference' => (string) $createdRemittance->remittance_reference,
+                'remitted_amount'      => $actualRemitted,
+            ]);
+        }
+
         return response()->json([
             'status'  => 'success',
             'message' => $isShort
@@ -269,6 +295,7 @@ class RiderFinanceApiController extends Controller
             'remitted_amount'      => ['nullable', 'numeric', 'min:0.01'],
             'remittance_reference' => ['nullable', 'string', 'max:80'],
             'shortfall_reason'     => ['nullable', 'string', 'max:255'],
+            'proof_image'          => ['nullable', 'file', 'mimetypes:image/jpeg,image/png,image/webp', 'mimes:jpg,jpeg,png,webp', 'max:5120'],
         ]);
 
         $expected = round((float) $codCollection->expected_amount, 2);
@@ -291,7 +318,9 @@ class RiderFinanceApiController extends Controller
             ? strtoupper(trim((string) $validated['remittance_reference']))
             : ('REM-' . now()->format('Ymd') . '-' . strtoupper(Str::random(6)));
 
-        $remittance = DB::transaction(function () use ($codCollection, $rider, $remitted, $expected, $isShort, $validated, $remittanceRef) {
+        $proofPath = $this->storeRemittanceProofImage($request, (int) $rider->id);
+
+        $remittance = DB::transaction(function () use ($codCollection, $rider, $remitted, $expected, $isShort, $validated, $remittanceRef, $proofPath) {
             $codCollection->update([
                 'remitted_amount'      => $remitted,
                 'status'               => $isShort ? 'short_remitted' : 'remitted',
@@ -322,6 +351,9 @@ class RiderFinanceApiController extends Controller
                 $remittanceData['total_seller_share'] = $sellerShare;
                 $remittanceData['total_admin_commission'] = $adminComm;
                 $remittanceData['total_logistics_fee'] = $logisticsFee;
+            }
+            if ($proofPath && Schema::hasColumn('cod_remittances', 'proof_image_path')) {
+                $remittanceData['proof_image_path'] = $proofPath;
             }
 
             $rem = CodRemittance::create($remittanceData);
@@ -358,6 +390,21 @@ class RiderFinanceApiController extends Controller
 
             return $rem;
         });
+
+        RealtimeBroadcastService::forWalletUpdate('Rider', (int) $rider->id, 'cod.remitted', [
+            'remittance_id'        => (int) $remittance->id,
+            'remittance_reference' => (string) $remittance->remittance_reference,
+            'remitted_amount'      => $remitted,
+        ]);
+
+        if ($codCollection->logistics_profile_id) {
+            RealtimeBroadcastService::forWalletUpdate('Logistics', (int) $codCollection->logistics_profile_id, 'cod.remitted', [
+                'rider_id'             => (int) $rider->id,
+                'remittance_id'        => (int) $remittance->id,
+                'remittance_reference' => (string) $remittance->remittance_reference,
+                'remitted_amount'      => $remitted,
+            ]);
+        }
 
         return response()->json([
             'status'  => 'success',
@@ -538,6 +585,12 @@ class RiderFinanceApiController extends Controller
             ], 422);
         }
 
+        RealtimeBroadcastService::forWalletUpdate('Rider', (int) $rider->id, 'withdrawal.requested', [
+            'withdrawal_id'        => (int) $withdrawal->id,
+            'withdrawal_reference' => (string) $withdrawal->withdrawal_reference,
+            'requested_amount'     => round((float) $withdrawal->requested_amount, 2),
+        ]);
+
         return response()->json([
             'status'  => 'success',
             'message' => "GCash Withdrawal Request #{$withdrawal->withdrawal_reference} for ₱" . number_format((float) $withdrawal->requested_amount, 2) . " submitted for approval!",
@@ -670,6 +723,25 @@ class RiderFinanceApiController extends Controller
         ]);
     }
 
+    protected function storeRemittanceProofImage(Request $request, int $riderId): ?string
+    {
+        if (! $request->hasFile('proof_image')) {
+            return null;
+        }
+
+        $file = $request->file('proof_image');
+        $filename = 'cod_remittance_proofs/rem_' . $riderId . '_' . uniqid('', true) . '.webp';
+
+        try {
+            $manager = new ImageManager(new Driver());
+            $encoded = $manager->read($file->getRealPath())->scaleDown(1600, 1600)->toWebp(82);
+            Storage::disk('public')->put($filename, (string) $encoded);
+            return $filename;
+        } catch (\Throwable $e) {
+            return $file->store('cod_remittance_proofs', 'public');
+        }
+    }
+
     protected function formatCodCollection(CodCollection $c): array
     {
         $expected = round((float) $c->expected_amount, 2);
@@ -711,6 +783,7 @@ class RiderFinanceApiController extends Controller
             'net_remitted_amount'    => round((float) $r->total_collected_amount, 2),
             'status'                 => (string) $r->status,
             'notes'                  => $r->notes,
+            'proof_image_url'        => $r->proof_image_url ?? ($r->proof_image_path ? asset('storage/' . ltrim($r->proof_image_path, '/')) : null),
             'submitted_at'           => $r->submitted_at?->toIso8601String(),
             'verified_at'            => $r->verified_at?->toIso8601String(),
         ];

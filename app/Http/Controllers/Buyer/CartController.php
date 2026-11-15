@@ -8,6 +8,7 @@ use App\Models\Cart;
 use App\Models\OrderItem;
 use App\Models\Product;
 use App\Services\InventoryStockService;
+use App\Services\RealtimeBroadcastService;
 use App\Services\SuperDealPricingService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Schema;
@@ -116,10 +117,6 @@ class CartController extends Controller
 
         if ($cart) {
             $cart->update(['quantity' => $newQuantity]);
-            try {
-                broadcast(new CartQuantityUpdated($cart->id, $cart->user_id, $cart->quantity));
-            } catch (\Throwable $e) {
-            }
         } else {
             $cart = Cart::create([
                 'user_id'     => $userId,
@@ -131,6 +128,22 @@ class CartController extends Controller
         }
 
         $dropdownPayload = $this->buildDropdownPayload($userId);
+
+        try {
+            broadcast(new CartQuantityUpdated($cart->id, $cart->user_id, $cart->quantity))->toOthers();
+            RealtimeBroadcastService::send(
+                channels: ['user.' . $userId, 'cart.' . $userId],
+                scope: 'cart',
+                action: 'cart.updated',
+                payload: [
+                    'cart_id'    => (int) $cart->id,
+                    'user_id'    => $userId,
+                    'quantity'   => (int) $cart->quantity,
+                    'cart_count' => (int) $dropdownPayload['cart_count'],
+                ]
+            );
+        } catch (\Throwable $e) {
+        }
 
         if ($request->wantsJson() || $request->ajax()) {
             return response()->json([
@@ -180,12 +193,23 @@ class CartController extends Controller
 
         $cart->update(['quantity' => $clampedQuantity]);
 
+        $dropdownPayload = $this->buildDropdownPayload((int) $cart->user_id);
+
         try {
-            broadcast(new CartQuantityUpdated($cart->id, $cart->user_id, $cart->quantity));
+            broadcast(new CartQuantityUpdated($cart->id, $cart->user_id, $cart->quantity))->toOthers();
+            RealtimeBroadcastService::send(
+                channels: ['user.' . (int) $cart->user_id, 'cart.' . (int) $cart->user_id],
+                scope: 'cart',
+                action: 'cart.updated',
+                payload: [
+                    'cart_id'    => (int) $cart->id,
+                    'user_id'    => (int) $cart->user_id,
+                    'quantity'   => (int) $cart->quantity,
+                    'cart_count' => (int) $dropdownPayload['cart_count'],
+                ]
+            );
         } catch (\Throwable $e) {
         }
-
-        $dropdownPayload = $this->buildDropdownPayload((int) $cart->user_id);
 
         return response()->json([
             'success'      => true,
@@ -216,6 +240,22 @@ class CartController extends Controller
         $cart->delete();
 
         $dropdownPayload = $this->buildDropdownPayload($userId);
+
+        try {
+            broadcast(new CartQuantityUpdated($deletedId, $userId, 0))->toOthers();
+            RealtimeBroadcastService::send(
+                channels: ['user.' . $userId, 'cart.' . $userId],
+                scope: 'cart',
+                action: 'cart.removed',
+                payload: [
+                    'cart_id'    => $deletedId,
+                    'user_id'    => $userId,
+                    'quantity'   => 0,
+                    'cart_count' => (int) $dropdownPayload['cart_count'],
+                ]
+            );
+        } catch (\Throwable $e) {
+        }
 
         if ($request->wantsJson() || $request->ajax()) {
             return response()->json([

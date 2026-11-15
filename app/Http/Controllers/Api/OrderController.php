@@ -17,6 +17,7 @@ use App\Services\BuyerRewardService;
 use App\Services\CourierMobileSchemaService;
 use App\Services\InventoryStockService;
 use App\Services\OrderCompletionService;
+use App\Services\RealtimeBroadcastService;
 use App\Services\RoleWalletService;
 use App\Services\StorkSchemaBootstrapService;
 use App\Services\VoucherService;
@@ -388,6 +389,7 @@ class OrderController extends Controller
             'success' => true,
             'data'    => [
                 'has_shipment'    => true,
+                'shipment_id'     => (int) $shipment->id,
                 'tracking_number' => $shipment->tracking_number,
                 'status'          => $shipment->status,
                 'status_label'    => $shipment->status_label,
@@ -436,13 +438,31 @@ class OrderController extends Controller
             ]);
         }
 
-        DeliveryChatMessage::where('seller_order_id', $sellerOrder->id)
+        $markedCount = DeliveryChatMessage::where('seller_order_id', $sellerOrder->id)
             ->where('sender_type', 'rider')
             ->where('is_read', false)
             ->update([
                 'is_read' => true,
                 'read_at' => now(),
             ]);
+
+        if ($markedCount > 0 && $shipment->current_rider_id) {
+            RealtimeBroadcastService::send(
+                channels: [
+                    'user.' . (int) $sellerOrder->buyer_id,
+                    'rider.' . (int) $shipment->current_rider_id,
+                    'order.' . (int) $sellerOrder->id,
+                    'shipment.' . (int) $shipment->id,
+                ],
+                scope: 'delivery_chat',
+                action: 'delivery_chat.read',
+                payload: [
+                    'shipment_id'     => (int) $shipment->id,
+                    'seller_order_id' => (int) $sellerOrder->id,
+                    'reader_type'     => 'buyer',
+                ]
+            );
+        }
 
         $messages = DeliveryChatMessage::where('seller_order_id', $sellerOrder->id)
             ->orderBy('id', 'asc')
@@ -451,7 +471,7 @@ class OrderController extends Controller
                 'id'             => (int) $m->id,
                 'sender_type'    => $m->sender_type,
                 'message'        => $m->message,
-                'attachment_url' => $m->attachment_url,
+                'attachment_url' => $m->attachment_url ?? ($m->attachment_path ? asset('storage/' . ltrim($m->attachment_path, '/')) : null),
                 'is_read'        => (bool) $m->is_read,
                 'created_at'     => $m->created_at?->toIso8601String(),
             ]);
@@ -497,8 +517,22 @@ class OrderController extends Controller
         }
 
         $validated = $request->validate([
-            'message' => ['required', 'string', 'min:1', 'max:1000'],
+            'message'    => ['nullable', 'string', 'max:1000'],
+            'attachment' => ['nullable', 'file', 'mimetypes:image/jpeg,image/png,image/webp', 'mimes:jpg,jpeg,png,webp', 'max:5120'],
         ]);
+
+        $cleanMessage = trim((string) ($validated['message'] ?? ''));
+        if ($cleanMessage === '' && ! $request->hasFile('attachment')) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Please enter a message or attach a photo.',
+            ], 422);
+        }
+
+        $attachmentPath = null;
+        if ($request->hasFile('attachment')) {
+            $attachmentPath = $request->file('attachment')->store('delivery_chat', 'public');
+        }
 
         $activeAssignment = $shipment->deliveryAssignments
             ->where('rider_id', $shipment->current_rider_id)
@@ -512,9 +546,27 @@ class OrderController extends Controller
             'buyer_id'               => $user->id,
             'rider_id'               => $shipment->current_rider_id,
             'sender_type'            => 'buyer',
-            'message'                => trim($validated['message']),
+            'message'                => $cleanMessage !== '' ? $cleanMessage : '[Photo Attachment]',
+            'attachment_path'        => $attachmentPath,
             'is_read'                => false,
         ]);
+
+        $messagePayload = [
+            'id'             => (int) $chatMsg->id,
+            'sender_type'    => (string) $chatMsg->sender_type,
+            'message'        => (string) $chatMsg->message,
+            'attachment_url' => $attachmentPath ? asset('storage/' . ltrim($attachmentPath, '/')) : null,
+            'is_read'        => false,
+            'created_at'     => $chatMsg->created_at?->toIso8601String(),
+        ];
+
+        RealtimeBroadcastService::forDeliveryChat(
+            shipmentId: (int) $shipment->id,
+            sellerOrderId: (int) $sellerOrder->id,
+            buyerId: (int) $user->id,
+            riderId: (int) $shipment->current_rider_id,
+            messagePayload: $messagePayload
+        );
 
         try {
             $shipment->currentRider->notify(new OrderLifecycleNotification(
@@ -532,12 +584,7 @@ class OrderController extends Controller
         return response()->json([
             'success' => true,
             'message' => 'Message sent to Rider.',
-            'data'    => [
-                'id'          => (int) $chatMsg->id,
-                'sender_type' => $chatMsg->sender_type,
-                'message'     => $chatMsg->message,
-                'created_at'  => $chatMsg->created_at?->toIso8601String(),
-            ],
+            'data'    => $messagePayload,
         ]);
     }
 
@@ -650,6 +697,17 @@ class OrderController extends Controller
         } catch (\Throwable $e) {
         }
 
+        $freshOrder = $sellerOrder->fresh();
+        if ($freshOrder) {
+            RealtimeBroadcastService::forSellerOrder($freshOrder, 'order.cancelled');
+        }
+        if ($refundedWalletAmount > 0) {
+            RealtimeBroadcastService::forWalletUpdate('Buyer', (int) $user->id, 'order.cancelled_refund', [
+                'seller_order_id' => (int) $sellerOrder->id,
+                'refund_amount'   => round($refundedWalletAmount, 2),
+            ]);
+        }
+
         $walletMsg = $refundedWalletAmount > 0
             ? ' ₱' . number_format($refundedWalletAmount, 2) . ' has been refunded immediately to your Storkia E-Wallet.'
             : '';
@@ -725,6 +783,11 @@ class OrderController extends Controller
                 sellerOrderId: $sellerOrder->id
             ));
         } catch (\Throwable $e) {
+        }
+
+        $freshOrder = $sellerOrder->fresh();
+        if ($freshOrder) {
+            RealtimeBroadcastService::forSellerOrder($freshOrder, 'order.switched_to_cod');
         }
 
         return response()->json([
@@ -810,6 +873,11 @@ class OrderController extends Controller
         } catch (\Throwable $e) {
         }
 
+        $freshOrder = $sellerOrder->fresh();
+        if ($freshOrder) {
+            RealtimeBroadcastService::forSellerOrder($freshOrder, 'order.cancelled');
+        }
+
         return response()->json([
             'success' => true,
             'message' => "Order #{$sellerOrder->seller_order_number} has been cancelled immediately. Reserved stock, coins, and any applied vouchers have been restored.",
@@ -829,6 +897,14 @@ class OrderController extends Controller
             actorId: $request->user()->id,
             isAutoCompleted: false
         );
+
+        $freshOrder = $sellerOrder->fresh();
+        if ($freshOrder) {
+            RealtimeBroadcastService::forSellerOrder($freshOrder, 'order.completed');
+        }
+        RealtimeBroadcastService::forWalletUpdate('Buyer', (int) $request->user()->id, 'order.completed_rewards', [
+            'seller_order_id' => (int) $sellerOrder->id,
+        ]);
 
         return response()->json([
             'success' => true,
@@ -909,6 +985,11 @@ class OrderController extends Controller
             'refund_status'           => 'pending_approval',
         ]);
 
+        $freshOrder = $sellerOrder->fresh();
+        if ($freshOrder) {
+            RealtimeBroadcastService::forSellerOrder($freshOrder, 'order.disputed');
+        }
+
         return response()->json([
             'success' => true,
             'message' => 'Your Valid-ID-verified Return & Refund request and photo evidence have been submitted. Automatic order completion is now paused while under review.',
@@ -953,6 +1034,11 @@ class OrderController extends Controller
             'actor_id'        => $user->id,
             'remarks'         => 'Buyer escalated declined return/refund request to Storkia Admin for final resolution.',
         ]);
+
+        $freshOrder = $sellerOrder->fresh();
+        if ($freshOrder) {
+            RealtimeBroadcastService::forSellerOrder($freshOrder, 'order.dispute_escalated');
+        }
 
         return response()->json([
             'success' => true,
@@ -1021,6 +1107,10 @@ class OrderController extends Controller
                 'message' => 'The items in this order are currently out of stock or unavailable for reorder.',
             ], 422);
         }
+
+        RealtimeBroadcastService::forCartUpdated((int) $user->id, 'cart.buy_again', [
+            'added_count' => $addedCount,
+        ]);
 
         return response()->json([
             'success'     => true,

@@ -94,6 +94,38 @@ class CourierReturnDeliveryController extends Controller
         ]);
     }
 
+    public function show(Request $request, int $id): JsonResponse
+    {
+        $courier = $request->user();
+        $with = array_unique(array_merge($this->returnShipmentRelations(), [
+            'returnRequest',
+            'sellerOrder.buyer',
+            'sellerOrder.items',
+            'sellerOrder.sellerProfile',
+            'events',
+        ]));
+
+        $returnShipment = ReturnShipment::with($with)->find($id);
+
+        if (
+            ! $returnShipment
+            || (
+                (int) $returnShipment->current_courier_id !== (int) $courier->id
+                && (int) $returnShipment->logistics_profile_id !== (int) $courier->logistics_profile_id
+            )
+        ) {
+            return $this->returnNotAssigned();
+        }
+
+        return response()->json([
+            'status' => 'success',
+            'data'   => [
+                'return'          => $this->enrichCourierReturn($returnShipment, $courier),
+                'failure_reasons' => self::FAILURE_REASONS,
+            ],
+        ]);
+    }
+
     public function startDelivery(Request $request, int $id): JsonResponse
     {
         $courier = $request->user();
@@ -277,6 +309,19 @@ class CourierReturnDeliveryController extends Controller
             $hubSnap['province'] ?? null,
         ])->filter()->implode(', '));
 
+        $events = ($rs->relationLoaded('events') ? $rs->events : collect())
+            ->map(fn ($ev) => [
+                'id'          => (int) $ev->id,
+                'status'      => (string) $ev->status,
+                'title'       => (string) $ev->title,
+                'description' => (string) ($ev->description ?? ''),
+                'location'    => (string) ($ev->location ?? ''),
+                'actor_type'  => (string) $ev->actor_type,
+                'occurred_at' => $ev->occurred_at?->toIso8601String(),
+            ])
+            ->values()
+            ->all();
+
         return array_merge($base, [
             'id'                      => (int) $rs->id,
             'tracking_number'         => (string) $rs->tracking_number,
@@ -296,6 +341,7 @@ class CourierReturnDeliveryController extends Controller
             'delivery_failure_reason' => $rs->delivery_failure_reason ?? null,
             'reason_category'         => (string) ($req?->reason_category ?? 'Return & Refund'),
             'reason'                  => (string) ($req?->reason ?? ''),
+            'buyer_pickup_photo'      => $rs->buyer_pickup_photo ? asset('storage/' . ltrim($rs->buyer_pickup_photo, '/')) : null,
             'seller_delivery_photo'   => $rs->seller_delivery_photo ? asset('storage/' . ltrim($rs->seller_delivery_photo, '/')) : null,
             'courier_assigned_at'     => $rs->courier_assigned_at?->toIso8601String(),
             'picked_up_from_hub_at'   => $rs->picked_up_from_hub_at?->toIso8601String(),
@@ -327,6 +373,7 @@ class CourierReturnDeliveryController extends Controller
                 'quantity'     => (int) $item->quantity,
                 'line_weight'  => (float) $item->line_weight,
             ])->values()->all(),
+            'events'                  => $events,
         ]);
     }
 }

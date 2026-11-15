@@ -2,6 +2,7 @@
 
 namespace App\Notifications;
 
+use App\Services\RealtimeBroadcastService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Notifications\Notification;
 
@@ -26,7 +27,7 @@ class OrderLifecycleNotification extends Notification
 
     public function toArray(object $notifiable): array
     {
-        return [
+        $payload = [
             'title'           => $this->title,
             'message'         => $this->message,
             'type'            => $this->type,
@@ -35,5 +36,12 @@ class OrderLifecycleNotification extends Notification
             'seller_order_id' => $this->sellerOrderId,
             'shipment_id'     => $this->shipmentId,
         ];
+
+        try {
+            RealtimeBroadcastService::forNotification($notifiable, $payload);
+        } catch (\Throwable $e) {
+        }
+
+        return $payload;
     }
 }

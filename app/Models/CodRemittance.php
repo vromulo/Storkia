@@ -23,6 +23,7 @@ class CodRemittance extends Model
         'verified_at',
         'verified_by',
         'notes',
+        'proof_image_path',
     ];
 
     protected function casts(): array
@@ -57,5 +58,10 @@ class CodRemittance extends Model
     public function items(): HasMany
     {
         return $this->hasMany(CodRemittanceItem::class, 'cod_remittance_id');
+    }
+
+    public function getProofImageUrlAttribute(): ?string
+    {
+        return $this->proof_image_path ? asset('storage/' . ltrim($this->proof_image_path, '/')) : null;
     }
 }
