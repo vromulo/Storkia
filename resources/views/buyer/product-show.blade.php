@@ -26,7 +26,6 @@
     $mainPictures = (!empty($product->pictures) && is_array($product->pictures))
         ? array_slice(array_values(array_filter($product->pictures)), 0, 10)
         : [];
-
     $mainPictureUrls = array_map(fn ($p) => asset('storage/' . $p), $mainPictures);
     $firstPic = $mainPictureUrls[0] ?? '';
 
@@ -120,6 +119,13 @@
         'restockSubscribeUrl' => route('product.restock.subscribe', $product->id),
         'csrfToken'           => csrf_token(),
     ];
+
+    $rawDescText = (string) ($product->description ?? '');
+    $rawAddDescText = (string) ($product->additional_descriptions ?? '');
+    $fullDescriptionLength = mb_strlen($rawDescText) + mb_strlen($rawAddDescText);
+    $totalLineBreaks = substr_count($rawDescText, "\n") + substr_count($rawAddDescText, "\n");
+    $isLongDescription = $fullDescriptionLength > 260 || $totalLineBreaks >= 5;
+    $specsCount = $product->specifications ? $product->specifications->count() : 0;
 @endphp
 
 <script>
@@ -140,9 +146,6 @@
             isSubscribingRestock: false,
             helpfulCounts: cfg.helpfulCounts || {},
             upvotedMap: cfg.upvotedMap || {},
-            toastMessage: '',
-            toastType: 'danger',
-            showToast: false,
             basePrice: Number(cfg.basePrice || 0),
             discount: Number(cfg.discount || 0),
             dealType: cfg.dealType || 'regular',
@@ -164,14 +167,27 @@
             defaultImage: cfg.firstPic || '',
             quantity: 1,
             imageModalOpen: false,
-
+            reviewPhotoModalSrc: '',
+            descExpanded: false,
+            descOverflows: {{ $isLongDescription ? 'true' : 'false' }},
+            specsExpanded: false,
+            visibleReviewsLimit: 4,
+            visibleQuestionsLimit: 4,
+            checkDescriptionOverflow() {
+                this.$nextTick(() => {
+                    const el = this.$refs.descContent;
+                    if (!el) return;
+                    if (el.scrollHeight > 196) {
+                        this.descOverflows = true;
+                    }
+                });
+            },
             get maxAllowedQuantity() {
                 if (this.perBuyerLimit > 0) {
                     return Math.min(this.activeStock, this.perBuyerLimit);
                 }
                 return this.activeStock;
             },
-
             get discountedPrice() {
                 const price = this.activePrice;
                 let result = price;
@@ -188,13 +204,12 @@
                 }
                 return Math.round(result * 100) / 100;
             },
-
             get discountPercentShown() {
                 if (this.activePrice <= 0 || this.discountedPrice >= this.activePrice) return 0;
                 return Math.max(1, Math.round((1 - (this.discountedPrice / this.activePrice)) * 100));
             },
-
             startDealCountdown() {
+                this.checkDescriptionOverflow();
                 if (!this.dealEndsAtMs) return;
                 const pad = (n) => String(n).padStart(2, '0');
                 const tick = () => {
@@ -209,42 +224,35 @@
                 tick();
                 this.dealTimer = setInterval(tick, 1000);
             },
-
             formatMoney(value) {
                 return Number(value).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
             },
-
             setMainGalleryImage(index) {
                 if (!this.galleryImages.length || index < 0 || index >= this.galleryImages.length) return;
                 this.activeGalleryIndex = index;
                 this.mainImage = this.galleryImages[index];
                 this.isViewingVariantImage = false;
             },
-
             prevGalleryImage() {
                 if (this.galleryImages.length <= 1) return;
                 const nextIdx = (this.activeGalleryIndex - 1 + this.galleryImages.length) % this.galleryImages.length;
                 this.setMainGalleryImage(nextIdx);
             },
-
             nextGalleryImage() {
                 if (this.galleryImages.length <= 1) return;
                 const nextIdx = (this.activeGalleryIndex + 1) % this.galleryImages.length;
                 this.setMainGalleryImage(nextIdx);
             },
-
             setVariantImage(imgUrl) {
                 if (!imgUrl) return;
                 this.mainImage = imgUrl;
                 this.isViewingVariantImage = true;
             },
-
             resetToCoverImage() {
                 this.activeGalleryIndex = 0;
                 this.mainImage = this.defaultImage;
                 this.isViewingVariantImage = false;
             },
-
             selectMainVariantOption(vIndex, vName, hasSubs, itemPrice, itemStock, variantImageUrl) {
                 if (this.selectedMain === vIndex) {
                     this.selectedMain = null;
@@ -271,7 +279,6 @@
                 }
                 this.quantity = 1;
             },
-
             selectSubVariantOption(sIndex, sName, subPrice, subStock, parentPrice, parentStock, parentVariantImageUrl) {
                 if (this.selectedSub === sIndex) {
                     this.selectedSub = null;
@@ -289,14 +296,15 @@
                 }
                 this.quantity = 1;
             },
-
             triggerToast(msg, type = 'danger') {
-                this.toastMessage = msg;
-                this.toastType = type;
-                this.showToast = true;
-                setTimeout(() => this.showToast = false, 4000);
+                window.dispatchEvent(new CustomEvent('toast', {
+                    detail: {
+                        title: type === 'success' ? 'Success' : 'Notice',
+                        message: msg,
+                        type: type
+                    }
+                }));
             },
-
             async toggleWishlist(isAuth) {
                 if (!isAuth) {
                     window.location.href = cfg.loginUrl;
@@ -324,7 +332,6 @@
                     this.isTogglingWishlist = false;
                 }
             },
-
             async subscribeBackInStock(isAuth) {
                 if (!isAuth) {
                     window.location.href = cfg.loginUrl;
@@ -359,7 +366,6 @@
                     this.isSubscribingRestock = false;
                 }
             },
-
             async toggleReviewHelpful(reviewId, isAuth) {
                 if (!isAuth) {
                     window.location.href = cfg.loginUrl;
@@ -382,7 +388,6 @@
                     }
                 } catch (e) {}
             },
-
             validateAndSubmit(isAuth, isBuyNow = false) {
                 if (this.isStoreOnVacation) {
                     this.triggerToast('This store is currently on vacation and is temporarily not accepting orders.');
@@ -423,7 +428,6 @@
                     this.addToCart();
                 }
             },
-
             async refreshNavbarCartDropdown(data = {}) {
                 if (data.dropdown_html) {
                     const wrapper = document.querySelector('[data-cart-dropdown-wrapper]');
@@ -459,7 +463,6 @@
                     }
                 } catch (err) {}
             },
-
             async addToCart() {
                 if (this.isAddingToCart) return;
                 this.isAddingToCart = true;
@@ -494,6 +497,7 @@
                     window.setCartBadge(count);
                     await this.refreshNavbarCartDropdown(data);
                     window.dispatchEvent(new CustomEvent('cart:updated', { detail: data }));
+                    this.triggerToast(data.message || 'Added to your shopping cart!', 'success');
                 } catch (e) {
                     this.triggerToast('Unable to add this item to your cart right now.');
                 } finally {
@@ -506,55 +510,44 @@
 
 <div x-data="storkiaProductShowState(@js($productShowConfig))"
      x-init="startDealCountdown()"
-     class="bg-surface-subtle font-sans antialiased text-text-main min-h-screen pb-16 relative overflow-x-hidden">
+     @resize.window.debounce.150ms="checkDescriptionOverflow()"
+     class="bg-surface-subtle font-sans antialiased text-text-main min-h-screen pb-16 relative overflow-x-hidden select-none">
 
     <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-6 sm:pt-8 space-y-6">
+
         <x-ui.breadcrumbs :items="$breadcrumbItems" />
 
-        @if(session('success'))
-            <div class="p-4 rounded-2xl bg-green-50 border border-green-200 text-green-700 text-xs sm:text-sm font-bold">
-                {{ session('success') }}
-            </div>
-        @endif
-
-        @if($errors->any())
-            <div class="p-4 rounded-2xl bg-red-50 border border-red-200 text-red-700 text-xs sm:text-sm space-y-1">
-                @foreach($errors->all() as $err)
-                    <p class="font-semibold">{{ $err }}</p>
-                @endforeach
-            </div>
-        @endif
-
         @if($isStoreOnVacation)
-            <div class="p-4 rounded-2xl bg-amber-50 border border-amber-300 text-amber-900 flex items-center justify-between gap-3 text-xs sm:text-sm font-bold">
-                <div class="flex items-center gap-2.5">
-                    <span class="px-2.5 py-1 rounded-full bg-amber-200 text-amber-950 text-[10px] font-extrabold uppercase">On Vacation</span>
+            <div class="p-4 sm:p-5 rounded-3xl bg-brand-light/40 border border-primary/25 text-primary-dark flex items-center justify-between gap-3 text-xs sm:text-sm font-bold shadow-2xs">
+                <div class="flex items-center gap-3">
+                    <span class="px-3 py-1 rounded-full bg-primary-dark text-white text-[10px] font-extrabold uppercase tracking-wider shrink-0">On Vacation</span>
                     <span>{{ $seller->business_name ?? 'This store' }} is currently on vacation. Products remain viewable, but Add to Cart and Buy Now are temporarily paused.</span>
                 </div>
             </div>
         @endif
 
-        <div class="bg-white rounded-3xl shadow-sm border border-border-subtle/80 overflow-hidden p-5 sm:p-8 lg:p-10">
+        <div class="bg-surface rounded-3xl shadow-xs border border-border-subtle overflow-hidden p-5 sm:p-8 lg:p-10">
             <div class="grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-10">
+
                 <div class="lg:col-span-5 flex flex-col">
-                    <div class="aspect-square bg-surface rounded-2xl overflow-hidden border border-border-subtle/70 flex items-center justify-center group relative cursor-zoom-in shadow-2xs"
+                    <div class="aspect-square bg-surface-subtle rounded-2xl overflow-hidden border border-border-subtle flex items-center justify-center group relative cursor-zoom-in shadow-2xs"
                          x-on:click="if(mainImage) imageModalOpen = true">
                         @if(!empty($mainPictureUrls))
                             <img :src="mainImage"
                                  alt="{{ $product->name }}"
                                  class="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105">
                         @else
-                            <svg class="w-24 h-24 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <svg class="w-24 h-24 text-text-muted/30" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path>
                             </svg>
                         @endif
 
                         @if($totalStock <= 0)
-                            <span class="absolute top-3 left-3 px-3 py-1 rounded-full bg-black/75 text-white text-xs font-extrabold uppercase">
+                            <span class="absolute top-3 left-3 px-3 py-1 rounded-full bg-primary-dark/90 text-white text-xs font-extrabold uppercase">
                                 Sold Out
                             </span>
                         @elseif($isStoreOnVacation)
-                            <span class="absolute top-3 left-3 px-3 py-1 rounded-full bg-amber-500 text-white text-xs font-extrabold uppercase">
+                            <span class="absolute top-3 left-3 px-3 py-1 rounded-full bg-primary-dark text-brand-light text-xs font-extrabold uppercase">
                                 On Vacation
                             </span>
                         @endif
@@ -569,7 +562,7 @@
                                 </button>
                             </template>
                             <template x-if="!isViewingVariantImage && galleryImages.length > 0">
-                                <span class="px-3 py-1 rounded-full bg-black/70 text-white text-[11px] font-bold backdrop-blur-xs pointer-events-none shadow-xs"
+                                <span class="px-3 py-1 rounded-full bg-primary-dark/85 text-white text-[11px] font-bold backdrop-blur-xs pointer-events-none shadow-xs"
                                       x-text="(activeGalleryIndex + 1) + ' / ' + galleryImages.length"></span>
                             </template>
                         </div>
@@ -578,13 +571,13 @@
                             <button type="button"
                                     @click.stop="prevGalleryImage()"
                                     aria-label="Previous image"
-                                    class="absolute left-2.5 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-white/85 hover:bg-white text-text-main shadow-md border border-border-subtle flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer">
+                                    class="absolute left-2.5 top-1/2 -translate-y-1/2 w-9 h-9 rounded-full bg-surface/90 hover:bg-surface text-text-main hover:text-primary shadow-md border border-border-subtle flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all cursor-pointer">
                                 <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/></svg>
                             </button>
                             <button type="button"
                                     @click.stop="nextGalleryImage()"
                                     aria-label="Next image"
-                                    class="absolute right-2.5 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-white/85 hover:bg-white text-text-main shadow-md border border-border-subtle flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer">
+                                    class="absolute right-2.5 top-1/2 -translate-y-1/2 w-9 h-9 rounded-full bg-surface/90 hover:bg-surface text-text-main hover:text-primary shadow-md border border-border-subtle flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all cursor-pointer">
                                 <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
                             </button>
                         @endif
@@ -593,9 +586,9 @@
                                 @click.stop="toggleWishlist({{ auth()->check() ? 'true' : 'false' }})"
                                 :disabled="isTogglingWishlist"
                                 title="Save to Wishlist"
-                                class="absolute top-3 right-3 w-10 h-10 rounded-full bg-white/90 hover:bg-white shadow-md flex items-center justify-center transition-transform active:scale-95 cursor-pointer">
+                                class="absolute top-3 right-3 w-10 h-10 rounded-full bg-surface/95 hover:bg-surface shadow-md border border-border-subtle flex items-center justify-center transition-transform active:scale-95 cursor-pointer">
                             <svg class="w-5 h-5 transition-colors"
-                                 :class="isWishlisted ? 'text-danger fill-danger' : 'text-gray-400 hover:text-danger'"
+                                 :class="isWishlisted ? 'text-danger fill-danger' : 'text-text-muted hover:text-danger'"
                                  viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none">
                                 <path stroke-linecap="round" stroke-linejoin="round" d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
                             </svg>
@@ -609,7 +602,7 @@
                                         x-on:click="setMainGalleryImage({{ $picIdx }})"
                                         class="relative w-16 h-16 sm:w-20 sm:h-20 rounded-xl overflow-hidden border-2 flex-shrink-0 transition-all cursor-pointer focus:outline-none"
                                         :class="(!isViewingVariantImage && activeGalleryIndex === {{ $picIdx }}) ? 'border-primary ring-2 ring-primary/20 opacity-100 scale-[1.02]' : 'border-border-subtle opacity-70 hover:opacity-100 hover:border-primary/50'">
-                                    <img src="{{ $picUrl }}" alt="Product Image {{ $picIdx + 1 }}" class="w-full h-full object-cover bg-white">
+                                    <img src="{{ $picUrl }}" alt="Product Image {{ $picIdx + 1 }}" class="w-full h-full object-cover bg-surface">
                                     @if($picIdx === 0)
                                         <span class="absolute bottom-0 inset-x-0 bg-primary/90 text-white text-[9px] font-extrabold uppercase text-center py-0.5 pointer-events-none">
                                             Cover
@@ -624,27 +617,27 @@
                 <div class="lg:col-span-7 flex flex-col justify-between">
                     <div>
                         <div class="flex items-start justify-between gap-3 mb-3">
-                            <h1 class="text-2xl sm:text-3xl font-extrabold text-text-main tracking-tight leading-snug">
+                            <h1 class="text-2xl sm:text-3xl font-extrabold text-text-main tracking-tight leading-snug select-text">
                                 {{ $product->name }}
                             </h1>
                         </div>
 
-                        <div class="flex flex-wrap items-center gap-4 pb-5 mb-5 border-b border-border-subtle/70 text-sm">
-                            <a href="#product-reviews-section" class="flex items-center gap-1.5">
-                                <span class="font-extrabold text-amber-500">{{ number_format((float) $productAvgRating, 1) }}</span>
-                                <div class="flex text-amber-400">
+                        <div class="flex flex-wrap items-center gap-4 pb-5 mb-5 border-b border-border-subtle text-sm">
+                            <a href="#product-reviews-section" class="flex items-center gap-1.5 cursor-pointer group">
+                                <span class="font-extrabold text-primary">{{ number_format((float) $productAvgRating, 1) }}</span>
+                                <div class="flex text-primary">
                                     @for($i = 1; $i <= 5; $i++)
-                                        <svg class="w-4 h-4 {{ $i <= round($productAvgRating) ? 'text-amber-400' : 'text-gray-200' }}" fill="currentColor" viewBox="0 0 20 20">
+                                        <svg class="w-4 h-4 {{ $i <= round($productAvgRating) ? 'text-primary' : 'text-border-subtle' }}" fill="currentColor" viewBox="0 0 20 20">
                                             <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z"/>
                                         </svg>
                                     @endfor
                                 </div>
-                                <span class="text-text-muted font-semibold hover:text-primary transition-colors">
+                                <span class="text-text-muted font-semibold group-hover:text-primary transition-colors">
                                     {{ number_format($productReviews->count()) }} {{ Str::plural('Rating', $productReviews->count()) }}
                                 </span>
                             </a>
                             <span class="text-border-subtle">|</span>
-                            <a href="#product-qna-section" class="text-text-muted font-semibold hover:text-primary transition-colors">
+                            <a href="#product-qna-section" class="text-text-muted font-semibold hover:text-primary transition-colors cursor-pointer">
                                 {{ number_format($productQuestions->count()) }} {{ Str::plural('Question', $productQuestions->count()) }}
                             </a>
                             <span class="text-border-subtle">|</span>
@@ -657,10 +650,10 @@
                             @endif
                         </div>
 
-                        <div class="bg-gradient-to-r from-primary/5 via-surface-subtle to-surface rounded-2xl p-5 mb-5 border border-primary/10 flex flex-wrap items-baseline gap-3.5">
-                            <span class="text-3xl sm:text-4xl font-extrabold text-primary tracking-tight" x-text="'₱' + formatMoney(discountedPrice)"></span>
+                        <div class="bg-gradient-to-r from-primary/5 via-surface-subtle to-surface rounded-2xl p-5 mb-5 border border-primary/15 flex flex-wrap items-baseline gap-3.5">
+                            <span class="text-3xl sm:text-4xl font-extrabold text-price tracking-tight" x-text="'&#8369;' + formatMoney(discountedPrice)"></span>
                             <template x-if="discountPercentShown > 0">
-                                <span class="text-text-muted line-through text-base sm:text-lg font-medium" x-text="'₱' + formatMoney(activePrice)"></span>
+                                <span class="text-text-muted line-through text-base sm:text-lg font-medium" x-text="'&#8369;' + formatMoney(activePrice)"></span>
                             </template>
                             <template x-if="discountPercentShown > 0">
                                 <span class="bg-danger/10 text-danger text-xs px-2.5 py-1 rounded-full font-extrabold uppercase tracking-wider" x-text="discountPercentShown + '% OFF'"></span>
@@ -693,12 +686,12 @@
                                         @php
                                             $alreadyClaimed = in_array($sv->id, $claimedVoucherIds);
                                         @endphp
-                                        <div class="flex items-center gap-2.5 px-3 py-2 rounded-xl bg-white border border-primary/30 shadow-2xs text-xs">
+                                        <div class="flex items-center gap-2.5 px-3 py-2 rounded-xl bg-surface border border-primary/30 shadow-2xs text-xs">
                                             <div>
                                                 <span class="font-mono font-extrabold text-primary-dark">{{ $sv->code }}</span>
                                                 <span class="font-bold text-primary ml-1">{{ $sv->badge_label }}</span>
                                                 <div class="text-[10px] text-text-muted">
-                                                    Min. ₱{{ number_format((float) $sv->min_spend, 0) }} &bull; Exp {{ $sv->ends_at?->format('M d, Y') }}
+                                                    Min. &#8369;{{ number_format((float) $sv->min_spend, 0) }} &bull; Exp {{ $sv->ends_at?->format('M d, Y') }}
                                                 </div>
                                             </div>
                                             @auth
@@ -709,13 +702,13 @@
                                                         @csrf
                                                         <input type="hidden" name="code" value="{{ $sv->code }}">
                                                         <input type="hidden" name="seller_profile_id" value="{{ $seller->id }}">
-                                                        <button type="submit" class="px-2.5 py-1 rounded-lg bg-primary hover:bg-primary-dark text-white font-bold text-[10px] cursor-pointer">
+                                                        <button type="submit" class="px-2.5 py-1 rounded-lg bg-primary hover:bg-primary-dark text-white font-bold text-[10px] transition-colors cursor-pointer">
                                                             Claim
                                                         </button>
                                                     </form>
                                                 @endif
                                             @else
-                                                <a href="{{ route('login') }}" class="px-2.5 py-1 rounded-lg bg-primary text-white font-bold text-[10px]">Claim</a>
+                                                <a href="{{ route('login') }}" class="px-2.5 py-1 rounded-lg bg-primary hover:bg-primary-dark text-white font-bold text-[10px] transition-colors cursor-pointer">Claim</a>
                                             @endauth
                                         </div>
                                     @endforeach
@@ -741,13 +734,13 @@
                                                     : (int) ($item['stock'] ?? 0);
                                                 $variantImageUrl = (!empty($item['image'])) ? asset('storage/' . $item['image']) : '';
                                                 $inactiveBtnClass = ($itemStock <= 0 && !$hasSubs)
-                                                    ? 'border-border-subtle text-gray-400 bg-gray-50 line-through cursor-pointer'
+                                                    ? 'border-border-subtle text-text-muted/60 bg-surface-subtle line-through cursor-pointer'
                                                     : 'border-border-subtle text-text-main hover:border-primary/50 hover:text-primary bg-surface font-medium cursor-pointer';
                                             @endphp
                                             <button type="button"
                                                 x-on:click="selectMainVariantOption({{ $vIndex }}, '{{ addslashes($item['name'] ?? '') }}', {{ $hasSubs ? 'true' : 'false' }}, {{ (float) ($item['price'] ?? $product->price) }}, {{ (int) $itemStock }}, '{{ addslashes($variantImageUrl) }}')"
                                                 :class="selectedMain === {{ $vIndex }}
-                                                    ? 'border-primary text-primary bg-primary/10 ring-2 ring-primary/20 font-bold'
+                                                    ? 'border-primary text-primary bg-primary/10 ring-2 ring-primary/20 font-bold cursor-pointer'
                                                     : '{{ $inactiveBtnClass }}'"
                                                 class="px-3.5 py-2 border rounded-xl focus:outline-none transition-all text-sm inline-flex items-center gap-2">
                                                 @if($variantImageUrl !== '')
@@ -782,13 +775,13 @@
                                                         $subStock = (int) ($sub['stock'] ?? 0);
                                                         $subPriceVal = (float) ($sub['price'] ?? ($item['price'] ?? $product->price));
                                                         $subInactiveClass = $subStock <= 0
-                                                            ? 'border-border-subtle text-gray-400 bg-gray-50 line-through cursor-pointer'
+                                                            ? 'border-border-subtle text-text-muted/60 bg-surface-subtle line-through cursor-pointer'
                                                             : 'border-border-subtle text-text-main hover:border-primary/50 hover:text-primary bg-surface font-medium cursor-pointer';
                                                     @endphp
                                                     <button type="button"
                                                         x-on:click="selectSubVariantOption({{ $sIndex }}, '{{ addslashes($sub['name'] ?? '') }}', {{ $subPriceVal }}, {{ $subStock }}, {{ $parentPriceVal }}, {{ (int) $parentStock }}, '{{ addslashes($parentVariantImageUrl) }}')"
                                                         :class="selectedSub === {{ $sIndex }}
-                                                            ? 'border-primary text-primary bg-primary/10 ring-2 ring-primary/20 font-bold'
+                                                            ? 'border-primary text-primary bg-primary/10 ring-2 ring-primary/20 font-bold cursor-pointer'
                                                             : '{{ $subInactiveClass }}'"
                                                         class="px-4 py-2.5 border rounded-xl focus:outline-none transition-all text-sm">
                                                         {{ $sub['name'] ?? 'Unnamed' }}
@@ -814,7 +807,7 @@
                                        x-model.number="quantity"
                                        min="1"
                                        :max="maxAllowedQuantity"
-                                       class="w-14 h-full text-center bg-transparent border-none focus:ring-0 text-text-main font-bold p-0">
+                                       class="w-14 h-full text-center bg-transparent border-none focus:ring-0 text-text-main font-bold p-0 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none">
                                 <button type="button"
                                         x-on:click="if(quantity < maxAllowedQuantity) quantity++"
                                         class="w-10 h-full flex items-center justify-center text-text-main hover:text-primary hover:bg-surface-subtle transition-colors border-l border-border-subtle cursor-pointer focus:outline-none">+</button>
@@ -827,9 +820,9 @@
                                 <button type="button"
                                         @click="subscribeBackInStock({{ auth()->check() ? 'true' : 'false' }})"
                                         :disabled="isSubscribingRestock || restockSubscribed"
-                                        :class="restockSubscribed ? 'bg-emerald-100 text-emerald-800 border-emerald-300' : 'bg-primary-dark hover:bg-primary text-white border-primary-dark cursor-pointer'"
+                                        :class="restockSubscribed ? 'bg-success/10 text-success border-success/30' : 'bg-primary-dark hover:bg-primary text-white border-primary-dark cursor-pointer'"
                                         class="px-4 py-2 rounded-xl border text-xs font-extrabold transition-colors">
-                                    <span x-text="restockSubscribed ? '✓ Back-in-Stock Alert Active' : (isSubscribingRestock ? 'Subscribing...' : 'Notify Me When Back in Stock')"></span>
+                                    <span x-text="restockSubscribed ? '&#10003; Back-in-Stock Alert Active' : (isSubscribingRestock ? 'Subscribing...' : 'Notify Me When Back in Stock')"></span>
                                 </button>
                             </template>
                         </div>
@@ -847,8 +840,8 @@
                                         x-ref="addToCartBtn"
                                         :disabled="isStoreOnVacation || activeStock <= 0 || isAddingToCart"
                                         @click="validateAndSubmit(true, false)"
-                                        :class="(isStoreOnVacation || activeStock <= 0) ? 'bg-gray-200 text-gray-500 cursor-not-allowed' : 'bg-primary/10 text-primary border border-primary/30 hover:bg-primary hover:text-white cursor-pointer'"
-                                        class="w-full font-bold py-3.5 px-6 rounded-2xl transition-all duration-300 flex items-center justify-center gap-2.5 shadow-2xs">
+                                        :class="(isStoreOnVacation || activeStock <= 0) ? 'bg-surface-subtle text-text-muted border border-border-subtle cursor-not-allowed' : 'bg-primary/10 text-primary border border-primary/30 hover:bg-primary hover:text-white cursor-pointer active:scale-[0.99]'"
+                                        class="w-full font-bold py-3.5 px-6 rounded-2xl transition-all duration-200 flex items-center justify-center gap-2.5 shadow-2xs">
                                     <span x-text="isStoreOnVacation ? 'Store On Vacation' : (activeStock <= 0 ? 'Sold Out' : (isAddingToCart ? 'Adding...' : 'Add To Cart'))"></span>
                                 </button>
                             </form>
@@ -862,8 +855,8 @@
                                 <button type="button"
                                         :disabled="isStoreOnVacation || activeStock <= 0"
                                         @click="validateAndSubmit(true, true)"
-                                        :class="(isStoreOnVacation || activeStock <= 0) ? 'bg-gray-300 text-gray-500 cursor-not-allowed' : 'bg-primary text-white hover:bg-primary-dark shadow-md shadow-primary/20 cursor-pointer'"
-                                        class="w-full font-bold py-3.5 px-6 rounded-2xl transition-all duration-300">
+                                        :class="(isStoreOnVacation || activeStock <= 0) ? 'bg-surface-subtle text-text-muted border border-border-subtle cursor-not-allowed' : 'bg-primary text-white hover:bg-primary-dark shadow-md shadow-primary/20 cursor-pointer active:scale-[0.99]'"
+                                        class="w-full font-bold py-3.5 px-6 rounded-2xl transition-all duration-200">
                                     <span x-text="isStoreOnVacation ? 'On Vacation' : 'Buy Now'"></span>
                                 </button>
                             </form>
@@ -871,14 +864,13 @@
                             <button type="button"
                                     :disabled="isStoreOnVacation || activeStock <= 0"
                                     @click="validateAndSubmit(false, false)"
-                                    class="w-full sm:w-1/2 bg-primary/10 text-primary border border-primary/30 hover:bg-primary hover:text-white font-bold py-3.5 px-6 rounded-2xl transition-all duration-300 flex items-center justify-center gap-2.5 cursor-pointer shadow-2xs disabled:opacity-50">
+                                    class="w-full sm:w-1/2 bg-primary/10 text-primary border border-primary/30 hover:bg-primary hover:text-white font-bold py-3.5 px-6 rounded-2xl transition-all duration-200 flex items-center justify-center gap-2.5 cursor-pointer shadow-2xs disabled:opacity-50">
                                 <span>Add To Cart</span>
                             </button>
-
                             <button type="button"
                                     :disabled="isStoreOnVacation || activeStock <= 0"
                                     @click="validateAndSubmit(false, true)"
-                                    class="w-full sm:w-1/2 bg-primary text-white hover:bg-primary-dark font-bold py-3.5 px-6 rounded-2xl transition-all duration-300 shadow-md shadow-primary/20 cursor-pointer flex items-center justify-center disabled:opacity-50">
+                                    class="w-full sm:w-1/2 bg-primary text-white hover:bg-primary-dark font-bold py-3.5 px-6 rounded-2xl transition-all duration-200 shadow-md shadow-primary/20 cursor-pointer flex items-center justify-center disabled:opacity-50">
                                 <span>Buy Now</span>
                             </button>
                         @endauth
@@ -887,10 +879,10 @@
             </div>
         </div>
 
-        <div class="bg-white rounded-3xl shadow-sm border border-border-subtle/80 p-6 sm:p-8">
+        <div class="bg-surface rounded-3xl shadow-xs border border-border-subtle p-6 sm:p-8">
             <div class="flex flex-col lg:flex-row items-center lg:items-start gap-6 sm:gap-8">
-                <a href="{{ $shopUrl }}" class="relative w-20 h-20 sm:w-24 sm:h-24 rounded-full p-1 bg-gradient-to-br from-primary via-secondary to-primary/40 shadow-md flex-shrink-0 group">
-                    <div class="w-full h-full bg-white rounded-full p-0.5 overflow-hidden flex items-center justify-center">
+                <a href="{{ $shopUrl }}" class="relative w-20 h-20 sm:w-24 sm:h-24 rounded-full p-1 bg-gradient-to-br from-primary via-secondary to-primary/40 shadow-md flex-shrink-0 group cursor-pointer">
+                    <div class="w-full h-full bg-surface rounded-full p-0.5 overflow-hidden flex items-center justify-center">
                         @if($seller && $seller->logo_path)
                             <img src="{{ Storage::url($seller->logo_path) }}"
                                  alt="{{ $seller->business_name }}"
@@ -903,14 +895,14 @@
                             </div>
                         @endif
                     </div>
-                    <span class="absolute bottom-1 right-1 w-3.5 h-3.5 rounded-full {{ $isStoreOnVacation ? 'bg-amber-400' : 'bg-success' }} ring-3 ring-white"
+                    <span class="absolute bottom-1 right-1 w-3.5 h-3.5 rounded-full {{ $isStoreOnVacation ? 'bg-primary-dark' : 'bg-success' }} ring-3 ring-surface"
                           title="{{ $isStoreOnVacation ? 'Store on Vacation' : 'Verified Active Store' }}"></span>
                 </a>
 
                 <div class="flex-1 w-full text-center lg:text-left">
-                    <div class="flex flex-col sm:flex-row items-center justify-between gap-4 pb-5 border-b border-border-subtle/70">
+                    <div class="flex flex-col sm:flex-row items-center justify-between gap-4 pb-5 border-b border-border-subtle">
                         <div>
-                            <a href="{{ $shopUrl }}" class="text-xl sm:text-2xl font-extrabold text-text-main hover:text-primary transition-colors tracking-tight leading-tight inline-block">
+                            <a href="{{ $shopUrl }}" class="text-xl sm:text-2xl font-extrabold text-text-main hover:text-primary transition-colors tracking-tight leading-tight inline-block cursor-pointer">
                                 {{ $seller->business_name ?? 'Official Store' }}
                             </a>
                             <div class="flex flex-wrap items-center justify-center lg:justify-start gap-2 mt-1 text-xs sm:text-sm text-text-muted">
@@ -931,30 +923,30 @@
                                         <form action="{{ route('sellers.follow', $seller->id) }}" method="POST" class="m-0">
                                             @csrf
                                             <button type="submit"
-                                                    class="inline-flex items-center gap-2 px-5 py-2.5 rounded-2xl text-xs sm:text-sm font-bold transition-all cursor-pointer shadow-2xs {{ $isFollowingStore ? 'bg-surface-subtle text-text-main border border-border-subtle' : 'bg-primary text-white hover:bg-primary-dark' }}">
-                                                <span>{{ $isFollowingStore ? '✓ Following' : '+ Follow Store (Get ₱30 Voucher)' }}</span>
+                                                    class="inline-flex items-center gap-2 px-5 py-2.5 rounded-2xl text-xs sm:text-sm font-bold transition-all cursor-pointer shadow-2xs {{ $isFollowingStore ? 'bg-surface-subtle text-text-main border border-border-subtle hover:border-primary/40' : 'bg-primary text-white hover:bg-primary-dark' }}">
+                                                <span>{!! $isFollowingStore ? '&#10003; Following' : '+ Follow Store (Get &#8369;30 Voucher)' !!}</span>
                                             </button>
                                         </form>
                                     @endif
 
                                     <a href="{{ route('user.messages.buyer-messages', ['contact' => $sellerUserId, 'product_id' => $product->id]) }}"
-                                       class="inline-flex items-center gap-2 px-5 py-2.5 rounded-2xl text-xs sm:text-sm font-bold bg-primary/10 hover:bg-primary text-primary hover:text-white border border-primary/30 transition-all duration-300 shadow-2xs">
+                                       class="inline-flex items-center gap-2 px-5 py-2.5 rounded-2xl text-xs sm:text-sm font-bold bg-primary/10 hover:bg-primary text-primary hover:text-white border border-primary/30 transition-all duration-200 shadow-2xs cursor-pointer">
                                         <span>Chat Now (Ask About Product)</span>
                                     </a>
                                 @else
                                     <a href="{{ route('login') }}"
-                                       class="inline-flex items-center gap-2 px-5 py-2.5 rounded-2xl text-xs sm:text-sm font-bold bg-primary text-white hover:bg-primary-dark transition-all">
+                                       class="inline-flex items-center gap-2 px-5 py-2.5 rounded-2xl text-xs sm:text-sm font-bold bg-primary text-white hover:bg-primary-dark transition-all cursor-pointer">
                                         + Follow Store
                                     </a>
                                     <a href="{{ route('login') }}"
-                                       class="inline-flex items-center gap-2 px-5 py-2.5 rounded-2xl text-xs sm:text-sm font-bold bg-primary/10 text-primary border border-primary/30">
+                                       class="inline-flex items-center gap-2 px-5 py-2.5 rounded-2xl text-xs sm:text-sm font-bold bg-primary/10 text-primary hover:bg-primary hover:text-white border border-primary/30 transition-all cursor-pointer">
                                         Chat Now
                                     </a>
                                 @endauth
                             @endif
 
                             <a href="{{ $shopUrl }}"
-                               class="inline-flex items-center gap-2 px-5 py-2.5 rounded-2xl text-xs sm:text-sm font-bold bg-surface hover:bg-surface-subtle text-text-main border border-border-subtle hover:border-primary/40 transition-all duration-300 shadow-2xs">
+                               class="inline-flex items-center gap-2 px-5 py-2.5 rounded-2xl text-xs sm:text-sm font-bold bg-surface hover:bg-surface-subtle text-text-main border border-border-subtle hover:border-primary/40 transition-all duration-200 shadow-2xs cursor-pointer">
                                 <span>View Store</span>
                             </a>
 
@@ -963,7 +955,7 @@
                                         @click="$dispatch('open-report-seller', { sellerId: {{ $seller->id }}, sellerName: @js($seller->business_name) })"
                                         title="Report this seller"
                                         aria-label="Report this seller"
-                                        class="inline-flex items-center gap-2 px-4 py-2.5 rounded-2xl text-xs sm:text-sm font-bold bg-surface hover:bg-red-50 text-text-muted hover:text-danger border border-border-subtle hover:border-danger/40 transition-all duration-300 shadow-2xs cursor-pointer">
+                                        class="inline-flex items-center gap-2 px-4 py-2.5 rounded-2xl text-xs sm:text-sm font-bold bg-surface hover:bg-danger/10 text-text-muted hover:text-danger border border-border-subtle hover:border-danger/40 transition-all duration-200 shadow-2xs cursor-pointer">
                                     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                                         <path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"></path>
                                         <line x1="4" y1="22" x2="4" y2="15"></line>
@@ -1016,76 +1008,120 @@
             </div>
         </div>
 
-        <div class="bg-white rounded-3xl shadow-sm border border-border-subtle/80 p-6 sm:p-8 lg:p-10 space-y-8">
+        <div class="bg-surface rounded-3xl shadow-xs border border-border-subtle p-6 sm:p-8 lg:p-10 space-y-8">
             <div>
-                <h2 class="bg-surface-subtle px-5 py-3.5 font-extrabold text-text-main rounded-2xl mb-5 uppercase text-xs tracking-wider border border-border-subtle/60">
+                <h2 class="bg-surface-subtle px-5 py-3.5 font-extrabold text-primary-dark rounded-2xl mb-5 uppercase text-xs tracking-wider border border-border-subtle">
                     Product Specifications
                 </h2>
                 <div class="divide-y divide-border-subtle/60 text-sm px-2">
                     @if($product->specifications && $product->specifications->count() > 0)
-                        @foreach($product->specifications as $spec)
-                            <div class="flex items-center py-3.5">
-                                <span class="w-44 text-text-muted font-medium">{{ $spec->title }}</span>
-                                <span class="font-bold text-text-main">{{ $spec->description }}</span>
+                        @foreach($product->specifications as $sIdx => $spec)
+                            <div x-show="{{ $sIdx }} < 5 || specsExpanded"
+                                 x-transition
+                                 class="flex items-center py-3.5">
+                                <span class="w-44 text-text-muted font-medium shrink-0">{{ $spec->title }}</span>
+                                <span class="font-bold text-text-main select-text">{{ $spec->description }}</span>
                             </div>
                         @endforeach
                     @endif
                     <div class="flex items-center py-3.5">
-                        <span class="w-44 text-text-muted font-medium">Weight</span>
+                        <span class="w-44 text-text-muted font-medium shrink-0">Weight</span>
                         <span class="font-bold text-text-main">{{ $product->weight ?? 'Not specified' }} kg</span>
                     </div>
                     <div class="flex items-center py-3.5">
-                        <span class="w-44 text-text-muted font-medium">Stock</span>
+                        <span class="w-44 text-text-muted font-medium shrink-0">Stock</span>
                         <span class="font-bold text-text-main" x-text="activeStock"></span>
                     </div>
                     <div class="flex items-center py-3.5">
-                        <span class="w-44 text-text-muted font-medium">Ships From</span>
+                        <span class="w-44 text-text-muted font-medium shrink-0">Ships From</span>
                         <span class="font-bold text-text-main">
                             {{ $seller ? trim(($seller->municipality ?? '') . ', ' . ($seller->province ?? ''), ', ') ?: 'Local Warehouse' : 'Local Warehouse' }}
                         </span>
                     </div>
                 </div>
+                @if($specsCount > 5)
+                    <div class="pt-4 px-2">
+                        <button type="button"
+                                @click="specsExpanded = !specsExpanded"
+                                class="inline-flex items-center gap-2 px-5 py-2.5 rounded-full bg-primary/10 hover:bg-primary text-primary hover:text-white border border-primary/30 text-xs font-extrabold transition-all cursor-pointer shadow-2xs">
+                            <span x-text="specsExpanded ? 'See Less Specifications' : 'See All {{ $specsCount }} Specifications'"></span>
+                            <svg class="w-4 h-4 transition-transform duration-200" :class="specsExpanded ? 'rotate-180' : ''" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
+                            </svg>
+                        </button>
+                    </div>
+                @endif
             </div>
 
             <div>
-                <h2 class="bg-surface-subtle px-5 py-3.5 font-extrabold text-text-main rounded-2xl mb-5 uppercase text-xs tracking-wider border border-border-subtle/60">
+                <h2 class="bg-surface-subtle px-5 py-3.5 font-extrabold text-primary-dark rounded-2xl mb-5 uppercase text-xs tracking-wider border border-border-subtle">
                     Product Description
                 </h2>
-                <div class="prose prose-sm max-w-none text-text-main/90 px-2 leading-relaxed">
-                    {!! nl2br(e($product->description)) !!}
-                    @if(!empty($product->additional_descriptions))
-                        <div class="mt-6 pt-6 border-t border-border-subtle/70">
-                            {!! nl2br(e($product->additional_descriptions)) !!}
+                <div class="px-2">
+                    <div class="relative">
+                        <div x-ref="descContent"
+                             :class="(!descExpanded && descOverflows) ? 'max-h-48 overflow-hidden' : ''"
+                             class="prose prose-sm max-w-none text-text-main leading-relaxed transition-all duration-300 select-text">
+                            {!! nl2br(e($product->description ?: 'No description provided for this product.')) !!}
+                            @if(!empty($product->additional_descriptions))
+                                <div class="mt-6 pt-6 border-t border-border-subtle">
+                                    {!! nl2br(e($product->additional_descriptions)) !!}
+                                </div>
+                            @endif
                         </div>
-                    @endif
+
+                        <div x-show="descOverflows && !descExpanded"
+                             x-cloak
+                             class="pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-surface via-surface/85 to-transparent"></div>
+                    </div>
+
+                    <div x-show="descOverflows"
+                         x-cloak
+                         class="relative z-20 pt-4 mt-2 border-t border-border-subtle/60 flex justify-center">
+                        <button type="button"
+                                @click="descExpanded = !descExpanded"
+                                class="inline-flex items-center gap-2 px-6 py-2.5 rounded-full bg-primary/10 hover:bg-primary text-primary hover:text-white border border-primary/30 text-xs font-extrabold transition-all duration-200 cursor-pointer shadow-xs active:scale-95">
+                            <span x-text="descExpanded ? 'See Less Description' : 'See More Description'"></span>
+                            <svg class="w-4 h-4 transition-transform duration-200" :class="descExpanded ? 'rotate-180' : ''" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
+                            </svg>
+                        </button>
+                    </div>
                 </div>
             </div>
 
             <div id="product-reviews-section">
-                <h2 class="bg-surface-subtle px-5 py-3.5 font-extrabold text-text-main rounded-2xl mb-5 uppercase text-xs tracking-wider border border-border-subtle/60 flex items-center justify-between">
+                <h2 class="bg-surface-subtle px-5 py-3.5 font-extrabold text-primary-dark rounded-2xl mb-5 uppercase text-xs tracking-wider border border-border-subtle flex items-center justify-between">
                     <span>Verified Buyer Product Ratings ({{ $productReviews->count() }})</span>
-                    <span class="text-primary font-extrabold">{{ number_format((float) $productAvgRating, 1) }} / 5.0 ★</span>
+                    <span class="text-primary font-extrabold">{{ number_format((float) $productAvgRating, 1) }} / 5.0 &#9733;</span>
                 </h2>
 
                 @if($productReviews->isEmpty())
                     <p class="text-xs text-text-muted px-2 py-4">No buyer ratings submitted for this product yet. Complete an order to leave the first review!</p>
                 @else
-                    <div class="divide-y divide-border-subtle/60 px-2">
-                        @foreach($productReviews as $rev)
+                    <div class="divide-y divide-border-subtle px-2">
+                        @foreach($productReviews as $rIdx => $rev)
                             @php
                                 $purchasedVariant = $rev->purchased_variant_label
                                     ?: ($rev->orderItem ? implode(' / ', array_filter([$rev->orderItem->variant_name, $rev->orderItem->sub_variant_name])) : null);
                                 $photosList = is_array($rev->review_photos) && !empty($rev->review_photos)
                                     ? $rev->review_photos
                                     : ($rev->review_photo_path ? [$rev->review_photo_path] : []);
+                                $revTextStr = (string) ($rev->review_text ?? '');
+                                $isLongRevText = mb_strlen($revTextStr) > 180 || substr_count($revTextStr, "\n") >= 3;
+                                $replyTextStr = (string) ($rev->seller_reply ?? '');
+                                $isLongReplyText = mb_strlen($replyTextStr) > 180 || substr_count($replyTextStr, "\n") >= 3;
                             @endphp
-                            <div class="py-4 space-y-2.5 text-xs">
+                            <div x-show="{{ $rIdx }} < visibleReviewsLimit"
+                                 x-transition
+                                 x-data="{ revExpanded: false, replyExpanded: false }"
+                                 class="py-4 space-y-2.5 text-xs">
                                 <div class="flex flex-wrap items-center justify-between gap-2">
                                     <div class="flex flex-wrap items-center gap-2 font-bold text-text-main">
                                         <span>{{ $rev->buyer?->first_name ? substr($rev->buyer->first_name, 0, 1) . '***' : 'Verified Buyer' }}</span>
-                                        <span class="text-amber-500">{{ str_repeat('★', (int) $rev->rating) }}{{ str_repeat('☆', max(0, 5 - (int) $rev->rating)) }}</span>
+                                        <span class="text-primary">{!! str_repeat('&#9733;', (int) $rev->rating) !!}{!! str_repeat('&#9734;', max(0, 5 - (int) $rev->rating)) !!}</span>
                                         @if($purchasedVariant)
-                                            <span class="px-2 py-0.5 rounded-full bg-brand-light/50 text-primary-dark text-[10px] font-bold border border-border-subtle">
+                                            <span class="px-2.5 py-0.5 rounded-full bg-brand-light/50 text-primary-dark text-[10px] font-bold border border-border-subtle">
                                                 Purchased: {{ $purchasedVariant }}
                                             </span>
                                         @endif
@@ -1097,40 +1133,82 @@
                                         <span class="text-[11px] text-text-muted">{{ $rev->created_at?->format('M d, Y') }}</span>
                                         <button type="button"
                                                 @click="toggleReviewHelpful({{ $rev->id }}, {{ auth()->check() ? 'true' : 'false' }})"
-                                                :class="upvotedMap[{{ $rev->id }}] ? 'bg-primary text-white border-primary' : 'bg-surface-subtle text-text-muted border-border-subtle hover:text-primary'"
+                                                :class="upvotedMap[{{ $rev->id }}] ? 'bg-primary text-white border-primary' : 'bg-surface-subtle text-text-muted border-border-subtle hover:text-primary hover:border-primary/40'"
                                                 class="px-2.5 py-1 rounded-xl border text-[11px] font-bold transition-colors cursor-pointer inline-flex items-center gap-1">
                                             <span>Helpful</span>
                                             <span class="font-mono" x-text="'(' + (helpfulCounts[{{ $rev->id }}] || 0) + ')'"></span>
                                         </button>
                                     </div>
                                 </div>
-                                @if($rev->review_text)
-                                    <p class="text-text-main leading-relaxed">{{ $rev->review_text }}</p>
+
+                                @if($revTextStr !== '')
+                                    <div class="text-text-main leading-relaxed select-text">
+                                        <p :class="(!revExpanded && {{ $isLongRevText ? 'true' : 'false' }}) ? 'line-clamp-3' : ''" class="whitespace-pre-line">{{ $revTextStr }}</p>
+                                        @if($isLongRevText)
+                                            <button type="button"
+                                                    @click="revExpanded = !revExpanded"
+                                                    class="mt-1.5 inline-flex items-center gap-1 text-[11px] font-extrabold text-primary hover:text-primary-dark hover:underline cursor-pointer"
+                                                    x-text="revExpanded ? 'See less' : 'See more'"></button>
+                                        @endif
+                                    </div>
                                 @endif
+
                                 @if(!empty($photosList))
                                     <div class="flex flex-wrap gap-2 pt-1">
                                         @foreach($photosList as $rPhoto)
-                                            <img src="{{ asset('storage/' . $rPhoto) }}" alt="Review Photo" class="w-18 h-18 object-cover rounded-xl border border-border-subtle">
+                                            <img src="{{ asset('storage/' . $rPhoto) }}"
+                                                 @click="reviewPhotoModalSrc = '{{ asset('storage/' . $rPhoto) }}'"
+                                                 alt="Review Photo"
+                                                 class="w-18 h-18 object-cover rounded-xl border border-border-subtle hover:border-primary transition-colors cursor-pointer">
                                         @endforeach
                                     </div>
                                 @endif
-                                @if($rev->seller_reply)
-                                    <div class="mt-2 p-3 rounded-2xl bg-surface-subtle border border-border-subtle space-y-1">
+
+                                @if($replyTextStr !== '')
+                                    <div class="mt-2 p-3.5 rounded-2xl bg-brand-light/25 border border-border-subtle space-y-1">
                                         <span class="text-[10px] font-extrabold uppercase text-primary-dark block">
                                             Seller's Response ({{ $seller->business_name ?? 'Official Store' }})
                                         </span>
-                                        <p class="text-text-main leading-relaxed">{{ $rev->seller_reply }}</p>
+                                        <p :class="(!replyExpanded && {{ $isLongReplyText ? 'true' : 'false' }}) ? 'line-clamp-3' : ''"
+                                           class="text-text-main leading-relaxed whitespace-pre-line select-text">{{ $replyTextStr }}</p>
+                                        @if($isLongReplyText)
+                                            <button type="button"
+                                                    @click="replyExpanded = !replyExpanded"
+                                                    class="mt-1 inline-flex items-center gap-1 text-[11px] font-extrabold text-primary hover:text-primary-dark hover:underline cursor-pointer"
+                                                    x-text="replyExpanded ? 'See less' : 'See more'"></button>
+                                        @endif
                                     </div>
                                 @endif
                             </div>
                         @endforeach
                     </div>
+
+                    @if($productReviews->count() > 4)
+                        <div class="pt-4 flex flex-wrap items-center justify-center gap-3">
+                            <button type="button"
+                                    x-show="visibleReviewsLimit < {{ $productReviews->count() }}"
+                                    @click="visibleReviewsLimit += 5"
+                                    class="inline-flex items-center gap-2 px-6 py-2.5 rounded-full bg-primary/10 hover:bg-primary text-primary hover:text-white border border-primary/30 text-xs font-extrabold transition-all cursor-pointer shadow-xs">
+                                <span x-text="'See More Reviews (' + ({{ $productReviews->count() }} - visibleReviewsLimit) + ' remaining)'"></span>
+                                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
+                                </svg>
+                            </button>
+                            <button type="button"
+                                    x-show="visibleReviewsLimit > 4"
+                                    x-cloak
+                                    @click="visibleReviewsLimit = 4"
+                                    class="inline-flex items-center gap-1.5 px-4 py-2 rounded-full bg-surface border border-border-subtle hover:border-primary/40 text-xs font-bold text-text-muted hover:text-primary transition-all cursor-pointer">
+                                <span>Show Less Reviews</span>
+                            </button>
+                        </div>
+                    @endif
                 @endif
             </div>
 
-            <div id="product-qna-section" class="pt-4 border-t border-border-subtle/70 space-y-4">
-                <div class="bg-surface-subtle px-5 py-3.5 rounded-2xl border border-border-subtle/60 flex flex-wrap items-center justify-between gap-2">
-                    <h2 class="font-extrabold text-text-main uppercase text-xs tracking-wider">
+            <div id="product-qna-section" class="pt-4 border-t border-border-subtle space-y-4">
+                <div class="bg-surface-subtle px-5 py-3.5 rounded-2xl border border-border-subtle flex flex-wrap items-center justify-between gap-2">
+                    <h2 class="font-extrabold text-primary-dark uppercase text-xs tracking-wider">
                         Buyer Product Q&amp;A ({{ $productQuestions->count() }})
                     </h2>
                     <span class="text-[11px] text-text-muted">Ask the seller a public question about this item</span>
@@ -1155,18 +1233,25 @@
                     @endif
                 @else
                     <div class="px-2 text-xs text-text-muted">
-                        Please <a href="{{ route('login') }}" class="text-primary font-bold underline">sign in</a> to ask a question about this product.
+                        Please <a href="{{ route('login') }}" class="text-primary font-bold underline cursor-pointer">sign in</a> to ask a question about this product.
                     </div>
                 @endauth
 
                 @if($productQuestions->isEmpty())
                     <p class="text-xs text-text-muted px-2 py-2">No questions asked yet. Be the first to ask the seller!</p>
                 @else
-                    <div class="divide-y divide-border-subtle/60 px-2 text-xs">
-                        @foreach($productQuestions as $pq)
-                            <div class="py-3.5 space-y-2">
+                    <div class="divide-y divide-border-subtle px-2 text-xs">
+                        @foreach($productQuestions as $qIdx => $pq)
+                            @php
+                                $ansStr = (string) ($pq->answer ?? '');
+                                $isLongAns = mb_strlen($ansStr) > 180 || substr_count($ansStr, "\n") >= 3;
+                            @endphp
+                            <div x-show="{{ $qIdx }} < visibleQuestionsLimit"
+                                 x-transition
+                                 x-data="{ ansExpanded: false }"
+                                 class="py-3.5 space-y-2">
                                 <div class="flex items-start justify-between gap-2">
-                                    <div class="font-bold text-text-main">
+                                    <div class="font-bold text-text-main select-text">
                                         <span class="px-2 py-0.5 rounded bg-primary/10 text-primary font-extrabold text-[10px] mr-1.5">Q</span>
                                         {{ $pq->question }}
                                     </div>
@@ -1174,13 +1259,20 @@
                                         {{ $pq->buyer?->first_name ? substr($pq->buyer->first_name, 0, 1) . '***' : 'Buyer' }} &bull; {{ $pq->created_at?->format('M d, Y') }}
                                     </span>
                                 </div>
-                                @if($pq->answer)
-                                    <div class="p-3 rounded-2xl bg-brand-light/25 border border-border-subtle space-y-1 ml-4">
+                                @if($ansStr !== '')
+                                    <div class="p-3.5 rounded-2xl bg-brand-light/25 border border-border-subtle space-y-1 ml-4">
                                         <div class="flex items-center justify-between text-[10px]">
                                             <strong class="text-primary-dark uppercase">A: {{ $seller->business_name ?? 'Official Store' }}</strong>
                                             <span class="text-text-muted">{{ $pq->answered_at?->format('M d, Y') }}</span>
                                         </div>
-                                        <p class="text-text-main leading-relaxed">{{ $pq->answer }}</p>
+                                        <p :class="(!ansExpanded && {{ $isLongAns ? 'true' : 'false' }}) ? 'line-clamp-3' : ''"
+                                           class="text-text-main leading-relaxed whitespace-pre-line select-text">{{ $ansStr }}</p>
+                                        @if($isLongAns)
+                                            <button type="button"
+                                                    @click="ansExpanded = !ansExpanded"
+                                                    class="mt-1 inline-flex items-center gap-1 text-[11px] font-extrabold text-primary hover:text-primary-dark hover:underline cursor-pointer"
+                                                    x-text="ansExpanded ? 'See less' : 'See more'"></button>
+                                        @endif
                                     </div>
                                 @else
                                     <p class="text-[11px] text-text-muted italic ml-6">Waiting for seller response...</p>
@@ -1188,22 +1280,43 @@
                             </div>
                         @endforeach
                     </div>
+
+                    @if($productQuestions->count() > 4)
+                        <div class="pt-3 flex flex-wrap items-center justify-center gap-3">
+                            <button type="button"
+                                    x-show="visibleQuestionsLimit < {{ $productQuestions->count() }}"
+                                    @click="visibleQuestionsLimit += 5"
+                                    class="inline-flex items-center gap-2 px-6 py-2.5 rounded-full bg-primary/10 hover:bg-primary text-primary hover:text-white border border-primary/30 text-xs font-extrabold transition-all cursor-pointer shadow-xs">
+                                <span x-text="'See More Questions (' + ({{ $productQuestions->count() }} - visibleQuestionsLimit) + ' remaining)'"></span>
+                                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
+                                </svg>
+                            </button>
+                            <button type="button"
+                                    x-show="visibleQuestionsLimit > 4"
+                                    x-cloak
+                                    @click="visibleQuestionsLimit = 4"
+                                    class="inline-flex items-center gap-1.5 px-4 py-2 rounded-full bg-surface border border-border-subtle hover:border-primary/40 text-xs font-bold text-text-muted hover:text-primary transition-all cursor-pointer">
+                                <span>Show Less Questions</span>
+                            </button>
+                        </div>
+                    @endif
                 @endif
             </div>
         </div>
 
         @if($recommendedProducts->isNotEmpty())
-            <div class="bg-white rounded-3xl shadow-sm border border-border-subtle/80 p-6 sm:p-8 space-y-5">
-                <div class="flex items-center justify-between border-b border-border-subtle/70 pb-3">
+            <div class="bg-surface rounded-3xl shadow-xs border border-border-subtle p-6 sm:p-8 space-y-5">
+                <div class="flex items-center justify-between border-b border-border-subtle pb-3">
                     <div>
                         <span class="text-[10px] font-extrabold uppercase tracking-wider text-primary block">Tailored For You</span>
                         <h2 class="text-lg sm:text-xl font-bold font-serif text-text-main uppercase">Recommended Products You May Also Like</h2>
                     </div>
-                    <a href="{{ route('home') }}" class="text-xs font-bold text-primary hover:underline">Explore All &rarr;</a>
+                    <a href="{{ route('home') }}" class="text-xs font-bold text-primary hover:underline cursor-pointer">Explore All &rarr;</a>
                 </div>
                 <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-4">
                     @foreach($recommendedProducts as $recProd)
-                        <div class="bg-surface rounded-2xl p-2.5 border border-border-subtle/60 hover:border-primary/40 transition-all">
+                        <div class="bg-surface rounded-2xl p-2.5 border border-border-subtle hover:border-primary/40 transition-all">
                             <x-dynamic-component :component="$productCardComponent" :product="$recProd" />
                         </div>
                     @endforeach
@@ -1218,11 +1331,10 @@
          class="fixed inset-0 z-[150] flex items-center justify-center bg-black/80 backdrop-blur-md p-4 sm:p-8"
          x-on:keydown.escape.window="imageModalOpen = false"
          @click="imageModalOpen = false">
-
         <button type="button"
                 @click.stop="imageModalOpen = false"
                 aria-label="Close image preview"
-                class="fixed top-5 right-5 z-[160] w-11 h-11 rounded-full bg-white/95 hover:bg-white text-gray-900 shadow-2xl border border-gray-200 flex items-center justify-center transition-transform active:scale-95 cursor-pointer">
+                class="fixed top-5 right-5 z-[160] w-11 h-11 rounded-full bg-surface hover:bg-surface-subtle text-text-main shadow-2xl border border-border-subtle flex items-center justify-center transition-transform active:scale-95 cursor-pointer">
             <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
             </svg>
@@ -1234,21 +1346,21 @@
                         x-show="!isViewingVariantImage"
                         @click.stop="prevGalleryImage()"
                         aria-label="Previous image"
-                        class="absolute left-3 top-1/2 -translate-y-1/2 w-10 h-10 rounded-full bg-white/90 hover:bg-white text-gray-900 shadow-lg flex items-center justify-center cursor-pointer">
+                        class="absolute left-3 top-1/2 -translate-y-1/2 w-10 h-10 rounded-full bg-surface/90 hover:bg-surface text-text-main shadow-lg flex items-center justify-center cursor-pointer">
                     <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/></svg>
                 </button>
             @endif
 
             <img :src="mainImage"
                  alt="{{ $product->name }}"
-                 class="max-w-full max-h-[85vh] object-contain rounded-2xl shadow-2xl bg-white">
+                 class="max-w-full max-h-[85vh] object-contain rounded-2xl shadow-2xl bg-surface">
 
             @if(count($mainPictureUrls) > 1)
                 <button type="button"
                         x-show="!isViewingVariantImage"
                         @click.stop="nextGalleryImage()"
                         aria-label="Next image"
-                        class="absolute right-3 top-1/2 -translate-y-1/2 w-10 h-10 rounded-full bg-white/90 hover:bg-white text-gray-900 shadow-lg flex items-center justify-center cursor-pointer">
+                        class="absolute right-3 top-1/2 -translate-y-1/2 w-10 h-10 rounded-full bg-surface/90 hover:bg-surface text-text-main shadow-lg flex items-center justify-center cursor-pointer">
                     <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
                 </button>
             @endif
@@ -1262,21 +1374,20 @@
                     </button>
                 </template>
                 <template x-if="!isViewingVariantImage && galleryImages.length > 0">
-                    <span class="px-3 py-1 rounded-full bg-black/75 text-white text-xs font-bold shadow-md"
+                    <span class="px-3 py-1 rounded-full bg-primary-dark/85 text-white text-xs font-bold shadow-md"
                           x-text="(activeGalleryIndex + 1) + ' / ' + galleryImages.length"></span>
                 </template>
             </div>
         </div>
     </div>
 
-    <div x-show="showToast"
+    <div x-show="reviewPhotoModalSrc !== ''"
          x-cloak
-         class="fixed top-24 right-6 z-[100] bg-surface border border-border-subtle rounded-2xl shadow-2xl font-sans flex items-start gap-3 min-w-[300px] overflow-hidden">
-        <div class="absolute left-0 top-0 bottom-0 w-1.5" :class="toastType === 'success' ? 'bg-green-600' : 'bg-danger'"></div>
-        <div class="py-3 pl-5 pr-8">
-            <h4 class="text-text-main text-sm font-bold mb-0.5" x-text="toastType === 'success' ? 'Success' : 'Notice'"></h4>
-            <p class="text-text-muted text-xs font-medium leading-relaxed" x-text="toastMessage"></p>
-        </div>
+         x-transition.opacity
+         @click="reviewPhotoModalSrc = ''"
+         @keydown.escape.window="reviewPhotoModalSrc = ''"
+         class="fixed inset-0 z-[170] flex items-center justify-center bg-black/80 backdrop-blur-md p-4 cursor-zoom-out">
+        <img :src="reviewPhotoModalSrc" class="max-w-full max-h-[85vh] rounded-2xl shadow-2xl object-contain bg-surface" @click.stop>
     </div>
 
     <x-buyer.report-seller-modal />

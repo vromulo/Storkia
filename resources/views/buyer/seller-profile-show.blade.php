@@ -31,7 +31,7 @@
         $claimedVoucherIds = $claimedVoucherIds ?? [];
     @endphp
 
-    <div class="relative bg-surface-subtle font-sans antialiased text-text-main overflow-x-hidden min-h-screen pb-20"
+    <div class="relative bg-surface-subtle font-sans antialiased text-text-main overflow-x-hidden min-h-screen pb-20 select-none"
          x-data="sellerStorefront({
              products: {{ Js::from($productsJson) }},
              categoryTree: {{ Js::from($storeCategoryTree) }},
@@ -44,24 +44,12 @@
          })"
          x-init="initScrollObserver()">
 
-        <div class="bg-white border-b border-border-subtle/80 shadow-2xs">
+        <div class="bg-surface border-b border-border-subtle shadow-2xs">
             <div class="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 py-7 sm:py-10 space-y-6">
-
-                @if(session('success'))
-                    <div class="p-4 rounded-2xl bg-green-50 border border-green-200 text-green-700 text-xs sm:text-sm font-bold">
-                        {{ session('success') }}
-                    </div>
-                @endif
-
-                <template x-if="followBannerMessage">
-                    <div class="p-4 rounded-2xl border text-xs sm:text-sm font-bold"
-                         :class="followBannerError ? 'bg-red-50 border-red-200 text-red-700' : 'bg-green-50 border-green-200 text-green-700'"
-                         x-text="followBannerMessage"></div>
-                </template>
 
                 <div class="flex flex-col lg:flex-row items-center lg:items-start gap-6 sm:gap-8">
                     <div class="relative w-28 h-28 sm:w-36 sm:h-36 rounded-full p-1 bg-gradient-to-br from-primary via-secondary to-primary/40 shadow-md flex-shrink-0">
-                        <div class="w-full h-full bg-white rounded-full p-1 overflow-hidden flex items-center justify-center">
+                        <div class="w-full h-full bg-surface rounded-full p-1 overflow-hidden flex items-center justify-center">
                             @if($seller->logo_path)
                                 <img src="{{ Storage::url($seller->logo_path) }}" alt="{{ $seller->business_name }}" class="w-full h-full rounded-full object-cover">
                             @else
@@ -72,17 +60,17 @@
                                 </div>
                             @endif
                         </div>
-                        <span class="absolute bottom-1.5 right-1.5 w-4 h-4 rounded-full bg-success ring-4 ring-white" title="Verified Active Store"></span>
+                        <span class="absolute bottom-1.5 right-1.5 w-4 h-4 rounded-full bg-success ring-4 ring-surface" title="Verified Active Store"></span>
                     </div>
 
                     <div class="flex-1 w-full text-center lg:text-left">
-                        <div class="flex flex-col sm:flex-row items-center justify-between gap-4 pb-5 border-b border-border-subtle/70">
+                        <div class="flex flex-col sm:flex-row items-center justify-between gap-4 pb-5 border-b border-border-subtle">
                             <div>
                                 <h1 class="text-2xl sm:text-3xl lg:text-4xl font-extrabold text-text-main tracking-tight leading-tight">
                                     {{ $seller->business_name }}
                                 </h1>
                                 <p class="text-sm sm:text-base font-normal text-text-muted mt-1">
-                                    {{ implode(' • ', $storeMainCategories) }}
+                                    {!! implode(' &bull; ', array_map('e', $storeMainCategories)) !!}
                                 </p>
                             </div>
 
@@ -95,22 +83,22 @@
                                     <button type="button"
                                             @click="toggleFollow()"
                                             :disabled="isSubmittingFollow"
-                                            class="inline-flex items-center gap-2 px-5 py-2.5 rounded-2xl text-xs sm:text-sm font-bold transition-all duration-300 cursor-pointer shadow-2xs disabled:opacity-50"
+                                            class="inline-flex items-center gap-2 px-5 py-2.5 rounded-2xl text-xs sm:text-sm font-bold transition-all duration-200 cursor-pointer shadow-2xs disabled:opacity-50"
                                             :class="isFollowing
                                                 ? 'bg-surface-subtle text-text-main border border-border-subtle hover:border-primary/40'
                                                 : 'bg-primary text-white hover:bg-primary-dark shadow-md shadow-primary/20'">
-                                        <span x-text="isFollowing ? '✓ Following' : '+ Follow Store (Get 1-Time ₱30 Voucher)'"></span>
+                                        <span x-text="isFollowing ? '&#10003; Following' : '+ Follow Store (Get 1-Time &#8369;30 Voucher)'"></span>
                                     </button>
                                 @endif
 
                                 @auth
                                     <a href="{{ route('user.messages.buyer-messages', ['contact' => $seller->user_id]) }}"
-                                       class="inline-flex items-center gap-2 px-5 py-2.5 rounded-2xl text-xs sm:text-sm font-bold bg-surface hover:bg-surface-subtle text-text-main border border-border-subtle hover:border-primary/40 transition-all duration-300 shadow-2xs">
+                                       class="inline-flex items-center gap-2 px-5 py-2.5 rounded-2xl text-xs sm:text-sm font-bold bg-surface hover:bg-surface-subtle text-text-main border border-border-subtle hover:border-primary/40 transition-all duration-200 shadow-2xs cursor-pointer">
                                         <span>Chat Now</span>
                                     </a>
                                 @else
                                     <a href="{{ route('login') }}"
-                                       class="inline-flex items-center gap-2 px-5 py-2.5 rounded-2xl text-xs sm:text-sm font-bold bg-surface hover:bg-surface-subtle text-text-main border border-border-subtle hover:border-primary/40 transition-all duration-300 shadow-2xs">
+                                       class="inline-flex items-center gap-2 px-5 py-2.5 rounded-2xl text-xs sm:text-sm font-bold bg-surface hover:bg-surface-subtle text-text-main border border-border-subtle hover:border-primary/40 transition-all duration-200 shadow-2xs cursor-pointer">
                                         <span>Chat Now</span>
                                     </a>
                                 @endauth
@@ -120,7 +108,7 @@
                                             @click="$dispatch('open-report-seller', { sellerId: {{ $seller->id }}, sellerName: @js($seller->business_name) })"
                                             title="Report this store"
                                             aria-label="Report this store"
-                                            class="inline-flex items-center gap-2 px-4 py-2.5 rounded-2xl text-xs sm:text-sm font-bold bg-surface hover:bg-red-50 text-text-muted hover:text-danger border border-border-subtle hover:border-danger/40 transition-all duration-300 shadow-2xs cursor-pointer">
+                                            class="inline-flex items-center gap-2 px-4 py-2.5 rounded-2xl text-xs sm:text-sm font-bold bg-surface hover:bg-danger/10 text-text-muted hover:text-danger border border-border-subtle hover:border-danger/40 transition-all duration-200 shadow-2xs cursor-pointer">
                                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                                             <path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"></path>
                                             <line x1="4" y1="22" x2="4" y2="15"></line>
@@ -141,7 +129,6 @@
                                     <p class="text-xs sm:text-sm font-bold text-primary">{{ $stats['chat_response_rate'] }}%</p>
                                 </div>
                             </div>
-
                             <div class="flex items-center gap-2.5">
                                 <div class="w-8 h-8 rounded-xl bg-primary/10 text-primary flex items-center justify-center flex-shrink-0">
                                     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"></path></svg>
@@ -151,7 +138,6 @@
                                     <p class="text-xs sm:text-sm font-bold text-text-main">{{ number_format($stats['following']) }}</p>
                                 </div>
                             </div>
-
                             <div class="flex items-center gap-2.5">
                                 <div class="w-8 h-8 rounded-xl bg-primary/10 text-primary flex items-center justify-center flex-shrink-0">
                                     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
@@ -161,7 +147,6 @@
                                     <p class="text-xs sm:text-sm font-bold text-text-main" x-text="followersCount.toLocaleString()"></p>
                                 </div>
                             </div>
-
                             <div class="flex items-center gap-2.5">
                                 <div class="w-8 h-8 rounded-xl bg-primary/10 text-primary flex items-center justify-center flex-shrink-0">
                                     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z"></path></svg>
@@ -171,7 +156,6 @@
                                     <p class="text-xs sm:text-sm font-bold text-primary">{{ $stats['ratings'] }} / 5.0</p>
                                 </div>
                             </div>
-
                             <div class="flex items-center gap-2.5">
                                 <div class="w-8 h-8 rounded-xl bg-primary/10 text-primary flex items-center justify-center flex-shrink-0">
                                     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
@@ -181,7 +165,6 @@
                                     <p class="text-xs sm:text-sm font-bold text-text-main truncate">{{ $stats['joined'] }}</p>
                                 </div>
                             </div>
-
                             <div class="flex items-center gap-2.5">
                                 <div class="w-8 h-8 rounded-xl bg-primary/10 text-primary flex items-center justify-center flex-shrink-0">
                                     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"></path></svg>
@@ -196,10 +179,10 @@
                 </div>
 
                 @if($storeVouchers->isNotEmpty())
-                    <div class="pt-4 border-t border-border-subtle/70 space-y-3">
+                    <div class="pt-4 border-t border-border-subtle space-y-3">
                         <div class="flex items-center justify-between">
                             <h3 class="text-xs font-extrabold uppercase tracking-wider text-primary-dark">
-                                Exclusive Store Vouchers — Claim Here Only
+                                Exclusive Store Vouchers &bull; Claim Here Only
                             </h3>
                             <span class="text-[11px] text-text-muted">Sponsored by {{ $seller->business_name }}</span>
                         </div>
@@ -212,7 +195,7 @@
                                     <div class="w-28 bg-gradient-to-br from-primary to-primary-dark text-white p-3 flex flex-col items-center justify-center text-center shrink-0 border-r-2 border-dashed border-white/40">
                                         <span class="text-[8px] font-extrabold uppercase px-1.5 py-0.5 rounded bg-black/25 mb-1">STORE VOUCHER</span>
                                         <div class="text-sm font-serif font-extrabold">{{ $sv->badge_label }}</div>
-                                        <span class="text-[10px] text-white/90 mt-0.5">Min. ₱{{ number_format((float) $sv->min_spend, 0) }}</span>
+                                        <span class="text-[10px] text-white/90 mt-0.5">Min. &#8369;{{ number_format((float) $sv->min_spend, 0) }}</span>
                                     </div>
                                     <div class="flex-1 p-3 flex flex-col justify-between text-xs min-w-0">
                                         <div>
@@ -229,13 +212,13 @@
                                                         @csrf
                                                         <input type="hidden" name="code" value="{{ $sv->code }}">
                                                         <input type="hidden" name="seller_profile_id" value="{{ $seller->id }}">
-                                                        <button type="submit" class="px-3.5 py-1.5 rounded-xl bg-primary hover:bg-primary-dark text-white font-bold text-[11px] cursor-pointer">
+                                                        <button type="submit" class="px-3.5 py-1.5 rounded-xl bg-primary hover:bg-primary-dark text-white font-bold text-[11px] transition-colors cursor-pointer">
                                                             Claim Voucher
                                                         </button>
                                                     </form>
                                                 @endif
                                             @else
-                                                <a href="{{ route('login') }}" class="px-3.5 py-1.5 rounded-xl bg-primary text-white font-bold text-[11px]">Claim Voucher</a>
+                                                <a href="{{ route('login') }}" class="px-3.5 py-1.5 rounded-xl bg-primary hover:bg-primary-dark text-white font-bold text-[11px] transition-colors cursor-pointer">Claim Voucher</a>
                                             @endauth
                                         </div>
                                     </div>
@@ -247,22 +230,19 @@
             </div>
         </div>
 
-        <!-- Storefront Filter Console (Main Category -> Dynamic Sub Category + Custom Downward Dropdowns) -->
         <div class="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 py-8">
-            <div class="bg-white rounded-3xl shadow-sm border border-border-subtle/80 p-5 sm:p-7 mb-8">
+            <div class="bg-surface rounded-3xl shadow-xs border border-border-subtle p-5 sm:p-7 mb-8">
                 <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-12 gap-4 items-end">
 
-                    <!-- Search Store -->
                     <div class="xl:col-span-3">
                         <label class="block text-xs font-bold uppercase tracking-wider text-text-muted mb-2">Search Store</label>
                         <input type="text"
                                x-model.debounce.150ms="searchQuery"
                                @input="visibleLimit = batchSize"
                                placeholder="Search product of this store"
-                               class="w-full bg-surface hover:bg-surface-subtle focus:bg-white text-text-main text-sm font-medium rounded-2xl px-4 py-3 border border-border-subtle focus:border-primary focus:outline-none">
+                               class="w-full bg-surface hover:bg-surface-subtle focus:bg-surface text-text-main text-sm font-medium rounded-2xl px-4 py-3 border border-border-subtle focus:border-primary focus:outline-none">
                     </div>
 
-                    <!-- Main Category Custom Downward Dropdown -->
                     <div class="xl:col-span-3 relative" x-data="{ open: false }" @click.away="open = false">
                         <label class="block text-xs font-bold uppercase tracking-wider text-text-muted mb-2">Main Category</label>
                         <button type="button"
@@ -272,8 +252,7 @@
                             <span class="truncate" x-text="activeMainCategory || 'All Main Categories'"></span>
                             <svg class="w-4 h-4 text-text-muted transition-transform shrink-0" :class="open ? 'rotate-180' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M19 9l-7 7-7-7"></path></svg>
                         </button>
-
-                        <div x-show="open" x-cloak x-transition class="absolute left-0 right-0 top-full mt-2 z-50 bg-white border border-border-subtle rounded-2xl shadow-xl py-1.5 max-h-64 overflow-y-auto">
+                        <div x-show="open" x-cloak x-transition class="absolute left-0 right-0 top-full mt-2 z-50 bg-surface border border-border-subtle rounded-2xl shadow-xl py-1.5 max-h-64 overflow-y-auto custom-scrollbar">
                             <button type="button"
                                     @click="selectMainCategory(''); open = false"
                                     class="w-full text-left px-4 py-2.5 text-sm transition-colors cursor-pointer"
@@ -291,7 +270,6 @@
                         </div>
                     </div>
 
-                    <!-- Dynamic Sub Category Custom Downward Dropdown -->
                     <div class="xl:col-span-3 relative" x-data="{ open: false }" @click.away="open = false">
                         <label class="block text-xs font-bold uppercase tracking-wider text-text-muted mb-2">Sub Category</label>
                         <button type="button"
@@ -301,8 +279,7 @@
                             <span class="truncate" x-text="activeCategory || 'All Sub Categories'"></span>
                             <svg class="w-4 h-4 text-text-muted transition-transform shrink-0" :class="open ? 'rotate-180' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M19 9l-7 7-7-7"></path></svg>
                         </button>
-
-                        <div x-show="open" x-cloak x-transition class="absolute left-0 right-0 top-full mt-2 z-50 bg-white border border-border-subtle rounded-2xl shadow-xl py-1.5 max-h-64 overflow-y-auto">
+                        <div x-show="open" x-cloak x-transition class="absolute left-0 right-0 top-full mt-2 z-50 bg-surface border border-border-subtle rounded-2xl shadow-xl py-1.5 max-h-64 overflow-y-auto custom-scrollbar">
                             <button type="button"
                                     @click="activeCategory = ''; visibleLimit = batchSize; open = false"
                                     class="w-full text-left px-4 py-2.5 text-sm transition-colors cursor-pointer"
@@ -320,7 +297,6 @@
                         </div>
                     </div>
 
-                    <!-- Sort Products Custom Downward Dropdown -->
                     <div class="xl:col-span-3 relative" x-data="{ open: false }" @click.away="open = false">
                         <label class="block text-xs font-bold uppercase tracking-wider text-text-muted mb-2">Sort Products</label>
                         <button type="button"
@@ -330,8 +306,7 @@
                             <span class="truncate" x-text="sortLabel"></span>
                             <svg class="w-4 h-4 text-text-muted transition-transform shrink-0" :class="open ? 'rotate-180' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M19 9l-7 7-7-7"></path></svg>
                         </button>
-
-                        <div x-show="open" x-cloak x-transition class="absolute left-0 right-0 top-full mt-2 z-50 bg-white border border-border-subtle rounded-2xl shadow-xl py-1.5">
+                        <div x-show="open" x-cloak x-transition class="absolute left-0 right-0 top-full mt-2 z-50 bg-surface border border-border-subtle rounded-2xl shadow-xl py-1.5">
                             <template x-for="opt in [
                                 { key: 'newest', label: 'Newest Added' },
                                 { key: 'oldest', label: 'Oldest Added' },
@@ -349,32 +324,29 @@
                             </template>
                         </div>
                     </div>
-
                 </div>
             </div>
 
-            <!-- Products Grid (Per-Batch Scroll Loading) -->
             <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4 sm:gap-6 min-h-[360px]">
                 @foreach($products as $product)
                     <div x-show="isVisibleInBatch({{ $product->id }})"
                          :style="{ order: getOrder({{ $product->id }}) }"
-                         class="bg-white rounded-2xl p-3 border border-border-subtle/60 hover:border-primary/30 hover:shadow-md transition-all duration-300 flex flex-col">
+                         class="bg-surface rounded-2xl p-3 border border-border-subtle hover:border-primary/30 hover:shadow-md transition-all duration-300 flex flex-col">
                         <x-dynamic-component :component="$productCardComponent" :product="$product" />
                     </div>
                 @endforeach
 
-                <div x-show="filteredAndSortedIds.length === 0" x-cloak class="col-span-full flex flex-col items-center justify-center py-20 px-4 text-center bg-white rounded-3xl border border-border-subtle shadow-xs">
+                <div x-show="filteredAndSortedIds.length === 0" x-cloak class="col-span-full flex flex-col items-center justify-center py-20 px-4 text-center bg-surface rounded-3xl border border-border-subtle shadow-xs">
                     <h3 class="text-lg font-extrabold text-text-main mb-1">No Products Found</h3>
                     <p class="text-text-muted text-xs sm:text-sm max-w-sm mx-auto mb-5">
                         No products in this store match your selected category or search filter.
                     </p>
-                    <button type="button" @click="resetFilters()" class="px-6 py-2.5 bg-primary text-white rounded-full font-bold text-xs cursor-pointer">
+                    <button type="button" @click="resetFilters()" class="px-6 py-2.5 bg-primary hover:bg-primary-dark text-white rounded-full font-bold text-xs transition-colors cursor-pointer">
                         Reset Filters
                     </button>
                 </div>
             </div>
 
-            <!-- Infinite Scroll Sentinel for Per-Batch Loading -->
             <div x-ref="scrollSentinel"
                  x-show="visibleLimit < filteredAndSortedIds.length"
                  class="py-8 flex flex-col items-center justify-center gap-2 text-xs text-text-muted font-bold">
@@ -383,7 +355,7 @@
                     <span class="w-2 h-2 rounded-full bg-primary animate-bounce" style="animation-delay: 0.15s"></span>
                     <span class="w-2 h-2 rounded-full bg-primary animate-bounce" style="animation-delay: 0.3s"></span>
                 </div>
-                <span x-text="'Showing ' + Math.min(visibleLimit, filteredAndSortedIds.length) + ' of ' + filteredAndSortedIds.length + ' products — Scroll down for next batch'"></span>
+                <span x-text="'Showing ' + Math.min(visibleLimit, filteredAndSortedIds.length) + ' of ' + filteredAndSortedIds.length + ' products &bull; Scroll down for next batch'"></span>
             </div>
         </div>
     </div>
@@ -405,9 +377,6 @@
                 isFollowing: initialFollowingState || false,
                 followersCount: initialFollowers || 0,
                 isSubmittingFollow: false,
-                followBannerMessage: '',
-                followBannerError: false,
-
                 initScrollObserver() {
                     this.$nextTick(() => {
                         if (!this.$refs.scrollSentinel || typeof IntersectionObserver === 'undefined') return;
@@ -423,20 +392,17 @@
                         observer.observe(this.$refs.scrollSentinel);
                     });
                 },
-
                 selectMainCategory(mainCat) {
                     this.activeMainCategory = mainCat;
                     this.activeCategory = '';
                     this.visibleLimit = this.batchSize;
                 },
-
                 get availableSubCategories() {
                     if (!this.activeMainCategory) {
                         return this.allSubCategories;
                     }
                     return this.categoryTree[this.activeMainCategory] || [];
                 },
-
                 get sortLabel() {
                     const labels = {
                         newest: 'Newest Added',
@@ -448,15 +414,12 @@
                     };
                     return labels[this.sortBy] || 'Newest Added';
                 },
-
                 async toggleFollow() {
                     if (!isAuthenticated) {
                         window.location.href = loginUrl;
                         return;
                     }
                     this.isSubmittingFollow = true;
-                    this.followBannerMessage = '';
-                    this.followBannerError = false;
                     try {
                         const res = await fetch(followUrl, {
                             method: 'POST',
@@ -468,33 +431,48 @@
                         });
                         const data = await res.json();
                         if (!res.ok || data.success === false) {
-                            this.followBannerError = true;
-                            this.followBannerMessage = data.message || 'Unable to follow store.';
+                            window.dispatchEvent(new CustomEvent('toast', {
+                                detail: {
+                                    title: 'Notice',
+                                    message: data.message || 'Unable to follow store.',
+                                    type: 'danger'
+                                }
+                            }));
                         } else {
                             this.isFollowing = data.is_following;
                             this.followersCount = data.followers_count;
-                            this.followBannerMessage = data.message || '';
+                            if (data.message) {
+                                window.dispatchEvent(new CustomEvent('toast', {
+                                    detail: {
+                                        title: 'Success',
+                                        message: data.message,
+                                        type: 'success'
+                                    }
+                                }));
+                            }
                         }
                     } catch (err) {
-                        this.followBannerError = true;
-                        this.followBannerMessage = 'Network error while updating follow status.';
+                        window.dispatchEvent(new CustomEvent('toast', {
+                            detail: {
+                                title: 'Error',
+                                message: 'Network error while updating follow status.',
+                                type: 'danger'
+                            }
+                        }));
                     } finally {
                         this.isSubmittingFollow = false;
                     }
                 },
-
                 get filteredAndSortedIds() {
                     const query = this.searchQuery.trim().toLowerCase();
                     const mainCat = this.activeMainCategory;
                     const subCat = this.activeCategory;
-
                     let filtered = this.products.filter(item => {
                         const matchSearch = !query || item.name.includes(query);
                         const matchMain = !mainCat || item.main_category === mainCat;
                         const matchSub = !subCat || item.category === subCat;
                         return matchSearch && matchMain && matchSub;
                     });
-
                     filtered.sort((a, b) => {
                         switch (this.sortBy) {
                             case 'price_asc': return a.price - b.price;
@@ -506,20 +484,16 @@
                             default: return b.timestamp - a.timestamp;
                         }
                     });
-
                     return filtered.map(item => item.id);
                 },
-
                 isVisibleInBatch(id) {
                     const idx = this.filteredAndSortedIds.indexOf(id);
                     return idx !== -1 && idx < this.visibleLimit;
                 },
-
                 getOrder(id) {
                     const idx = this.filteredAndSortedIds.indexOf(id);
                     return idx === -1 ? 9999 : idx;
                 },
-
                 resetFilters() {
                     this.searchQuery = '';
                     this.activeMainCategory = '';

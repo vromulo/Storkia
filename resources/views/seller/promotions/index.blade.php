@@ -7,7 +7,14 @@
     $bundles = $bundles ?? collect();
 
     $productVariantsMap = [];
+    $productOptionsList = [];
     foreach ($products as $prod) {
+        $productOptionsList[] = [
+            'id'    => (string) $prod->id,
+            'name'  => (string) $prod->name,
+            'price' => (float) ($prod->price ?? 0),
+            'stock' => (int) ($prod->stock_quantity ?? 0),
+        ];
         $raw = $prod->raw_variants;
         $vars = [];
         if (is_array($raw) && !empty($raw['items']) && is_array($raw['items'])) {
@@ -38,18 +45,19 @@
         }
         $productVariantsMap[$prod->id] = $vars;
     }
-    $firstProductId = (string) ($products->first()?->id ?? '');
 
+    $firstProductId = (string) ($products->first()?->id ?? '');
     $promotionsConfig = [
-        'dealType'              => (string) old('deal_type', 'super_deal'),
-        'bundleType'            => (string) old('bundle_type', 'percentage_off'),
-        'selectedDealProductId' => (string) old('product_id', $firstProductId),
-        'selectedDealVariant'   => (string) old('variant_name', ''),
-        'selectedDealSubVariant'=> (string) old('sub_variant_name', ''),
-        'selectedGiftProductId' => (string) old('free_gift_product_id', $firstProductId),
-        'selectedGiftVariant'   => (string) old('free_gift_variant_name', ''),
-        'selectedGiftSubVariant'=> (string) old('free_gift_sub_variant_name', ''),
-        'variantsByProduct'     => $productVariantsMap,
+        'dealType'               => (string) old('deal_type', 'super_deal'),
+        'bundleType'             => (string) old('bundle_type', 'percentage_off'),
+        'selectedDealProductId'  => (string) old('product_id', $firstProductId),
+        'selectedDealVariant'    => (string) old('variant_name', ''),
+        'selectedDealSubVariant' => (string) old('sub_variant_name', ''),
+        'selectedGiftProductId'  => (string) old('free_gift_product_id', $firstProductId),
+        'selectedGiftVariant'    => (string) old('free_gift_variant_name', ''),
+        'selectedGiftSubVariant' => (string) old('free_gift_sub_variant_name', ''),
+        'variantsByProduct'      => $productVariantsMap,
+        'productsList'           => $productOptionsList,
     ];
 @endphp
 
@@ -65,8 +73,29 @@
             selectedGiftVariant: cfg.selectedGiftVariant || '',
             selectedGiftSubVariant: cfg.selectedGiftSubVariant || '',
             variantsByProduct: cfg.variantsByProduct || {},
+            productsList: Array.isArray(cfg.productsList) ? cfg.productsList : [],
+            dealProductOpen: false,
+            dealVariantOpen: false,
+            dealSubVariantOpen: false,
+            bundleTypeOpen: false,
+            giftProductOpen: false,
+            giftVariantOpen: false,
+            giftSubVariantOpen: false,
+            showAllQualifying: false,
+            dealsTableExpanded: false,
+            bundlesTableExpanded: false,
             isSubmittingDeal: false,
             isSubmittingBundle: false,
+            get selectedDealProductLabel() {
+                const found = this.productsList.find(p => String(p.id) === String(this.selectedDealProductId));
+                if (!found) return 'Select product...';
+                return `${found.name} — Orig: \u20B1${Number(found.price).toFixed(2)} (Stock: ${found.stock})`;
+            },
+            get selectedGiftProductLabel() {
+                const found = this.productsList.find(p => String(p.id) === String(this.selectedGiftProductId));
+                if (!found) return 'Select free gift...';
+                return `${found.name} (\u20B1${Number(found.price).toFixed(2)} \u2192 \u20B10.00)`;
+            },
             get dealVariants() {
                 return this.variantsByProduct[this.selectedDealProductId] || [];
             },
@@ -99,26 +128,12 @@
             @csrf
             @method('PATCH')
             <button type="submit"
-                    class="px-5 py-3 rounded-2xl text-xs font-extrabold shadow-xs transition-all cursor-pointer flex items-center gap-2 {{ $isOnVacation ? 'bg-amber-500 hover:bg-amber-600 text-white' : 'bg-surface border border-border-subtle hover:border-primary text-text-main' }}">
-                <span class="w-2.5 h-2.5 rounded-full {{ $isOnVacation ? 'bg-white' : 'bg-green-500' }}"></span>
+                    class="px-5 py-3 rounded-2xl text-xs font-extrabold shadow-xs transition-all cursor-pointer flex items-center gap-2 {{ $isOnVacation ? 'bg-primary-dark hover:bg-primary text-white' : 'bg-surface border border-border-subtle hover:border-primary text-text-main' }}">
+                <span class="w-2.5 h-2.5 rounded-full {{ $isOnVacation ? 'bg-brand-light' : 'bg-success' }}"></span>
                 <span>{{ $isOnVacation ? 'Store On Vacation (Click to Re-Open Store)' : 'Store Active (Click to Turn On Vacation Mode)' }}</span>
             </button>
         </form>
     </div>
-
-    @if(session('success'))
-        <div class="p-4 rounded-2xl bg-green-50 border border-green-200 text-green-700 text-xs sm:text-sm font-bold">
-            {{ session('success') }}
-        </div>
-    @endif
-
-    @if($errors->any())
-        <div class="p-4 rounded-2xl bg-red-50 border border-red-200 text-red-700 text-xs sm:text-sm space-y-1">
-            @foreach($errors->all() as $err)
-                <p class="font-semibold">{{ $err }}</p>
-            @endforeach
-        </div>
-    @endif
 
     <div class="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
         <div class="lg:col-span-6 bg-surface rounded-3xl border border-border-subtle p-6 shadow-xs space-y-4">
@@ -134,87 +149,112 @@
                   @submit="isSubmittingDeal = true"
                   class="space-y-4 text-xs">
                 @csrf
-
                 <div class="grid grid-cols-2 gap-3">
-                    <label class="p-3 rounded-xl border cursor-pointer font-bold flex items-center gap-2"
-                           :class="dealType === 'super_deal' ? 'border-primary bg-primary/5 text-primary-dark' : 'border-border-subtle'">
-                        <input type="radio" name="deal_type" value="super_deal" x-model="dealType">
+                    <label class="p-3 rounded-xl border cursor-pointer font-bold flex items-center gap-2 transition-colors"
+                           :class="dealType === 'super_deal' ? 'border-primary bg-primary/5 text-primary-dark' : 'border-border-subtle hover:border-primary/40'">
+                        <input type="radio" name="deal_type" value="super_deal" x-model="dealType" class="text-primary">
                         <span>Super Deal (Time Slot)</span>
                     </label>
-                    <label class="p-3 rounded-xl border cursor-pointer font-bold flex items-center gap-2"
-                           :class="dealType === 'store_sale' ? 'border-primary bg-primary/5 text-primary-dark' : 'border-border-subtle'">
-                        <input type="radio" name="deal_type" value="store_sale" x-model="dealType">
+                    <label class="p-3 rounded-xl border cursor-pointer font-bold flex items-center gap-2 transition-colors"
+                           :class="dealType === 'store_sale' ? 'border-primary bg-primary/5 text-primary-dark' : 'border-border-subtle hover:border-primary/40'">
+                        <input type="radio" name="deal_type" value="store_sale" x-model="dealType" class="text-primary">
                         <span>Scheduled Store Sale</span>
                     </label>
                 </div>
 
-                <div>
+                <div class="relative" @click.away="dealProductOpen = false">
                     <label class="block font-bold text-text-muted uppercase mb-1">Select Product <span class="text-danger">*</span></label>
-                    <select name="product_id"
-                            x-model="selectedDealProductId"
-                            @change="selectedDealVariant = ''; selectedDealSubVariant = '';"
-                            required
-                            class="w-full p-3 rounded-xl border border-border-subtle bg-surface font-semibold">
-                        @foreach($products as $prod)
-                            <option value="{{ $prod->id }}">
-                                {{ $prod->name }} — Orig: ₱{{ number_format((float) $prod->price, 2) }} (Stock: {{ $prod->stock_quantity }})
-                            </option>
-                        @endforeach
-                    </select>
+                    <input type="hidden" name="product_id" :value="selectedDealProductId" required>
+                    <button type="button"
+                            @click="dealProductOpen = !dealProductOpen"
+                            class="w-full p-3 rounded-xl border border-border-subtle hover:border-primary bg-surface font-semibold flex items-center justify-between text-left cursor-pointer">
+                        <span class="truncate pr-2" x-text="selectedDealProductLabel"></span>
+                        <svg class="w-4 h-4 text-text-muted shrink-0 transition-transform" :class="dealProductOpen ? 'rotate-180' : ''" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+                    </button>
+                    <div x-show="dealProductOpen" x-cloak x-transition class="absolute left-0 right-0 top-full mt-1 bg-surface border border-border-subtle rounded-2xl shadow-xl max-h-56 overflow-y-auto custom-scrollbar z-30 divide-y divide-border-subtle/40">
+                        <template x-for="prod in productsList" :key="'dp_' + prod.id">
+                            <button type="button"
+                                    @click="selectedDealProductId = String(prod.id); selectedDealVariant = ''; selectedDealSubVariant = ''; dealProductOpen = false"
+                                    class="w-full px-4 py-2.5 text-left hover:bg-brand-light/30 flex items-center justify-between gap-2 cursor-pointer">
+                                <span class="truncate font-semibold text-text-main" x-text="prod.name + ' — Orig: \u20B1' + Number(prod.price).toFixed(2) + ' (Stock: ' + prod.stock + ')'"></span>
+                                <span x-show="String(selectedDealProductId) === String(prod.id)" class="text-primary font-bold shrink-0">&#10003;</span>
+                            </button>
+                        </template>
+                    </div>
                 </div>
 
                 <div x-show="dealVariants.length > 0" x-cloak class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <div>
+                    <div class="relative" @click.away="dealVariantOpen = false">
                         <label class="block font-bold text-text-muted uppercase mb-1">Target Variant (Optional)</label>
-                        <select name="variant_name"
-                                x-model="selectedDealVariant"
-                                @change="selectedDealSubVariant = ''"
-                                class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface font-semibold">
-                            <option value="">All Variants</option>
+                        <input type="hidden" name="variant_name" :value="selectedDealVariant">
+                        <button type="button"
+                                @click="dealVariantOpen = !dealVariantOpen"
+                                class="w-full p-2.5 rounded-xl border border-border-subtle hover:border-primary bg-surface font-semibold flex items-center justify-between text-left cursor-pointer">
+                            <span class="truncate" x-text="selectedDealVariant || 'All Variants'"></span>
+                            <svg class="w-4 h-4 text-text-muted shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+                        </button>
+                        <div x-show="dealVariantOpen" x-cloak x-transition class="absolute left-0 right-0 top-full mt-1 bg-surface border border-border-subtle rounded-xl shadow-xl max-h-48 overflow-y-auto custom-scrollbar z-30">
+                            <button type="button" @click="selectedDealVariant = ''; selectedDealSubVariant = ''; dealVariantOpen = false" class="w-full px-3.5 py-2 text-left hover:bg-brand-light/30 font-semibold cursor-pointer">All Variants</button>
                             <template x-for="v in dealVariants" :key="v.name">
-                                <option :value="v.name" x-text="v.name + ' (\u20B1' + Number(v.price).toFixed(2) + ' \u2022 Stock: ' + v.stock + ')'"></option>
+                                <button type="button"
+                                        @click="selectedDealVariant = v.name; selectedDealSubVariant = ''; dealVariantOpen = false"
+                                        class="w-full px-3.5 py-2 text-left hover:bg-brand-light/30 font-semibold flex items-center justify-between cursor-pointer">
+                                    <span class="truncate" x-text="v.name + ' (\u20B1' + Number(v.price).toFixed(2) + ' \u2022 Stock: ' + v.stock + ')'"></span>
+                                    <span x-show="selectedDealVariant === v.name" class="text-primary font-bold">&#10003;</span>
+                                </button>
                             </template>
-                        </select>
+                        </div>
                     </div>
-                    <div x-show="dealSubVariants.length > 0" x-cloak>
+
+                    <div x-show="dealSubVariants.length > 0" x-cloak class="relative" @click.away="dealSubVariantOpen = false">
                         <label class="block font-bold text-text-muted uppercase mb-1">Target Sub-Variant (Optional)</label>
-                        <select name="sub_variant_name"
-                                x-model="selectedDealSubVariant"
-                                class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface font-semibold">
-                            <option value="">All Sub-Variants</option>
+                        <input type="hidden" name="sub_variant_name" :value="selectedDealSubVariant">
+                        <button type="button"
+                                @click="dealSubVariantOpen = !dealSubVariantOpen"
+                                class="w-full p-2.5 rounded-xl border border-border-subtle hover:border-primary bg-surface font-semibold flex items-center justify-between text-left cursor-pointer">
+                            <span class="truncate" x-text="selectedDealSubVariant || 'All Sub-Variants'"></span>
+                            <svg class="w-4 h-4 text-text-muted shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+                        </button>
+                        <div x-show="dealSubVariantOpen" x-cloak x-transition class="absolute left-0 right-0 top-full mt-1 bg-surface border border-border-subtle rounded-xl shadow-xl max-h-48 overflow-y-auto custom-scrollbar z-30">
+                            <button type="button" @click="selectedDealSubVariant = ''; dealSubVariantOpen = false" class="w-full px-3.5 py-2 text-left hover:bg-brand-light/30 font-semibold cursor-pointer">All Sub-Variants</button>
                             <template x-for="sv in dealSubVariants" :key="sv.name">
-                                <option :value="sv.name" x-text="sv.name + ' (\u20B1' + Number(sv.price).toFixed(2) + ' \u2022 Stock: ' + sv.stock + ')'"></option>
+                                <button type="button"
+                                        @click="selectedDealSubVariant = sv.name; dealSubVariantOpen = false"
+                                        class="w-full px-3.5 py-2 text-left hover:bg-brand-light/30 font-semibold flex items-center justify-between cursor-pointer">
+                                    <span class="truncate" x-text="sv.name + ' (\u20B1' + Number(sv.price).toFixed(2) + ' \u2022 Stock: ' + sv.stock + ')'"></span>
+                                    <span x-show="selectedDealSubVariant === sv.name" class="text-primary font-bold">&#10003;</span>
+                                </button>
                             </template>
-                        </select>
+                        </div>
                     </div>
                 </div>
 
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
                         <label class="block font-bold text-text-muted uppercase mb-1">Discount % (1–99%) <span class="text-danger">*</span></label>
-                        <input type="number" min="1" max="99" step="1" name="discount_percentage" value="{{ old('discount_percentage', 20) }}" required class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface font-bold">
+                        <input type="number" min="1" max="99" step="1" name="discount_percentage" value="{{ old('discount_percentage', 20) }}" required class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface font-bold outline-none focus:border-primary">
                     </div>
                     <div x-show="dealType === 'super_deal'">
                         <label class="block font-bold text-text-muted uppercase mb-1">Super Deal Qty <span class="text-danger">*</span></label>
-                        <input type="number" min="1" name="flash_quantity" :required="dealType === 'super_deal'" value="{{ old('flash_quantity', 3) }}" class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface font-bold">
+                        <input type="number" min="1" name="flash_quantity" :required="dealType === 'super_deal'" value="{{ old('flash_quantity', 3) }}" class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface font-bold outline-none focus:border-primary">
                     </div>
                 </div>
 
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
                         <label class="block font-bold text-text-muted uppercase mb-1">Start Date &amp; Time <span class="text-danger">*</span></label>
-                        <input type="datetime-local" name="starts_at" value="{{ old('starts_at', now()->format('Y-m-d\TH:i')) }}" min="{{ now()->subMinutes(5)->format('Y-m-d\TH:i') }}" required class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface">
+                        <input type="datetime-local" name="starts_at" value="{{ old('starts_at', now()->format('Y-m-d\TH:i')) }}" min="{{ now()->subMinutes(5)->format('Y-m-d\TH:i') }}" required class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface font-mono font-bold outline-none focus:border-primary cursor-pointer">
                     </div>
                     <div>
                         <label class="block font-bold text-text-muted uppercase mb-1">End Date &amp; Time <span class="text-danger">*</span></label>
-                        <input type="datetime-local" name="ends_at" value="{{ old('ends_at', now()->addHours(4)->format('Y-m-d\TH:i')) }}" required class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface">
+                        <input type="datetime-local" name="ends_at" value="{{ old('ends_at', now()->addHours(4)->format('Y-m-d\TH:i')) }}" required class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface font-mono font-bold outline-none focus:border-primary cursor-pointer">
                     </div>
                 </div>
 
                 <div class="flex justify-end">
                     <button type="submit"
                             :disabled="isSubmittingDeal || {{ $products->isEmpty() ? 'true' : 'false' }}"
-                            class="px-5 py-2.5 rounded-xl bg-primary hover:bg-primary-dark text-white font-bold shadow-xs cursor-pointer disabled:opacity-50">
+                            class="px-5 py-2.5 rounded-xl bg-primary hover:bg-primary-dark text-white font-bold shadow-xs transition-colors cursor-pointer disabled:opacity-50">
                         <span x-show="!isSubmittingDeal">Publish Promotion</span>
                         <span x-show="isSubmittingDeal" x-cloak>Publishing...</span>
                     </button>
@@ -233,76 +273,127 @@
                   @submit="isSubmittingBundle = true"
                   class="space-y-4 text-xs">
                 @csrf
-
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
                         <label class="block font-bold text-text-muted uppercase mb-1">Bundle Title <span class="text-danger">*</span></label>
-                        <input type="text" name="title" value="{{ old('title') }}" required minlength="3" maxlength="120" placeholder="e.g. Buy 3 Get 15% Off Bundle" class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface font-bold">
+                        <input type="text" name="title" value="{{ old('title') }}" required minlength="3" maxlength="120" placeholder="e.g. Buy 3 Get 15% Off Bundle" class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface font-bold outline-none focus:border-primary">
                     </div>
-                    <div>
+                    <div class="relative" @click.away="bundleTypeOpen = false">
                         <label class="block font-bold text-text-muted uppercase mb-1">Bundle Mechanic <span class="text-danger">*</span></label>
-                        <select name="bundle_type" x-model="bundleType" class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface font-bold">
-                            <option value="percentage_off">Buy N Items Get % Off</option>
-                            <option value="buy_x_get_y">Buy X Items Get Free Gift (₱0.00)</option>
-                        </select>
+                        <input type="hidden" name="bundle_type" :value="bundleType">
+                        <button type="button"
+                                @click="bundleTypeOpen = !bundleTypeOpen"
+                                class="w-full p-2.5 rounded-xl border border-border-subtle hover:border-primary bg-surface font-bold flex items-center justify-between text-left cursor-pointer">
+                            <span class="truncate" x-text="bundleType === 'buy_x_get_y' ? 'Buy X Items Get Free Gift (\u20B10.00)' : 'Buy N Items Get % Off'"></span>
+                            <svg class="w-4 h-4 text-text-muted shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+                        </button>
+                        <div x-show="bundleTypeOpen" x-cloak x-transition class="absolute left-0 right-0 top-full mt-1 bg-surface border border-border-subtle rounded-xl shadow-xl z-30 overflow-hidden">
+                            <button type="button" @click="bundleType = 'percentage_off'; bundleTypeOpen = false" class="w-full px-3.5 py-2.5 text-left hover:bg-brand-light/30 font-semibold flex items-center justify-between cursor-pointer">
+                                <span>Buy N Items Get % Off</span>
+                                <span x-show="bundleType === 'percentage_off'" class="text-primary font-bold">&#10003;</span>
+                            </button>
+                            <button type="button" @click="bundleType = 'buy_x_get_y'; bundleTypeOpen = false" class="w-full px-3.5 py-2.5 text-left hover:bg-brand-light/30 font-semibold flex items-center justify-between cursor-pointer">
+                                <span>Buy X Items Get Free Gift (&#8369;0.00)</span>
+                                <span x-show="bundleType === 'buy_x_get_y'" class="text-primary font-bold">&#10003;</span>
+                            </button>
+                        </div>
                     </div>
                 </div>
 
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
                         <label class="block font-bold text-text-muted uppercase mb-1">Required Quantity (X) <span class="text-danger">*</span></label>
-                        <input type="number" name="required_quantity" value="{{ old('required_quantity', 3) }}" min="2" max="20" required class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface font-bold">
+                        <input type="number" name="required_quantity" value="{{ old('required_quantity', 3) }}" min="2" max="20" required class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface font-bold outline-none focus:border-primary">
                     </div>
 
                     <div x-show="bundleType === 'percentage_off'">
                         <label class="block font-bold text-text-muted uppercase mb-1">Bundle Discount % <span class="text-danger">*</span></label>
-                        <input type="number" step="0.1" min="1" max="99" name="discount_percentage" value="{{ old('discount_percentage', 15) }}" class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface font-bold text-primary">
+                        <input type="number" step="0.1" min="1" max="99" name="discount_percentage" value="{{ old('discount_percentage', 15) }}" class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface font-bold text-primary outline-none focus:border-primary">
                     </div>
 
-                    <div x-show="bundleType === 'buy_x_get_y'" x-cloak>
+                    <div x-show="bundleType === 'buy_x_get_y'" x-cloak class="relative" @click.away="giftProductOpen = false">
                         <label class="block font-bold text-text-muted uppercase mb-1">Free Gift Product (Y) <span class="text-danger">*</span></label>
-                        <select name="free_gift_product_id"
-                                x-model="selectedGiftProductId"
-                                @change="selectedGiftVariant = ''; selectedGiftSubVariant = '';"
-                                class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface font-semibold">
-                            @foreach($products as $prod)
-                                <option value="{{ $prod->id }}">{{ $prod->name }} (₱{{ number_format((float) $prod->price, 2) }} &rarr; ₱0.00)</option>
-                            @endforeach
-                        </select>
+                        <input type="hidden" name="free_gift_product_id" :value="selectedGiftProductId">
+                        <button type="button"
+                                @click="giftProductOpen = !giftProductOpen"
+                                class="w-full p-2.5 rounded-xl border border-border-subtle hover:border-primary bg-surface font-semibold flex items-center justify-between text-left cursor-pointer">
+                            <span class="truncate pr-2" x-text="selectedGiftProductLabel"></span>
+                            <svg class="w-4 h-4 text-text-muted shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+                        </button>
+                        <div x-show="giftProductOpen" x-cloak x-transition class="absolute left-0 right-0 top-full mt-1 bg-surface border border-border-subtle rounded-xl shadow-xl max-h-48 overflow-y-auto custom-scrollbar z-30">
+                            <template x-for="prod in productsList" :key="'gp_' + prod.id">
+                                <button type="button"
+                                        @click="selectedGiftProductId = String(prod.id); selectedGiftVariant = ''; selectedGiftSubVariant = ''; giftProductOpen = false"
+                                        class="w-full px-3.5 py-2 text-left hover:bg-brand-light/30 font-semibold flex items-center justify-between cursor-pointer">
+                                    <span class="truncate" x-text="prod.name + ' (\u20B1' + Number(prod.price).toFixed(2) + ' \u2192 \u20B10.00)'"></span>
+                                    <span x-show="String(selectedGiftProductId) === String(prod.id)" class="text-primary font-bold">&#10003;</span>
+                                </button>
+                            </template>
+                        </div>
                     </div>
                 </div>
 
                 <div x-show="bundleType === 'buy_x_get_y' && giftVariants.length > 0" x-cloak class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <div>
+                    <div class="relative" @click.away="giftVariantOpen = false">
                         <label class="block font-bold text-text-muted uppercase mb-1">Free Gift Variant</label>
-                        <select name="free_gift_variant_name"
-                                x-model="selectedGiftVariant"
-                                @change="selectedGiftSubVariant = ''"
-                                class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface font-semibold">
-                            <option value="">Default / Any Variant</option>
+                        <input type="hidden" name="free_gift_variant_name" :value="selectedGiftVariant">
+                        <button type="button"
+                                @click="giftVariantOpen = !giftVariantOpen"
+                                class="w-full p-2.5 rounded-xl border border-border-subtle hover:border-primary bg-surface font-semibold flex items-center justify-between text-left cursor-pointer">
+                            <span class="truncate" x-text="selectedGiftVariant || 'Default / Any Variant'"></span>
+                            <svg class="w-4 h-4 text-text-muted shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+                        </button>
+                        <div x-show="giftVariantOpen" x-cloak x-transition class="absolute left-0 right-0 top-full mt-1 bg-surface border border-border-subtle rounded-xl shadow-xl max-h-48 overflow-y-auto custom-scrollbar z-30">
+                            <button type="button" @click="selectedGiftVariant = ''; selectedGiftSubVariant = ''; giftVariantOpen = false" class="w-full px-3.5 py-2 text-left hover:bg-brand-light/30 font-semibold cursor-pointer">Default / Any Variant</button>
                             <template x-for="gv in giftVariants" :key="gv.name">
-                                <option :value="gv.name" x-text="gv.name + ' (Stock: ' + gv.stock + ')'"></option>
+                                <button type="button"
+                                        @click="selectedGiftVariant = gv.name; selectedGiftSubVariant = ''; giftVariantOpen = false"
+                                        class="w-full px-3.5 py-2 text-left hover:bg-brand-light/30 font-semibold flex items-center justify-between cursor-pointer">
+                                    <span class="truncate" x-text="gv.name + ' (Stock: ' + gv.stock + ')'"></span>
+                                    <span x-show="selectedGiftVariant === gv.name" class="text-primary font-bold">&#10003;</span>
+                                </button>
                             </template>
-                        </select>
+                        </div>
                     </div>
-                    <div x-show="giftSubVariants.length > 0" x-cloak>
+
+                    <div x-show="giftSubVariants.length > 0" x-cloak class="relative" @click.away="giftSubVariantOpen = false">
                         <label class="block font-bold text-text-muted uppercase mb-1">Free Gift Sub-Variant</label>
-                        <select name="free_gift_sub_variant_name"
-                                x-model="selectedGiftSubVariant"
-                                class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface font-semibold">
-                            <option value="">Default / Any Sub-Variant</option>
+                        <input type="hidden" name="free_gift_sub_variant_name" :value="selectedGiftSubVariant">
+                        <button type="button"
+                                @click="giftSubVariantOpen = !giftSubVariantOpen"
+                                class="w-full p-2.5 rounded-xl border border-border-subtle hover:border-primary bg-surface font-semibold flex items-center justify-between text-left cursor-pointer">
+                            <span class="truncate" x-text="selectedGiftSubVariant || 'Default / Any Sub-Variant'"></span>
+                            <svg class="w-4 h-4 text-text-muted shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+                        </button>
+                        <div x-show="giftSubVariantOpen" x-cloak x-transition class="absolute left-0 right-0 top-full mt-1 bg-surface border border-border-subtle rounded-xl shadow-xl max-h-48 overflow-y-auto custom-scrollbar z-30">
+                            <button type="button" @click="selectedGiftSubVariant = ''; giftSubVariantOpen = false" class="w-full px-3.5 py-2 text-left hover:bg-brand-light/30 font-semibold cursor-pointer">Default / Any Sub-Variant</button>
                             <template x-for="gsv in giftSubVariants" :key="gsv.name">
-                                <option :value="gsv.name" x-text="gsv.name + ' (Stock: ' + gsv.stock + ')'"></option>
+                                <button type="button"
+                                        @click="selectedGiftSubVariant = gsv.name; giftSubVariantOpen = false"
+                                        class="w-full px-3.5 py-2 text-left hover:bg-brand-light/30 font-semibold flex items-center justify-between cursor-pointer">
+                                    <span class="truncate" x-text="gsv.name + ' (Stock: ' + gsv.stock + ')'"></span>
+                                    <span x-show="selectedGiftSubVariant === gsv.name" class="text-primary font-bold">&#10003;</span>
+                                </button>
                             </template>
-                        </select>
+                        </div>
                     </div>
                 </div>
 
                 <div>
-                    <label class="block font-bold text-text-muted uppercase mb-1">Select Qualifying Products <span class="text-danger">*</span></label>
-                    <div class="max-h-32 overflow-y-auto border border-border-subtle rounded-xl p-2.5 bg-surface-subtle grid grid-cols-1 sm:grid-cols-2 gap-1.5">
-                        @foreach($products as $prod)
-                            <label class="flex items-center gap-2 text-xs font-medium cursor-pointer">
+                    <div class="flex items-center justify-between mb-1">
+                        <label class="block font-bold text-text-muted uppercase">Select Qualifying Products <span class="text-danger">*</span></label>
+                        @if($products->count() > 6)
+                            <button type="button"
+                                    @click="showAllQualifying = !showAllQualifying"
+                                    class="text-[11px] font-bold text-primary hover:underline cursor-pointer"
+                                    x-text="showAllQualifying ? 'See Less' : 'See All ({{ $products->count() }})'"></button>
+                        @endif
+                    </div>
+                    <div class="border border-border-subtle rounded-xl p-2.5 bg-surface-subtle grid grid-cols-1 sm:grid-cols-2 gap-1.5"
+                         :class="showAllQualifying ? 'max-h-64 overflow-y-auto custom-scrollbar' : ''">
+                        @foreach($products as $pIdx => $prod)
+                            <label x-show="{{ $pIdx }} < 6 || showAllQualifying"
+                                   class="flex items-center gap-2 text-xs font-medium p-1.5 rounded-lg bg-surface border border-border-subtle/70 hover:border-primary/40 cursor-pointer">
                                 <input type="checkbox" name="applicable_product_ids[]" value="{{ $prod->id }}" checked class="rounded text-primary">
                                 <span class="truncate">{{ $prod->name }}</span>
                             </label>
@@ -313,18 +404,18 @@
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
                         <label class="block font-bold text-text-muted uppercase mb-1">Starts At <span class="text-danger">*</span></label>
-                        <input type="datetime-local" name="starts_at" value="{{ now()->format('Y-m-d\TH:i') }}" min="{{ now()->subMinutes(5)->format('Y-m-d\TH:i') }}" required class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface">
+                        <input type="datetime-local" name="starts_at" value="{{ now()->format('Y-m-d\TH:i') }}" min="{{ now()->subMinutes(5)->format('Y-m-d\TH:i') }}" required class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface font-mono font-bold outline-none focus:border-primary cursor-pointer">
                     </div>
                     <div>
                         <label class="block font-bold text-text-muted uppercase mb-1">Ends At <span class="text-danger">*</span></label>
-                        <input type="datetime-local" name="ends_at" value="{{ now()->addDays(14)->format('Y-m-d\TH:i') }}" required class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface">
+                        <input type="datetime-local" name="ends_at" value="{{ now()->addDays(14)->format('Y-m-d\TH:i') }}" required class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface font-mono font-bold outline-none focus:border-primary cursor-pointer">
                     </div>
                 </div>
 
                 <div class="flex justify-end">
                     <button type="submit"
                             :disabled="isSubmittingBundle || {{ $products->isEmpty() ? 'true' : 'false' }}"
-                            class="px-5 py-2.5 rounded-xl bg-primary-dark hover:bg-text-main text-white font-bold cursor-pointer disabled:opacity-50">
+                            class="px-5 py-2.5 rounded-xl bg-primary-dark hover:bg-primary text-white font-bold transition-colors cursor-pointer disabled:opacity-50">
                         <span x-show="!isSubmittingBundle">Publish Bundle Deal</span>
                         <span x-show="isSubmittingBundle" x-cloak>Publishing...</span>
                     </button>
@@ -354,7 +445,7 @@
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-border-subtle">
-                        @foreach($deals as $d)
+                        @foreach($deals as $dIdx => $d)
                             @php
                                 $prod = $productsById->get($d->product_id);
                                 $starts = \Carbon\Carbon::parse($d->starts_at);
@@ -364,7 +455,7 @@
                                     : (now()->lt($starts) ? 'Upcoming' : 'Ongoing');
                                 $varScope = implode(' / ', array_filter([$d->variant_name ?? null, $d->sub_variant_name ?? null]));
                             @endphp
-                            <tr class="hover:bg-surface-subtle/30">
+                            <tr x-show="{{ $dIdx }} < 6 || dealsTableExpanded" class="hover:bg-surface-subtle/30">
                                 <td class="py-3.5 px-5">
                                     <span class="px-2 py-0.5 rounded text-[10px] font-extrabold uppercase {{ $d->deal_type === 'super_deal' ? 'bg-primary text-white' : 'bg-brand-light/60 text-primary-dark' }}">
                                         {{ $d->deal_type === 'super_deal' ? 'Super Deal' : 'Store Sale' }}
@@ -377,8 +468,8 @@
                                     @endif
                                 </td>
                                 <td class="py-3.5 px-4">
-                                    <div class="font-bold text-primary text-sm">₱{{ number_format((float) $d->deal_price, 2) }}</div>
-                                    <div class="text-text-muted">-{{ number_format((float) $d->discount_percentage, 0) }}% off ₱{{ number_format((float) ($prod->price ?? 0), 2) }}</div>
+                                    <div class="font-bold text-price text-sm">&#8369;{{ number_format((float) $d->deal_price, 2) }}</div>
+                                    <div class="text-text-muted">-{{ number_format((float) $d->discount_percentage, 0) }}% off &#8369;{{ number_format((float) ($prod->price ?? 0), 2) }}</div>
                                 </td>
                                 <td class="py-3.5 px-4">
                                     @if($d->flash_quantity !== null)
@@ -392,7 +483,7 @@
                                     <div>End: {{ $ends->format('M d, Y h:i A') }}</div>
                                 </td>
                                 <td class="py-3.5 px-4">
-                                    <span class="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase {{ $state === 'Ongoing' ? 'bg-green-100 text-green-700' : ($state === 'Upcoming' ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-500') }}">
+                                    <span class="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase {{ $state === 'Ongoing' ? 'bg-success/15 text-success' : ($state === 'Upcoming' ? 'bg-brand-light/70 text-primary-dark' : 'bg-surface-subtle text-text-muted') }}">
                                         {{ $state }}
                                     </span>
                                 </td>
@@ -401,12 +492,12 @@
                                         <div class="inline-flex items-center gap-2">
                                             <form action="{{ route('seller.promotions.deals.update', $d->id) }}" method="POST" class="inline-flex items-center gap-1">
                                                 @csrf @method('PATCH')
-                                                <input type="number" name="discount_percentage" value="{{ (int) $d->discount_percentage }}" min="1" max="99" class="w-14 p-1.5 rounded-lg border border-border-subtle text-center font-bold">
-                                                <button type="submit" class="px-2.5 py-1.5 rounded-lg bg-surface-subtle border border-border-subtle font-bold text-primary-dark cursor-pointer">Update %</button>
+                                                <input type="number" name="discount_percentage" value="{{ (int) $d->discount_percentage }}" min="1" max="99" class="w-14 p-1.5 rounded-lg border border-border-subtle text-center font-bold outline-none focus:border-primary">
+                                                <button type="submit" class="px-2.5 py-1.5 rounded-lg bg-surface-subtle hover:bg-brand-light/40 border border-border-subtle font-bold text-primary-dark transition-colors cursor-pointer">Update %</button>
                                             </form>
                                             <form action="{{ route('seller.promotions.deals.end', $d->id) }}" method="POST" class="inline">
                                                 @csrf
-                                                <button type="submit" class="px-3 py-1.5 rounded-lg bg-red-50 text-danger font-bold cursor-pointer">End Now</button>
+                                                <button type="submit" class="px-3 py-1.5 rounded-lg bg-danger/10 hover:bg-danger text-danger hover:text-white font-bold transition-colors cursor-pointer">End Now</button>
                                             </form>
                                         </div>
                                     @endif
@@ -416,6 +507,15 @@
                     </tbody>
                 </table>
             </div>
+            @if($deals->count() > 6)
+                <div class="p-4 border-t border-border-subtle flex justify-center bg-surface-subtle/30">
+                    <button type="button"
+                            @click="dealsTableExpanded = !dealsTableExpanded"
+                            class="inline-flex items-center gap-2 px-5 py-2 rounded-full bg-primary/10 hover:bg-primary text-primary hover:text-white border border-primary/30 text-xs font-extrabold transition-colors cursor-pointer">
+                        <span x-text="dealsTableExpanded ? 'See Less Deals' : 'See More Deals (' + ({{ $deals->count() }} - 6) + ' more)'"></span>
+                    </button>
+                </div>
+            @endif
         @endif
     </div>
 
@@ -443,43 +543,43 @@
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-border-subtle">
-                        @foreach($bundles as $b)
+                        @foreach($bundles as $bIdx => $b)
                             @php
                                 $bStarts = \Carbon\Carbon::parse($b->starts_at);
                                 $bEnds = \Carbon\Carbon::parse($b->ends_at);
                                 $bState = $b->status === 'ended' || now()->gt($bEnds)
                                     ? 'Ended'
                                     : (now()->lt($bStarts) ? 'Upcoming' : 'Ongoing');
-
                                 $appIds = is_string($b->applicable_product_ids)
                                     ? (json_decode($b->applicable_product_ids, true) ?: [])
                                     : (array) $b->applicable_product_ids;
-
                                 $qualifyingNames = collect($appIds)
                                     ->map(fn ($pid) => $productsById->get((int) $pid)?->name ?? ('Product #' . $pid))
                                     ->values();
-
                                 $freeGiftProd = $b->free_gift_product_id ? $productsById->get((int) $b->free_gift_product_id) : null;
                                 $giftVarLabel = implode(' / ', array_filter([$b->free_gift_variant_name ?? null, $b->free_gift_sub_variant_name ?? null]));
                             @endphp
-                            <tr class="hover:bg-surface-subtle/30">
+                            <tr x-show="{{ $bIdx }} < 6 || bundlesTableExpanded" class="hover:bg-surface-subtle/30">
                                 <td class="py-3.5 px-5">
-                                    <span class="px-2 py-0.5 rounded text-[10px] font-extrabold uppercase {{ $b->bundle_type === 'percentage_off' ? 'bg-primary text-white' : 'bg-purple-100 text-purple-800' }}">
+                                    <span class="px-2 py-0.5 rounded text-[10px] font-extrabold uppercase {{ $b->bundle_type === 'percentage_off' ? 'bg-primary text-white' : 'bg-primary-dark text-white' }}">
                                         {{ $b->bundle_type === 'percentage_off' ? 'Buy ' . $b->required_quantity . ' Get % Off' : 'Buy ' . $b->required_quantity . ' Get Free Gift' }}
                                     </span>
                                     <div class="font-bold text-text-main mt-1">{{ $b->title }}</div>
                                 </td>
-                                <td class="py-3.5 px-4 max-w-xs">
-                                    <div class="text-text-main font-medium line-clamp-2">{{ $qualifyingNames->implode(', ') }}</div>
+                                <td class="py-3.5 px-4 max-w-xs" x-data="{ qualExpanded: false }">
+                                    <div :class="!qualExpanded ? 'line-clamp-2' : ''" class="text-text-main font-medium">{{ $qualifyingNames->implode(', ') }}</div>
+                                    @if($qualifyingNames->count() > 2)
+                                        <button type="button" @click="qualExpanded = !qualExpanded" class="text-[10px] font-bold text-primary hover:underline cursor-pointer" x-text="qualExpanded ? 'See less' : 'See all ({{ $qualifyingNames->count() }})'"></button>
+                                    @endif
                                     <div class="text-[11px] text-text-muted">Min Qty: {{ $b->required_quantity }} item(s)</div>
                                 </td>
                                 <td class="py-3.5 px-4">
                                     @if($b->bundle_type === 'percentage_off')
                                         <span class="font-bold text-primary text-sm">{{ number_format((float) $b->discount_percentage, 1) }}% OFF</span>
                                     @else
-                                        <div class="font-bold text-purple-800">Free Gift: {{ $freeGiftProd->name ?? ('Product #' . $b->free_gift_product_id) }}</div>
+                                        <div class="font-bold text-primary-dark">Free Gift: {{ $freeGiftProd->name ?? ('Product #' . $b->free_gift_product_id) }}</div>
                                         @if($giftVarLabel !== '')
-                                            <div class="text-[10px] font-bold text-primary-dark">Variant: {{ $giftVarLabel }}</div>
+                                            <div class="text-[10px] font-bold text-primary">Variant: {{ $giftVarLabel }}</div>
                                         @endif
                                         <div class="text-[11px] text-text-muted">100% Off Gift Item</div>
                                     @endif
@@ -489,7 +589,7 @@
                                     <div>End: {{ $bEnds->format('M d, Y h:i A') }}</div>
                                 </td>
                                 <td class="py-3.5 px-4">
-                                    <span class="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase {{ $bState === 'Ongoing' ? 'bg-green-100 text-green-700' : ($bState === 'Upcoming' ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-500') }}">
+                                    <span class="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase {{ $bState === 'Ongoing' ? 'bg-success/15 text-success' : ($bState === 'Upcoming' ? 'bg-brand-light/70 text-primary-dark' : 'bg-surface-subtle text-text-muted') }}">
                                         {{ $bState }}
                                     </span>
                                 </td>
@@ -497,7 +597,7 @@
                                     @if($bState !== 'Ended')
                                         <form action="{{ route('seller.promotions.bundles.end', $b->id) }}" method="POST" class="inline">
                                             @csrf
-                                            <button type="submit" class="px-3 py-1.5 rounded-lg bg-red-50 text-danger font-bold cursor-pointer">
+                                            <button type="submit" class="px-3 py-1.5 rounded-lg bg-danger/10 hover:bg-danger text-danger hover:text-white font-bold transition-colors cursor-pointer">
                                                 End Now
                                             </button>
                                         </form>
@@ -508,6 +608,15 @@
                     </tbody>
                 </table>
             </div>
+            @if($bundles->count() > 6)
+                <div class="p-4 border-t border-border-subtle flex justify-center bg-surface-subtle/30">
+                    <button type="button"
+                            @click="bundlesTableExpanded = !bundlesTableExpanded"
+                            class="inline-flex items-center gap-2 px-5 py-2 rounded-full bg-primary/10 hover:bg-primary text-primary hover:text-white border border-primary/30 text-xs font-extrabold transition-colors cursor-pointer">
+                        <span x-text="bundlesTableExpanded ? 'See Less Bundles' : 'See More Bundles (' + ({{ $bundles->count() }} - 6) + ' more)'"></span>
+                    </button>
+                </div>
+            @endif
         @endif
     </div>
 </div>
