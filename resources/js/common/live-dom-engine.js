@@ -7,6 +7,7 @@ const EXCLUDED_FORM_ACTIONS = [
     '/seller/login',
     '/logistics/login',
     '/report/export',
+    '/invoice',
     '/pdf',
     '/print'
 ];
@@ -17,6 +18,8 @@ class StorkiaLiveDomEngine {
         this.abortController = null;
         this.wsDebounceTimer = null;
         this.initialized = false;
+        this.lastToastSignature = '';
+        this.lastToastTime = 0;
     }
 
     init() {
@@ -29,6 +32,7 @@ class StorkiaLiveDomEngine {
         this.bindGlobalAutoSubmitInputs();
         this.bindPopState();
         this.bindRealtimeWebsocketListener();
+        this.extractAndBroadcastAlerts(document);
     }
 
     startProgress() {
@@ -51,16 +55,26 @@ class StorkiaLiveDomEngine {
     }
 
     showToast(message, type = 'success') {
-        if (!message) return;
+        if (!message || typeof message !== 'string') return;
+        const cleanMsg = message.trim();
+        if (!cleanMsg) return;
+
+        const now = Date.now();
+        const sig = `${type}:${cleanMsg}`;
+        if (this.lastToastSignature === sig && now - this.lastToastTime < 1500) {
+            return;
+        }
+        this.lastToastSignature = sig;
+        this.lastToastTime = now;
 
         window.dispatchEvent(new CustomEvent('notify', {
-            detail: { message, type }
+            detail: { message: cleanMsg, type }
         }));
 
         window.dispatchEvent(new CustomEvent('toast', {
             detail: {
                 title: type === 'error' || type === 'danger' ? 'Error' : (type === 'warning' ? 'Notice' : 'Success'),
-                message,
+                message: cleanMsg,
                 type
             }
         }));
@@ -85,7 +99,7 @@ class StorkiaLiveDomEngine {
 
         const textSpan = document.createElement('span');
         textSpan.className = 'leading-relaxed';
-        textSpan.textContent = message;
+        textSpan.textContent = cleanMsg;
 
         const closeBtn = document.createElement('button');
         closeBtn.type = 'button';
@@ -101,7 +115,7 @@ class StorkiaLiveDomEngine {
             toast.style.opacity = '0';
             toast.style.transform = 'translateY(-8px)';
             setTimeout(() => toast.remove(), 300);
-        }, 3500);
+        }, 4200);
     }
 
     shouldInterceptForm(form, submitter = null) {
@@ -404,9 +418,29 @@ class StorkiaLiveDomEngine {
     }
 
     extractAndBroadcastAlerts(newDoc) {
-        const successBanner = newDoc.querySelector('.bg-green-50.border-green-200.text-green-700');
+        if (!newDoc) return;
+
+        const successBanner = newDoc.querySelector('.bg-green-50.border-green-200.text-green-700, [data-storkia-flash-success]');
         if (successBanner && successBanner.textContent.trim()) {
             this.showToast(successBanner.textContent.trim(), 'success');
+        }
+
+        const errorSelectors = [
+            '.bg-red-50.border-red-200.text-red-700 p',
+            '.bg-red-50.border-red-200.text-red-700 li',
+            '.bg-red-50.border-red-200.text-red-700',
+            '[data-storkia-flash-error]'
+        ];
+
+        for (const selector of errorSelectors) {
+            const el = newDoc.querySelector(selector);
+            if (el && el.textContent && el.textContent.trim()) {
+                const firstLine = el.textContent.trim().split('\n').map(s => s.trim()).filter(Boolean)[0];
+                if (firstLine) {
+                    this.showToast(firstLine, 'error');
+                    break;
+                }
+            }
         }
     }
 
@@ -470,8 +504,15 @@ class StorkiaLiveDomEngine {
                     window.location.href = data.redirect;
                     return data;
                 }
+                if (data.errors && typeof data.errors === 'object') {
+                    const firstErr = Object.values(data.errors).flat()[0];
+                    if (firstErr) {
+                        this.showToast(String(firstErr), 'error');
+                        return data;
+                    }
+                }
                 if (data.message) {
-                    this.showToast(data.message, response.ok ? 'success' : 'error');
+                    this.showToast(data.message, response.ok && data.success !== false ? 'success' : 'error');
                 }
                 return data;
             }
@@ -489,6 +530,14 @@ class StorkiaLiveDomEngine {
 
             const html = await response.text();
             const newDoc = new DOMParser().parseFromString(html, 'text/html');
+
+            if (!response.ok && !silentPoll) {
+                this.extractAndBroadcastAlerts(newDoc);
+                if (response.status >= 500) {
+                    this.showToast('Unable to process your request right now. Please check your inputs and try again.', 'error');
+                    return;
+                }
+            }
 
             if (newDoc.title) {
                 document.title = newDoc.title;
@@ -530,7 +579,7 @@ class StorkiaLiveDomEngine {
                 afterSwap(currentMain, preservedState);
             }
 
-            if (!silentPoll && method !== 'GET') {
+            if (!silentPoll) {
                 this.extractAndBroadcastAlerts(newDoc);
             }
 
@@ -556,7 +605,7 @@ class StorkiaLiveDomEngine {
             }
         } catch (err) {
             if (err.name !== 'AbortError' && !silentPoll) {
-                console.error('StorkiaLive navigation error:', err);
+                this.showToast('Network error occurred while communicating with the server.', 'error');
             }
         } finally {
             if (!silentPoll) {

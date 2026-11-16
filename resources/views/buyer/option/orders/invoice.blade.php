@@ -4,11 +4,12 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Official E-Invoice #INV-{{ str_replace('SO-', '', $sellerOrder->seller_order_number) }}</title>
-    @vite(['resources/css/app.css', 'resources/js/app.js'])
+    @vite(['resources/css/app.css'])
     <style>
         @media print {
             .no-print { display: none !important; }
-            body { background: #FFFFFF !important; }
+            body { background: #FFFFFF !important; padding: 0 !important; }
+            .invoice-sheet { box-shadow: none !important; border: none !important; max-width: 100% !important; padding: 12px !important; }
         }
     </style>
 </head>
@@ -38,16 +39,29 @@
     $originalShip = (float) ($extra?->original_shipping_fee ?: $sellerOrder->shipping_fee);
 @endphp
 
-<div class="max-w-3xl mx-auto bg-white rounded-3xl shadow-lg border border-stone-200 p-8 sm:p-10 space-y-6">
+<div class="invoice-sheet max-w-3xl mx-auto bg-white rounded-3xl shadow-lg border border-stone-200 p-8 sm:p-10 space-y-6">
     <div class="no-print flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-stone-200">
-        <a href="{{ route('user.orders.show', $sellerOrder->id) }}" class="text-xs font-bold text-stone-600 hover:text-stone-900">
+        <a href="{{ route('user.orders.show', $sellerOrder->id) }}"
+           data-no-live
+           class="text-xs font-bold text-stone-600 hover:text-stone-900">
             &larr; Back to Order #{{ $sellerOrder->seller_order_number }}
         </a>
-        <button type="button"
-                onclick="window.print()"
-                class="px-5 py-2.5 rounded-xl bg-[#5D3140] hover:bg-[#CF4173] text-white text-xs font-bold shadow-sm cursor-pointer">
-            Print / Download Official PDF Invoice
-        </button>
+        <div class="flex flex-wrap items-center gap-2">
+            <a href="{{ route('user.orders.invoice', ['sellerOrder' => $sellerOrder->id, 'download' => 1]) }}"
+               data-no-live
+               download="{{ $invoiceNo }}.pdf"
+               class="px-4 py-2.5 rounded-xl bg-white border border-stone-300 hover:border-[#5D3140] text-[#5D3140] text-xs font-bold shadow-2xs transition-colors inline-flex items-center gap-1.5 cursor-pointer">
+                <svg class="w-4 h-4 text-[#CF4173]" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+                <span>Download Official PDF File</span>
+            </a>
+            <button type="button"
+                    onclick="window.print()"
+                    class="px-5 py-2.5 rounded-xl bg-[#5D3140] hover:bg-[#CF4173] text-white text-xs font-bold shadow-sm transition-colors cursor-pointer">
+                Print Official E-Invoice
+            </button>
+        </div>
     </div>
 
     <div class="flex flex-col sm:flex-row sm:items-start justify-between gap-4 border-b border-stone-200 pb-6">

@@ -7,6 +7,17 @@ export default function imageUploader(maxImages = 10) {
         errorMessage: '',
         draggingIndex: null,
 
+        notifyError(msg) {
+            if (!msg) return;
+            if (window.StorkiaLive && typeof window.StorkiaLive.showToast === 'function') {
+                window.StorkiaLive.showToast(msg, 'error');
+            } else {
+                window.dispatchEvent(new CustomEvent('toast', {
+                    detail: { title: 'Upload Error', message: msg, type: 'danger' }
+                }));
+            }
+        },
+
         handleSelect(event) {
             const selectedFiles = Array.from(event.target.files || []);
             this.appendFiles(selectedFiles);
@@ -31,21 +42,24 @@ export default function imageUploader(maxImages = 10) {
             for (const file of incomingFiles) {
                 if (this.files.length >= this.maxImages) {
                     this.errorMessage = `Maximum of ${this.maxImages} main product pictures allowed. Remove an image if you wish to replace it.`;
+                    this.notifyError(this.errorMessage);
                     break;
                 }
 
-                if (!allowedTypes.includes(file.type)) {
+                if (!allowedTypes.includes((file.type || '').toLowerCase())) {
                     this.errorMessage = `"${file.name}" was skipped. Only JPG, PNG, and WEBP images are allowed.`;
+                    this.notifyError(this.errorMessage);
                     continue;
                 }
 
                 if (file.size > maxFileSize) {
                     this.errorMessage = `"${file.name}" exceeds the 5MB per-image limit.`;
+                    this.notifyError(this.errorMessage);
                     continue;
                 }
 
                 const isDuplicate = this.files.some(
-                    existing => existing.name === file.name && existing.size === file.size && existing.lastModified === file.lastModified
+                    (existing) => existing.name === file.name && existing.size === file.size && existing.lastModified === file.lastModified
                 );
                 if (isDuplicate) {
                     continue;
@@ -115,8 +129,10 @@ export default function imageUploader(maxImages = 10) {
             if (!input || typeof DataTransfer === 'undefined') return;
 
             const dt = new DataTransfer();
-            this.files.forEach(file => dt.items.add(file));
+            this.files.forEach((file) => dt.items.add(file));
             input.files = dt.files;
+
+            this.$dispatch('main-pictures-changed', { count: this.files.length });
             input.dispatchEvent(new Event('input', { bubbles: true }));
         }
     };

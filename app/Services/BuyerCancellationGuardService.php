@@ -10,6 +10,8 @@ class BuyerCancellationGuardService
 {
     public function validateCanCheckoutItems(int $buyerId, array $rawLineItems): void
     {
+        StorkSchemaBootstrapService::ensureTablesExist();
+
         $cutoff = now()->subDays(BuyerCancellationLog::WINDOW_DAYS);
 
         $totalBuyerCancels = BuyerCancellationLog::where('buyer_id', $buyerId)
@@ -58,6 +60,8 @@ class BuyerCancellationGuardService
 
     public function validateCanCancelOrder(SellerOrder $sellerOrder, int $buyerId): void
     {
+        StorkSchemaBootstrapService::ensureTablesExist();
+
         if ((int) $sellerOrder->buyer_id !== $buyerId) {
             abort(403);
         }
@@ -110,6 +114,8 @@ class BuyerCancellationGuardService
 
     public function recordOrderCancellation(SellerOrder $sellerOrder, int $buyerId, string $reason): void
     {
+        StorkSchemaBootstrapService::ensureTablesExist();
+
         $sellerOrder->loadMissing('items');
 
         $alreadyLogged = BuyerCancellationLog::where('seller_order_id', $sellerOrder->id)
@@ -134,6 +140,8 @@ class BuyerCancellationGuardService
 
     public function getBuyerQuotaSummary(int $buyerId): array
     {
+        StorkSchemaBootstrapService::ensureTablesExist();
+
         $cutoff = now()->subDays(BuyerCancellationLog::WINDOW_DAYS);
 
         $usedBuyerTotal = BuyerCancellationLog::where('buyer_id', $buyerId)
@@ -142,12 +150,12 @@ class BuyerCancellationGuardService
             ->count('seller_order_id');
 
         return [
-            'window_days'       => BuyerCancellationLog::WINDOW_DAYS,
-            'limit_by_buyer'    => BuyerCancellationLog::LIMIT_BY_BUYER,
-            'used_by_buyer'     => $usedBuyerTotal,
-            'remaining_buyer'   => max(0, BuyerCancellationLog::LIMIT_BY_BUYER - $usedBuyerTotal),
-            'limit_by_seller'   => BuyerCancellationLog::LIMIT_BY_SELLER,
-            'limit_by_product'  => BuyerCancellationLog::LIMIT_BY_PRODUCT,
+            'window_days'      => BuyerCancellationLog::WINDOW_DAYS,
+            'limit_by_buyer'   => BuyerCancellationLog::LIMIT_BY_BUYER,
+            'used_by_buyer'    => $usedBuyerTotal,
+            'remaining_buyer'  => max(0, BuyerCancellationLog::LIMIT_BY_BUYER - $usedBuyerTotal),
+            'limit_by_seller'  => BuyerCancellationLog::LIMIT_BY_SELLER,
+            'limit_by_product' => BuyerCancellationLog::LIMIT_BY_PRODUCT,
         ];
     }
 }

@@ -7,6 +7,7 @@ use App\Models\ReturnRequest;
 use App\Models\ReturnShipment;
 use App\Models\SellerOrder;
 use App\Models\SellerOrderExtra;
+use App\Models\User;
 use App\Notifications\OrderLifecycleNotification;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
@@ -30,6 +31,8 @@ class ReturnRefundService
 
     public function submit(SellerOrder $sellerOrder, int $buyerId, array $data): ReturnRequest
     {
+        StorkSchemaBootstrapService::ensureTablesExist();
+
         $ctx = $this->newContext();
 
         $request = DB::transaction(function () use ($sellerOrder, $buyerId, $data, &$ctx) {
@@ -38,6 +41,14 @@ class ReturnRefundService
             if ((int) $locked->buyer_id !== $buyerId) {
                 $this->fail('This order does not belong to your account.');
             }
+
+            $buyer = $locked->buyer ?: User::find($buyerId);
+            if (! $buyer || $buyer->identityVerification?->status !== 'verified') {
+                throw ValidationException::withMessages([
+                    'identity_verification' => 'Valid ID Verification Required: You must have an approved Valid Government ID on your account to request a Return & Refund. Please complete Identity Verification in your Account Management settings first.',
+                ]);
+            }
+
             if ($locked->status === 'completed') {
                 $this->fail('Completed orders can no longer be returned or refunded.');
             }
@@ -63,6 +74,7 @@ class ReturnRefundService
 
             $resolution = $this->chooseRequestedResolution($category, $data['requested_resolution'] ?? null);
             $photos = array_values(array_filter((array) ($data['evidence_photos'] ?? [])));
+
             $payoutMethod = strtoupper(trim((string) ($data['refund_payout_method'] ?? 'WALLET')));
             if (! in_array($payoutMethod, ['WALLET', 'GCASH'], true)) {
                 $payoutMethod = 'WALLET';
@@ -512,6 +524,7 @@ class ReturnRefundService
             if ($locked->isTerminal()) {
                 return;
             }
+
             $order = $this->lockOrder($locked->seller_order_id);
             $this->applyClose($locked, $order, $finalStatus, $reasonCode, $message, $actorType, $actorId, $ctx);
         });
@@ -679,6 +692,7 @@ class ReturnRefundService
             'dispute_resolved_at'    => now(),
             'cancelled_at'           => now(),
         ]);
+
         $order->payment?->update(['status' => 'cancelled']);
 
         $this->syncParent($order);
@@ -800,7 +814,7 @@ class ReturnRefundService
     {
         return SellerOrder::with([
             'order',
-            'buyer',
+            'buyer.identityVerification',
             'seller',
             'logisticsProfile.user',
             'payment',

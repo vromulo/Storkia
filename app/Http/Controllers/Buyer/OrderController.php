@@ -19,7 +19,9 @@ use App\Services\BuyerCancellationGuardService;
 use App\Services\BuyerRewardService;
 use App\Services\CourierMobileSchemaService;
 use App\Services\InventoryStockService;
+use App\Services\OfficialInvoicePdfService;
 use App\Services\OrderCompletionService;
+use App\Services\RealtimeBroadcastService;
 use App\Services\RoleWalletService;
 use App\Services\StorkSchemaBootstrapService;
 use App\Services\VoucherService;
@@ -50,6 +52,7 @@ class OrderController extends Controller
     protected function encodeAndStoreWebp($file, string $folder, string $prefix = 'img_'): string
     {
         $filename = trim($folder, '/') . '/' . $prefix . uniqid('', true) . '.webp';
+
         try {
             $manager = new ImageManager(new Driver());
             $encoded = $manager->read($file->getRealPath())->scaleDown(1200, 1200)->toWebp(84);
@@ -62,8 +65,9 @@ class OrderController extends Controller
 
     public function index(Request $request)
     {
-        $user = $request->user();
+        StorkSchemaBootstrapService::ensureTablesExist();
 
+        $user = $request->user();
         $this->orderCompletionService->runLifecycleMaintenance(buyerId: (int) $user->id);
 
         $statusTab = $request->query('status', 'all');
@@ -193,11 +197,12 @@ class OrderController extends Controller
 
     public function downloadInvoice(Request $request, SellerOrder $sellerOrder)
     {
+        StorkSchemaBootstrapService::ensureTablesExist();
+
         $user = $request->user();
 
         if (
-            (int) $sellerOrder->buyer_id !== (int) $user->id
-            && (int) $sellerOrder->seller_id !== (int) $user->id
+            (! $user || ((int) $sellerOrder->buyer_id !== (int) $user->id && (int) $sellerOrder->seller_id !== (int) $user->id))
             && ! Auth::guard('admin')->check()
         ) {
             abort(403);
@@ -214,7 +219,19 @@ class OrderController extends Controller
             'shipment.packages',
         ]);
 
-        $autoPrint = $request->boolean('print', true);
+        if ($request->boolean('download') || $request->query('format') === 'pdf') {
+            $pdfBytes = app(OfficialInvoicePdfService::class)->generatePdfBinary($sellerOrder);
+            $filename = 'INV-' . str_replace('SO-', '', (string) $sellerOrder->seller_order_number) . '.pdf';
+
+            return response($pdfBytes, 200, [
+                'Content-Type'        => 'application/pdf',
+                'Content-Disposition' => 'attachment; filename="' . $filename . '"',
+                'Content-Length'      => strlen($pdfBytes),
+                'Cache-Control'       => 'no-store, no-cache, must-revalidate',
+            ]);
+        }
+
+        $autoPrint = $request->has('print') ? $request->boolean('print') : true;
 
         return view('buyer.option.orders.invoice', compact('sellerOrder', 'autoPrint'));
     }
@@ -334,27 +351,27 @@ class OrderController extends Controller
         return response()->json([
             'success' => true,
             'data'    => [
-                'has_shipment'     => true,
-                'tracking_number'  => $shipment->tracking_number,
-                'status'           => $shipment->status,
-                'status_label'     => $shipment->status_label,
-                'is_live_active'   => $isLiveActive,
-                'driver'           => $driverPayload,
-                'distance_meters'  => $distanceMeters,
-                'eta_minutes'      => $distanceMeters !== null ? max(2, (int) ceil($distanceMeters / 400)) : null,
-                'origin_seller'    => [
+                'has_shipment'    => true,
+                'tracking_number' => $shipment->tracking_number,
+                'status'          => $shipment->status,
+                'status_label'    => $shipment->status_label,
+                'is_live_active'  => $isLiveActive,
+                'driver'          => $driverPayload,
+                'distance_meters' => $distanceMeters,
+                'eta_minutes'     => $distanceMeters !== null ? max(2, (int) ceil($distanceMeters / 400)) : null,
+                'origin_seller'   => [
                     'name'      => $pickupSnap['business_name'] ?? ($sellerOrder->sellerProfile?->business_name ?? 'Seller'),
                     'address'   => $pickupSnap['full_address'] ?? '',
                     'latitude'  => $sellerCoords['latitude'],
                     'longitude' => $sellerCoords['longitude'],
                 ],
-                'sorting_hub'      => [
+                'sorting_hub'     => [
                     'name'      => $hubSnap['hub_name'] ?? ($shipment->logisticsProfile?->business_name ?? 'Sorting Hub'),
                     'address'   => $hubSnap['full_address'] ?? '',
                     'latitude'  => $hubCoords['latitude'],
                     'longitude' => $hubCoords['longitude'],
                 ],
-                'destination'      => [
+                'destination'     => [
                     'recipient' => $delivSnap['recipient_name'] ?? 'Buyer',
                     'address'   => $delivSnap['full_address'] ?? '',
                     'latitude'  => $destCoords['latitude'],
@@ -570,6 +587,8 @@ class OrderController extends Controller
 
     public function showRatePage(Request $request, SellerOrder $sellerOrder)
     {
+        StorkSchemaBootstrapService::ensureTablesExist();
+
         $user = $request->user();
         if ((int) $sellerOrder->buyer_id !== (int) $user->id) {
             abort(403);
@@ -718,7 +737,7 @@ class OrderController extends Controller
                     'logistics_hub_rating'    => (int) $validated['logistics_hub_rating'],
                     'rider_delivery_rating'   => (int) $validated['rider_delivery_rating'],
                     'overall_average_rating'  => $overallAvg,
-                    'review_comment'          => $validated['review_comment'] ? trim($validated['review_comment']) : null,
+                    'review_comment'          => ! empty($validated['review_comment']) ? trim($validated['review_comment']) : null,
                 ]
             );
 
@@ -729,7 +748,7 @@ class OrderController extends Controller
                 'to_status'       => 'completed',
                 'actor_type'      => 'Buyer',
                 'actor_id'        => $user->id,
-                'remarks'         => "Buyer submitted 5-point ratings (Overall {$overallAvg}/5.0 ★)."
+                'remarks'         => "Buyer submitted 5-point ratings (Overall {$overallAvg}/5.0)."
                     . ($totalReviewCoinsEarned > 0 ? " Earned +{$totalReviewCoinsEarned} Storkia Coins review bonus." : ''),
             ]);
         });
@@ -745,6 +764,8 @@ class OrderController extends Controller
 
     public function buyAgain(Request $request, SellerOrder $sellerOrder)
     {
+        StorkSchemaBootstrapService::ensureTablesExist();
+
         $user = $request->user();
         if ((int) $sellerOrder->buyer_id !== (int) $user->id) {
             abort(403);
@@ -810,6 +831,8 @@ class OrderController extends Controller
 
     public function switchToCod(Request $request, SellerOrder $sellerOrder)
     {
+        StorkSchemaBootstrapService::ensureTablesExist();
+
         $user = $request->user();
         if ((int) $sellerOrder->buyer_id !== (int) $user->id) {
             abort(403);
@@ -873,11 +896,18 @@ class OrderController extends Controller
         } catch (\Throwable $e) {
         }
 
+        $freshOrder = $sellerOrder->fresh();
+        if ($freshOrder) {
+            RealtimeBroadcastService::forSellerOrder($freshOrder, 'order.switched_to_cod');
+        }
+
         return back()->with('success', "Order #{$sellerOrder->seller_order_number} has been switched to Cash on Delivery (COD) and returned to the seller for acceptance!");
     }
 
     public function cancelFlaggedPaymentOrder(Request $request, SellerOrder $sellerOrder)
     {
+        StorkSchemaBootstrapService::ensureTablesExist();
+
         $user = $request->user();
         if ((int) $sellerOrder->buyer_id !== (int) $user->id) {
             abort(403);
@@ -914,6 +944,7 @@ class OrderController extends Controller
                 'order_id'        => $locked->order_id,
                 'seller_order_id' => $locked->id,
             ]);
+
             $extra->update([
                 'buyer_cancel_reason'   => 'Cancelled after flagged online payment',
                 'cancelled_by_buyer_id' => $user->id,
@@ -950,11 +981,18 @@ class OrderController extends Controller
         } catch (\Throwable $e) {
         }
 
+        $freshOrder = $sellerOrder->fresh();
+        if ($freshOrder) {
+            RealtimeBroadcastService::forSellerOrder($freshOrder, 'order.cancelled');
+        }
+
         return back()->with('success', "Order #{$sellerOrder->seller_order_number} has been cancelled immediately. Reserved stock, coins, and any applied vouchers have been restored.");
     }
 
     public function cancelOrder(Request $request, SellerOrder $sellerOrder)
     {
+        StorkSchemaBootstrapService::ensureTablesExist();
+
         $user = $request->user();
         if ((int) $sellerOrder->buyer_id !== (int) $user->id) {
             abort(403);
@@ -965,13 +1003,17 @@ class OrderController extends Controller
             'cancel_notes'  => ['nullable', 'string', 'max:500'],
         ], [
             'cancel_reason.required' => 'Please select a reason for cancelling this order.',
+            'cancel_reason.min'      => 'Please select a valid reason for cancelling this order.',
         ]);
+
+        $cancelReason = trim((string) $validated['cancel_reason']);
+        $cancelNotes = ! empty($validated['cancel_notes']) ? trim((string) $validated['cancel_notes']) : null;
 
         $this->cancellationGuardService->validateCanCancelOrder($sellerOrder, (int) $user->id);
 
         $refundedWalletAmount = 0.00;
 
-        DB::transaction(function () use ($sellerOrder, $user, $validated, &$refundedWalletAmount) {
+        DB::transaction(function () use ($sellerOrder, $user, $cancelReason, $cancelNotes, &$refundedWalletAmount) {
             $locked = SellerOrder::with(['order', 'payment', 'paymentSubmission', 'extra', 'items'])
                 ->where('id', $sellerOrder->id)
                 ->lockForUpdate()
@@ -995,7 +1037,7 @@ class OrderController extends Controller
                 'status'           => 'cancelled',
                 'payment_status'   => 'cancelled',
                 'cancelled_at'     => now(),
-                'rejection_reason' => 'Cancelled by Buyer: ' . trim($validated['cancel_reason']),
+                'rejection_reason' => 'Cancelled by Buyer: ' . $cancelReason,
             ]);
 
             $locked->payment?->update([
@@ -1010,9 +1052,10 @@ class OrderController extends Controller
                 'order_id'        => $locked->order_id,
                 'seller_order_id' => $locked->id,
             ]);
+
             $extra->update([
-                'buyer_cancel_reason'   => trim($validated['cancel_reason']),
-                'buyer_cancel_notes'    => $validated['cancel_notes'] ? trim($validated['cancel_notes']) : null,
+                'buyer_cancel_reason'   => $cancelReason,
+                'buyer_cancel_notes'    => $cancelNotes,
                 'cancelled_by_buyer_id' => $user->id,
             ]);
 
@@ -1028,7 +1071,7 @@ class OrderController extends Controller
             $this->inventoryStockService->restoreStockForSellerOrder($locked);
             $this->voucherService->restoreVouchersForSellerOrder($locked);
             $this->buyerRewardService?->restoreCoinsForSellerOrder($locked);
-            $this->cancellationGuardService->recordOrderCancellation($locked, (int) $user->id, $validated['cancel_reason']);
+            $this->cancellationGuardService->recordOrderCancellation($locked, (int) $user->id, $cancelReason);
 
             OrderStatusHistory::create([
                 'order_id'        => $locked->order_id,
@@ -1037,9 +1080,9 @@ class OrderController extends Controller
                 'to_status'       => 'cancelled',
                 'actor_type'      => 'Buyer',
                 'actor_id'        => $user->id,
-                'remarks'         => 'Buyer cancelled order: ' . trim($validated['cancel_reason'])
-                    . ($validated['cancel_notes'] ? ' (' . trim($validated['cancel_notes']) . ')' : '')
-                    . ($refundedWalletAmount > 0 ? ' — ₱' . number_format($refundedWalletAmount, 2) . ' refunded immediately to Buyer E-Wallet.' : ''),
+                'remarks'         => 'Buyer cancelled order: ' . $cancelReason
+                    . ($cancelNotes !== null ? ' (' . $cancelNotes . ')' : '')
+                    . ($refundedWalletAmount > 0 ? ' ₱' . number_format($refundedWalletAmount, 2) . ' refunded immediately to Buyer E-Wallet.' : ''),
             ]);
 
             if ($locked->order) {
@@ -1050,13 +1093,24 @@ class OrderController extends Controller
         try {
             $sellerOrder->seller?->notify(new OrderLifecycleNotification(
                 title: 'Order Cancelled by Buyer',
-                message: "Buyer cancelled Order #{$sellerOrder->seller_order_number}. Reason: {$validated['cancel_reason']}. Reserved stock has been restored.",
+                message: "Buyer cancelled Order #{$sellerOrder->seller_order_number}. Reason: {$cancelReason}. Reserved stock has been restored.",
                 type: 'warning',
                 url: route('seller.orders.show', $sellerOrder->id),
                 orderId: $sellerOrder->order_id,
                 sellerOrderId: $sellerOrder->id
             ));
         } catch (\Throwable $e) {
+        }
+
+        $freshOrder = $sellerOrder->fresh();
+        if ($freshOrder) {
+            RealtimeBroadcastService::forSellerOrder($freshOrder, 'order.cancelled');
+        }
+        if ($refundedWalletAmount > 0) {
+            RealtimeBroadcastService::forWalletUpdate('Buyer', (int) $user->id, 'order.cancelled_refund', [
+                'seller_order_id' => (int) $sellerOrder->id,
+                'refund_amount'   => round($refundedWalletAmount, 2),
+            ]);
         }
 
         $walletMsg = $refundedWalletAmount > 0
@@ -1068,6 +1122,8 @@ class OrderController extends Controller
 
     public function confirmReceipt(Request $request, SellerOrder $sellerOrder)
     {
+        StorkSchemaBootstrapService::ensureTablesExist();
+
         if ((int) $sellerOrder->buyer_id !== (int) $request->user()->id) {
             abort(403);
         }
@@ -1086,6 +1142,8 @@ class OrderController extends Controller
 
     public function reportDispute(Request $request, SellerOrder $sellerOrder)
     {
+        StorkSchemaBootstrapService::ensureTablesExist();
+
         $user = $request->user();
         if ((int) $sellerOrder->buyer_id !== (int) $user->id) {
             abort(403);
@@ -1153,6 +1211,8 @@ class OrderController extends Controller
 
     public function escalateDispute(Request $request, SellerOrder $sellerOrder)
     {
+        StorkSchemaBootstrapService::ensureTablesExist();
+
         if ((int) $sellerOrder->buyer_id !== (int) $request->user()->id) {
             abort(403);
         }

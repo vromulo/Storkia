@@ -19,8 +19,13 @@
     $returnRequest = $sellerOrder->returnRequest;
     $canBuyerCancel = $sellerOrder->canBuyerCancelPreShipment();
     $isRated = $sellerOrder->isRatedByBuyer();
-    $isIdentityVerified = $isIdentityVerified ?? (auth()->user()?->identityVerification?->status === 'verified');
+    $identityVerification = auth()->user()?->identityVerification;
+    $identityStatus = $identityVerification?->status ?? 'unsubmitted';
+    $isIdentityVerified = $isIdentityVerified ?? ($identityStatus === 'verified');
     $proofImageUrl = $latestProof ? route('user.orders.proof-image', $latestProof->id) : '';
+    $invoiceViewUrl = route('user.orders.invoice', ['sellerOrder' => $sellerOrder->id, 'print' => 0]);
+    $invoicePrintUrl = route('user.orders.invoice', ['sellerOrder' => $sellerOrder->id, 'print' => 1]);
+    $invoiceDownloadUrl = route('user.orders.invoice', ['sellerOrder' => $sellerOrder->id, 'download' => 1]);
     $deliveryChatMessages = $deliveryChatMessages ?? collect();
     $isRiderChatOpenable = $shipment && $shipment->current_rider_id && in_array($shipment->status, ['rider_assigned', 'out_for_delivery', 'delivery_failed'], true);
 
@@ -105,7 +110,12 @@
             proofModalOpen: false,
             gcashScreenshotModalOpen: false,
             riderChatModalOpen: false,
+            idRequiredModalOpen: false,
             isSubmittingCancel: false,
+            isPrintingInvoice: false,
+            cancelReason: '',
+            cancelNotes: '',
+            cancelError: '',
             liveMap: null,
             driverMarker: null,
             destMarker: null,
@@ -121,8 +131,24 @@
                 'created_at'  => $m->created_at?->timezone('Asia/Manila')->format('M d, h:i A'),
             ])->values()),
             chatInput: '',
+            chatError: '',
             isSendingChat: false,
             canSendChat: {{ $isRiderChatOpenable ? 'true' : 'false' }},
+
+            notify(message, type = 'error') {
+                if (!message) return;
+                if (window.StorkiaLive && typeof window.StorkiaLive.showToast === 'function') {
+                    window.StorkiaLive.showToast(message, type === 'danger' ? 'error' : type);
+                    return;
+                }
+                window.dispatchEvent(new CustomEvent('toast', {
+                    detail: {
+                        title: type === 'danger' || type === 'error' ? 'Alert' : (type === 'warning' ? 'Notice' : 'Success'),
+                        message: message,
+                        type: type
+                    }
+                }));
+            },
 
             initOrderShowPage() {
                 if (window.StorkiaRealtime && typeof window.StorkiaRealtime.subscribePrivate === 'function') {
@@ -184,6 +210,59 @@
                 if (this._wsListener) {
                     window.removeEventListener('storkia:ws-event', this._wsListener);
                 }
+            },
+
+            printOfficialInvoice() {
+                if (this.isPrintingInvoice) return;
+                this.isPrintingInvoice = true;
+                this.notify('Preparing Official E-Invoice for printing...', 'info');
+
+                try {
+                    let frame = document.getElementById('storkia-hidden-invoice-print-frame');
+                    if (frame) {
+                        frame.remove();
+                    }
+                    frame = document.createElement('iframe');
+                    frame.id = 'storkia-hidden-invoice-print-frame';
+                    frame.style.position = 'fixed';
+                    frame.style.right = '0';
+                    frame.style.bottom = '0';
+                    frame.style.width = '0';
+                    frame.style.height = '0';
+                    frame.style.border = '0';
+                    frame.src = @js($invoiceViewUrl);
+
+                    frame.onload = () => {
+                        this.isPrintingInvoice = false;
+                        try {
+                            frame.contentWindow.focus();
+                            frame.contentWindow.print();
+                        } catch (err) {
+                            window.open(@js($invoicePrintUrl), '_blank', 'noopener');
+                        }
+                    };
+
+                    frame.onerror = () => {
+                        this.isPrintingInvoice = false;
+                        window.open(@js($invoicePrintUrl), '_blank', 'noopener');
+                    };
+
+                    document.body.appendChild(frame);
+                } catch (e) {
+                    this.isPrintingInvoice = false;
+                    window.open(@js($invoicePrintUrl), '_blank', 'noopener');
+                }
+            },
+
+            handleCancelOrderSubmit(event) {
+                this.cancelError = '';
+                if (!this.cancelReason || this.cancelReason.trim() === '') {
+                    event.preventDefault();
+                    this.cancelError = 'Please select a reason for cancelling this order.';
+                    this.notify(this.cancelError, 'danger');
+                    return;
+                }
+                this.isSubmittingCancel = true;
             },
 
             async fetchLiveTracking() {
@@ -283,6 +362,7 @@
 
             async openRiderChat() {
                 this.riderChatModalOpen = true;
+                this.chatError = '';
                 await this.refreshRiderChat();
             },
 
@@ -300,8 +380,19 @@
             },
 
             async sendRiderChatMessage() {
+                this.chatError = '';
                 const text = (this.chatInput || '').trim();
-                if (!text || this.isSendingChat || !this.canSendChat) return;
+                if (!this.canSendChat) {
+                    this.chatError = 'Delivery chat is only active while a Rider is assigned and delivering your parcel.';
+                    this.notify(this.chatError, 'danger');
+                    return;
+                }
+                if (!text) {
+                    this.chatError = 'Please enter a delivery note or landmark message before sending.';
+                    this.notify(this.chatError, 'danger');
+                    return;
+                }
+                if (this.isSendingChat) return;
                 this.isSendingChat = true;
                 try {
                     const socketId = window.Echo && typeof window.Echo.socketId === 'function' ? window.Echo.socketId() : null;
@@ -326,8 +417,14 @@
                             this.chatMessages.push(data.data);
                         }
                         this.chatInput = '';
+                    } else {
+                        const msg = data.message || 'Unable to send message to Rider.';
+                        this.chatError = msg;
+                        this.notify(msg, 'danger');
                     }
                 } catch (e) {
+                    this.chatError = 'Network error while sending message to Rider.';
+                    this.notify(this.chatError, 'danger');
                 } finally {
                     this.isSendingChat = false;
                 }
@@ -349,13 +446,24 @@
         </a>
 
         <div class="flex flex-wrap items-center gap-2">
-            <a href="{{ route('user.orders.invoice', $sellerOrder->id) }}"
-               target="_blank"
-               class="px-3.5 py-1 rounded-full text-xs font-bold bg-surface border border-border-subtle hover:border-primary text-primary-dark shadow-2xs transition-colors inline-flex items-center gap-1.5">
+            <button type="button"
+                    @click.stop="printOfficialInvoice()"
+                    :disabled="isPrintingInvoice"
+                    class="px-3.5 py-1 rounded-full text-xs font-bold bg-surface border border-border-subtle hover:border-primary text-primary-dark shadow-2xs transition-colors inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-60">
                 <svg class="w-3.5 h-3.5 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
+                </svg>
+                <span x-text="isPrintingInvoice ? 'Preparing Print...' : 'Print Official E-Invoice'"></span>
+            </button>
+
+            <a href="{{ $invoiceDownloadUrl }}"
+               data-no-live
+               download="INV-{{ str_replace('SO-', '', $sellerOrder->seller_order_number) }}.pdf"
+               class="px-3.5 py-1 rounded-full text-xs font-bold bg-primary/10 border border-primary/25 hover:bg-primary hover:text-white text-primary-dark shadow-2xs transition-colors inline-flex items-center gap-1.5 cursor-pointer">
+                <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                     <path stroke-linecap="round" stroke-linejoin="round" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                 </svg>
-                <span>Official E-Invoice (PDF)</span>
+                <span>Download PDF Invoice</span>
             </a>
 
             @if($shipment && $shipment->currentRider)
@@ -388,13 +496,13 @@
     </div>
 
     @if(session('success'))
-        <div class="p-4 rounded-2xl bg-green-50 border border-green-200 text-green-700 text-xs sm:text-sm font-bold">
+        <div data-storkia-flash-success class="p-4 rounded-2xl bg-green-50 border border-green-200 text-green-700 text-xs sm:text-sm font-bold">
             {{ session('success') }}
         </div>
     @endif
 
     @if($errors->any())
-        <div class="p-4 rounded-2xl bg-red-50 border border-red-200 text-red-700 text-xs sm:text-sm space-y-1">
+        <div data-storkia-flash-error class="p-4 rounded-2xl bg-red-50 border border-red-200 text-red-700 text-xs sm:text-sm space-y-1">
             @foreach($errors->all() as $err)
                 <p class="font-semibold">{{ $err }}</p>
             @endforeach
@@ -475,10 +583,11 @@
             </div>
 
             <div class="flex flex-wrap items-center gap-2 shrink-0">
-                <a href="{{ route('user.orders.invoice', $sellerOrder->id) }}"
-                   target="_blank"
+                <a href="{{ $invoiceDownloadUrl }}"
+                   data-no-live
+                   download="INV-{{ str_replace('SO-', '', $sellerOrder->seller_order_number) }}.pdf"
                    class="px-4 py-3 rounded-2xl bg-white border border-border-subtle hover:border-primary text-primary-dark text-xs font-bold shadow-2xs transition-colors">
-                    Download E-Invoice
+                    Download E-Invoice (PDF)
                 </a>
                 @if($latestProof)
                     <button type="button"
@@ -567,7 +676,7 @@
                 </p>
             </div>
             <button type="button"
-                    @click.stop="cancelModalOpen = true"
+                    @click.stop="cancelReason = ''; cancelNotes = ''; cancelError = ''; cancelModalOpen = true"
                     class="px-4 py-2.5 rounded-xl border border-red-300 bg-white hover:bg-red-50 text-danger font-bold transition-colors cursor-pointer shrink-0 self-start sm:self-auto">
                 Cancel Order
             </button>
@@ -577,10 +686,14 @@
     @if($sellerOrder->status === 'delivered' && !$sellerOrder->has_unresolved_dispute && !$returnRequest)
         <div class="p-5 rounded-2xl bg-blue-50 border border-blue-200 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div>
-                <div class="flex items-center gap-2">
+                <div class="flex flex-wrap items-center gap-2">
                     <h3 class="text-sm font-bold text-blue-900">Package Delivered — Confirm Receipt or Request Return &amp; Refund</h3>
                     @if($isIdentityVerified)
                         <span class="px-2 py-0.5 rounded-full bg-green-100 text-green-800 text-[10px] font-bold">Valid ID Verified ✓</span>
+                    @elseif($identityStatus === 'pending')
+                        <span class="px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 text-[10px] font-bold">ID Under Admin Review (Required for Refund)</span>
+                    @elseif($identityStatus === 'failed')
+                        <span class="px-2 py-0.5 rounded-full bg-red-100 text-red-800 text-[10px] font-bold">ID Verification Rejected (Resubmit for Refund)</span>
                     @else
                         <span class="px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 text-[10px] font-bold">Valid ID Required for Refund</span>
                     @endif
@@ -606,10 +719,11 @@
                         Request Return / Refund
                     </a>
                 @else
-                    <a href="{{ route('user.identity-verification') }}"
-                       class="px-4 py-2.5 rounded-xl border border-amber-300 bg-white hover:bg-amber-50 text-amber-900 text-xs font-bold transition-colors">
-                        Verify Valid ID to Request a Refund &rarr;
-                    </a>
+                    <button type="button"
+                            @click.stop="idRequiredModalOpen = true; notify('Valid Government ID verification is required before requesting a Return & Refund.', 'warning')"
+                            class="px-4 py-2.5 rounded-xl border border-amber-400 bg-white hover:bg-amber-50 text-amber-950 text-xs font-bold transition-colors cursor-pointer">
+                        Request Return / Refund (Verify ID)
+                    </button>
                 @endif
                 <form action="{{ route('user.orders.confirm-receipt', $sellerOrder->id) }}" method="POST" class="m-0">
                     @csrf
@@ -824,11 +938,21 @@
             </div>
 
             <div class="pt-2 border-t border-border-subtle flex flex-wrap items-center justify-between gap-2">
-                <a href="{{ route('user.orders.invoice', $sellerOrder->id) }}"
-                   target="_blank"
-                   class="px-3 py-1.5 rounded-xl bg-surface-subtle hover:bg-brand-light/50 border border-border-subtle text-primary-dark text-xs font-bold transition-colors">
-                    Print Official E-Invoice
-                </a>
+                <div class="flex flex-wrap items-center gap-2">
+                    <button type="button"
+                            @click.stop="printOfficialInvoice()"
+                            :disabled="isPrintingInvoice"
+                            class="px-3 py-1.5 rounded-xl bg-surface-subtle hover:bg-brand-light/50 border border-border-subtle text-primary-dark text-xs font-bold transition-colors cursor-pointer disabled:opacity-60">
+                        <span x-text="isPrintingInvoice ? 'Preparing Print...' : 'Print Official E-Invoice'"></span>
+                    </button>
+
+                    <a href="{{ $invoiceDownloadUrl }}"
+                       data-no-live
+                       download="INV-{{ str_replace('SO-', '', $sellerOrder->seller_order_number) }}.pdf"
+                       class="px-3 py-1.5 rounded-xl bg-primary/10 hover:bg-primary hover:text-white border border-primary/25 text-primary-dark text-xs font-bold transition-colors cursor-pointer">
+                        Download PDF
+                    </a>
+                </div>
 
                 @if($latestProof)
                     <button type="button"
@@ -925,11 +1049,57 @@
     </div>
 
     <template x-teleport="body">
+        <div x-show="idRequiredModalOpen"
+             x-cloak
+             class="fixed inset-0 z-[205] flex items-center justify-center p-4">
+            <div @click="idRequiredModalOpen = false" class="absolute inset-0 bg-black/60 backdrop-blur-xs cursor-pointer"></div>
+            <div @click.stop class="relative z-10 bg-surface rounded-3xl max-w-md w-full p-6 shadow-2xl border border-border-subtle space-y-4">
+                <div class="flex items-center justify-between pb-3 border-b border-border-subtle">
+                    <div class="flex items-center gap-2">
+                        <span class="px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-900 text-[10px] font-extrabold uppercase">Refund Protection Policy</span>
+                        <h3 class="text-base font-bold text-primary-dark">Valid ID Required for Return &amp; Refund</h3>
+                    </div>
+                    <button type="button" @click="idRequiredModalOpen = false" class="p-1 text-text-muted hover:text-text-main cursor-pointer text-lg font-bold">&times;</button>
+                </div>
+
+                <div class="p-4 rounded-2xl bg-amber-50 border border-amber-200 text-xs text-amber-950 space-y-2 leading-relaxed">
+                    <p class="font-bold">
+                        While you can place orders on Storkia without ID verification, submitting a Return &amp; Refund claim requires an approved Valid Government ID.
+                    </p>
+                    @if($identityStatus === 'pending')
+                        <p class="text-amber-900">
+                            Current Status: <strong>Pending Admin Review</strong>. Your submitted Government ID is currently being reviewed by Storkia Admin.
+                        </p>
+                    @elseif($identityStatus === 'failed')
+                        <p class="text-danger font-semibold">
+                            Current Status: <strong>Verification Declined</strong> ({{ $identityVerification?->rejection_reason ?: 'Please upload a clearer photo of your valid ID.' }}).
+                        </p>
+                    @else
+                        <p class="text-amber-900">
+                            Current Status: <strong>Not Verified Yet</strong>. Please upload or capture your Government ID in Account Management.
+                        </p>
+                    @endif
+                </div>
+
+                <div class="flex items-center justify-end gap-2 pt-2">
+                    <button type="button" @click="idRequiredModalOpen = false" class="px-4 py-2.5 rounded-xl bg-surface-subtle text-text-muted font-bold text-xs cursor-pointer">
+                        Close
+                    </button>
+                    <a href="{{ route('user.identity-verification') }}"
+                       class="px-5 py-2.5 rounded-xl bg-primary hover:bg-primary-dark text-white font-bold text-xs shadow-xs transition-colors cursor-pointer">
+                        {{ $identityStatus === 'pending' ? 'View ID Verification Status' : 'Verify Valid ID Now' }} &rarr;
+                    </a>
+                </div>
+            </div>
+        </div>
+    </template>
+
+    <template x-teleport="body">
         <div x-show="riderChatModalOpen"
              x-cloak
              class="fixed inset-0 z-[200] flex items-center justify-center p-4">
             <div @click="riderChatModalOpen = false" class="absolute inset-0 bg-black/60 backdrop-blur-xs cursor-pointer"></div>
-            <div @click.stop class="relative z-10 bg-surface rounded-3xl max-w-md w-full p-5 shadow-2xl border border-border-subtle flex flex-col h-[500px]">
+            <div @click.stop class="relative z-10 bg-surface rounded-3xl max-w-md w-full p-5 shadow-2xl border border-border-subtle flex flex-col h-[520px]">
                 <div class="flex items-center justify-between pb-3 border-b border-border-subtle">
                     <div>
                         <span class="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-extrabold uppercase">Last-Mile Delivery Chat</span>
@@ -939,6 +1109,10 @@
                     </div>
                     <button type="button" @click="riderChatModalOpen = false" class="p-1 text-text-muted hover:text-text-main cursor-pointer text-lg font-bold">&times;</button>
                 </div>
+
+                <template x-if="chatError">
+                    <div class="mt-2 p-2.5 rounded-xl bg-danger/10 border border-danger/30 text-danger text-[11px] font-bold" x-text="chatError"></div>
+                </template>
 
                 <div class="flex-1 overflow-y-auto p-3 space-y-2.5 bg-surface-subtle/50 rounded-2xl my-3 text-xs">
                     <template x-if="chatMessages.length === 0">
@@ -959,13 +1133,15 @@
                     <form @submit.prevent="sendRiderChatMessage()" class="flex items-center gap-2">
                         <input type="text"
                                x-model="chatInput"
+                               @input="chatError = ''"
                                maxlength="1000"
                                placeholder="Type delivery landmark or note..."
                                class="flex-1 p-2.5 rounded-xl border border-border-subtle bg-surface text-xs outline-none focus:border-primary">
                         <button type="submit"
-                                :disabled="isSendingChat || !chatInput.trim()"
-                                class="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold cursor-pointer disabled:opacity-50">
-                            Send
+                                :aria-disabled="isSendingChat || !chatInput.trim()"
+                                :class="(isSendingChat || !chatInput.trim()) ? 'bg-emerald-600/50 cursor-not-allowed' : 'bg-emerald-600 hover:bg-emerald-700 cursor-pointer'"
+                                class="px-4 py-2.5 rounded-xl text-white text-xs font-bold transition-colors">
+                            <span x-text="isSendingChat ? 'Sending...' : 'Send'"></span>
                         </button>
                     </form>
                 </template>
@@ -989,14 +1165,23 @@
                     <button type="button" @click="cancelModalOpen = false" class="p-1 text-text-muted hover:text-text-main cursor-pointer">&times;</button>
                 </div>
 
+                <template x-if="cancelError">
+                    <div class="p-3 rounded-xl bg-danger/10 border border-danger/30 text-danger text-xs font-bold" x-text="cancelError"></div>
+                </template>
+
                 <form action="{{ route('user.orders.cancel', $sellerOrder->id) }}"
                       method="POST"
-                      @submit="isSubmittingCancel = true"
+                      data-no-live
+                      @submit="handleCancelOrderSubmit($event)"
                       class="space-y-4 text-xs">
                     @csrf
                     <div>
                         <label class="block font-bold text-text-muted mb-1">Select Cancellation Reason <span class="text-danger">*</span></label>
-                        <select name="cancel_reason" required class="w-full p-3 rounded-xl border border-border-subtle bg-surface font-semibold">
+                        <select name="cancel_reason"
+                                x-model="cancelReason"
+                                @change="cancelError = ''"
+                                required
+                                class="w-full p-3 rounded-xl border border-border-subtle bg-surface font-semibold outline-none focus:border-primary">
                             <option value="">-- Choose a reason --</option>
                             <option value="Changed my mind">Changed my mind</option>
                             <option value="Need to change delivery address">Need to change delivery address</option>
@@ -1004,9 +1189,33 @@
                             <option value="Ordered wrong item or variation">Ordered wrong item or variation</option>
                         </select>
                     </div>
-                    <div class="flex justify-end gap-2">
-                        <button type="button" @click="cancelModalOpen = false" class="px-4 py-2 rounded-xl bg-surface-subtle text-text-muted font-bold cursor-pointer">Keep Order</button>
-                        <button type="submit" :disabled="isSubmittingCancel" class="px-5 py-2 rounded-xl bg-danger text-white font-bold cursor-pointer">Confirm Cancel</button>
+
+                    <div>
+                        <label class="block font-bold text-text-muted mb-1">Additional Cancellation Notes <span class="font-normal italic">(Optional)</span></label>
+                        <textarea name="cancel_notes"
+                                  x-model="cancelNotes"
+                                  rows="2"
+                                  maxlength="500"
+                                  placeholder="Optional details..."
+                                  class="w-full p-3 rounded-xl border border-border-subtle bg-surface outline-none focus:border-primary"></textarea>
+                    </div>
+
+                    <template x-if="!cancelReason">
+                        <div class="p-3 rounded-xl bg-amber-50 border border-amber-300 text-amber-950 text-[11px] font-semibold">
+                            Incomplete Step: Please select a cancellation reason above to enable <strong>Confirm Cancel</strong>.
+                        </div>
+                    </template>
+
+                    <div class="flex justify-end gap-2 pt-1">
+                        <button type="button" @click="cancelModalOpen = false" class="px-4 py-2.5 rounded-xl bg-surface-subtle text-text-muted font-bold cursor-pointer">
+                            Keep Order
+                        </button>
+                        <button type="submit"
+                                :aria-disabled="isSubmittingCancel || !cancelReason"
+                                :class="(isSubmittingCancel || !cancelReason) ? 'bg-danger/50 cursor-not-allowed' : 'bg-danger hover:opacity-90 cursor-pointer'"
+                                class="px-5 py-2.5 rounded-xl text-white font-bold transition-opacity">
+                            <span x-text="isSubmittingCancel ? 'Cancelling...' : 'Confirm Cancel'"></span>
+                        </button>
                     </div>
                 </form>
             </div>
@@ -1068,6 +1277,7 @@
                     <div class="flex items-center justify-between pt-2 border-t border-border-subtle text-xs">
                         <a href="{{ $proofImageUrl }}"
                            target="_blank"
+                           data-no-live
                            class="font-bold text-primary hover:underline">
                             Open Full Image in New Tab &nearr;
                         </a>

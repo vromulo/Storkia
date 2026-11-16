@@ -100,6 +100,7 @@
             'appliedShippingCode'     => $appliedShippingCodeStr,
         ],
         'liveVoucherNotices'    => array_values($voucherNotices ?? []),
+        'initialServerErrors'   => $errors->all(),
         'bestVouchers'          => $bestVouchers ?? ['store' => [], 'platform' => '', 'shipping' => ''],
         'touchedSlots'          => array_values($touchedSlots ?? []),
         'livePriceSignature'    => (string) $priceSignature,
@@ -140,12 +141,17 @@
             packageMetrics: cfg.packageMetrics || {},
             summary: cfg.summary || {},
             liveVoucherNotices: Array.isArray(cfg.liveVoucherNotices) ? cfg.liveVoucherNotices : [],
+            initialServerErrors: Array.isArray(cfg.initialServerErrors) ? cfg.initialServerErrors : [],
             livePriceSignature: cfg.livePriceSignature || '',
             bestVouchers: cfg.bestVouchers || { store: {}, platform: '', shipping: '' },
             touchedSlots: Array.isArray(cfg.touchedSlots) ? cfg.touchedSlots : [],
             _wsHandler: null,
             notify(message, type = 'success') {
                 if (!message) return;
+                if (window.StorkiaLive && typeof window.StorkiaLive.showToast === 'function') {
+                    window.StorkiaLive.showToast(message, type === 'danger' ? 'error' : type);
+                    return;
+                }
                 window.dispatchEvent(new CustomEvent('toast', {
                     detail: {
                         title: type === 'danger' || type === 'error' ? 'Alert' : (type === 'warning' ? 'Notice' : 'Success'),
@@ -155,8 +161,10 @@
                 }));
             },
             init() {
-                if (this.liveVoucherNotices.length > 0) {
-                    this.notify(this.liveVoucherNotices[0], 'info');
+                if (this.initialServerErrors.length > 0) {
+                    this.notify(this.initialServerErrors[0], 'danger');
+                } else if (this.liveVoucherNotices.length > 0) {
+                    this.notify(this.liveVoucherNotices[0], 'warning');
                 }
                 this._wsHandler = (event) => {
                     const detail = (event && event.detail) || {};
@@ -303,6 +311,30 @@
             allSelectedPaymentsValid() {
                 return this.hasSufficientWalletBalance();
             },
+            checkoutBlockers() {
+                const reasons = [];
+                if (!this.selectedAddress || !this.selectedAddress.id) {
+                    reasons.push('Add or select a delivery address.');
+                } else if (!this.isAddressServiceable) {
+                    reasons.push('Your selected delivery address is outside our partner logistics serviceable zones. Please select or add another address.');
+                }
+                if (!this.hasSufficientWalletBalance()) {
+                    reasons.push('Insufficient Storkia E-Wallet balance (Need ₱' + this.formatMoney(this.walletShortfall()) + ' more). Top up via GCash or switch payment method to Cash on Delivery (COD).');
+                }
+                if (this.isSyncingCheckout) {
+                    reasons.push('Updating checkout totals and shipping fees, please wait...');
+                }
+                return reasons;
+            },
+            handlePlaceOrderClick(event) {
+                const blockers = this.checkoutBlockers();
+                if (this.isSubmitting || blockers.length > 0) {
+                    event.preventDefault();
+                    if (blockers.length > 0) {
+                        this.notify(blockers[0], 'danger');
+                    }
+                }
+            },
             buildSyncParams(overrideAddressId = null) {
                 const params = new URLSearchParams();
                 params.set('mode', this.mode);
@@ -402,7 +434,7 @@
                     window.history.replaceState({ storkiaLive: true }, document.title, nextUrl);
 
                     if (this.liveVoucherNotices.length > 0) {
-                        this.notify(this.liveVoucherNotices[0], 'info');
+                        this.notify(this.liveVoucherNotices[0], 'warning');
                     } else if (actionFeedback) {
                         this.notify(actionFeedback, 'success');
                     }
@@ -426,6 +458,10 @@
                 await this.syncCheckoutRealtime(null, feedbackMsg);
             },
             async toggleCoinsOffset() {
+                if (Number(this.summary.maxRedeemableCoins || 0) < 10) {
+                    this.notify('You need at least 10 Storkia Coins (₱1.00) eligible for this order to redeem coins.', 'warning');
+                    return;
+                }
                 this.useStorkiaCoins = !this.useStorkiaCoins;
                 await this.syncCheckoutRealtime(null, this.useStorkiaCoins ? 'Storkia Coins discount applied!' : 'Storkia Coins discount removed.');
             }
@@ -437,10 +473,28 @@
      class="min-h-screen bg-surface-subtle/40 pb-16 lg:pb-20 pt-4 w-full overflow-x-hidden select-none">
     <div class="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 space-y-6">
 
+        @if($errors->any())
+            <div data-storkia-flash-error class="p-4 sm:p-5 rounded-2xl bg-danger/10 border border-danger/30 text-danger text-xs sm:text-sm space-y-1 shadow-2xs">
+                <div class="font-extrabold uppercase tracking-wider text-xs">Unable to Place Order:</div>
+                @foreach($errors->all() as $err)
+                    <p class="font-semibold">&bull; {{ $err }}</p>
+                @endforeach
+            </div>
+        @endif
+
+        <template x-if="liveVoucherNotices.length > 0">
+            <div class="p-4 rounded-2xl bg-amber-50 border border-amber-300 text-amber-950 text-xs sm:text-sm space-y-1 shadow-2xs">
+                <div class="font-extrabold uppercase tracking-wider text-[11px] text-amber-900">Checkout Notice:</div>
+                <template x-for="(notice, nIdx) in liveVoucherNotices" :key="'v_notice_' + nIdx">
+                    <p class="font-semibold" x-text="'• ' + notice"></p>
+                </template>
+            </div>
+        </template>
+
         <form action="{{ route('checkout.store') }}"
               method="POST"
               data-no-live
-              @submit="if (isSubmitting || isSyncingCheckout || !allSelectedPaymentsValid()) { $event.preventDefault(); } else { isSubmitting = true; }">
+              @submit="if (isSubmitting || checkoutBlockers().length > 0) { $event.preventDefault(); if (checkoutBlockers().length > 0) notify(checkoutBlockers()[0], 'danger'); } else { isSubmitting = true; }">
             @csrf
             <input type="hidden" name="mode" value="{{ $mode }}">
             <input type="hidden" name="idempotency_key" value="{{ $idempotencyKey }}">
@@ -468,6 +522,11 @@
                                             <span class="text-text-muted font-normal ml-2">+63 <span x-text="selectedAddress.phone_number"></span></span>
                                         </p>
                                         <p class="text-xs sm:text-sm text-text-muted mt-1 leading-relaxed" x-text="selectedAddress.full_address"></p>
+                                        <template x-if="!isAddressServiceable">
+                                            <p class="text-xs text-danger font-bold mt-2">
+                                                This delivery address is currently outside our partner logistics serviceable zones. Please select or add another address.
+                                            </p>
+                                        </template>
                                     </div>
                                 </template>
                                 <template x-if="!selectedAddress">
@@ -806,10 +865,10 @@
                                 </div>
                             </div>
                             <button type="button"
-                                    :disabled="summary.maxRedeemableCoins < 10 || isSyncingCheckout"
+                                    :disabled="isSyncingCheckout"
                                     @click="toggleCoinsOffset()"
-                                    :class="useStorkiaCoins ? 'bg-primary text-white' : 'bg-surface border border-border-subtle text-text-main hover:border-primary'"
-                                    class="px-3.5 py-1.5 rounded-xl font-extrabold text-xs transition-all cursor-pointer disabled:opacity-40 shrink-0">
+                                    :class="summary.maxRedeemableCoins < 10 ? 'bg-surface-subtle border border-border-subtle text-text-muted opacity-50 cursor-not-allowed' : (useStorkiaCoins ? 'bg-primary text-white cursor-pointer' : 'bg-surface border border-border-subtle text-text-main hover:border-primary cursor-pointer')"
+                                    class="px-3.5 py-1.5 rounded-xl font-extrabold text-xs transition-all shrink-0">
                                 <span x-text="useStorkiaCoins ? 'Applied &#10003;' : 'Use Coins'"></span>
                             </button>
                         </div>
@@ -858,10 +917,27 @@
                             </div>
                         </template>
 
+                        <template x-if="checkoutBlockers().length > 0">
+                            <div class="p-3.5 rounded-2xl bg-amber-50 border border-amber-300 text-amber-950 text-xs space-y-1.5">
+                                <div class="font-extrabold uppercase tracking-wider text-[11px] flex items-center gap-1.5 text-amber-900">
+                                    <svg class="w-4 h-4 text-amber-600 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+                                        <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                    </svg>
+                                    <span>Complete These Steps to Place Order:</span>
+                                </div>
+                                <ul class="list-disc list-inside space-y-1 font-semibold text-amber-900">
+                                    <template x-for="(reason, rIdx) in checkoutBlockers()" :key="'blk_' + rIdx">
+                                        <li x-text="reason"></li>
+                                    </template>
+                                </ul>
+                            </div>
+                        </template>
+
                         <button type="submit"
-                                :disabled="isSubmitting || isSyncingCheckout || !selectedAddress || !isAddressServiceable || !allSelectedPaymentsValid()"
-                                :class="(isSubmitting || isSyncingCheckout || !selectedAddress || !isAddressServiceable || !allSelectedPaymentsValid())
-                                    ? 'bg-surface-subtle text-text-muted cursor-not-allowed border border-border-subtle'
+                                @click="handlePlaceOrderClick($event)"
+                                :aria-disabled="isSubmitting || checkoutBlockers().length > 0"
+                                :class="(isSubmitting || checkoutBlockers().length > 0)
+                                    ? 'bg-surface-subtle text-text-muted cursor-not-allowed border border-border-subtle opacity-70'
                                     : 'bg-primary hover:bg-primary-dark text-surface cursor-pointer shadow-md active:scale-[0.99]'"
                                 class="w-full py-4 px-6 font-bold text-sm rounded-xl transition-all">
                             <span x-show="!isSubmitting">Place Order (&#8369;<span x-text="formatMoney(summary.overallTotal)"></span>)</span>
@@ -885,6 +961,14 @@
                         </div>
                         <button type="button" @click="topupModalOpen = false" class="p-1.5 text-text-muted hover:text-text-main text-lg font-bold cursor-pointer">&times;</button>
                     </div>
+
+                    <template x-if="topupError">
+                        <div class="p-3.5 rounded-2xl bg-danger/10 border border-danger/30 text-danger text-xs font-bold" x-text="topupError"></div>
+                    </template>
+
+                    <template x-if="topupSuccessMsg">
+                        <div class="p-3.5 rounded-2xl bg-green-50 border border-green-200 text-green-800 text-xs font-bold" x-text="topupSuccessMsg"></div>
+                    </template>
 
                     @if($isPlatformGcashActive)
                         <div class="p-4 rounded-2xl bg-brand-light/25 border border-primary/25 space-y-2.5 text-xs">

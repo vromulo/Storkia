@@ -16,6 +16,7 @@ use App\Services\BuyerCancellationGuardService;
 use App\Services\BuyerRewardService;
 use App\Services\CourierMobileSchemaService;
 use App\Services\InventoryStockService;
+use App\Services\OfficialInvoicePdfService;
 use App\Services\OrderCompletionService;
 use App\Services\RealtimeBroadcastService;
 use App\Services\RoleWalletService;
@@ -49,6 +50,8 @@ class OrderController extends Controller
 
     public function index(Request $request): JsonResponse
     {
+        StorkSchemaBootstrapService::ensureTablesExist();
+
         $user = $request->user();
         $this->orderCompletionService->runLifecycleMaintenance(buyerId: (int) $user->id);
 
@@ -133,6 +136,8 @@ class OrderController extends Controller
 
     public function show(Request $request, $id): JsonResponse
     {
+        StorkSchemaBootstrapService::ensureTablesExist();
+
         $user = $request->user();
         $sellerOrder = SellerOrder::findOrFail($id);
 
@@ -188,11 +193,14 @@ class OrderController extends Controller
             'unread_delivery_chat_count' => $unreadDeliveryChatCount,
             'cancellation_quota'         => $cancellationQuota,
             'is_identity_verified'       => $isIdentityVerified,
+            'identity_status'            => $user->identityVerification?->status,
         ]);
     }
 
-    public function invoice(Request $request, $id): JsonResponse
+    public function invoice(Request $request, $id)
     {
+        StorkSchemaBootstrapService::ensureTablesExist();
+
         $user = $request->user();
         $sellerOrder = SellerOrder::with([
             'order',
@@ -207,6 +215,19 @@ class OrderController extends Controller
 
         if ((int) $sellerOrder->buyer_id !== (int) $user->id) {
             return response()->json(['success' => false, 'message' => 'Unauthorized'], 403);
+        }
+
+        $invoiceNumber = 'INV-' . str_replace('SO-', '', (string) $sellerOrder->seller_order_number);
+
+        if ($request->boolean('download') || $request->query('format') === 'pdf') {
+            $pdfBytes = app(OfficialInvoicePdfService::class)->generatePdfBinary($sellerOrder);
+
+            return response($pdfBytes, 200, [
+                'Content-Type'        => 'application/pdf',
+                'Content-Disposition' => 'attachment; filename="' . $invoiceNumber . '.pdf"',
+                'Content-Length'      => strlen($pdfBytes),
+                'Cache-Control'       => 'no-store, no-cache, must-revalidate',
+            ]);
         }
 
         $extra = $sellerOrder->extra;
@@ -225,31 +246,44 @@ class OrderController extends Controller
             }
         }
 
+        $pdfBase64 = null;
+        if ($request->boolean('include_pdf', true)) {
+            try {
+                $pdfBase64 = base64_encode(app(OfficialInvoicePdfService::class)->generatePdfBinary($sellerOrder));
+            } catch (\Throwable $e) {
+                $pdfBase64 = null;
+            }
+        }
+
         return response()->json([
             'success' => true,
             'data'    => [
-                'invoice_number'             => 'INV-' . str_replace('SO-', '', $sellerOrder->seller_order_number),
-                'seller_order_id'            => (int) $sellerOrder->id,
-                'seller_order_number'        => $sellerOrder->seller_order_number,
-                'order_number'               => $sellerOrder->order?->order_number,
-                'issued_at'                  => ($sellerOrder->completed_at ?? $sellerOrder->delivered_at ?? $sellerOrder->created_at)?->timezone('Asia/Manila')->format('M d, Y h:i A'),
-                'status'                     => $sellerOrder->status,
-                'status_label'               => $sellerOrder->status_label,
-                'payment_method'             => $sellerOrder->effective_payment_method,
-                'payment_status'             => $sellerOrder->payment_status,
-                'payment_reference'          => $sellerOrder->payment?->payment_reference,
-                'printable_url'              => route('user.orders.invoice', $sellerOrder->id),
-                'seller'                     => [
+                'invoice_number'            => $invoiceNumber,
+                'filename'                  => $invoiceNumber . '.pdf',
+                'seller_order_id'           => (int) $sellerOrder->id,
+                'seller_order_number'       => $sellerOrder->seller_order_number,
+                'order_number'              => $sellerOrder->order?->order_number,
+                'issued_at'                 => ($sellerOrder->completed_at ?? $sellerOrder->delivered_at ?? $sellerOrder->created_at)?->timezone('Asia/Manila')->format('M d, Y h:i A'),
+                'status'                    => $sellerOrder->status,
+                'status_label'              => $sellerOrder->status_label,
+                'payment_method'            => $sellerOrder->effective_payment_method,
+                'payment_status'            => $sellerOrder->payment_status,
+                'payment_reference'         => $sellerOrder->payment?->payment_reference,
+                'printable_url'             => route('user.orders.invoice', $sellerOrder->id),
+                'download_pdf_url'          => route('user.orders.invoice', ['sellerOrder' => $sellerOrder->id, 'download' => 1]),
+                'api_pdf_url'               => url("/api/v1/orders/{$sellerOrder->id}/invoice?format=pdf"),
+                'pdf_base64'                => $pdfBase64,
+                'seller'                    => [
                     'business_name' => $sellerOrder->sellerProfile?->business_name ?? 'Seller Store',
                     'address'       => $sellerOrder->pickup_address_snapshot['full_address'] ?? '',
                     'contact_no'    => $sellerOrder->pickup_address_snapshot['contact_no'] ?? '',
                 ],
-                'buyer'                      => [
+                'buyer'                     => [
                     'recipient_name' => $sellerOrder->delivery_address_snapshot['recipient_name'] ?? $user->full_name,
                     'phone_number'   => $sellerOrder->delivery_address_snapshot['phone_number'] ?? $user->contact_no,
                     'address'        => $sellerOrder->delivery_address_snapshot['full_address'] ?? '',
                 ],
-                'items'                      => $sellerOrder->items->map(fn ($item) => [
+                'items'                     => $sellerOrder->items->map(fn ($item) => [
                     'id'                    => (int) $item->id,
                     'product_name'          => $item->product_name,
                     'variant'               => implode(' / ', array_filter([$item->variant_name, $item->sub_variant_name])) ?: null,
@@ -258,16 +292,16 @@ class OrderController extends Controller
                     'discounted_unit_price' => (float) $item->discounted_unit_price,
                     'line_total'            => (float) $item->line_total,
                 ])->values(),
-                'original_subtotal'          => $origSub,
-                'store_voucher_discount'     => $storeDisc,
-                'platform_voucher_discount'  => $cleanPlatformDiscount,
-                'coins_used'                 => (int) ($extra?->coins_used ?? 0),
-                'coins_discount_amount'      => $coinsDisc,
-                'net_subtotal'               => $netSub,
-                'original_shipping_fee'      => (float) ($extra?->original_shipping_fee ?: $sellerOrder->shipping_fee),
-                'shipping_voucher_discount'  => (float) ($extra?->shipping_voucher_discount ?? 0),
-                'net_shipping_fee'           => (float) $sellerOrder->shipping_fee,
-                'total_amount'               => (float) $sellerOrder->total_amount,
+                'original_subtotal'         => $origSub,
+                'store_voucher_discount'    => $storeDisc,
+                'platform_voucher_discount' => $cleanPlatformDiscount,
+                'coins_used'                => (int) ($extra?->coins_used ?? 0),
+                'coins_discount_amount'     => $coinsDisc,
+                'net_subtotal'              => $netSub,
+                'original_shipping_fee'     => (float) ($extra?->original_shipping_fee ?: $sellerOrder->shipping_fee),
+                'shipping_voucher_discount' => (float) ($extra?->shipping_voucher_discount ?? 0),
+                'net_shipping_fee'          => (float) $sellerOrder->shipping_fee,
+                'total_amount'              => (float) $sellerOrder->total_amount,
             ],
         ]);
     }
@@ -590,6 +624,8 @@ class OrderController extends Controller
 
     public function cancelOrder(Request $request, $id): JsonResponse
     {
+        StorkSchemaBootstrapService::ensureTablesExist();
+
         $user = $request->user();
         $sellerOrder = SellerOrder::findOrFail($id);
 
@@ -602,13 +638,17 @@ class OrderController extends Controller
             'cancel_notes'  => ['nullable', 'string', 'max:500'],
         ], [
             'cancel_reason.required' => 'Please select a reason for cancelling this order.',
+            'cancel_reason.min'      => 'Please select a valid reason for cancelling this order.',
         ]);
+
+        $cancelReason = trim((string) $validated['cancel_reason']);
+        $cancelNotes = ! empty($validated['cancel_notes']) ? trim((string) $validated['cancel_notes']) : null;
 
         $this->cancellationGuardService->validateCanCancelOrder($sellerOrder, (int) $user->id);
 
         $refundedWalletAmount = 0.00;
 
-        DB::transaction(function () use ($sellerOrder, $user, $validated, &$refundedWalletAmount) {
+        DB::transaction(function () use ($sellerOrder, $user, $cancelReason, $cancelNotes, &$refundedWalletAmount) {
             $locked = SellerOrder::with(['order', 'payment', 'paymentSubmission', 'extra', 'items'])
                 ->where('id', $sellerOrder->id)
                 ->lockForUpdate()
@@ -632,7 +672,7 @@ class OrderController extends Controller
                 'status'           => 'cancelled',
                 'payment_status'   => 'cancelled',
                 'cancelled_at'     => now(),
-                'rejection_reason' => 'Cancelled by Buyer: ' . trim($validated['cancel_reason']),
+                'rejection_reason' => 'Cancelled by Buyer: ' . $cancelReason,
             ]);
 
             $locked->payment?->update([
@@ -649,8 +689,8 @@ class OrderController extends Controller
             ]);
 
             $extra->update([
-                'buyer_cancel_reason'   => trim($validated['cancel_reason']),
-                'buyer_cancel_notes'    => ! empty($validated['cancel_notes']) ? trim($validated['cancel_notes']) : null,
+                'buyer_cancel_reason'   => $cancelReason,
+                'buyer_cancel_notes'    => $cancelNotes,
                 'cancelled_by_buyer_id' => $user->id,
             ]);
 
@@ -666,7 +706,7 @@ class OrderController extends Controller
             $this->inventoryStockService->restoreStockForSellerOrder($locked);
             $this->voucherService->restoreVouchersForSellerOrder($locked);
             $this->buyerRewardService?->restoreCoinsForSellerOrder($locked);
-            $this->cancellationGuardService->recordOrderCancellation($locked, (int) $user->id, $validated['cancel_reason']);
+            $this->cancellationGuardService->recordOrderCancellation($locked, (int) $user->id, $cancelReason);
 
             OrderStatusHistory::create([
                 'order_id'        => $locked->order_id,
@@ -675,8 +715,8 @@ class OrderController extends Controller
                 'to_status'       => 'cancelled',
                 'actor_type'      => 'Buyer',
                 'actor_id'        => $user->id,
-                'remarks'         => 'Buyer cancelled order: ' . trim($validated['cancel_reason'])
-                    . (! empty($validated['cancel_notes']) ? ' (' . trim($validated['cancel_notes']) . ')' : '')
+                'remarks'         => 'Buyer cancelled order: ' . $cancelReason
+                    . ($cancelNotes !== null ? ' (' . $cancelNotes . ')' : '')
                     . ($refundedWalletAmount > 0 ? ' ₱' . number_format($refundedWalletAmount, 2) . ' refunded immediately to Buyer E-Wallet.' : ''),
             ]);
 
@@ -688,7 +728,7 @@ class OrderController extends Controller
         try {
             $sellerOrder->seller?->notify(new OrderLifecycleNotification(
                 title: 'Order Cancelled by Buyer',
-                message: "Buyer cancelled Order #{$sellerOrder->seller_order_number}. Reason: {$validated['cancel_reason']}. Reserved stock has been restored.",
+                message: "Buyer cancelled Order #{$sellerOrder->seller_order_number}. Reason: {$cancelReason}. Reserved stock has been restored.",
                 type: 'warning',
                 url: route('seller.orders.show', $sellerOrder->id),
                 orderId: $sellerOrder->order_id,
@@ -720,6 +760,8 @@ class OrderController extends Controller
 
     public function switchToCod(Request $request, $id): JsonResponse
     {
+        StorkSchemaBootstrapService::ensureTablesExist();
+
         $user = $request->user();
         $sellerOrder = SellerOrder::findOrFail($id);
 
@@ -798,6 +840,8 @@ class OrderController extends Controller
 
     public function cancelFlaggedPaymentOrder(Request $request, $id): JsonResponse
     {
+        StorkSchemaBootstrapService::ensureTablesExist();
+
         $user = $request->user();
         $sellerOrder = SellerOrder::findOrFail($id);
 
@@ -886,6 +930,8 @@ class OrderController extends Controller
 
     public function confirmReceipt(Request $request, $id): JsonResponse
     {
+        StorkSchemaBootstrapService::ensureTablesExist();
+
         $sellerOrder = SellerOrder::findOrFail($id);
         if ((int) $sellerOrder->buyer_id !== (int) $request->user()->id) {
             return response()->json(['success' => false, 'message' => 'Unauthorized'], 403);
@@ -914,6 +960,8 @@ class OrderController extends Controller
 
     public function reportDispute(Request $request, $id): JsonResponse
     {
+        StorkSchemaBootstrapService::ensureTablesExist();
+
         $user = $request->user();
         $sellerOrder = SellerOrder::findOrFail($id);
 
@@ -998,6 +1046,8 @@ class OrderController extends Controller
 
     public function escalateDispute(Request $request, $id): JsonResponse
     {
+        StorkSchemaBootstrapService::ensureTablesExist();
+
         $user = $request->user();
         $sellerOrder = SellerOrder::findOrFail($id);
 
@@ -1048,6 +1098,8 @@ class OrderController extends Controller
 
     public function buyAgain(Request $request, $id): JsonResponse
     {
+        StorkSchemaBootstrapService::ensureTablesExist();
+
         $user = $request->user();
         $sellerOrder = SellerOrder::with('items.product')->findOrFail($id);
 

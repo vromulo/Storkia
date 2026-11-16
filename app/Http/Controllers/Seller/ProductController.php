@@ -141,6 +141,34 @@ class ProductController extends Controller
         }
     }
 
+    protected function storeBase64Webp(string $dataUri, string $folder = 'products/variants'): ?string
+    {
+        $clean = trim($dataUri);
+        if (! preg_match('/^data:image\/([a-zA-Z0-9+]+);base64,(.+)$/', $clean, $matches)) {
+            return null;
+        }
+
+        $binary = base64_decode($matches[2], true);
+        if ($binary === false || strlen($binary) < 32) {
+            return null;
+        }
+
+        $filename = trim($folder, '/') . '/prod_' . uniqid('', true) . '.webp';
+
+        try {
+            $manager = new ImageManager(new Driver());
+            $encoded = $manager->read($binary)
+                ->scaleDown(1600, 1600)
+                ->toWebp(84);
+
+            Storage::disk('public')->put($filename, (string) $encoded);
+            return $filename;
+        } catch (\Throwable $e) {
+            Storage::disk('public')->put($filename, $binary);
+            return $filename;
+        }
+    }
+
     public function index(Request $request)
     {
         StorkSchemaBootstrapService::ensureTablesExist();
@@ -324,6 +352,7 @@ class ProductController extends Controller
         $variantWeightsInput = $validated['variant_weights'] ?? [];
         $variantStocksInput = $validated['variant_stocks'] ?? [];
         $variantPicturesFiles = $request->file('variant_pictures', []);
+        $variantPicturesBase64 = (array) $request->input('variant_pictures_base64', []);
 
         $subNamesInput = $validated['sub_variant_names'] ?? [];
         $subPricesInput = $validated['sub_variant_prices'] ?? [];
@@ -350,6 +379,14 @@ class ProductController extends Controller
             $variantImgPath = null;
             if (isset($variantPicturesFiles[$vKey])) {
                 $variantImgPath = $this->encodeAndStoreWebp($variantPicturesFiles[$vKey], 'products/variants');
+            } elseif (! empty($variantPicturesBase64[$vKey])) {
+                $variantImgPath = $this->storeBase64Webp((string) $variantPicturesBase64[$vKey], 'products/variants');
+            }
+
+            if (! $variantImgPath) {
+                throw ValidationException::withMessages([
+                    "variant_pictures.{$vKey}" => "Please upload a dedicated photo for variant \"{$vName}\".",
+                ]);
             }
 
             if ($priceDependency === 'sub') {
@@ -547,6 +584,7 @@ class ProductController extends Controller
         $variantWeightsInput = $request->input('variant_weights', []);
         $variantStocksInput = $request->input('variant_stocks', []);
         $variantPicsFiles = $request->file('variant_pictures', []);
+        $variantPicsBase64 = (array) $request->input('variant_pictures_base64', []);
         $archiveVariantsInput = $request->input('archive_variants', []);
 
         $subNamesInput = $request->input('sub_variant_names', []);
@@ -575,6 +613,11 @@ class ProductController extends Controller
             }
             if (! $isArchived && isset($variantPicsFiles[$vIdx])) {
                 $item['image'] = $this->encodeAndStoreWebp($variantPicsFiles[$vIdx], 'products/variants');
+            } elseif (! $isArchived && ! empty($variantPicsBase64[$vIdx])) {
+                $decodedImg = $this->storeBase64Webp((string) $variantPicsBase64[$vIdx], 'products/variants');
+                if ($decodedImg) {
+                    $item['image'] = $decodedImg;
+                }
             }
 
             $itemStatus = $item['status'] ?? 'Approved';
@@ -705,6 +748,7 @@ class ProductController extends Controller
         $newVariantWeights = $request->input('new_variant_weights', []);
         $newVariantStocks = $request->input('new_variant_stocks', []);
         $newVariantPics = $request->file('new_variant_pictures', []);
+        $newVariantPicsBase64 = (array) $request->input('new_variant_pictures_base64', []);
 
         $newSubNames = $request->input('new_sub_variant_names', []);
         $newSubPrices = $request->input('new_sub_variant_prices', []);
@@ -717,9 +761,12 @@ class ProductController extends Controller
                 continue;
             }
 
-            $nvImgPath = isset($newVariantPics[$nvId])
-                ? $this->encodeAndStoreWebp($newVariantPics[$nvId], 'products/variants')
-                : null;
+            $nvImgPath = null;
+            if (isset($newVariantPics[$nvId])) {
+                $nvImgPath = $this->encodeAndStoreWebp($newVariantPics[$nvId], 'products/variants');
+            } elseif (! empty($newVariantPicsBase64[$nvId])) {
+                $nvImgPath = $this->storeBase64Webp((string) $newVariantPicsBase64[$nvId], 'products/variants');
+            }
 
             $nvStatus = $isApprovedProduct ? 'Pending' : 'Approved';
             if ($nvStatus === 'Pending') {
