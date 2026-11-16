@@ -34,6 +34,8 @@ class SellerOrder extends Model
         'seller_id',
         'seller_profile_id',
         'logistics_profile_id',
+        'origin_logistics_hub_id',
+        'destination_logistics_hub_id',
         'status',
         'payment_status',
         'subtotal_amount',
@@ -170,6 +172,16 @@ class SellerOrder extends Model
         return $this->belongsTo(LogisticsProfile::class, 'logistics_profile_id');
     }
 
+    public function originLogisticsHub(): BelongsTo
+    {
+        return $this->belongsTo(LogisticsHub::class, 'origin_logistics_hub_id');
+    }
+
+    public function destinationLogisticsHub(): BelongsTo
+    {
+        return $this->belongsTo(LogisticsHub::class, 'destination_logistics_hub_id');
+    }
+
     public function items(): HasMany
     {
         return $this->hasMany(OrderItem::class, 'seller_order_id')->orderBy('id', 'asc');
@@ -297,7 +309,7 @@ class SellerOrder extends Model
             'delivery_failed'           => 'Delivery Attempt Failed',
             'disputed'                  => 'Delivery Issue / Return Requested',
             'completed'                 => $this->isRatedByBuyer() ? 'Completed (Rated)' : 'Completed (To Rate)',
-            'rejected'                  => 'Rejected by Seller',
+            'rejected'                  => 'Rejected / Unserviceable',
             'cancelled'                 => 'Cancelled',
             'returned_to_seller'        => $this->returnedStatusLabel(),
             default                     => ucwords(str_replace('_', ' ', $this->status)),

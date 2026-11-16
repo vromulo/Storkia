@@ -19,7 +19,7 @@ use Illuminate\Support\Str;
 
 class StorkSchemaBootstrapService
 {
-    protected const SCHEMA_VERSION_CACHE_KEY = 'storkia_additive_schema_v16_ready';
+    protected const SCHEMA_VERSION_CACHE_KEY = 'storkia_additive_schema_v17_ready';
 
     protected static bool $verifiedInProcess = false;
 
@@ -46,6 +46,11 @@ class StorkSchemaBootstrapService
             && Schema::hasTable('product_restock_subscriptions')
             && Schema::hasTable('product_questions')
             && Schema::hasTable('delivery_chat_messages')
+            && Schema::hasTable('inter_hub_transfers')
+            && Schema::hasColumn('seller_orders', 'origin_logistics_hub_id')
+            && Schema::hasColumn('seller_orders', 'destination_logistics_hub_id')
+            && Schema::hasColumn('shipments', 'origin_logistics_hub_id')
+            && Schema::hasColumn('shipments', 'requires_inter_hub_transfer')
             && Schema::hasColumn('cod_collections', 'remitted_amount')
             && Schema::hasColumn('cod_collections', 'admin_remittance_status')
             && Schema::hasColumn('commission_records', 'courier_commission_amount')
@@ -116,6 +121,7 @@ class StorkSchemaBootstrapService
             self::upgradeCommissionRecordsNullableColumns();
             self::upgradeOrdersAndReturnShipmentsColumns();
             self::createDeliveryChatMessagesTable();
+            self::upgradeStrictRoutingAndInterHubTransferTables();
             RiderMobileSchemaService::ensureTablesExist();
             CourierMobileSchemaService::ensureTablesExist();
             self::backfillMainHubsAndPackages();
@@ -125,6 +131,99 @@ class StorkSchemaBootstrapService
             self::$verifiedInProcess = true;
         } catch (\Throwable $e) {
             report($e);
+        }
+    }
+
+    protected static function upgradeStrictRoutingAndInterHubTransferTables(): void
+    {
+        if (Schema::hasTable('logistics_hubs')) {
+            Schema::table('logistics_hubs', function (Blueprint $table) {
+                if (! Schema::hasColumn('logistics_hubs', 'max_courier_pickup_radius_km')) {
+                    $table->decimal('max_courier_pickup_radius_km', 6, 2)->default(50.00)->after('status');
+                }
+                if (! Schema::hasColumn('logistics_hubs', 'max_rider_delivery_radius_km')) {
+                    $table->decimal('max_rider_delivery_radius_km', 6, 2)->default(20.00)->after('max_courier_pickup_radius_km');
+                }
+            });
+        }
+
+        if (Schema::hasTable('seller_orders')) {
+            Schema::table('seller_orders', function (Blueprint $table) {
+                if (! Schema::hasColumn('seller_orders', 'origin_logistics_hub_id')) {
+                    $table->unsignedBigInteger('origin_logistics_hub_id')->nullable()->index()->after('logistics_profile_id');
+                }
+                if (! Schema::hasColumn('seller_orders', 'destination_logistics_hub_id')) {
+                    $table->unsignedBigInteger('destination_logistics_hub_id')->nullable()->index()->after('origin_logistics_hub_id');
+                }
+                if (! Schema::hasColumn('seller_orders', 'is_unserviceable_exception')) {
+                    $table->boolean('is_unserviceable_exception')->default(false)->index()->after('rejection_reason');
+                }
+                if (! Schema::hasColumn('seller_orders', 'seller_to_buyer_distance_km')) {
+                    $table->decimal('seller_to_buyer_distance_km', 8, 2)->nullable()->after('shipping_tier');
+                }
+            });
+        }
+
+        if (Schema::hasTable('shipments')) {
+            Schema::table('shipments', function (Blueprint $table) {
+                if (! Schema::hasColumn('shipments', 'origin_logistics_hub_id')) {
+                    $table->unsignedBigInteger('origin_logistics_hub_id')->nullable()->index()->after('logistics_profile_id');
+                }
+                if (! Schema::hasColumn('shipments', 'destination_logistics_hub_id')) {
+                    $table->unsignedBigInteger('destination_logistics_hub_id')->nullable()->index()->after('origin_logistics_hub_id');
+                }
+                if (! Schema::hasColumn('shipments', 'current_logistics_hub_id')) {
+                    $table->unsignedBigInteger('current_logistics_hub_id')->nullable()->index()->after('destination_logistics_hub_id');
+                }
+                if (! Schema::hasColumn('shipments', 'linehaul_courier_id')) {
+                    $table->unsignedBigInteger('linehaul_courier_id')->nullable()->index()->after('current_courier_id');
+                }
+                if (! Schema::hasColumn('shipments', 'requires_inter_hub_transfer')) {
+                    $table->boolean('requires_inter_hub_transfer')->default(false)->index()->after('status');
+                }
+                if (! Schema::hasColumn('shipments', 'origin_to_hub_distance_km')) {
+                    $table->decimal('origin_to_hub_distance_km', 8, 2)->nullable()->after('shipping_fee');
+                }
+                if (! Schema::hasColumn('shipments', 'hub_to_buyer_distance_km')) {
+                    $table->decimal('hub_to_buyer_distance_km', 8, 2)->nullable()->after('origin_to_hub_distance_km');
+                }
+                if (! Schema::hasColumn('shipments', 'inter_hub_dispatched_at')) {
+                    $table->timestamp('inter_hub_dispatched_at')->nullable()->after('arrived_at_hub_at');
+                }
+                if (! Schema::hasColumn('shipments', 'arrived_at_destination_hub_at')) {
+                    $table->timestamp('arrived_at_destination_hub_at')->nullable()->after('inter_hub_dispatched_at');
+                }
+                if (! Schema::hasColumn('shipments', 'destination_hub_verified_by')) {
+                    $table->unsignedBigInteger('destination_hub_verified_by')->nullable()->after('arrived_at_destination_hub_at');
+                }
+            });
+        }
+
+        if (! Schema::hasTable('inter_hub_transfers') && Schema::hasTable('shipments') && Schema::hasTable('logistics_hubs')) {
+            Schema::create('inter_hub_transfers', function (Blueprint $table) {
+                $table->id();
+                $table->string('transfer_reference', 50)->unique();
+                $table->foreignId('shipment_id')->constrained('shipments')->cascadeOnDelete();
+                $table->foreignId('seller_order_id')->constrained('seller_orders')->cascadeOnDelete();
+                $table->foreignId('logistics_profile_id')->constrained('logistics_profiles')->cascadeOnDelete();
+                $table->foreignId('origin_hub_id')->constrained('logistics_hubs')->cascadeOnDelete();
+                $table->foreignId('destination_hub_id')->constrained('logistics_hubs')->cascadeOnDelete();
+                $table->foreignId('courier_id')->nullable()->constrained('couriers')->nullOnDelete();
+                $table->foreignId('dispatched_by')->nullable()->constrained('users')->nullOnDelete();
+                $table->foreignId('received_by')->nullable()->constrained('users')->nullOnDelete();
+                $table->string('status', 35)->default('pending_transfer')->index();
+                $table->decimal('distance_km', 8, 2)->nullable();
+                $table->timestamp('assigned_at')->nullable();
+                $table->timestamp('departed_origin_hub_at')->nullable();
+                $table->timestamp('arrived_destination_hub_at')->nullable();
+                $table->text('notes')->nullable();
+                $table->timestamps();
+
+                $table->index(['shipment_id', 'status'], 'iht_shipment_status_idx');
+                $table->index(['origin_hub_id', 'status'], 'iht_orig_hub_status_idx');
+                $table->index(['destination_hub_id', 'status'], 'iht_dest_hub_status_idx');
+                $table->index(['courier_id', 'status'], 'iht_courier_status_idx');
+            });
         }
     }
 
@@ -152,6 +251,8 @@ class StorkSchemaBootstrapService
             $table->string('street', 150)->nullable();
             $table->string('house_details', 150)->nullable();
             $table->string('status', 25)->default('active')->index();
+            $table->decimal('max_courier_pickup_radius_km', 6, 2)->default(50.00);
+            $table->decimal('max_rider_delivery_radius_km', 6, 2)->default(20.00);
             $table->foreignId('created_by')->nullable()->constrained('users')->nullOnDelete();
             $table->timestamps();
 
@@ -1707,7 +1808,7 @@ class StorkSchemaBootstrapService
             })->values()->all();
 
             $isOutForDeliveryOrLater = in_array($shipment->status, ['out_for_delivery', 'delivered', 'delivery_failed'], true);
-            $isAtHubOrLater = $isOutForDeliveryOrLater || in_array($shipment->status, ['received_at_hub', 'rider_assigned', 'scheduled_redelivery'], true);
+            $isAtHubOrLater = $isOutForDeliveryOrLater || in_array($shipment->status, ['received_at_hub', 'received_at_destination_hub', 'rider_assigned', 'scheduled_redelivery'], true);
             $isPickedUpOrLater = $isAtHubOrLater || in_array($shipment->status, ['picked_up_from_seller', 'in_transit_to_hub'], true);
 
             ShipmentPackage::create([

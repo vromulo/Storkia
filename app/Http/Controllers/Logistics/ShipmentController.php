@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Http\Controllers\Courier\PickupController as WebPickupController;
 use App\Models\Courier;
 use App\Models\DeliveryAssignment;
+use App\Models\InterHubTransfer;
 use App\Models\LogisticsHub;
 use App\Models\LogisticsProfile;
 use App\Models\OrderStatusHistory;
@@ -26,10 +27,12 @@ use App\Services\OrderCompletionService;
 use App\Services\RealtimeBroadcastService;
 use App\Services\RoleWalletService;
 use App\Services\ShipmentVerificationService;
+use App\Services\StorkSchemaBootstrapService;
 use App\Services\VoucherService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 
 class ShipmentController extends Controller
@@ -67,6 +70,8 @@ class ShipmentController extends Controller
 
     public function index(Request $request)
     {
+        StorkSchemaBootstrapService::ensureTablesExist();
+
         /** @var User $user */
         $user = $request->user();
         $profile = $this->resolveLogisticsProfile($user);
@@ -95,8 +100,15 @@ class ShipmentController extends Controller
             $baseQuery->where(function ($q) use ($activeBranchHub) {
                 $q->whereHas('packages', fn ($pq) => $pq->where('logistics_hub_id', $activeBranchHub->id))
                   ->orWhere('hub_address_snapshot->logistics_hub_id', $activeBranchHub->id)
+                  ->orWhere('hub_address_snapshot->destination_logistics_hub_id', $activeBranchHub->id)
+                  ->when(Schema::hasColumn('shipments', 'origin_logistics_hub_id'), function ($oq) use ($activeBranchHub) {
+                      $oq->orWhere('origin_logistics_hub_id', $activeBranchHub->id);
+                  })
                   ->when(Schema::hasColumn('shipments', 'destination_logistics_hub_id'), function ($dq) use ($activeBranchHub) {
                       $dq->orWhere('destination_logistics_hub_id', $activeBranchHub->id);
+                  })
+                  ->when(Schema::hasColumn('shipments', 'current_logistics_hub_id'), function ($cq) use ($activeBranchHub) {
+                      $cq->orWhere('current_logistics_hub_id', $activeBranchHub->id);
                   });
             });
         }
@@ -104,8 +116,8 @@ class ShipmentController extends Controller
         $counts = [
             'all'              => (clone $baseQuery)->count(),
             'to_pickup'        => (clone $baseQuery)->whereIn('status', ['pickup_requested', 'awaiting_seller_drop_off', 'courier_assigned'])->count(),
-            'in_transit_hub'   => (clone $baseQuery)->whereIn('status', ['picked_up_from_seller', 'in_transit_to_hub'])->count(),
-            'at_hub'           => (clone $baseQuery)->whereIn('status', ['received_at_hub', 'rider_assigned', 'scheduled_redelivery'])->count(),
+            'in_transit_hub'   => (clone $baseQuery)->whereIn('status', ['picked_up_from_seller', 'in_transit_to_hub', 'in_transit_to_destination_hub'])->count(),
+            'at_hub'           => (clone $baseQuery)->whereIn('status', ['received_at_hub', 'awaiting_inter_hub_transfer', 'inter_hub_courier_assigned', 'received_at_destination_hub', 'rider_assigned', 'scheduled_redelivery'])->count(),
             'out_for_delivery' => (clone $baseQuery)->where('status', 'out_for_delivery')->count(),
             'delivered'        => (clone $baseQuery)->where('status', 'delivered')->count(),
             'failed_returned'  => (clone $baseQuery)->whereIn('status', ['delivery_failed', 'returning_to_seller', 'returned_to_seller'])->count(),
@@ -133,8 +145,10 @@ class ShipmentController extends Controller
             'sellerOrder.buyer',
             'sellerOrder.items',
             'sellerProfile',
+            'originLogisticsHub',
             'destinationLogisticsHub',
             'currentCourier',
+            'linehaulCourier',
             'currentRider',
             'packages.logisticsHub',
             'codCollection',
@@ -142,8 +156,8 @@ class ShipmentController extends Controller
 
         match ($statusTab) {
             'to_pickup'        => $query->whereIn('status', ['pickup_requested', 'awaiting_seller_drop_off', 'courier_assigned']),
-            'in_transit_hub'   => $query->whereIn('status', ['picked_up_from_seller', 'in_transit_to_hub']),
-            'at_hub'           => $query->whereIn('status', ['received_at_hub', 'rider_assigned', 'scheduled_redelivery']),
+            'in_transit_hub'   => $query->whereIn('status', ['picked_up_from_seller', 'in_transit_to_hub', 'in_transit_to_destination_hub']),
+            'at_hub'           => $query->whereIn('status', ['received_at_hub', 'awaiting_inter_hub_transfer', 'inter_hub_courier_assigned', 'received_at_destination_hub', 'rider_assigned', 'scheduled_redelivery']),
             'out_for_delivery' => $query->where('status', 'out_for_delivery'),
             'delivered'        => $query->where('status', 'delivered'),
             'failed_returned'  => $query->whereIn('status', ['delivery_failed', 'returning_to_seller', 'returned_to_seller']),
@@ -165,6 +179,9 @@ class ShipmentController extends Controller
             $query->where(function ($q) use ($hubFilter) {
                 $q->whereHas('packages', fn ($pq) => $pq->where('logistics_hub_id', $hubFilter))
                   ->orWhere('hub_address_snapshot->logistics_hub_id', $hubFilter)
+                  ->when(Schema::hasColumn('shipments', 'origin_logistics_hub_id'), function ($oq) use ($hubFilter) {
+                      $oq->orWhere('origin_logistics_hub_id', $hubFilter);
+                  })
                   ->when(Schema::hasColumn('shipments', 'destination_logistics_hub_id'), function ($dq) use ($hubFilter) {
                       $dq->orWhere('destination_logistics_hub_id', $hubFilter);
                   });
@@ -231,6 +248,8 @@ class ShipmentController extends Controller
 
     public function show(Request $request, Shipment $shipment)
     {
+        StorkSchemaBootstrapService::ensureTablesExist();
+
         /** @var User $user */
         $user = $request->user();
         $profile = $this->resolveLogisticsProfile($user);
@@ -257,10 +276,16 @@ class ShipmentController extends Controller
             'sellerOrder.buyer',
             'sellerOrder.payment',
             'sellerProfile',
+            'originLogisticsHub',
             'destinationLogisticsHub',
+            'currentLogisticsHub',
             'currentCourier.currentHubAssignment.hub',
+            'linehaulCourier.currentHubAssignment.hub',
             'currentRider.currentHubAssignment.hub',
             'currentRider.barangayCoverages',
+            'latestInterHubTransfer.originHub',
+            'latestInterHubTransfer.destinationHub',
+            'latestInterHubTransfer.courier',
             'packages.logisticsHub',
             'packages.verifications',
             'verifications',
@@ -273,13 +298,15 @@ class ShipmentController extends Controller
         ]);
 
         $primaryPackage = $shipment->packages->first();
-        $targetHubId = $primaryPackage?->logistics_hub_id ?? ($shipment->hub_address_snapshot['logistics_hub_id'] ?? null);
-        $destHubId = $shipment->destination_logistics_hub_id ?? ($shipment->hub_address_snapshot['destination_logistics_hub_id'] ?? $targetHubId);
+        $originHubId = $shipment->origin_logistics_hub_id
+            ?? ($primaryPackage?->logistics_hub_id ?? ($shipment->hub_address_snapshot['logistics_hub_id'] ?? null));
+        $destHubId = $shipment->destination_logistics_hub_id
+            ?? ($shipment->hub_address_snapshot['destination_logistics_hub_id'] ?? $originHubId);
 
         if ($user->isBranchLogisticsAccount() && $user->branchLogisticsHub) {
             $branchId = (int) $user->branchLogisticsHub->id;
             if (
-                $targetHubId && (int) $targetHubId !== $branchId
+                $originHubId && (int) $originHubId !== $branchId
                 && (! $destHubId || (int) $destHubId !== $branchId)
             ) {
                 abort(403, 'This shipment is assigned to another hub branch.');
@@ -316,6 +343,15 @@ class ShipmentController extends Controller
 
         $outOfRangeCouriers = $evaluatedCouriers->reject(fn (Courier $c) => (bool) ($c->getAttribute('pickup_eval')['is_eligible'] ?? false))->values();
 
+        $originHubModel = $shipment->originLogisticsHub
+            ?? ($originHubId ? LogisticsHub::find((int) $originHubId) : null);
+        $destHubModel = $shipment->destinationLogisticsHub
+            ?? ($destHubId ? LogisticsHub::find((int) $destHubId) : null);
+
+        $availableLinehaulCouriers = $allCouriers->filter(function (Courier $c) use ($shipmentWeightKg) {
+            return $c->remaining_load_capacity_kg >= $shipmentWeightKg;
+        })->values();
+
         $allRiders = Rider::with(['currentHubAssignment.hub', 'barangayCoverages'])
             ->withCount([
                 'deliveryAssignments as active_deliveries_count' => function ($q) {
@@ -327,8 +363,11 @@ class ShipmentController extends Controller
             ->orderBy('first_name')
             ->get();
 
-        $evaluatedRiders = $allRiders->map(function (Rider $r) use ($deliverySnap) {
-            $eval = $r->evaluateDeliveryEligibilityForSnapshot($deliverySnap);
+        $evaluatedRiders = $allRiders->map(function (Rider $r) use ($deliverySnap, $destHubId) {
+            $eval = $r->evaluateDeliveryEligibilityForSnapshot(
+                $deliverySnap,
+                $destHubId ? (int) $destHubId : null
+            );
             $r->setAttribute('delivery_eval', $eval);
             return $r;
         });
@@ -353,7 +392,10 @@ class ShipmentController extends Controller
         return view('logistics.shipments.show', compact(
             'profile',
             'shipment',
+            'originHubModel',
+            'destHubModel',
             'availableCouriers',
+            'availableLinehaulCouriers',
             'outOfRangeCouriers',
             'availableRiders',
             'outOfRangeRiders',
@@ -626,13 +668,26 @@ class ShipmentController extends Controller
         $completedPickupAssignment = null;
         $isCod = true;
         $verificationMethodUsed = strtoupper((string) $request->input('verification_method', 'MANUAL'));
+        $requiresLinehaulTransfer = false;
 
-        DB::transaction(function () use ($shipment, $profile, $user, &$notifiableCourier, &$creditedPayInfo, &$completedPickupAssignment, &$isCod, &$verificationMethodUsed) {
+        DB::transaction(function () use (
+            $shipment,
+            $profile,
+            $user,
+            &$notifiableCourier,
+            &$creditedPayInfo,
+            &$completedPickupAssignment,
+            &$isCod,
+            &$verificationMethodUsed,
+            &$requiresLinehaulTransfer
+        ) {
             $locked = Shipment::with([
                 'sellerOrder.order',
                 'sellerOrder.payment',
                 'latestPickupAssignment',
                 'currentCourier',
+                'originLogisticsHub',
+                'destinationLogisticsHub',
                 'packages.logisticsHub',
             ])
                 ->where('id', $shipment->id)
@@ -673,11 +728,42 @@ class ShipmentController extends Controller
                 ]);
             }
 
-            $locked->update([
-                'status'            => 'received_at_hub',
+            $requiresLinehaulTransfer = $locked->needsInterHubTransfer();
+            $nextShipmentStatus = $requiresLinehaulTransfer ? 'awaiting_inter_hub_transfer' : 'received_at_hub';
+
+            $updatePayload = [
+                'status'            => $nextShipmentStatus,
                 'arrived_at_hub_at' => now(),
                 'hub_verified_by'   => $user->id,
-            ]);
+            ];
+            if (! $requiresLinehaulTransfer && Schema::hasColumn('shipments', 'arrived_at_destination_hub_at')) {
+                $updatePayload['arrived_at_destination_hub_at'] = now();
+                $updatePayload['destination_hub_verified_by'] = $user->id;
+            }
+            $locked->update($updatePayload);
+
+            if ($requiresLinehaulTransfer && Schema::hasTable('inter_hub_transfers')) {
+                $originHubId = $locked->origin_logistics_hub_id
+                    ?? ($locked->packages->first()?->logistics_hub_id ?? ($locked->hub_address_snapshot['logistics_hub_id'] ?? null));
+                $destHubId = $locked->destination_logistics_hub_id
+                    ?? ($locked->hub_address_snapshot['destination_logistics_hub_id'] ?? null);
+
+                if ($originHubId && $destHubId && (int) $originHubId !== (int) $destHubId) {
+                    InterHubTransfer::updateOrCreate(
+                        [
+                            'shipment_id'        => $locked->id,
+                            'origin_hub_id'      => (int) $originHubId,
+                            'destination_hub_id' => (int) $destHubId,
+                        ],
+                        [
+                            'transfer_reference'   => 'IHT-' . now()->format('Ymd') . '-' . strtoupper(Str::random(6)),
+                            'seller_order_id'      => $locked->seller_order_id,
+                            'logistics_profile_id' => $profile->id,
+                            'status'               => 'awaiting_courier',
+                        ]
+                    );
+                }
+            }
 
             if ($locked->latestPickupAssignment) {
                 $locked->latestPickupAssignment->update([
@@ -710,17 +796,24 @@ class ShipmentController extends Controller
                 'status' => 'at_logistics_hub',
             ]);
 
-            $receivingHub = method_exists($user, 'activeLogisticsHub') ? $user->activeLogisticsHub() : null;
+            $receivingHub = $locked->originLogisticsHub
+                ?? (method_exists($user, 'activeLogisticsHub') ? $user->activeLogisticsHub() : null);
             $hubName = $receivingHub?->hub_name ?? $profile->business_name;
             $hubLocation = ($receivingHub?->municipality ?? $profile->municipality) . ', ' . ($receivingHub?->province ?? $profile->province);
+            $destHubName = $locked->destinationLogisticsHub?->hub_name
+                ?? ($locked->hub_address_snapshot['destination_hub']['hub_name'] ?? 'Destination Branch Hub');
+
+            $transferRemark = $requiresLinehaulTransfer
+                ? " Awaiting Inter-Hub Linehaul Courier dispatch to {$destHubName} for last-mile delivery."
+                : '';
 
             if ($isSelfDropOff) {
                 ShipmentTracking::create([
                     'shipment_id'     => $locked->id,
                     'seller_order_id' => $locked->seller_order_id,
-                    'status'          => 'received_at_hub',
-                    'title'           => 'Seller Dropped Off Package — Verified & Received at Hub',
-                    'description'     => "Seller personally dropped off the package at {$hubName}. Logistics verified package identification ({$verificationMethodUsed}) and confirmed physical receipt.",
+                    'status'          => $nextShipmentStatus,
+                    'title'           => 'Seller Dropped Off Package — Verified & Received at Origin Hub',
+                    'description'     => "Seller personally dropped off the package at {$hubName}. Logistics verified package identification ({$verificationMethodUsed}) and confirmed physical receipt.{$transferRemark}",
                     'location'        => $hubLocation,
                     'actor_type'      => 'Logistics',
                     'actor_id'        => $user->id,
@@ -730,9 +823,9 @@ class ShipmentController extends Controller
                 ShipmentTracking::create([
                     'shipment_id'     => $locked->id,
                     'seller_order_id' => $locked->seller_order_id,
-                    'status'          => 'received_at_hub',
-                    'title'           => 'Arrived at Logistics Sorting Facility',
-                    'description'     => "Package verified ({$verificationMethodUsed}) and received at {$hubName} from Courier {$locked->currentCourier?->full_name}.",
+                    'status'          => $nextShipmentStatus,
+                    'title'           => 'Arrived at Origin Logistics Sorting Facility',
+                    'description'     => "Package verified ({$verificationMethodUsed}) and received at {$hubName} from Courier {$locked->currentCourier?->full_name}.{$transferRemark}",
                     'location'        => $hubLocation,
                     'actor_type'      => 'Logistics',
                     'actor_id'        => $user->id,
@@ -747,9 +840,9 @@ class ShipmentController extends Controller
                 'to_status'       => 'at_logistics_hub',
                 'actor_type'      => 'Logistics',
                 'actor_id'        => $user->id,
-                'remarks'         => $isSelfDropOff
+                'remarks'         => ($isSelfDropOff
                     ? "Seller drop-off verified ({$verificationMethodUsed}) and received at {$hubName}."
-                    : "Courier handover verified ({$verificationMethodUsed}) and received at {$hubName}.",
+                    : "Courier handover verified ({$verificationMethodUsed}) and received at {$hubName}.") . $transferRemark,
             ]);
         });
 
@@ -791,17 +884,306 @@ class ShipmentController extends Controller
             ]);
         }
 
-        return back()->with('success', "Shipment #{$shipment->tracking_number} verified ({$verificationMethodUsed}) and physical receipt confirmed at sorting hub. You can now assign a last-mile Rider.");
+        $nextActionMsg = $requiresLinehaulTransfer
+            ? 'Please assign an Inter-Hub Linehaul Courier to transport the parcel to the Destination Branch Hub in the buyer\'s municipality.'
+            : 'You can now assign a local Last-Mile Rider.';
+
+        return back()->with('success', "Shipment #{$shipment->tracking_number} verified ({$verificationMethodUsed}) and physical receipt confirmed at Origin Sorting Hub. {$nextActionMsg}");
     }
 
-    public function assignRider(Request $request, Shipment $shipment)
+    public function assignLinehaulCourier(Request $request, Shipment $shipment)
     {
+        StorkSchemaBootstrapService::ensureTablesExist();
+
         /** @var User $user */
         $user = $request->user();
         $profile = $this->resolveLogisticsProfile($user);
 
         if (! $profile || (int) $shipment->logistics_profile_id !== (int) $profile->id) {
             abort(403, 'This shipment is not assigned to your logistics company.');
+        }
+
+        $validated = $request->validate([
+            'courier_id' => ['required', 'integer', 'exists:couriers,id'],
+            'notes'      => ['nullable', 'string', 'max:500'],
+        ]);
+
+        /** @var Courier $courier */
+        $courier = Courier::with('currentHubAssignment.hub')
+            ->where('logistics_profile_id', $profile->id)
+            ->whereIn('status', ['active', 'Active', 'on_delivery'])
+            ->findOrFail($validated['courier_id']);
+
+        $shipmentWeightKg = (float) ($shipment->total_weight ?: 0.5);
+        if ($courier->remaining_load_capacity_kg < $shipmentWeightKg) {
+            return back()->withErrors([
+                'courier_id' => "Courier {$courier->full_name} does not have enough remaining load capacity ({$courier->remaining_load_capacity_kg} kg available, {$shipmentWeightKg} kg needed).",
+            ]);
+        }
+
+        $destHub = null;
+
+        DB::transaction(function () use ($shipment, $courier, $profile, $user, $validated, &$destHub) {
+            $locked = Shipment::with(['sellerOrder', 'originLogisticsHub', 'destinationLogisticsHub', 'packages'])
+                ->where('id', $shipment->id)
+                ->lockForUpdate()
+                ->firstOrFail();
+
+            if (! $locked->needsInterHubTransfer()) {
+                throw ValidationException::withMessages([
+                    'shipment' => 'This shipment is already at the buyer\'s local destination hub and does not require an inter-hub transfer.',
+                ]);
+            }
+
+            if (! in_array($locked->status, ['received_at_hub', 'awaiting_inter_hub_transfer', 'inter_hub_courier_assigned', 'in_transit_to_destination_hub'], true)) {
+                throw ValidationException::withMessages([
+                    'shipment' => 'Package must first be received at the Origin Hub before dispatching an inter-hub transfer.',
+                ]);
+            }
+
+            $originHubId = $locked->origin_logistics_hub_id
+                ?? ($locked->packages->first()?->logistics_hub_id ?? ($locked->hub_address_snapshot['logistics_hub_id'] ?? null));
+            $destHubId = $locked->destination_logistics_hub_id
+                ?? ($locked->hub_address_snapshot['destination_logistics_hub_id'] ?? null);
+
+            $originHub = $locked->originLogisticsHub ?? ($originHubId ? LogisticsHub::find((int) $originHubId) : null);
+            $destHub = $locked->destinationLogisticsHub ?? ($destHubId ? LogisticsHub::find((int) $destHubId) : null);
+
+            if (! $originHub || ! $destHub) {
+                throw ValidationException::withMessages([
+                    'shipment' => 'Origin or Destination Branch Hub could not be resolved for this transfer.',
+                ]);
+            }
+
+            $updatePayload = [
+                'status'                  => 'in_transit_to_destination_hub',
+                'inter_hub_dispatched_at' => now(),
+            ];
+            if (Schema::hasColumn('shipments', 'linehaul_courier_id')) {
+                $updatePayload['linehaul_courier_id'] = $courier->id;
+            }
+            $locked->update($updatePayload);
+
+            $courier->update(['status' => 'on_delivery']);
+
+            if (Schema::hasTable('inter_hub_transfers')) {
+                InterHubTransfer::updateOrCreate(
+                    [
+                        'shipment_id'        => $locked->id,
+                        'origin_hub_id'      => $originHub->id,
+                        'destination_hub_id' => $destHub->id,
+                    ],
+                    [
+                        'transfer_reference'     => 'IHT-' . now()->format('Ymd') . '-' . strtoupper(Str::random(6)),
+                        'seller_order_id'        => $locked->seller_order_id,
+                        'logistics_profile_id'   => $profile->id,
+                        'courier_id'             => $courier->id,
+                        'dispatched_by'          => $user->id,
+                        'status'                 => 'in_transit',
+                        'assigned_at'            => now(),
+                        'departed_origin_hub_at' => now(),
+                        'notes'                  => $validated['notes'] ?? "Linehaul transfer from {$originHub->hub_name} to {$destHub->hub_name}.",
+                    ]
+                );
+            }
+
+            $noteSuffix = ! empty($validated['notes']) ? ' Note: ' . trim($validated['notes']) : '';
+
+            ShipmentTracking::create([
+                'shipment_id'     => $locked->id,
+                'seller_order_id' => $locked->seller_order_id,
+                'status'          => 'in_transit_to_destination_hub',
+                'title'           => 'Dispatched from Origin Hub to Destination Branch Hub',
+                'description'     => "Linehaul Courier {$courier->full_name} ({$courier->vehicle_type} - {$courier->plate_number}) is transporting the parcel from {$originHub->hub_name} ({$originHub->municipality}, {$originHub->province}) to {$destHub->hub_name} ({$destHub->municipality}, {$destHub->province}).{$noteSuffix}",
+                'location'        => "{$originHub->municipality}, {$originHub->province}",
+                'actor_type'      => 'Logistics',
+                'actor_id'        => $user->id,
+                'occurred_at'     => now(),
+            ]);
+
+            OrderStatusHistory::create([
+                'order_id'        => $locked->order_id,
+                'seller_order_id' => $locked->seller_order_id,
+                'from_status'     => $locked->sellerOrder->status,
+                'to_status'       => 'at_logistics_hub',
+                'actor_type'      => 'Logistics',
+                'actor_id'        => $user->id,
+                'remarks'         => "Inter-Hub Linehaul Courier {$courier->full_name} dispatched from {$originHub->hub_name} to Destination Branch Hub {$destHub->hub_name} ({$destHub->municipality}, {$destHub->province}).",
+            ]);
+        });
+
+        try {
+            $courier->notify(new OrderLifecycleNotification(
+                title: "Inter-Hub Linehaul Assignment (#{$shipment->tracking_number})",
+                message: "Transport Shipment #{$shipment->tracking_number} to Destination Branch Hub: " . ($destHub?->hub_name ?? 'Branch Hub') . " ({$destHub?->municipality}, {$destHub?->province}).",
+                type: 'info',
+                url: '/courier/dashboard',
+                orderId: $shipment->order_id,
+                sellerOrderId: $shipment->seller_order_id,
+                shipmentId: $shipment->id
+            ));
+
+            if ($destHub?->branchUser) {
+                $destHub->branchUser->notify(new OrderLifecycleNotification(
+                    title: "Incoming Inter-Hub Transfer (#{$shipment->tracking_number})",
+                    message: "Courier {$courier->full_name} is transporting Shipment #{$shipment->tracking_number} to your branch hub ({$destHub->hub_name}). Verify arrival once received to assign a local Last-Mile Rider.",
+                    type: 'info',
+                    url: route('logistics.shipments.show', $shipment->id),
+                    orderId: $shipment->order_id,
+                    sellerOrderId: $shipment->seller_order_id,
+                    shipmentId: $shipment->id
+                ));
+            }
+        } catch (\Throwable $e) {
+        }
+
+        RealtimeBroadcastService::forShipment($shipment->fresh(), 'shipment.in_transit_to_destination_hub');
+
+        return back()->with('success', "Linehaul Courier {$courier->full_name} dispatched to transport Shipment #{$shipment->tracking_number} to {$destHub?->hub_name} ({$destHub?->municipality})!");
+    }
+
+    public function verifyDestinationHubArrival(Request $request, Shipment $shipment)
+    {
+        StorkSchemaBootstrapService::ensureTablesExist();
+
+        /** @var User $user */
+        $user = $request->user();
+        $profile = $this->resolveLogisticsProfile($user);
+
+        if (! $profile || (int) $shipment->logistics_profile_id !== (int) $profile->id) {
+            abort(403, 'This shipment is not assigned to your logistics company.');
+        }
+
+        $destHub = null;
+
+        DB::transaction(function () use ($shipment, $profile, $user, &$destHub) {
+            $locked = Shipment::with(['sellerOrder.buyer', 'originLogisticsHub', 'destinationLogisticsHub', 'linehaulCourier', 'packages'])
+                ->where('id', $shipment->id)
+                ->lockForUpdate()
+                ->firstOrFail();
+
+            if (! in_array($locked->status, ['received_at_hub', 'awaiting_inter_hub_transfer', 'inter_hub_courier_assigned', 'in_transit_to_destination_hub'], true)) {
+                throw ValidationException::withMessages([
+                    'shipment' => 'Shipment is not currently awaiting Destination Branch Hub arrival confirmation.',
+                ]);
+            }
+
+            $destHubId = $locked->destination_logistics_hub_id
+                ?? ($locked->hub_address_snapshot['destination_logistics_hub_id'] ?? null);
+            $destHub = $locked->destinationLogisticsHub ?? ($destHubId ? LogisticsHub::find((int) $destHubId) : null);
+
+            if (! $destHub) {
+                throw ValidationException::withMessages([
+                    'shipment' => 'Destination Branch Hub could not be resolved.',
+                ]);
+            }
+
+            $updatePayload = [
+                'status' => 'received_at_destination_hub',
+            ];
+            if (Schema::hasColumn('shipments', 'current_logistics_hub_id')) {
+                $updatePayload['current_logistics_hub_id'] = $destHub->id;
+            }
+            if (Schema::hasColumn('shipments', 'arrived_at_destination_hub_at')) {
+                $updatePayload['arrived_at_destination_hub_at'] = now();
+            }
+            if (Schema::hasColumn('shipments', 'destination_hub_verified_by')) {
+                $updatePayload['destination_hub_verified_by'] = $user->id;
+            }
+            $locked->update($updatePayload);
+
+            foreach ($locked->packages as $pkg) {
+                $pkg->update([
+                    'logistics_hub_id' => $destHub->id,
+                ]);
+            }
+
+            if (Schema::hasTable('inter_hub_transfers')) {
+                InterHubTransfer::where('shipment_id', $locked->id)
+                    ->whereIn('status', ['pending_origin_arrival', 'awaiting_courier', 'in_transit'])
+                    ->update([
+                        'status'                     => 'completed',
+                        'received_by'                => $user->id,
+                        'arrived_destination_hub_at' => now(),
+                    ]);
+            }
+
+            if ($locked->linehaulCourier && $locked->linehaulCourier->status === 'on_delivery') {
+                $hasActivePickup = PickupAssignment::where('courier_id', $locked->linehaulCourier->id)
+                    ->whereIn('status', ['assigned', 'accepted', 'picked_up', 'in_transit_to_hub'])
+                    ->exists();
+                $hasActiveLinehaul = Schema::hasTable('inter_hub_transfers')
+                    && InterHubTransfer::where('courier_id', $locked->linehaulCourier->id)
+                        ->where('status', 'in_transit')
+                        ->exists();
+
+                if (! $hasActivePickup && ! $hasActiveLinehaul) {
+                    $locked->linehaulCourier->update(['status' => 'active']);
+                }
+            }
+
+            ShipmentTracking::create([
+                'shipment_id'     => $locked->id,
+                'seller_order_id' => $locked->seller_order_id,
+                'status'          => 'received_at_destination_hub',
+                'title'           => 'Arrived & Verified at Destination Branch Hub',
+                'description'     => "Parcel arrived and was verified at {$destHub->hub_name} ({$destHub->municipality}, {$destHub->province}). Ready for local barangay-to-barangay Last-Mile Rider dispatch.",
+                'location'        => "{$destHub->municipality}, {$destHub->province}",
+                'actor_type'      => 'Logistics',
+                'actor_id'        => $user->id,
+                'occurred_at'     => now(),
+            ]);
+
+            OrderStatusHistory::create([
+                'order_id'        => $locked->order_id,
+                'seller_order_id' => $locked->seller_order_id,
+                'from_status'     => $locked->sellerOrder->status,
+                'to_status'       => 'at_logistics_hub',
+                'actor_type'      => 'Logistics',
+                'actor_id'        => $user->id,
+                'remarks'         => "Inter-Hub Transfer completed: Parcel received at Destination Branch Hub {$destHub->hub_name} ({$destHub->municipality}, {$destHub->province}).",
+            ]);
+        });
+
+        try {
+            $buyer = $shipment->sellerOrder?->buyer;
+            if ($buyer && $destHub) {
+                $buyer->notify(new OrderLifecycleNotification(
+                    title: 'Parcel Arrived at Your Local Destination Hub',
+                    message: "Your package #{$shipment->tracking_number} arrived at {$destHub->hub_name} in {$destHub->municipality}, {$destHub->province} and is ready for local Rider delivery.",
+                    type: 'info',
+                    url: route('user.orders.show', $shipment->seller_order_id),
+                    orderId: $shipment->order_id,
+                    sellerOrderId: $shipment->seller_order_id,
+                    shipmentId: $shipment->id
+                ));
+            }
+        } catch (\Throwable $e) {
+        }
+
+        RealtimeBroadcastService::forShipment($shipment->fresh(), 'shipment.received_at_destination_hub');
+
+        return back()->with('success', "Shipment #{$shipment->tracking_number} confirmed at Destination Branch Hub ({$destHub?->hub_name})! You can now assign an approved local Last-Mile Rider in {$destHub?->municipality}.");
+    }
+
+    public function assignRider(Request $request, Shipment $shipment)
+    {
+        StorkSchemaBootstrapService::ensureTablesExist();
+
+        /** @var User $user */
+        $user = $request->user();
+        $profile = $this->resolveLogisticsProfile($user);
+
+        if (! $profile || (int) $shipment->logistics_profile_id !== (int) $profile->id) {
+            abort(403, 'This shipment is not assigned to your logistics company.');
+        }
+
+        if ($shipment->needsInterHubTransfer() && ! $shipment->hasArrivedAtDestinationHub()) {
+            $destHubName = $shipment->destinationLogisticsHub?->hub_name
+                ?? ($shipment->hub_address_snapshot['destination_hub']['hub_name'] ?? 'the Destination Branch Hub');
+            return back()->withErrors([
+                'shipment' => "Inter-Hub Transfer Required: This parcel is currently at the Origin Hub and must first be transferred by a Courier and received at {$destHubName} before a local Last-Mile Rider can be assigned.",
+            ]);
         }
 
         $validated = $request->validate([
@@ -816,11 +1198,17 @@ class ShipmentController extends Controller
             ->where('status', 'approved')
             ->findOrFail($validated['rider_id']);
 
-        $deliveryEval = $rider->evaluateDeliveryEligibilityForSnapshot((array) ($shipment->delivery_address_snapshot ?? []));
+        $destHubId = $shipment->destination_logistics_hub_id
+            ?? ($shipment->hub_address_snapshot['destination_logistics_hub_id'] ?? null);
+
+        $deliveryEval = $rider->evaluateDeliveryEligibilityForSnapshot(
+            (array) ($shipment->delivery_address_snapshot ?? []),
+            $destHubId ? (int) $destHubId : null
+        );
 
         if (! $deliveryEval['is_eligible']) {
             return back()->withErrors([
-                'rider_id' => $deliveryEval['reason'] ?: "Rider {$rider->full_name} is registered to {$rider->assigned_hub?->municipality} and cannot be assigned to a buyer outside their last-mile hub radius.",
+                'rider_id' => $deliveryEval['reason'] ?: "Rider {$rider->full_name} is registered to {$rider->assigned_hub?->municipality} and cannot be assigned to a buyer outside their municipality or barangay coverage.",
             ]);
         }
 
@@ -830,9 +1218,9 @@ class ShipmentController extends Controller
         DB::transaction(function () use ($shipment, $rider, $profile, $user, $validated, &$createdDeliveryAssignment) {
             $locked = Shipment::with(['sellerOrder', 'packages'])->where('id', $shipment->id)->lockForUpdate()->firstOrFail();
 
-            if (! in_array($locked->status, ['received_at_hub', 'rider_assigned', 'scheduled_redelivery'], true)) {
+            if (! in_array($locked->status, ['received_at_hub', 'received_at_destination_hub', 'rider_assigned', 'scheduled_redelivery'], true)) {
                 throw ValidationException::withMessages([
-                    'shipment' => 'Rider can only be assigned when the package has been verified as received at the sorting hub or scheduled for redelivery.',
+                    'shipment' => 'Rider can only be assigned when the package has been verified as received at the destination sorting hub or scheduled for redelivery.',
                 ]);
             }
 
@@ -886,7 +1274,7 @@ class ShipmentController extends Controller
                 'seller_order_id' => $locked->seller_order_id,
                 'status'          => 'rider_assigned',
                 'title'           => "Last-Mile Delivery Rider Assigned (Attempt #{$nextAttemptNumber})",
-                'description'     => "Rider {$rider->full_name} ({$rider->vehicle_type} - {$rider->plate_number}) assigned for delivery. {$scheduledNote}",
+                'description'     => "Rider {$rider->full_name} ({$rider->vehicle_type} - {$rider->plate_number}) assigned for local barangay delivery in {$rider->assigned_hub?->municipality}. {$scheduledNote}",
                 'location'        => $rider->assigned_hub?->hub_name ?? $profile->business_name,
                 'actor_type'      => 'Logistics',
                 'actor_id'        => $user->id,
@@ -932,6 +1320,9 @@ class ShipmentController extends Controller
             'notes'      => ['nullable', 'string', 'max:500'],
         ]);
 
+        $destHubId = $shipment->destination_logistics_hub_id
+            ?? ($shipment->hub_address_snapshot['destination_logistics_hub_id'] ?? null);
+
         $newRider = null;
         if ($validated['resolution'] === 'schedule_redelivery' && ! empty($validated['rider_id'])) {
             $newRider = Rider::with(['currentHubAssignment.hub', 'barangayCoverages'])
@@ -939,10 +1330,13 @@ class ShipmentController extends Controller
                 ->where('status', 'approved')
                 ->findOrFail($validated['rider_id']);
 
-            $redelivEval = $newRider->evaluateDeliveryEligibilityForSnapshot((array) ($shipment->delivery_address_snapshot ?? []));
+            $redelivEval = $newRider->evaluateDeliveryEligibilityForSnapshot(
+                (array) ($shipment->delivery_address_snapshot ?? []),
+                $destHubId ? (int) $destHubId : null
+            );
             if (! $redelivEval['is_eligible']) {
                 return back()->withErrors([
-                    'rider_id' => $redelivEval['reason'] ?: "Rider {$newRider->full_name} is outside the Last-Mile delivery range for this buyer.",
+                    'rider_id' => $redelivEval['reason'] ?: "Rider {$newRider->full_name} is outside the Last-Mile municipality/barangay coverage for this buyer.",
                 ]);
             }
         }

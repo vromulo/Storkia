@@ -88,7 +88,7 @@ class OperationalSlaGuardService
             ]);
         }
 
-        return DB::transaction(function () use ($courier, $cleanReason, $actorType, $actorId, $actorName) {
+        $unassignedCount = DB::transaction(function () use ($courier, $cleanReason, $actorType, $actorId, $actorName) {
             $oldStatus = $courier->status;
             $oldOnline = (bool) ($courier->is_online ?? false);
 
@@ -106,7 +106,7 @@ class OperationalSlaGuardService
                 ->lockForUpdate()
                 ->get();
 
-            $unassignedCount = 0;
+            $count = 0;
 
             foreach ($uncollectedPickups as $assignment) {
                 $assignment->update([
@@ -138,7 +138,7 @@ class OperationalSlaGuardService
                         'occurred_at'     => now(),
                     ]);
 
-                    $unassignedCount++;
+                    $count++;
                 }
             }
 
@@ -148,15 +148,22 @@ class OperationalSlaGuardService
                 targetId: (int) $courier->id,
                 targetReference: $courier->full_name . ' (' . $courier->plate_number . ')',
                 oldValues: ['status' => $oldStatus, 'is_online' => $oldOnline],
-                newValues: ['status' => 'suspended', 'is_online' => false, 'jobs_returned_to_unassigned' => $unassignedCount],
+                newValues: ['status' => 'suspended', 'is_online' => false, 'jobs_returned_to_unassigned' => $count],
                 reason: $cleanReason,
                 actorType: $actorType,
                 actorId: $actorId,
                 actorName: $actorName
             );
 
-            return $unassignedCount;
+            return $count;
         });
+
+        try {
+            app(OrderCompletionService::class)->autoCancelUnserviceablePendingOrders();
+        } catch (\Throwable $e) {
+        }
+
+        return $unassignedCount;
     }
 
     public function suspendRiderWithActiveJobHandling(
@@ -173,7 +180,7 @@ class OperationalSlaGuardService
             ]);
         }
 
-        return DB::transaction(function () use ($rider, $cleanReason, $actorType, $actorId, $actorName) {
+        $unassignedCount = DB::transaction(function () use ($rider, $cleanReason, $actorType, $actorId, $actorName) {
             $oldStatus = $rider->status;
             $oldOnline = (bool) ($rider->is_online ?? false);
 
@@ -192,7 +199,7 @@ class OperationalSlaGuardService
                 ->lockForUpdate()
                 ->get();
 
-            $unassignedCount = 0;
+            $count = 0;
 
             foreach ($uncollectedAssignments as $assignment) {
                 $assignment->update([
@@ -201,15 +208,19 @@ class OperationalSlaGuardService
                 ]);
 
                 if ($assignment->shipment && in_array($assignment->shipment->status, ['rider_assigned', 'scheduled_redelivery'], true)) {
+                    $restoredStatus = $assignment->shipment->needsInterHubTransfer()
+                        ? 'received_at_destination_hub'
+                        : 'received_at_hub';
+
                     $assignment->shipment->update([
                         'current_rider_id' => null,
-                        'status'           => 'received_at_hub',
+                        'status'           => $restoredStatus,
                     ]);
 
                     ShipmentTracking::create([
                         'shipment_id'     => $assignment->shipment->id,
                         'seller_order_id' => $assignment->seller_order_id,
-                        'status'          => 'received_at_hub',
+                        'status'          => $restoredStatus,
                         'title'           => 'Returned to Unassigned Hub Queue (Rider Suspended)',
                         'description'     => "Rider {$rider->full_name} was suspended before collecting the parcel ({$cleanReason}). Shipment returned to Unassigned queue.",
                         'location'        => $rider->assigned_hub?->hub_name ?? 'Sorting Hub',
@@ -218,7 +229,7 @@ class OperationalSlaGuardService
                         'occurred_at'     => now(),
                     ]);
 
-                    $unassignedCount++;
+                    $count++;
                 }
             }
 
@@ -228,15 +239,22 @@ class OperationalSlaGuardService
                 targetId: (int) $rider->id,
                 targetReference: $rider->full_name . ' (' . $rider->plate_number . ')',
                 oldValues: ['status' => $oldStatus, 'is_online' => $oldOnline],
-                newValues: ['status' => 'rejected', 'is_online' => false, 'jobs_returned_to_unassigned' => $unassignedCount],
+                newValues: ['status' => 'rejected', 'is_online' => false, 'jobs_returned_to_unassigned' => $count],
                 reason: $cleanReason,
                 actorType: $actorType,
                 actorId: $actorId,
                 actorName: $actorName
             );
 
-            return $unassignedCount;
+            return $count;
         });
+
+        try {
+            app(OrderCompletionService::class)->autoCancelUnserviceablePendingOrders();
+        } catch (\Throwable $e) {
+        }
+
+        return $unassignedCount;
     }
 
     public function sweepOverdueEmployeeAssignments(int $logisticsProfileId): void
@@ -326,9 +344,13 @@ class OperationalSlaGuardService
             ]);
 
             if ($deliv->shipment && (int) $deliv->shipment->current_rider_id === (int) $rider->id) {
+                $restoredStatus = $deliv->shipment->needsInterHubTransfer()
+                    ? 'received_at_destination_hub'
+                    : 'received_at_hub';
+
                 $deliv->shipment->update([
                     'current_rider_id' => null,
-                    'status'           => 'received_at_hub',
+                    'status'           => $restoredStatus,
                 ]);
             }
         }

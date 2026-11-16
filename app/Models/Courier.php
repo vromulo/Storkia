@@ -201,6 +201,7 @@ class Courier extends Authenticatable
             return [
                 'is_eligible'              => false,
                 'has_load_capacity'        => false,
+                'same_island'              => false,
                 'same_municipality'        => false,
                 'same_province'            => false,
                 'distance_from_hub_km'     => 9999.0,
@@ -242,17 +243,20 @@ class Courier extends Authenticatable
             ? (float) $hub->max_courier_pickup_radius_km
             : ShippingCalculatorService::MAX_COURIER_PICKUP_RADIUS_KM;
 
-        $sameProvince = $hubProv !== '' && $origProv !== '' && $hubProv === $origProv && $hubIsland === $origIsland;
+        $sameIsland = $hubIsland !== '' && $origIsland !== '' && $hubIsland === $origIsland;
+        $sameProvince = $sameIsland && $hubProv !== '' && $origProv !== '' && $hubProv === $origProv;
         $sameMunicipality = $sameProvince && $hubMun !== '' && $origMun !== '' && $hubMun === $origMun;
 
-        $withinRange = ($hubIsland === $origIsland) && ($sameProvince || $distFromHubKm <= $maxCourierRadius);
+        $withinRange = $sameIsland && ($sameProvince || $distFromHubKm <= $maxCourierRadius);
 
         $activeLoadKg = $this->active_assigned_weight_kg;
         $remainingCapKg = $this->remaining_load_capacity_kg;
         $hasCapacity = $shipmentWeightKg <= 0 || $remainingCapKg >= $shipmentWeightKg;
 
         $reason = null;
-        if (! $withinRange) {
+        if (! $sameIsland) {
+            $reason = "Courier {$this->full_name} is based at {$hub->hub_name} (" . ucfirst($hubIsland) . ") and cannot perform First-Mile Seller Pickup on another island (" . ucfirst($origIsland) . ").";
+        } elseif (! $withinRange) {
             $reason = "Seller in {$pickupSnapshot['municipality']}, {$pickupSnapshot['province']} is {$distFromHubKm} km from {$hub->hub_name} (exceeds {$maxCourierRadius} km First-Mile Courier limit).";
         } elseif (! $hasCapacity) {
             $reason = "Courier {$this->full_name} has {$activeLoadKg} kg active load / {$this->load_capacity} kg max capacity (needs {$shipmentWeightKg} kg).";
@@ -262,6 +266,7 @@ class Courier extends Authenticatable
             'is_eligible'              => $withinRange && $hasCapacity,
             'within_range'             => $withinRange,
             'has_load_capacity'        => $hasCapacity,
+            'same_island'              => $sameIsland,
             'same_municipality'        => $sameMunicipality,
             'same_province'            => $sameProvince,
             'distance_from_hub_km'     => $distFromHubKm,
@@ -269,6 +274,38 @@ class Courier extends Authenticatable
             'active_load_kg'           => $activeLoadKg,
             'remaining_capacity_kg'    => $remainingCapKg,
             'reason'                   => $reason,
+        ];
+    }
+
+    public function evaluateLinehaulEligibilityForTransfer(
+        LogisticsHub $originHub,
+        LogisticsHub $destinationHub,
+        float $shipmentWeightKg = 0.0
+    ): array {
+        $assignedHub = $this->assigned_hub;
+        if (! $assignedHub || (int) $this->logistics_profile_id !== (int) $originHub->parent_logistics_profile_id) {
+            return [
+                'is_eligible'           => false,
+                'has_load_capacity'     => false,
+                'remaining_capacity_kg' => $this->remaining_load_capacity_kg,
+                'reason'                => 'Courier does not belong to this Logistics company.',
+            ];
+        }
+
+        $activeLoadKg = $this->active_assigned_weight_kg;
+        $remainingCapKg = $this->remaining_load_capacity_kg;
+        $hasCapacity = $shipmentWeightKg <= 0 || $remainingCapKg >= $shipmentWeightKg;
+
+        return [
+            'is_eligible'           => $hasCapacity,
+            'has_load_capacity'     => $hasCapacity,
+            'active_load_kg'        => $activeLoadKg,
+            'remaining_capacity_kg' => $remainingCapKg,
+            'origin_hub_name'       => $originHub->hub_name,
+            'destination_hub_name'  => $destinationHub->hub_name,
+            'reason'                => $hasCapacity
+                ? null
+                : "Courier {$this->full_name} has {$activeLoadKg} kg active load / {$this->load_capacity} kg max capacity (needs {$shipmentWeightKg} kg).",
         ];
     }
 }

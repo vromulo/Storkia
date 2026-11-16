@@ -39,6 +39,8 @@ Route::middleware('throttle:120,1')->group(function () {
             Route::post('/shipments/{shipment}/verify-lookup', [ShipmentController::class, 'verifyPackageLookup'])->name('shipments.verify-lookup');
             Route::post('/shipments/{shipment}/assign-courier', [ShipmentController::class, 'assignCourier'])->name('shipments.assign-courier');
             Route::post('/shipments/{shipment}/verify-hub-arrival', [ShipmentController::class, 'verifyHubArrival'])->name('shipments.verify-hub-arrival');
+            Route::post('/shipments/{shipment}/assign-linehaul-courier', [ShipmentController::class, 'assignLinehaulCourier'])->name('shipments.assign-linehaul-courier');
+            Route::post('/shipments/{shipment}/verify-destination-hub-arrival', [ShipmentController::class, 'verifyDestinationHubArrival'])->name('shipments.verify-destination-hub-arrival');
             Route::post('/shipments/{shipment}/assign-rider', [ShipmentController::class, 'assignRider'])->name('shipments.assign-rider');
             Route::post('/shipments/{shipment}/resolve-failed', [ShipmentController::class, 'resolveFailedDelivery'])->name('shipments.resolve-failed');
             Route::post('/shipments/{shipment}/override-status', [ZonesAndExceptionsController::class, 'overrideShipmentStatus'])->name('shipments.override-status');

@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Seller;
 use App\Http\Controllers\Controller;
 use App\Models\Admin;
 use App\Models\CommissionRecord;
+use App\Models\InterHubTransfer;
 use App\Models\LogisticsHub;
 use App\Models\LogisticsProfile;
 use App\Models\OrderItemReview;
@@ -63,8 +64,11 @@ class OrderController extends Controller
 
     public function index(Request $request)
     {
+        StorkSchemaBootstrapService::ensureTablesExist();
+
         $user = $request->user();
 
+        $this->orderCompletionService->autoCancelUnserviceablePendingOrders(sellerId: (int) $user->id);
         $this->orderCompletionService->runLifecycleMaintenance(sellerId: (int) $user->id);
         $this->backfillSellerOrderDistances((int) $user->id);
 
@@ -196,11 +200,17 @@ class OrderController extends Controller
 
     public function show(Request $request, SellerOrder $sellerOrder)
     {
+        StorkSchemaBootstrapService::ensureTablesExist();
+
         $user = $request->user();
         if ((int) $sellerOrder->seller_id !== (int) $user->id) {
             abort(403);
         }
 
+        $this->orderCompletionService->autoCancelUnserviceablePendingOrders(
+            sellerId: (int) $user->id,
+            specificSellerOrderId: (int) $sellerOrder->id
+        );
         $this->orderCompletionService->runLifecycleMaintenance(sellerId: (int) $user->id);
         $sellerOrder->refresh();
 
@@ -210,6 +220,8 @@ class OrderController extends Controller
             'items',
             'sellerProfile',
             'logisticsProfile',
+            'originLogisticsHub',
+            'destinationLogisticsHub',
             'payment',
             'paymentSubmission',
             'extra',
@@ -219,6 +231,7 @@ class OrderController extends Controller
             'shipment.packages.logisticsHub',
             'shipment.trackingLogs',
             'shipment.currentCourier',
+            'shipment.linehaulCourier',
             'shipment.currentRider',
             'shipment.deliveryAttempts',
             'shipment.deliveryProofs',
@@ -247,7 +260,8 @@ class OrderController extends Controller
             buyerMunicipality: (string) ($deliverySnap['municipality'] ?? ''),
             sellerBarangay: (string) ($pickupSnap['barangay'] ?? ($user->sellerProfile?->barangay ?? '')),
             buyerBarangay: (string) ($deliverySnap['barangay'] ?? ''),
-            sellerProfile: $user->sellerProfile
+            sellerProfile: $user->sellerProfile,
+            totalWeightKg: (float) ($sellerOrder->total_weight ?: 0.5)
         );
 
         $eligibleLogistics = $this->getEligibleLogisticsProviders($user->sellerProfile);
@@ -255,9 +269,7 @@ class OrderController extends Controller
 
         $hasFleetReadyLogistics = collect($routeEvaluationMap)->contains(fn ($eval) => ! empty($eval['is_fleet_ready']));
         $hasRouteServiceableLogistics = collect($routeEvaluationMap)->contains(fn ($eval) => ! empty($eval['is_route_serviceable']));
-        $canRejectUnserviceable = ! $sellerOrder->shipment
-            && in_array($sellerOrder->status, ['pending_seller_acceptance', 'accepted', 'preparing'], true)
-            && ! $hasFleetReadyLogistics;
+        $canRejectUnserviceable = false;
 
         return view('seller.orders.show', compact(
             'sellerOrder',
@@ -673,13 +685,25 @@ class OrderController extends Controller
 
     public function accept(Request $request, SellerOrder $sellerOrder)
     {
+        StorkSchemaBootstrapService::ensureTablesExist();
+
         $user = $request->user();
         if ((int) $sellerOrder->seller_id !== (int) $user->id) {
             abort(403);
         }
 
+        $autoCancelled = $this->orderCompletionService->autoCancelUnserviceablePendingOrders(
+            sellerId: (int) $user->id,
+            specificSellerOrderId: (int) $sellerOrder->id
+        );
         $this->orderCompletionService->runLifecycleMaintenance(sellerId: (int) $user->id);
         $sellerOrder->refresh();
+
+        if ($autoCancelled > 0 || $sellerOrder->status === 'cancelled') {
+            return redirect()
+                ->route('seller.orders.show', $sellerOrder->id)
+                ->with('info', "Order #{$sellerOrder->seller_order_number} was automatically cancelled by the platform with 0 SLA strikes because the Logistics/Rider route became unavailable.");
+        }
 
         if ($sellerOrder->status !== 'pending_seller_acceptance') {
             return back()->withErrors([
@@ -734,139 +758,27 @@ class OrderController extends Controller
 
     public function rejectUnserviceableOrder(Request $request, SellerOrder $sellerOrder)
     {
+        StorkSchemaBootstrapService::ensureTablesExist();
+
         $user = $request->user();
         if ((int) $sellerOrder->seller_id !== (int) $user->id) {
             abort(403);
         }
 
-        $validated = $request->validate([
-            'rejection_reason' => ['nullable', 'string', 'max:300'],
-        ]);
-
-        $pickupSnap = (array) ($sellerOrder->pickup_address_snapshot ?? []);
-        $deliverySnap = (array) ($sellerOrder->delivery_address_snapshot ?? []);
-
-        $evaluations = $this->shippingCalculatorService->evaluateLogisticsProvidersForRoute(
-            sellerProvince: (string) ($pickupSnap['province'] ?? ($user->sellerProfile?->province ?? '')),
-            sellerMunicipality: (string) ($pickupSnap['municipality'] ?? ($user->sellerProfile?->municipality ?? '')),
-            buyerProvince: (string) ($deliverySnap['province'] ?? ''),
-            buyerMunicipality: (string) ($deliverySnap['municipality'] ?? ''),
-            sellerBarangay: (string) ($pickupSnap['barangay'] ?? ($user->sellerProfile?->barangay ?? '')),
-            buyerBarangay: (string) ($deliverySnap['barangay'] ?? ''),
-            sellerProfile: $user->sellerProfile
+        $autoCancelled = $this->orderCompletionService->autoCancelUnserviceablePendingOrders(
+            sellerId: (int) $user->id,
+            specificSellerOrderId: (int) $sellerOrder->id
         );
 
-        $hasFleetReady = collect($evaluations)->contains(fn ($e) => ! empty($e['is_fleet_ready']));
-        if ($hasFleetReady) {
-            return back()->withErrors([
-                'order' => 'Penalty-free unserviceable rejection is only permitted when no active Logistics partner has both Origin Hub coverage and an approved Last-Mile Rider covering the buyer\'s area.',
-            ]);
+        if ($autoCancelled > 0) {
+            return redirect()
+                ->route('seller.orders.show', $sellerOrder->id)
+                ->with('success', "Order #{$sellerOrder->seller_order_number} was automatically cancelled due to unserviceable route with 0 SLA violation strikes.");
         }
 
-        $buyerArea = trim(($deliverySnap['municipality'] ?? '') . ', ' . ($deliverySnap['province'] ?? ''), ', ');
-        $reasonNote = trim((string) ($validated['rejection_reason'] ?? ''))
-            ?: "Unserviceable Area / No Available Last-Mile Rider covering {$buyerArea} (Exempt from Seller SLA Violation).";
-
-        $adminNotifications = [];
-
-        DB::transaction(function () use ($sellerOrder, $user, $reasonNote, &$adminNotifications) {
-            $locked = SellerOrder::with(['order', 'payment', 'paymentSubmission', 'extra', 'sellerProfile', 'shipment'])
-                ->where('id', $sellerOrder->id)
-                ->lockForUpdate()
-                ->firstOrFail();
-
-            if (! in_array($locked->status, ['pending_seller_acceptance', 'accepted', 'preparing'], true) || $locked->shipment) {
-                throw ValidationException::withMessages([
-                    'order' => 'This order can no longer be rejected because a shipment has already been generated or the order is closed.',
-                ]);
-            }
-
-            $previousStatus = $locked->status;
-            $payMethod = strtoupper((string) $locked->effective_payment_method);
-            $wasPrepaidWallet = $payMethod === 'WALLET' || (float) ($locked->extra?->wallet_paid_amount ?? 0) > 0;
-            $wasPrepaidGcash = $payMethod === 'GCASH';
-
-            $updatePayload = [
-                'status'           => 'rejected',
-                'payment_status'   => 'cancelled',
-                'rejected_at'      => now(),
-                'cancelled_at'     => now(),
-                'rejection_reason' => $reasonNote,
-            ];
-            if (Schema::hasColumn('seller_orders', 'is_unserviceable_exception')) {
-                $updatePayload['is_unserviceable_exception'] = true;
-            }
-            $locked->update($updatePayload);
-
-            $locked->payment?->update([
-                'status' => 'cancelled',
-            ]);
-
-            if ($wasPrepaidWallet) {
-                $refundAmt = (float) ($locked->extra?->wallet_paid_amount > 0 ? $locked->extra->wallet_paid_amount : $locked->total_amount);
-                $this->roleWalletService->refundBuyerWalletForOrder(
-                    $locked,
-                    $refundAmt,
-                    'Instant E-Wallet Refund (Unserviceable Delivery Area / No Last-Mile Rider)'
-                );
-            } elseif ($wasPrepaidGcash && $locked->paymentSubmission) {
-                $locked->paymentSubmission->update([
-                    'status'        => 'refund_required_unserviceable',
-                    'refund_status' => 'pending_admin_refund',
-                ]);
-                foreach (Admin::all() as $admin) {
-                    $adminNotifications[] = [
-                        'recipient'    => $admin,
-                        'notification' => new OrderLifecycleNotification(
-                            title: "GCash Refund Needed (Unserviceable Area — #{$locked->seller_order_number})",
-                            message: "Order #{$locked->seller_order_number} was cancelled due to lack of Last-Mile Rider coverage. Please process the buyer's GCash refund.",
-                            type: 'warning',
-                            url: route('admin.commissions.index')
-                        ),
-                    ];
-                }
-            }
-
-            $this->inventoryStockService->restoreStockForSellerOrder($locked);
-            $this->voucherService->restoreVouchersForSellerOrder($locked);
-            $this->buyerRewardService?->restoreCoinsForSellerOrder($locked);
-
-            if ($locked->sellerProfile) {
-                $this->slaGuardService?->recordSellerSlaStrike(
-                    sellerProfile: $locked->sellerProfile,
-                    reason: $reasonNote,
-                    isUnserviceableAreaException: true
-                );
-            }
-
-            OrderStatusHistory::create([
-                'order_id'        => $locked->order_id,
-                'seller_order_id' => $locked->id,
-                'from_status'     => $previousStatus,
-                'to_status'       => 'rejected',
-                'actor_type'      => 'Seller',
-                'actor_id'        => $user->id,
-                'remarks'         => "Order cancelled due to unserviceable destination / no available Last-Mile Rider ({$reasonNote}). 0 SLA strikes applied to Seller; stock, vouchers, coins, and wallet funds restored.",
-            ]);
-
-            if ($locked->order) {
-                $this->orderCompletionService->syncParentOrderStatus($locked->order);
-            }
-        });
-
-        foreach ($adminNotifications as $entry) {
-            try {
-                $entry['recipient']->notify($entry['notification']);
-            } catch (\Throwable $e) {
-            }
-        }
-
-        $this->buyerNotifications->rejected($sellerOrder, $reasonNote);
-        RealtimeBroadcastService::forSellerOrder($sellerOrder->fresh(), 'order.rejected_unserviceable');
-
-        return redirect()
-            ->route('seller.orders.show', $sellerOrder->id)
-            ->with('success', "Order #{$sellerOrder->seller_order_number} cancelled due to unserviceable buyer area with 0 SLA violation strikes. Buyer stock, vouchers, coins, and wallet payment were restored.");
+        return back()->withErrors([
+            'order' => 'This order currently has an active Logistics Hub & Last-Mile Rider route covering the buyer and can be fulfilled normally.',
+        ]);
     }
 
     public function reject(Request $request, SellerOrder $sellerOrder)
@@ -964,9 +876,21 @@ class OrderController extends Controller
 
     public function markReadyForPickup(Request $request, SellerOrder $sellerOrder)
     {
+        StorkSchemaBootstrapService::ensureTablesExist();
+
         $user = $request->user();
         if ((int) $sellerOrder->seller_id !== (int) $user->id) {
             abort(403);
+        }
+
+        $autoCancelled = $this->orderCompletionService->autoCancelUnserviceablePendingOrders(
+            sellerId: (int) $user->id,
+            specificSellerOrderId: (int) $sellerOrder->id
+        );
+        if ($autoCancelled > 0) {
+            return redirect()
+                ->route('seller.orders.show', $sellerOrder->id)
+                ->with('info', "Order #{$sellerOrder->seller_order_number} was automatically cancelled by the platform with 0 SLA strikes because the Logistics/Rider route became unavailable.");
         }
 
         $validated = $request->validate([
@@ -987,7 +911,8 @@ class OrderController extends Controller
             buyerMunicipality: (string) ($deliverySnap['municipality'] ?? ''),
             sellerBarangay: (string) ($pickupSnap['barangay'] ?? ($user->sellerProfile?->barangay ?? '')),
             buyerBarangay: (string) ($deliverySnap['barangay'] ?? ''),
-            sellerProfile: $user->sellerProfile
+            sellerProfile: $user->sellerProfile,
+            totalWeightKg: (float) ($sellerOrder->total_weight ?: 0.5)
         );
 
         if (! empty($validated['logistics_hub_id'])) {
@@ -1006,25 +931,26 @@ class OrderController extends Controller
             sellerProvince: (string) ($pickupSnap['province'] ?? ($user->sellerProfile?->province ?? '')),
             sellerMunicipality: (string) ($pickupSnap['municipality'] ?? ($user->sellerProfile?->municipality ?? '')),
             sellerBarangay: (string) ($pickupSnap['barangay'] ?? ($user->sellerProfile?->barangay ?? '')),
-            sellerProfile: $user->sellerProfile
+            sellerProfile: $user->sellerProfile,
+            totalWeightKg: (float) ($sellerOrder->total_weight ?: 0.5)
         );
 
         if (! $originEval['is_covered']) {
             return back()->withErrors([
-                'logistics_hub_id' => "Origin Hub \"{$selectedHub->hub_name}\" ({$selectedHub->municipality}, {$selectedHub->province}) is {$originEval['distance_km']} km away and outside First-Mile Courier pickup range ({$originEval['max_radius_km']} km).",
+                'logistics_hub_id' => "Origin Hub \"{$selectedHub->hub_name}\" ({$selectedHub->municipality}, {$selectedHub->province}) is outside First-Mile Courier pickup range or on a different island from your store.",
             ]);
         }
 
         if (! $providerEval || ! $providerEval['destination_hub']) {
             $buyerLoc = trim(($deliverySnap['municipality'] ?? '') . ', ' . ($deliverySnap['province'] ?? ''), ', ');
             return back()->withErrors([
-                'logistics_hub_id' => "{$logisticsProfile->business_name} does not have a Destination Last-Mile Hub covering {$buyerLoc} (within " . number_format(ShippingCalculatorService::MAX_RIDER_DELIVERY_RADIUS_KM, 0) . " km). Please select a Logistics partner that covers the buyer's area or cancel as Unserviceable Area (0 SLA Strikes).",
+                'logistics_hub_id' => "{$logisticsProfile->business_name} does not have an active Branch/Main Hub in the buyer's municipality ({$buyerLoc}). Please select a Logistics partner with a connected hub in {$buyerLoc}.",
             ]);
         }
 
         if ((int) ($providerEval['destination_riders_count'] ?? 0) <= 0) {
             return back()->withErrors([
-                'logistics_hub_id' => "{$logisticsProfile->business_name}'s destination hub ({$providerEval['destination_hub']->hub_name}) currently has 0 approved Last-Mile Riders covering {$deliverySnap['municipality']}. Please select another Logistics partner or use Penalty-Free Unserviceable Rejection.",
+                'logistics_hub_id' => "{$logisticsProfile->business_name}'s destination hub ({$providerEval['destination_hub']->hub_name}) currently has 0 approved Last-Mile Riders covering Brgy. {$deliverySnap['barangay']}, {$deliverySnap['municipality']}.",
             ]);
         }
 
@@ -1036,6 +962,7 @@ class OrderController extends Controller
         }
 
         $destinationHub = $providerEval['destination_hub'] ?? $selectedHub;
+        $requiresInterHubTransfer = (int) $selectedHub->id !== (int) $destinationHub->id;
         $originDistanceKm = (float) ($originEval['distance_km'] ?? 0);
         $destDistanceKm = (float) ($providerEval['destination_distance_km'] ?? 0);
         $packageCount = (int) ($validated['package_count'] ?? 1);
@@ -1046,6 +973,7 @@ class OrderController extends Controller
             $logisticsProfile,
             $selectedHub,
             $destinationHub,
+            $requiresInterHubTransfer,
             $originDistanceKm,
             $destDistanceKm,
             $handoverMethod,
@@ -1061,11 +989,19 @@ class OrderController extends Controller
 
             $previousStatus = $locked->status;
 
-            $locked->update([
+            $orderUpdatePayload = [
                 'logistics_profile_id' => $logisticsProfile->id,
                 'status'               => 'ready_for_pickup',
                 'ready_for_pickup_at'  => now(),
-            ]);
+            ];
+            if (Schema::hasColumn('seller_orders', 'origin_logistics_hub_id')) {
+                $orderUpdatePayload['origin_logistics_hub_id'] = $selectedHub->id;
+            }
+            if (Schema::hasColumn('seller_orders', 'destination_logistics_hub_id')) {
+                $orderUpdatePayload['destination_logistics_hub_id'] = $destinationHub->id;
+            }
+
+            $locked->update($orderUpdatePayload);
 
             $hubSnapshot = [
                 'logistics_hub_id'             => $selectedHub->id,
@@ -1081,6 +1017,7 @@ class OrderController extends Controller
                 'full_address'                 => $selectedHub->full_address ?: $logisticsProfile->full_address,
                 'origin_to_hub_distance_km'    => $originDistanceKm,
                 'destination_logistics_hub_id' => $destinationHub->id,
+                'requires_inter_hub_transfer'  => $requiresInterHubTransfer,
                 'hub_to_buyer_distance_km'     => $destDistanceKm,
                 'destination_hub'              => [
                     'logistics_hub_id' => $destinationHub->id,
@@ -1118,13 +1055,55 @@ class OrderController extends Controller
                 'pickup_requested_at'       => now(),
             ];
 
+            if (Schema::hasColumn('shipments', 'origin_logistics_hub_id')) {
+                $shipmentPayload['origin_logistics_hub_id'] = $selectedHub->id;
+            }
             if (Schema::hasColumn('shipments', 'destination_logistics_hub_id')) {
                 $shipmentPayload['destination_logistics_hub_id'] = $destinationHub->id;
                 $shipmentPayload['origin_to_hub_distance_km'] = $originDistanceKm;
                 $shipmentPayload['hub_to_buyer_distance_km'] = $destDistanceKm;
             }
+            if (Schema::hasColumn('shipments', 'current_logistics_hub_id')) {
+                $shipmentPayload['current_logistics_hub_id'] = $selectedHub->id;
+            }
+            if (Schema::hasColumn('shipments', 'requires_inter_hub_transfer')) {
+                $shipmentPayload['requires_inter_hub_transfer'] = $requiresInterHubTransfer;
+            }
 
             $newShipment = Shipment::create($shipmentPayload);
+
+            if ($requiresInterHubTransfer && Schema::hasTable('inter_hub_transfers')) {
+                $hubToHubDist = CourierMobileSchemaService::calculateDistanceKmBetweenLocations(
+                    [
+                        'province'     => $selectedHub->province,
+                        'municipality' => $selectedHub->municipality,
+                        'barangay'     => $selectedHub->barangay,
+                        'latitude'     => $selectedHub->latitude,
+                        'longitude'    => $selectedHub->longitude,
+                    ],
+                    [
+                        'province'     => $destinationHub->province,
+                        'municipality' => $destinationHub->municipality,
+                        'barangay'     => $destinationHub->barangay,
+                        'latitude'     => $destinationHub->latitude,
+                        'longitude'    => $destinationHub->longitude,
+                    ],
+                    $selectedHub,
+                    $destinationHub
+                );
+
+                InterHubTransfer::create([
+                    'transfer_reference'   => 'IHT-' . now()->format('Ymd') . '-' . strtoupper(Str::random(6)),
+                    'shipment_id'          => $newShipment->id,
+                    'seller_order_id'      => $locked->id,
+                    'logistics_profile_id' => $logisticsProfile->id,
+                    'origin_hub_id'        => $selectedHub->id,
+                    'destination_hub_id'   => $destinationHub->id,
+                    'status'               => 'pending_origin_arrival',
+                    'distance_km'          => $hubToHubDist,
+                    'notes'                => "Scheduled inter-hub transfer from {$selectedHub->hub_name} ({$selectedHub->municipality}) to {$destinationHub->hub_name} ({$destinationHub->municipality}).",
+                ]);
+            }
 
             $this->shipmentVerificationService->ensurePackagesForShipment(
                 shipment: $newShipment,
@@ -1134,8 +1113,8 @@ class OrderController extends Controller
                 packageCount: $packageCount
             );
 
-            $relayNote = (int) $selectedHub->id !== (int) $destinationHub->id
-                ? " (Origin Hub: {$selectedHub->hub_name} -> Destination Hub: {$destinationHub->hub_name})"
+            $relayNote = $requiresInterHubTransfer
+                ? " (Origin Hub: {$selectedHub->hub_name} -> Inter-Hub Transfer to Destination Branch: {$destinationHub->hub_name})"
                 : '';
 
             ShipmentTracking::create([
@@ -1398,8 +1377,8 @@ class OrderController extends Controller
                 'screenshot_path'        => $screenshotPath,
                 'status'                 => 'verified',
                 'verified_at'            => now(),
-                'created_at'            => now(),
-                'updated_at'            => now(),
+                'created_at'             => now(),
+                'updated_at'             => now(),
             ]);
 
             $newAvailable = round((float) $wallet->available_balance + $remitAmount, 2);
@@ -1476,22 +1455,24 @@ class OrderController extends Controller
         $sellerProv = (string) ($pickupSnap['province'] ?? ($sellerProfile?->province ?? ''));
         $sellerMun = (string) ($pickupSnap['municipality'] ?? ($sellerProfile?->municipality ?? ''));
         $sellerBrgy = (string) ($pickupSnap['barangay'] ?? ($sellerProfile?->barangay ?? ''));
+        $orderWeight = (float) ($sellerOrder?->total_weight ?: 0.5);
 
         $hubs = LogisticsHub::with('parentLogisticsProfile')
             ->whereIn('parent_logistics_profile_id', $providerIds)
             ->where('status', 'active')
             ->get();
 
-        $evaluatedHubs = $hubs->map(function (LogisticsHub $hub) use ($sellerProv, $sellerMun, $sellerBrgy, $sellerProfile, $routeEvaluationMap) {
+        $evaluatedHubs = $hubs->map(function (LogisticsHub $hub) use ($sellerProv, $sellerMun, $sellerBrgy, $sellerProfile, $orderWeight, $routeEvaluationMap) {
             $origEval = $this->shippingCalculatorService->evaluateOriginHubForSeller(
                 hub: $hub,
                 sellerProvince: $sellerProv,
                 sellerMunicipality: $sellerMun,
                 sellerBarangay: $sellerBrgy,
-                sellerProfile: $sellerProfile
+                sellerProfile: $sellerProfile,
+                totalWeightKg: $orderWeight
             );
 
-            $providerEval = $routeEvaluationMap[$hub->parent_logistics_profile_id] ?? null;
+            $providerEval = $routeEvaluations[$hub->parent_logistics_profile_id] ?? ($routeEvaluationMap[$hub->parent_logistics_profile_id] ?? null);
             $destHub = $providerEval['destination_hub'] ?? null;
             $destRidersCount = (int) ($providerEval['destination_riders_count'] ?? 0);
             $destDistanceKm = $providerEval['destination_distance_km'] ?? null;
@@ -1505,6 +1486,7 @@ class OrderController extends Controller
             $hub->setAttribute('destination_hub_municipality', $destHub?->municipality);
             $hub->setAttribute('destination_distance_km', $destDistanceKm);
             $hub->setAttribute('destination_riders_count', $destRidersCount);
+            $hub->setAttribute('requires_inter_hub_transfer', $destHub && (int) $hub->id !== (int) $destHub->id);
             $hub->setAttribute('is_route_serviceable', $isSelectable);
             $hub->setAttribute('requires_self_drop_off', (int) $origEval['active_couriers_count'] <= 0);
             $hub->setAttribute('unserviceable_reason', ! $origEval['is_covered']

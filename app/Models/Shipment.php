@@ -29,10 +29,14 @@ class Shipment extends Model
         'seller_order_id',
         'seller_profile_id',
         'logistics_profile_id',
+        'origin_logistics_hub_id',
         'destination_logistics_hub_id',
+        'current_logistics_hub_id',
         'current_courier_id',
+        'linehaul_courier_id',
         'current_rider_id',
         'status',
+        'requires_inter_hub_transfer',
         'total_weight',
         'cod_amount',
         'shipping_fee',
@@ -46,7 +50,10 @@ class Shipment extends Model
         'courier_assigned_at',
         'picked_up_at',
         'arrived_at_hub_at',
+        'inter_hub_dispatched_at',
+        'arrived_at_destination_hub_at',
         'hub_verified_by',
+        'destination_hub_verified_by',
         'rider_assigned_at',
         'out_for_delivery_at',
         'delivered_at',
@@ -57,24 +64,27 @@ class Shipment extends Model
     protected function casts(): array
     {
         return [
-            'total_weight'              => 'decimal:3',
-            'cod_amount'                => 'decimal:2',
-            'shipping_fee'              => 'decimal:2',
-            'origin_to_hub_distance_km' => 'decimal:2',
-            'hub_to_buyer_distance_km'  => 'decimal:2',
-            'delivery_attempts_count'   => 'integer',
-            'pickup_address_snapshot'   => 'array',
-            'hub_address_snapshot'      => 'array',
-            'delivery_address_snapshot' => 'array',
-            'pickup_requested_at'       => 'datetime',
-            'courier_assigned_at'       => 'datetime',
-            'picked_up_at'              => 'datetime',
-            'arrived_at_hub_at'         => 'datetime',
-            'rider_assigned_at'         => 'datetime',
-            'out_for_delivery_at'       => 'datetime',
-            'delivered_at'              => 'datetime',
-            'failed_at'                 => 'datetime',
-            'returned_at'               => 'datetime',
+            'requires_inter_hub_transfer'   => 'boolean',
+            'total_weight'                  => 'decimal:3',
+            'cod_amount'                    => 'decimal:2',
+            'shipping_fee'                  => 'decimal:2',
+            'origin_to_hub_distance_km'     => 'decimal:2',
+            'hub_to_buyer_distance_km'      => 'decimal:2',
+            'delivery_attempts_count'       => 'integer',
+            'pickup_address_snapshot'       => 'array',
+            'hub_address_snapshot'          => 'array',
+            'delivery_address_snapshot'     => 'array',
+            'pickup_requested_at'           => 'datetime',
+            'courier_assigned_at'           => 'datetime',
+            'picked_up_at'                  => 'datetime',
+            'arrived_at_hub_at'             => 'datetime',
+            'inter_hub_dispatched_at'       => 'datetime',
+            'arrived_at_destination_hub_at' => 'datetime',
+            'rider_assigned_at'             => 'datetime',
+            'out_for_delivery_at'           => 'datetime',
+            'delivered_at'                  => 'datetime',
+            'failed_at'                     => 'datetime',
+            'returned_at'                   => 'datetime',
         ];
     }
 
@@ -157,14 +167,29 @@ class Shipment extends Model
         return $this->belongsTo(LogisticsProfile::class, 'logistics_profile_id');
     }
 
+    public function originLogisticsHub(): BelongsTo
+    {
+        return $this->belongsTo(LogisticsHub::class, 'origin_logistics_hub_id');
+    }
+
     public function destinationLogisticsHub(): BelongsTo
     {
         return $this->belongsTo(LogisticsHub::class, 'destination_logistics_hub_id');
     }
 
+    public function currentLogisticsHub(): BelongsTo
+    {
+        return $this->belongsTo(LogisticsHub::class, 'current_logistics_hub_id');
+    }
+
     public function currentCourier(): BelongsTo
     {
         return $this->belongsTo(Courier::class, 'current_courier_id');
+    }
+
+    public function linehaulCourier(): BelongsTo
+    {
+        return $this->belongsTo(Courier::class, 'linehaul_courier_id');
     }
 
     public function currentRider(): BelongsTo
@@ -175,6 +200,21 @@ class Shipment extends Model
     public function hubVerifier(): BelongsTo
     {
         return $this->belongsTo(User::class, 'hub_verified_by');
+    }
+
+    public function destinationHubVerifier(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'destination_hub_verified_by');
+    }
+
+    public function interHubTransfers(): HasMany
+    {
+        return $this->hasMany(InterHubTransfer::class, 'shipment_id')->latest('id');
+    }
+
+    public function latestInterHubTransfer(): HasOne
+    {
+        return $this->hasOne(InterHubTransfer::class, 'shipment_id')->latestOfMany();
     }
 
     public function packages(): HasMany
@@ -237,6 +277,30 @@ class Shipment extends Model
         return $this->hasOne(CodCollection::class, 'shipment_id');
     }
 
+    public function needsInterHubTransfer(): bool
+    {
+        $originHubId = $this->origin_logistics_hub_id
+            ?? ($this->hub_address_snapshot['logistics_hub_id'] ?? null);
+        $destHubId = $this->destination_logistics_hub_id
+            ?? ($this->hub_address_snapshot['destination_logistics_hub_id'] ?? null);
+
+        if ($originHubId && $destHubId && (int) $originHubId !== (int) $destHubId) {
+            return true;
+        }
+
+        return (bool) $this->requires_inter_hub_transfer;
+    }
+
+    public function hasArrivedAtDestinationHub(): bool
+    {
+        if (! $this->needsInterHubTransfer()) {
+            return in_array($this->status, ['received_at_hub', 'received_at_destination_hub', 'rider_assigned', 'scheduled_redelivery', 'out_for_delivery', 'delivered'], true);
+        }
+
+        return $this->arrived_at_destination_hub_at !== null
+            || in_array($this->status, ['received_at_destination_hub', 'rider_assigned', 'scheduled_redelivery', 'out_for_delivery', 'delivered'], true);
+    }
+
     public function getCalculatedOriginDistanceKmAttribute(): float
     {
         if ($this->origin_to_hub_distance_km !== null && (float) $this->origin_to_hub_distance_km > 0) {
@@ -266,20 +330,26 @@ class Shipment extends Model
     public function getStatusLabelAttribute(): string
     {
         return match ($this->status) {
-            'pickup_requested'         => 'Pickup Requested',
-            'awaiting_seller_drop_off' => 'Awaiting Seller Drop-Off at Hub',
-            'courier_assigned'         => 'Courier Assigned',
-            'picked_up_from_seller'    => 'Picked Up from Seller',
-            'in_transit_to_hub'        => 'In Transit to Hub',
-            'received_at_hub'          => 'Received at Sorting Hub',
-            'rider_assigned'           => 'Rider Assigned',
-            'out_for_delivery'         => 'Out for Delivery',
-            'delivered'                => 'Delivered',
-            'delivery_failed'          => 'Delivery Failed (Pending Review)',
-            'scheduled_redelivery'     => 'Scheduled for Redelivery',
-            'returning_to_seller'      => 'Returning to Seller',
-            'returned_to_seller'       => 'Returned to Seller',
-            default                    => ucwords(str_replace('_', ' ', $this->status)),
+            'pickup_requested'              => 'Pickup Requested',
+            'awaiting_seller_drop_off'      => 'Awaiting Seller Drop-Off at Hub',
+            'courier_assigned'              => 'Courier Assigned',
+            'picked_up_from_seller'         => 'Picked Up from Seller',
+            'in_transit_to_hub'             => 'In Transit to Origin Hub',
+            'received_at_hub'               => $this->needsInterHubTransfer() && ! $this->hasArrivedAtDestinationHub()
+                ? 'At Origin Hub (Needs Branch Transfer)'
+                : 'Received at Sorting Hub',
+            'awaiting_inter_hub_transfer'   => 'At Origin Hub (Awaiting Branch Transfer)',
+            'inter_hub_courier_assigned'    => 'Linehaul Courier Assigned (To Branch Hub)',
+            'in_transit_to_destination_hub' => 'In Transit to Destination Branch Hub',
+            'received_at_destination_hub'   => 'Received at Destination Branch Hub',
+            'rider_assigned'                => 'Rider Assigned',
+            'out_for_delivery'              => 'Out for Delivery',
+            'delivered'                     => 'Delivered',
+            'delivery_failed'               => 'Delivery Failed (Pending Review)',
+            'scheduled_redelivery'          => 'Scheduled for Redelivery',
+            'returning_to_seller'           => 'Returning to Seller',
+            'returned_to_seller'            => 'Returned to Seller',
+            default                         => ucwords(str_replace('_', ' ', $this->status)),
         };
     }
 }

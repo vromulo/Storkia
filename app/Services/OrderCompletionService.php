@@ -41,13 +41,211 @@ class OrderCompletionService
             $logisticsProfileId ?? 'all'
         );
 
-        if (! Cache::add($scopeKey, true, now()->addSeconds(90))) {
+        if (! Cache::add($scopeKey, true, now()->addSeconds(30))) {
             return;
         }
 
+        $this->autoCancelUnserviceablePendingOrders($buyerId, $sellerId);
         $this->expireOverdueSellerAcceptanceOrders($buyerId, $sellerId);
         $this->autoApproveOverdueReturnRequests($buyerId, $sellerId);
         $this->autoCompleteExpiredDeliveredOrders($buyerId, $sellerId, $logisticsProfileId);
+    }
+
+    public function autoCancelUnserviceablePendingOrders(?int $buyerId = null, ?int $sellerId = null, ?int $specificSellerOrderId = null): int
+    {
+        if (! Schema::hasTable('seller_orders') || ! Schema::hasTable('logistics_profiles')) {
+            return 0;
+        }
+
+        $query = SellerOrder::with(['order', 'payment', 'paymentSubmission', 'extra', 'buyer', 'seller', 'sellerProfile'])
+            ->whereIn('status', ['pending_seller_acceptance', 'accepted', 'preparing'])
+            ->whereDoesntHave('shipment');
+
+        if ($specificSellerOrderId !== null) {
+            $query->where('id', $specificSellerOrderId);
+        } else {
+            if ($buyerId !== null) {
+                $query->where('buyer_id', $buyerId);
+            }
+            if ($sellerId !== null) {
+                $query->where('seller_id', $sellerId);
+            }
+        }
+
+        $candidates = $query->limit(50)->get();
+        if ($candidates->isEmpty()) {
+            return 0;
+        }
+
+        $shippingCalculator = app(ShippingCalculatorService::class);
+        $slaGuard = app(OperationalSlaGuardService::class);
+        $autoCancelledCount = 0;
+
+        foreach ($candidates as $candidate) {
+            $pickupSnap = (array) ($candidate->pickup_address_snapshot ?? []);
+            $deliverySnap = (array) ($candidate->delivery_address_snapshot ?? []);
+
+            $sellerProv = (string) ($pickupSnap['province'] ?? ($candidate->sellerProfile?->province ?? ''));
+            $sellerMun = (string) ($pickupSnap['municipality'] ?? ($candidate->sellerProfile?->municipality ?? ''));
+            $sellerBrgy = (string) ($pickupSnap['barangay'] ?? ($candidate->sellerProfile?->barangay ?? ''));
+
+            $buyerProv = (string) ($deliverySnap['province'] ?? '');
+            $buyerMun = (string) ($deliverySnap['municipality'] ?? '');
+            $buyerBrgy = (string) ($deliverySnap['barangay'] ?? '');
+
+            $routeCheck = $shippingCalculator->isRouteServiceable(
+                sellerProvince: $sellerProv,
+                sellerMunicipality: $sellerMun,
+                buyerProvince: $buyerProv,
+                buyerMunicipality: $buyerMun,
+                sellerBarangay: $sellerBrgy,
+                buyerBarangay: $buyerBrgy,
+                totalWeightKg: (float) ($candidate->total_weight ?: 0.5),
+                sellerProfile: $candidate->sellerProfile
+            );
+
+            if ($routeCheck['is_serviceable']) {
+                continue;
+            }
+
+            $reason = $routeCheck['reason']
+                ?: "Logistics route from {$sellerMun}, {$sellerProv} to {$buyerMun}, {$buyerProv} is no longer serviceable.";
+
+            $notifications = [];
+            $cancelledOrder = null;
+
+            try {
+                DB::transaction(function () use ($candidate, $reason, $slaGuard, &$notifications, &$autoCancelledCount, &$cancelledOrder) {
+                    $locked = SellerOrder::with(['order', 'payment', 'paymentSubmission', 'extra', 'buyer', 'seller', 'sellerProfile', 'shipment'])
+                        ->where('id', $candidate->id)
+                        ->lockForUpdate()
+                        ->first();
+
+                    if (
+                        ! $locked
+                        || ! in_array($locked->status, ['pending_seller_acceptance', 'accepted', 'preparing'], true)
+                        || $locked->shipment
+                    ) {
+                        return;
+                    }
+
+                    $previousStatus = $locked->status;
+                    $payMethod = strtoupper((string) $locked->effective_payment_method);
+                    $wasPrepaidWallet = $payMethod === 'WALLET' || (float) ($locked->extra?->wallet_paid_amount ?? 0) > 0;
+
+                    $updatePayload = [
+                        'status'           => 'cancelled',
+                        'payment_status'   => 'cancelled',
+                        'rejected_at'      => now(),
+                        'cancelled_at'     => now(),
+                        'rejection_reason' => 'Automated System Cancellation (Unserviceable Route / Fleet Unavailable): ' . $reason,
+                    ];
+
+                    if (Schema::hasColumn('seller_orders', 'is_unserviceable_exception')) {
+                        $updatePayload['is_unserviceable_exception'] = true;
+                    }
+
+                    $locked->update($updatePayload);
+
+                    $locked->payment?->update([
+                        'status' => 'cancelled',
+                    ]);
+
+                    $refundedWalletAmount = 0.00;
+                    if ($wasPrepaidWallet) {
+                        $refundedWalletAmount = (float) ($locked->extra?->wallet_paid_amount > 0 ? $locked->extra->wallet_paid_amount : $locked->total_amount);
+                        if ($refundedWalletAmount > 0) {
+                            $this->roleWalletService->refundBuyerWalletForOrder(
+                                $locked,
+                                $refundedWalletAmount,
+                                'Automated E-Wallet Refund (Order Auto-Cancelled: Unserviceable Logistics Route)'
+                            );
+                        }
+                    }
+
+                    $this->inventoryStockService->restoreStockForSellerOrder($locked);
+                    $this->voucherService->restoreVouchersForSellerOrder($locked);
+                    $this->buyerRewardService?->restoreCoinsForSellerOrder($locked);
+
+                    if ($locked->sellerProfile) {
+                        $slaGuard->recordSellerSlaStrike(
+                            sellerProfile: $locked->sellerProfile,
+                            reason: 'Automated System Cancellation (Unserviceable Route / Fleet Unavailable): ' . $reason,
+                            isUnserviceableAreaException: true
+                        );
+                    }
+
+                    $paymentRemark = $wasPrepaidWallet
+                        ? ' Buyer Storkia E-Wallet payment of ₱' . number_format($refundedWalletAmount, 2) . ' was refunded immediately.'
+                        : ' Payment method was Cash on Delivery (COD), so no payment was collected or refunded.';
+
+                    OrderStatusHistory::create([
+                        'order_id'        => $locked->order_id,
+                        'seller_order_id' => $locked->id,
+                        'from_status'     => $previousStatus,
+                        'to_status'       => 'cancelled',
+                        'actor_type'      => 'System',
+                        'actor_id'        => null,
+                        'remarks'         => 'Order automatically cancelled because the logistics/rider route became unserviceable (' . $reason . '). 0 SLA strikes applied to Seller; reserved stock, vouchers, and coins restored.' . $paymentRemark,
+                    ]);
+
+                    if ($locked->order) {
+                        $this->syncParentOrderStatus($locked->order);
+                    }
+
+                    if ($locked->buyer) {
+                        $buyerMsg = $wasPrepaidWallet
+                            ? "Order #{$locked->seller_order_number} was automatically cancelled because logistics/rider coverage for your route became unavailable ({$reason}). Your E-Wallet payment of ₱" . number_format($refundedWalletAmount, 2) . " was refunded immediately!"
+                            : "Order #{$locked->seller_order_number} (COD) was automatically cancelled because logistics/rider coverage for your route became unavailable ({$reason}). Because this was a Cash on Delivery order, no payment was charged.";
+
+                        $notifications[] = [
+                            'recipient'    => $locked->buyer,
+                            'notification' => new OrderLifecycleNotification(
+                                title: $wasPrepaidWallet
+                                    ? 'Order Auto-Cancelled & E-Wallet Refunded'
+                                    : 'COD Order Auto-Cancelled (Route Unserviceable)',
+                                message: $buyerMsg,
+                                type: 'warning',
+                                url: route('user.orders.show', $locked->id),
+                                orderId: $locked->order_id,
+                                sellerOrderId: $locked->id
+                            ),
+                        ];
+                    }
+
+                    if ($locked->seller) {
+                        $notifications[] = [
+                            'recipient'    => $locked->seller,
+                            'notification' => new OrderLifecycleNotification(
+                                title: 'Order Auto-Cancelled (Unserviceable Route — 0 SLA Strikes)',
+                                message: "Order #{$locked->seller_order_number} was automatically cancelled by the platform because no active Logistics Hub + Rider route is available for the buyer's address. 0 SLA strikes were applied and your product stock was restored.",
+                                type: 'info',
+                                url: route('seller.orders.show', $locked->id),
+                                orderId: $locked->order_id,
+                                sellerOrderId: $locked->id
+                            ),
+                        ];
+                    }
+
+                    $cancelledOrder = $locked;
+                    $autoCancelledCount++;
+                });
+
+                foreach ($notifications as $entry) {
+                    try {
+                        $entry['recipient']->notify($entry['notification']);
+                    } catch (\Throwable $e) {
+                    }
+                }
+
+                if ($cancelledOrder) {
+                    RealtimeBroadcastService::forSellerOrder($cancelledOrder->fresh(), 'order.auto_cancelled_unserviceable');
+                }
+            } catch (\Throwable $e) {
+            }
+        }
+
+        return $autoCancelledCount;
     }
 
     public function autoApproveOverdueReturnRequests(?int $buyerId = null, ?int $sellerId = null): int
@@ -275,7 +473,7 @@ class OrderCompletionService
 
                     $refundRemark = $wasPrepaidWallet
                         ? ' Buyer E-Wallet payment refunded immediately.'
-                        : ($wasPrepaidGcash ? ' Buyer GCash payment flagged for full refund.' : '');
+                        : ($wasPrepaidGcash ? ' Buyer GCash payment flagged for full refund.' : ' COD order cancelled with no charge.');
 
                     OrderStatusHistory::create([
                         'order_id'        => $locked->order_id,
@@ -410,6 +608,7 @@ class OrderCompletionService
 
             $commissionRecord = $this->roleWalletService->releaseCompletedOrderEarnings($locked);
             $isSettledNow = $commissionRecord->status === 'settled';
+
             $cashbackTx = $this->buyerRewardService?->awardOrderCompletionCashbackCoins($locked);
             $cashbackCoins = $cashbackTx ? (int) $cashbackTx->coins_delta : 0;
 

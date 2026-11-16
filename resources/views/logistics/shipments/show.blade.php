@@ -16,6 +16,21 @@
     $riderSort = $riderSort ?? request()->query('rider_sort', 'nearest');
     $outOfRangeCouriers = $outOfRangeCouriers ?? collect();
     $outOfRangeRiders = $outOfRangeRiders ?? collect();
+    $availableLinehaulCouriers = $availableLinehaulCouriers ?? $availableCouriers ?? collect();
+
+    $needsInterHubTransfer = $shipment->needsInterHubTransfer();
+    $hasArrivedAtDestHub = $shipment->hasArrivedAtDestinationHub();
+    $latestTransfer = $shipment->latestInterHubTransfer;
+
+    $originHubDisplay = $originHubModel?->hub_name
+        ?? ($primaryPackage?->logisticsHub?->hub_name ?? ($hubSnap['hub_name'] ?? $profile->business_name));
+    $originHubLoc = ($originHubModel?->municipality ?? ($hubSnap['municipality'] ?? $profile->municipality))
+        . ', ' . ($originHubModel?->province ?? ($hubSnap['province'] ?? $profile->province));
+
+    $destHubDisplay = $destHubModel?->hub_name
+        ?? ($destHubSnap['hub_name'] ?? $originHubDisplay);
+    $destHubLoc = ($destHubModel?->municipality ?? ($destHubSnap['municipality'] ?? ($deliv['municipality'] ?? '')))
+        . ', ' . ($destHubModel?->province ?? ($destHubSnap['province'] ?? ($deliv['province'] ?? '')));
 
     $allHubPackagesVerified = $packages->isNotEmpty() && $packages->every(function ($pkg) {
         if ($pkg->hub_verified_at !== null) {
@@ -230,6 +245,17 @@
                     Parent Order: <strong>{{ $shipment->sellerOrder->order->order_number ?? 'N/A' }}</strong> &bull;
                     COD Amount: <strong class="text-primary">&#8369;{{ number_format((float) $shipment->cod_amount, 2) }}</strong>
                 </p>
+                <div class="mt-1.5 flex flex-wrap items-center gap-2 text-[11px]">
+                    <span class="px-2.5 py-0.5 rounded-full bg-surface border border-border-subtle text-primary-dark font-bold">
+                        Origin Hub: {{ $originHubDisplay }} ({{ $originHubLoc }})
+                    </span>
+                    @if($needsInterHubTransfer)
+                        <span class="text-primary font-extrabold">&rarr;</span>
+                        <span class="px-2.5 py-0.5 rounded-full {{ $hasArrivedAtDestHub ? 'bg-green-100 text-green-800 border border-green-300' : 'bg-amber-100 text-amber-900 border border-amber-300' }} font-bold">
+                            Destination Branch Hub: {{ $destHubDisplay }} ({{ $destHubLoc }})
+                        </span>
+                    @endif
+                </div>
             </div>
         </div>
     </div>
@@ -252,9 +278,9 @@
         <div class="p-6 rounded-3xl bg-surface border-2 border-primary/30 shadow-xs space-y-4">
             <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                 <div>
-                    <h2 class="text-base font-bold text-primary-dark">Step 1: Assign First-Mile Pickup Courier (Within 50 km &amp; Vehicle Load Capacity)</h2>
+                    <h2 class="text-base font-bold text-primary-dark">Step 1: Assign First-Mile Pickup Courier (Same Island &amp; Vehicle Load Capacity)</h2>
                     <p class="text-xs text-text-muted mt-0.5">
-                        Select an active Courier covering <strong>{{ $pickup['municipality'] ?? 'Seller Municipality' }}, {{ $pickup['province'] ?? '' }}</strong> with sufficient remaining load capacity ({{ number_format((float) $shipment->total_weight, 2) }} kg required).
+                        Select an active Courier at <strong>{{ $originHubDisplay }}</strong> covering <strong>{{ $pickup['municipality'] ?? 'Seller Municipality' }}, {{ $pickup['province'] ?? '' }}</strong> with sufficient remaining load capacity ({{ number_format((float) $shipment->total_weight, 2) }} kg required).
                     </p>
                 </div>
                 <div class="flex flex-wrap items-center gap-1.5 text-[11px]">
@@ -335,16 +361,16 @@
             <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-blue-200">
                 <div>
                     @if($isSelfDropOff)
-                        <h2 class="text-base font-bold text-blue-950">Step 1 &amp; 2: Seller Self Drop-Off — Scan QR Camera or Enter Code to Confirm Hub Receipt</h2>
+                        <h2 class="text-base font-bold text-blue-950">Step 1 &amp; 2: Seller Self Drop-Off — Scan QR Camera or Enter Code to Confirm Origin Hub Receipt</h2>
                         <p class="text-xs text-blue-800 mt-0.5">
-                            Seller <strong>{{ $shipment->sellerProfile->business_name ?? ($pickup['business_name'] ?? 'Seller') }}</strong> selected Self Drop-Off at <strong>{{ $primaryPackage?->logisticsHub?->hub_name ?? $profile->business_name }}</strong>.
-                            Open your camera to scan the package QR Code (or enter the code manually) to confirm physical receipt at the hub.
+                            Seller <strong>{{ $shipment->sellerProfile->business_name ?? ($pickup['business_name'] ?? 'Seller') }}</strong> selected Self Drop-Off at <strong>{{ $originHubDisplay }}</strong>.
+                            Open your camera to scan the package QR Code (or enter the code manually) to confirm physical receipt at the Origin Hub.
                         </p>
                     @else
-                        <h2 class="text-base font-bold text-blue-950">Step 2: Courier Handover — Scan QR Camera or Enter Code to Confirm Hub Arrival</h2>
+                        <h2 class="text-base font-bold text-blue-950">Step 2: Courier Handover — Scan QR Camera or Enter Code to Confirm Origin Hub Arrival</h2>
                         <p class="text-xs text-blue-800 mt-0.5">
                             Courier <strong>{{ $shipment->currentCourier?->full_name }}</strong> picked up this parcel at {{ $shipment->picked_up_at?->format('M d, Y h:i A') }}.
-                            Open your camera to scan the parcel QR code (or enter the Tracking / Package Reference manually) to confirm physical receipt at the Sorting Hub.
+                            Open your camera to scan the parcel QR code (or enter the Tracking / Package Reference manually) to confirm physical receipt at <strong>{{ $originHubDisplay }}</strong>.
                         </p>
                     @endif
                 </div>
@@ -462,20 +488,100 @@
                     <button type="submit"
                             :disabled="{{ $allHubPackagesVerified ? 'false' : 'true' }} || isSubmittingConfirm"
                             class="px-6 py-3 rounded-xl text-xs font-bold shadow-sm transition-colors {{ $allHubPackagesVerified ? 'bg-blue-600 hover:bg-blue-700 text-white cursor-pointer' : 'bg-gray-300 text-gray-500 cursor-not-allowed' }}">
-                        Confirm Physical Receipt at Sorting Hub
+                        Confirm Physical Receipt at Origin Hub
                     </button>
                 </form>
             </div>
         </div>
     @endif
 
-    @if(in_array($shipment->status, ['received_at_hub', 'rider_assigned', 'scheduled_redelivery'], true))
+    @if($needsInterHubTransfer && ! $hasArrivedAtDestHub && in_array($shipment->status, ['received_at_hub', 'awaiting_inter_hub_transfer', 'inter_hub_courier_assigned', 'in_transit_to_destination_hub'], true))
+        <div class="p-6 rounded-3xl bg-amber-50/90 border-2 border-amber-300 shadow-xs space-y-5">
+            <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-amber-200">
+                <div>
+                    <div class="flex items-center gap-2">
+                        <span class="px-2.5 py-0.5 rounded-full bg-amber-600 text-white text-[10px] font-extrabold uppercase">
+                            Cross-Municipality / Island Hub Transfer Required
+                        </span>
+                        <h2 class="text-base font-bold text-amber-950">Step 2B: Inter-Hub Linehaul Transfer ({{ $originHubDisplay }} &rarr; {{ $destHubDisplay }})</h2>
+                    </div>
+                    <p class="text-xs text-amber-900 mt-1 leading-relaxed">
+                        Because Last-Mile Riders only operate barangay-to-barangay within the same municipality, a <strong>Courier</strong> must transport this parcel from <strong>{{ $originHubDisplay }} ({{ $originHubLoc }})</strong> to your connected branch hub at <strong>{{ $destHubDisplay }} ({{ $destHubLoc }})</strong> before a local Rider in <strong>{{ $deliv['municipality'] ?? '' }}</strong> can be assigned.
+                    </p>
+                </div>
+                <span class="px-3 py-1 rounded-full text-xs font-bold bg-white border border-amber-300 text-amber-900 shrink-0">
+                    {{ $shipment->status === 'in_transit_to_destination_hub' ? 'In Transit to Destination Branch Hub' : 'Awaiting Linehaul Dispatch' }}
+                </span>
+            </div>
+
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 text-xs">
+                <div class="p-4 rounded-2xl bg-white border border-amber-200 space-y-3">
+                    <div class="font-bold text-primary-dark uppercase tracking-wider text-[11px]">
+                        1. Dispatch Linehaul Courier from {{ $originHubDisplay }}
+                    </div>
+                    @if($availableLinehaulCouriers->isEmpty())
+                        <p class="text-danger font-semibold">No active Couriers with sufficient load capacity ({{ number_format((float) $shipment->total_weight, 2) }} kg) available.</p>
+                    @else
+                        <form action="{{ route('logistics.shipments.assign-linehaul-courier', $shipment->id) }}" method="POST" class="space-y-3">
+                            @csrf
+                            <div>
+                                <label class="block font-bold text-text-muted mb-1">Select Linehaul Courier (Province/Island Transfer Allowed) <span class="text-danger">*</span></label>
+                                <select name="courier_id" required class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface text-xs font-semibold outline-none focus:border-primary">
+                                    @foreach($availableLinehaulCouriers as $lc)
+                                        <option value="{{ $lc->id }}" {{ (int) $shipment->linehaul_courier_id === (int) $lc->id ? 'selected' : '' }}>
+                                            {{ $lc->full_name }} — {{ $lc->assigned_hub?->municipality ?? 'Main Hub' }} ({{ $lc->vehicle_type }} - {{ $lc->plate_number }} | Rem. Cap: {{ number_format($lc->remaining_load_capacity_kg, 1) }}kg)
+                                        </option>
+                                    @endforeach
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block font-bold text-text-muted mb-1">Linehaul Transfer Notes (Optional)</label>
+                                <input type="text" name="notes" placeholder="e.g. Inter-island / branch transfer to {{ $destHubDisplay }}" class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface text-xs outline-none focus:border-primary">
+                            </div>
+                            <button type="submit" class="w-full py-2.5 px-4 rounded-xl bg-primary hover:bg-primary-dark text-white font-bold transition-colors cursor-pointer">
+                                {{ $shipment->linehaul_courier_id ? 'Reassign Linehaul Courier' : 'Dispatch Courier to Destination Branch Hub' }}
+                            </button>
+                        </form>
+                    @endif
+                </div>
+
+                <div class="p-4 rounded-2xl bg-white border border-amber-200 flex flex-col justify-between space-y-3">
+                    <div class="space-y-1.5">
+                        <div class="font-bold text-primary-dark uppercase tracking-wider text-[11px]">
+                            2. Confirm Arrival at {{ $destHubDisplay }} ({{ $destHubLoc }})
+                        </div>
+                        @if($shipment->linehaulCourier)
+                            <p class="text-text-main">
+                                Linehaul Courier: <strong>{{ $shipment->linehaulCourier->full_name }}</strong> ({{ $shipment->linehaulCourier->vehicle_type }} &bull; {{ $shipment->linehaulCourier->plate_number }})
+                            </p>
+                            <p class="text-text-muted text-[11px]">
+                                Dispatched: {{ $shipment->inter_hub_dispatched_at?->format('M d, Y h:i A') ?? 'Just now' }}
+                            </p>
+                        @else
+                            <p class="text-text-muted">
+                                Once the Linehaul Courier delivers this parcel to <strong>{{ $destHubDisplay }}</strong> in <strong>{{ $deliv['municipality'] ?? '' }}, {{ $deliv['province'] ?? '' }}</strong>, confirm arrival below to unlock local Barangay Rider assignment.
+                            </p>
+                        @endif
+                    </div>
+
+                    <form action="{{ route('logistics.shipments.verify-destination-hub-arrival', $shipment->id) }}" method="POST" class="m-0">
+                        @csrf
+                        <button type="submit" class="w-full py-3 px-4 rounded-xl bg-green-600 hover:bg-green-700 text-white font-bold shadow-xs transition-colors cursor-pointer">
+                            Confirm Physical Receipt at Destination Hub ({{ $destHubDisplay }})
+                        </button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    @endif
+
+    @if($hasArrivedAtDestHub && in_array($shipment->status, ['received_at_hub', 'received_at_destination_hub', 'rider_assigned', 'scheduled_redelivery'], true))
         <div class="p-6 rounded-3xl bg-surface border-2 border-primary/30 shadow-xs space-y-4">
             <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                 <div>
-                    <h2 class="text-base font-bold text-primary-dark">Step 3: Assign Last-Mile Delivery Rider (Strict 20 km / Municipality Fuel Protection)</h2>
+                    <h2 class="text-base font-bold text-primary-dark">Step 3: Assign Last-Mile Delivery Rider (Strict Same-Municipality Barangay-to-Barangay Rule)</h2>
                     <p class="text-xs text-text-muted mt-0.5">
-                        Assign an approved Rider covering <strong>Barangay {{ $deliv['barangay'] ?? 'N/A' }}, {{ $deliv['municipality'] ?? '' }}, {{ $deliv['province'] ?? '' }}</strong>. Out-of-province Riders are automatically blocked to protect Rider gasoline expenses.
+                        Assign an approved Rider stationed at <strong>{{ $destHubDisplay }} ({{ $deliv['municipality'] ?? '' }}, {{ $deliv['province'] ?? '' }})</strong> covering <strong>Barangay {{ $deliv['barangay'] ?? 'N/A' }}</strong>. Riders are strictly restricted to barangay-to-barangay delivery within <strong>{{ $deliv['municipality'] ?? '' }}</strong> and cannot travel municipality-to-municipality or province-to-province.
                     </p>
                 </div>
                 <div class="flex flex-wrap items-center gap-1.5 text-[11px]">
@@ -496,14 +602,14 @@
 
             @if($availableRiders->isEmpty())
                 <div class="p-4 rounded-2xl bg-yellow-50 border border-yellow-200 text-xs text-yellow-800 font-semibold">
-                    No approved Riders found within Last-Mile range (same province &amp; within 20 km) of <strong>{{ $deliv['municipality'] ?? '' }}, {{ $deliv['province'] ?? '' }}</strong>.
-                    <a href="{{ route('rider.register') }}" class="underline font-bold">Create a Rider Account</a> or <a href="{{ route('logistics.employees.index') }}" class="underline font-bold">assign Rider Hub &amp; Barangay coverage</a> first.
+                    No approved Riders found in <strong>{{ $deliv['municipality'] ?? '' }}, {{ $deliv['province'] ?? '' }}</strong> covering <strong>Barangay {{ $deliv['barangay'] ?? '' }}</strong>.
+                    <a href="{{ route('rider.register') }}" class="underline font-bold">Create a Rider Account</a> or <a href="{{ route('logistics.employees.index') }}" class="underline font-bold">assign Rider Hub &amp; Barangay coverage</a> in {{ $deliv['municipality'] ?? 'this municipality' }} first.
                 </div>
             @else
                 <form action="{{ route('logistics.shipments.assign-rider', $shipment->id) }}" method="POST" class="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
                     @csrf
                     <div>
-                        <label class="block text-xs font-bold text-text-muted mb-1">Select Approved Last-Mile Rider <span class="text-danger">*</span></label>
+                        <label class="block text-xs font-bold text-text-muted mb-1">Select Approved Local Municipality Rider <span class="text-danger">*</span></label>
                         <select name="rider_id" required class="w-full p-3 rounded-xl border border-border-subtle bg-surface text-xs font-semibold outline-none focus:border-primary">
                             @foreach($availableRiders as $r)
                                 @php
@@ -513,7 +619,7 @@
                                     $activeJobs = (int) ($r->active_deliveries_count ?? 0);
                                 @endphp
                                 <option value="{{ $r->id }}" {{ (int) $shipment->current_rider_id === (int) $r->id ? 'selected' : '' }}>
-                                    [~{{ $rDist }} km{{ $isExactBrgy ? ' • Exact Brgy' : '' }}] {{ $r->full_name }} ({{ $r->vehicle_type }} | Hub: {{ $r->assigned_hub?->municipality ?? 'Main' }} | Active Jobs: {{ $activeJobs }})
+                                    [~{{ $rDist }} km{{ $isExactBrgy ? ' • Brgy Covered' : '' }}] {{ $r->full_name }} ({{ $r->vehicle_type }} | Hub: {{ $r->assigned_hub?->municipality ?? 'Main' }} | Active Jobs: {{ $activeJobs }})
                                 </option>
                             @endforeach
                         </select>
@@ -535,7 +641,7 @@
                     <button type="button"
                             @click="showExcludedRiders = !showExcludedRiders"
                             class="text-[11px] font-bold text-text-muted hover:text-primary cursor-pointer">
-                        <span x-text="showExcludedRiders ? 'Hide Out-of-Zone Riders (' + {{ $outOfRangeRiders->count() }} + ')' : 'Show Why ' + {{ $outOfRangeRiders->count() }} + ' Other Rider(s) Are Blocked (Gasoline & Range Protection)'"></span>
+                        <span x-text="showExcludedRiders ? 'Hide Out-of-Municipality Riders (' + {{ $outOfRangeRiders->count() }} + ')' : 'Show Why ' + {{ $outOfRangeRiders->count() }} + ' Other Rider(s) Are Blocked (Same-Municipality Barangay Rule)'"></span>
                     </button>
                     <div x-show="showExcludedRiders" x-cloak class="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2">
                         @foreach($outOfRangeRiders as $exR)
@@ -544,7 +650,7 @@
                                 <div>
                                     <span class="font-bold text-text-main">{{ $exR->full_name }}</span>
                                     <span class="text-text-muted">({{ $exR->assigned_hub?->municipality ?? 'No Hub' }}, {{ $exR->assigned_hub?->province ?? '' }})</span>
-                                    <p class="text-danger font-semibold mt-0.5">{{ $exREval['reason'] ?? 'Outside last-mile radius' }}</p>
+                                    <p class="text-danger font-semibold mt-0.5">{{ $exREval['reason'] ?? 'Outside municipality/barangay coverage' }}</p>
                                 </div>
                                 <span class="font-mono font-bold text-text-muted shrink-0">~{{ number_format((float) ($exREval['distance_from_hub_km'] ?? 0), 1) }} km</span>
                             </div>
@@ -624,9 +730,9 @@
                         <div>
                             <h3 class="text-sm font-bold text-primary-dark">Package Identification &amp; Product Manifest</h3>
                             <p class="text-xs text-text-muted">
-                                Origin Hub: <strong>{{ $primaryPackage?->logisticsHub?->hub_name ?? ($hubSnap['hub_name'] ?? $profile->business_name) }}</strong>
-                                @if(!empty($destHubSnap['hub_name']) && $destHubSnap['hub_name'] !== ($primaryPackage?->logisticsHub?->hub_name ?? ($hubSnap['hub_name'] ?? '')))
-                                    &bull; Destination Hub: <strong>{{ $destHubSnap['hub_name'] }}</strong>
+                                Origin Hub: <strong>{{ $originHubDisplay }}</strong>
+                                @if($needsInterHubTransfer)
+                                    &bull; Destination Branch Hub: <strong>{{ $destHubDisplay }} ({{ $destHubLoc }})</strong>
                                 @endif
                             </p>
                         </div>
@@ -647,7 +753,10 @@
                                         <span class="px-2 py-0.5 rounded bg-blue-100 text-blue-800">Courier Verified ({{ strtoupper($pkg->courier_verification_method ?? 'QR') }})</span>
                                     @endif
                                     @if($pkg->hub_verified_at)
-                                        <span class="px-2 py-0.5 rounded bg-green-100 text-green-800">Hub Verified ({{ strtoupper($pkg->hub_verification_method ?? 'QR') }})</span>
+                                        <span class="px-2 py-0.5 rounded bg-green-100 text-green-800">Origin Hub Verified ({{ strtoupper($pkg->hub_verification_method ?? 'QR') }})</span>
+                                    @endif
+                                    @if($needsInterHubTransfer && $hasArrivedAtDestHub)
+                                        <span class="px-2 py-0.5 rounded bg-emerald-100 text-emerald-800">Dest Branch Verified</span>
                                     @endif
                                     @if($pkg->rider_collected_at)
                                         <span class="px-2 py-0.5 rounded bg-purple-100 text-purple-800">Rider Collected ({{ strtoupper($pkg->rider_verification_method ?? 'QR') }})</span>
@@ -744,9 +853,9 @@
                 <p class="text-text-muted">{{ $deliv['phone_number'] ?? '' }}</p>
                 <p class="text-text-main leading-relaxed">{{ $deliv['full_address'] ?? '' }}</p>
                 @if(!empty($deliv['barangay']))
-                    <div class="pt-1">
+                    <div class="pt-1 flex flex-wrap gap-1.5">
                         <span class="px-2.5 py-1 rounded-lg bg-blue-50 text-blue-800 border border-blue-200 text-[11px] font-bold">
-                            Target Barangay: {{ $deliv['barangay'] }}
+                            Target Brgy: {{ $deliv['barangay'] }} ({{ $deliv['municipality'] ?? '' }})
                         </span>
                     </div>
                 @endif

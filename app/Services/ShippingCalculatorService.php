@@ -54,18 +54,34 @@ class ShippingCalculatorService
             }
         }
 
-        $hasLogisticsProfiles = Schema::hasTable('logistics_profiles') && LogisticsProfile::count() > 0;
-        if (! $hasLogisticsProfiles) {
-            return true;
+        if (! Schema::hasTable('logistics_profiles') || LogisticsProfile::count() === 0) {
+            return false;
         }
 
         $activeHubs = $this->getAllActivePlatformHubs();
         if ($activeHubs->isEmpty()) {
-            return true;
+            return false;
+        }
+
+        $normMun = $this->addressService->normalizeName($municipality);
+        if ($normMun === '') {
+            foreach ($activeHubs as $hub) {
+                if ($this->addressService->normalizeName($hub->province) === $normProv) {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         foreach ($activeHubs as $hub) {
-            $eval = $this->evaluateDestinationHubForBuyer($hub, (string) $province, (string) $municipality, (string) $barangay, false);
+            $eval = $this->evaluateDestinationHubForBuyer(
+                hub: $hub,
+                buyerProvince: (string) $province,
+                buyerMunicipality: (string) $municipality,
+                buyerBarangay: (string) $barangay,
+                requireApprovedRider: true
+            );
             if ($eval['is_covered']) {
                 return true;
             }
@@ -80,34 +96,58 @@ class ShippingCalculatorService
         ?string $buyerProvince,
         ?string $buyerMunicipality,
         ?string $sellerBarangay = null,
-        ?string $buyerBarangay = null
+        ?string $buyerBarangay = null,
+        float $totalWeightKg = 0.5,
+        ?SellerProfile $sellerProfile = null
     ): array {
         $normBuyerProv = $this->addressService->normalizeName($buyerProvince);
-        if ($normBuyerProv === '') {
+        $normBuyerMun = $this->addressService->normalizeName($buyerMunicipality);
+
+        if ($normBuyerProv === '' || $normBuyerMun === '') {
             return [
-                'is_serviceable' => false,
-                'reason'         => 'Please select a valid delivery address.',
+                'is_serviceable'              => false,
+                'reason'                      => 'Please select a complete delivery address with Province, Municipality, and Barangay.',
+                'matched_provider'            => null,
+                'origin_hub'                  => null,
+                'destination_hub'             => null,
+                'requires_inter_hub_transfer' => false,
+                'route_badge_label'           => null,
             ];
         }
 
         if (Schema::hasTable('logistics_zone_rates')) {
             $blockedZone = DB::table('logistics_zone_rates')
                 ->whereRaw('LOWER(TRIM(province)) = ?', [strtolower(trim((string) $buyerProvince))])
+                ->where(function ($q) use ($buyerMunicipality) {
+                    $q->whereNull('municipality')
+                      ->orWhere('municipality', '')
+                      ->orWhereRaw('LOWER(TRIM(municipality)) = ?', [strtolower(trim((string) $buyerMunicipality))]);
+                })
                 ->where('is_serviceable', false)
                 ->exists();
 
             if ($blockedZone) {
                 return [
-                    'is_serviceable' => false,
-                    'reason'         => "Delivery to {$buyerMunicipality}, {$buyerProvince} is currently marked unserviceable by Logistics Zone Rules.",
+                    'is_serviceable'              => false,
+                    'reason'                      => "Delivery to {$buyerMunicipality}, {$buyerProvince} is currently marked unserviceable by Logistics Zone Rules.",
+                    'matched_provider'            => null,
+                    'origin_hub'                  => null,
+                    'destination_hub'             => null,
+                    'requires_inter_hub_transfer' => false,
+                    'route_badge_label'           => null,
                 ];
             }
         }
 
         if (! Schema::hasTable('logistics_profiles') || LogisticsProfile::count() === 0) {
             return [
-                'is_serviceable' => true,
-                'reason'         => null,
+                'is_serviceable'              => false,
+                'reason'                      => 'No active Logistics Partners are registered on the platform yet.',
+                'matched_provider'            => null,
+                'origin_hub'                  => null,
+                'destination_hub'             => null,
+                'requires_inter_hub_transfer' => false,
+                'route_badge_label'           => null,
             ];
         }
 
@@ -117,41 +157,148 @@ class ShippingCalculatorService
             buyerProvince: (string) $buyerProvince,
             buyerMunicipality: (string) $buyerMunicipality,
             sellerBarangay: (string) $sellerBarangay,
-            buyerBarangay: (string) $buyerBarangay
+            buyerBarangay: (string) $buyerBarangay,
+            sellerProfile: $sellerProfile,
+            totalWeightKg: $totalWeightKg
         );
 
-        $serviceableProviders = collect($evaluations)->where('is_route_serviceable', true);
+        $fleetReadyProviders = collect($evaluations)
+            ->where('is_fleet_ready', true)
+            ->sortBy(function (array $eval) {
+                $interHubPenalty = ! empty($eval['requires_inter_hub_transfer']) ? 20 : 0;
+                $brgyBonus = ((int) ($eval['destination_exact_brgy_riders'] ?? 0) > 0) ? -10 : 0;
+                return $interHubPenalty + $brgyBonus + (float) ($eval['origin_distance_km'] ?? 0) + (float) ($eval['destination_distance_km'] ?? 0);
+            })
+            ->values();
 
-        if ($serviceableProviders->isNotEmpty()) {
+        if ($fleetReadyProviders->isNotEmpty()) {
+            $best = $fleetReadyProviders->first();
+            /** @var LogisticsProfile $logProfile */
+            $logProfile = $best['logistics_profile'];
+            /** @var LogisticsHub $origHub */
+            $origHub = $best['origin_hub'];
+            /** @var LogisticsHub $destHub */
+            $destHub = $best['destination_hub'];
+            $requiresTransfer = (int) $origHub->id !== (int) $destHub->id;
+
+            $routeLabel = $requiresTransfer
+                ? "{$logProfile->business_name}: {$origHub->municipality} Hub → {$destHub->municipality} Branch Hub → Rider ({$buyerBarangay})"
+                : "{$logProfile->business_name}: {$origHub->municipality} Hub → Rider ({$buyerBarangay})";
+
             return [
-                'is_serviceable' => true,
-                'reason'         => null,
+                'is_serviceable'              => true,
+                'reason'                      => null,
+                'matched_provider'            => $logProfile,
+                'origin_hub'                  => $origHub,
+                'destination_hub'             => $destHub,
+                'requires_inter_hub_transfer' => $requiresTransfer,
+                'route_badge_label'           => $routeLabel,
             ];
         }
 
-        $anyOriginCovered = collect($evaluations)->contains(fn ($e) => ! empty($e['origin_hub']));
-        $anyDestCovered = collect($evaluations)->contains(fn ($e) => ! empty($e['destination_hub']));
+        $sellerIsland = ucfirst($this->resolveIslandGroup($sellerProvince));
+        $buyerIsland = ucfirst($this->resolveIslandGroup($buyerProvince));
+        $sellerLocLabel = trim(($sellerMunicipality ? $sellerMunicipality . ', ' : '') . $sellerProvince, ', ');
+        $buyerBrgyLabel = $buyerBarangay ? "Brgy. {$buyerBarangay}, " : '';
+        $buyerLocLabel = trim($buyerBrgyLabel . ($buyerMunicipality ? $buyerMunicipality . ', ' : '') . $buyerProvince, ', ');
 
-        $sellerLocLabel = trim(($sellerMunicipality ? $sellerMunicipality . ', ' : '') . $sellerProvince);
-        $buyerLocLabel = trim(($buyerMunicipality ? $buyerMunicipality . ', ' : '') . $buyerProvince);
+        $allPlatformHubs = $this->getAllActivePlatformHubs();
+        $hasAnyHubInBuyerProvince = $allPlatformHubs->contains(
+            fn (LogisticsHub $h) => $this->addressService->normalizeName($h->province) === $normBuyerProv
+        );
+        $hasAnyHubInBuyerMunicipality = $allPlatformHubs->contains(
+            fn (LogisticsHub $h) => $this->addressService->normalizeName($h->province) === $normBuyerProv
+                && $this->addressService->normalizeName($h->municipality) === $normBuyerMun
+        );
 
-        if (! $anyDestCovered) {
+        $anyOriginHubCovered = collect($evaluations)->contains(fn ($e) => ! empty($e['origin_hub']));
+        $anyOriginCourierReady = collect($evaluations)->contains(fn ($e) => ! empty($e['origin_hub']) && (int) ($e['origin_couriers_count'] ?? 0) > 0);
+        $anyDestHubCovered = collect($evaluations)->contains(fn ($e) => ! empty($e['destination_hub']));
+        $anyDestRiderReady = collect($evaluations)->contains(fn ($e) => ! empty($e['destination_hub']) && (int) ($e['destination_riders_count'] ?? 0) > 0);
+        $anySameCompanyBothHubs = collect($evaluations)->contains(fn ($e) => ! empty($e['origin_hub']) && ! empty($e['destination_hub']));
+
+        if (! $hasAnyHubInBuyerProvince) {
             return [
-                'is_serviceable' => false,
-                'reason'         => "Delivery to {$buyerLocLabel} is currently outside our Last-Mile Rider coverage (Riders only deliver within their assigned hub municipality or within " . number_format(self::MAX_RIDER_DELIVERY_RADIUS_KM, 0) . " km in the same province to protect rider fuel expenses).",
+                'is_serviceable'              => false,
+                'reason'                      => "Checkout Restricted: Storkia currently has no registered Logistics Hub in {$buyerProvince} ({$buyerIsland}). Please select a serviceable delivery address.",
+                'matched_provider'            => null,
+                'origin_hub'                  => null,
+                'destination_hub'             => null,
+                'requires_inter_hub_transfer' => false,
+                'route_badge_label'           => null,
             ];
         }
 
-        if (! $anyOriginCovered) {
+        if (! $hasAnyHubInBuyerMunicipality) {
             return [
-                'is_serviceable' => false,
-                'reason'         => "No Logistics Sorting Hub is currently within First-Mile Courier range (" . number_format(self::MAX_COURIER_PICKUP_RADIUS_KM, 0) . " km / same province) of the seller in {$sellerLocLabel}.",
+                'is_serviceable'              => false,
+                'reason'                      => "Checkout Restricted: No Logistics Hub is registered in {$buyerMunicipality}, {$buyerProvince}. Last-Mile Riders are strictly limited to barangay-to-barangay delivery within the same municipality and cannot travel municipality-to-municipality.",
+                'matched_provider'            => null,
+                'origin_hub'                  => null,
+                'destination_hub'             => null,
+                'requires_inter_hub_transfer' => false,
+                'route_badge_label'           => null,
             ];
         }
+
+        if (! $anyDestRiderReady && $anyDestHubCovered) {
+            return [
+                'is_serviceable'              => false,
+                'reason'                      => "Checkout Restricted: No approved Last-Mile Rider is currently assigned to cover {$buyerLocLabel} (Riders only operate barangay-to-barangay within {$buyerMunicipality}).",
+                'matched_provider'            => null,
+                'origin_hub'                  => null,
+                'destination_hub'             => null,
+                'requires_inter_hub_transfer' => false,
+                'route_badge_label'           => null,
+            ];
+        }
+
+        if (! $anyOriginHubCovered) {
+            return [
+                'is_serviceable'              => false,
+                'reason'                      => "Checkout Restricted: No Logistics Origin Hub on {$sellerIsland} covers the seller's location in {$sellerLocLabel}.",
+                'matched_provider'            => null,
+                'origin_hub'                  => null,
+                'destination_hub'             => null,
+                'requires_inter_hub_transfer' => false,
+                'route_badge_label'           => null,
+            ];
+        }
+
+        if (! $anyOriginCourierReady) {
+            return [
+                'is_serviceable'              => false,
+                'reason'                      => "Checkout Restricted: The Logistics Origin Hub covering {$sellerLocLabel} currently has 0 active First-Mile Couriers with available load capacity to pick up the seller's parcel.",
+                'matched_provider'            => null,
+                'origin_hub'                  => null,
+                'destination_hub'             => null,
+                'requires_inter_hub_transfer' => false,
+                'route_badge_label'           => null,
+            ];
+        }
+
+        if (! $anySameCompanyBothHubs) {
+            return [
+                'is_serviceable'              => false,
+                'reason'                      => "Checkout Restricted (No Connected Branch Hub): The seller is in {$sellerLocLabel} ({$sellerIsland}) and your address is in {$buyerLocLabel} ({$buyerIsland}), but the Logistics company covering the seller does not have an active Branch Hub in {$buyerMunicipality}, {$buyerProvince} to receive the inter-hub transfer and dispatch a local Rider.",
+                'matched_provider'            => null,
+                'origin_hub'                  => null,
+                'destination_hub'             => null,
+                'requires_inter_hub_transfer' => false,
+                'route_badge_label'           => null,
+            ];
+        }
+
+        $firstSpecificReason = collect($evaluations)->pluck('unserviceable_reason')->filter()->first();
 
         return [
-            'is_serviceable' => false,
-            'reason'         => "Shipping from {$sellerLocLabel} to {$buyerLocLabel} is unavailable because no single Storkia Logistics Partner operates both an Origin Hub near the seller and a Destination Last-Mile Hub covering {$buyerLocLabel}.",
+            'is_serviceable'              => false,
+            'reason'                      => $firstSpecificReason ?: "Checkout Restricted: No single Logistics Partner currently has an active Origin Courier in {$sellerLocLabel} connected to a Destination Hub with an approved Rider in {$buyerLocLabel}.",
+            'matched_provider'            => null,
+            'origin_hub'                  => null,
+            'destination_hub'             => null,
+            'requires_inter_hub_transfer' => false,
+            'route_badge_label'           => null,
         ];
     }
 
@@ -162,7 +309,8 @@ class ShippingCalculatorService
         string $buyerMunicipality,
         string $sellerBarangay = '',
         string $buyerBarangay = '',
-        ?SellerProfile $sellerProfile = null
+        ?SellerProfile $sellerProfile = null,
+        float $totalWeightKg = 0.5
     ): array {
         if (! Schema::hasTable('logistics_profiles')) {
             return [];
@@ -193,7 +341,8 @@ class ShippingCalculatorService
                     sellerMunicipality: $sellerMunicipality,
                     sellerBarangay: $sellerBarangay,
                     couriers: $profile->couriers,
-                    sellerProfile: $sellerProfile
+                    sellerProfile: $sellerProfile,
+                    totalWeightKg: $totalWeightKg
                 );
 
                 if ($origEval['is_covered']) {
@@ -214,31 +363,55 @@ class ShippingCalculatorService
                 }
             }
 
-            usort($originCandidates, fn ($a, $b) => $a['distance_km'] <=> $b['distance_km']);
-            usort($destCandidates, fn ($a, $b) => $a['distance_km'] <=> $b['distance_km']);
+            usort($originCandidates, function ($a, $b) {
+                $aHasCourier = ((int) $a['active_couriers_count'] > 0) ? 0 : 1;
+                $bHasCourier = ((int) $b['active_couriers_count'] > 0) ? 0 : 1;
+                if ($aHasCourier !== $bHasCourier) {
+                    return $aHasCourier <=> $bHasCourier;
+                }
+                return $a['distance_km'] <=> $b['distance_km'];
+            });
+
+            usort($destCandidates, function ($a, $b) {
+                $aHasRider = ((int) $a['approved_riders_count'] > 0) ? 0 : 1;
+                $bHasRider = ((int) $b['approved_riders_count'] > 0) ? 0 : 1;
+                if ($aHasRider !== $bHasRider) {
+                    return $aHasRider <=> $bHasRider;
+                }
+                return $a['distance_km'] <=> $b['distance_km'];
+            });
 
             $bestOrigin = $originCandidates[0] ?? null;
             $bestDest = $destCandidates[0] ?? null;
 
             $isRouteServiceable = $bestOrigin !== null && $bestDest !== null;
             $hasActiveFleetForBothEnds = $isRouteServiceable
-                && ($bestOrigin['active_couriers_count'] > 0 || true)
-                && ($bestDest['approved_riders_count'] > 0);
+                && ((int) ($bestOrigin['active_couriers_count'] ?? 0) > 0)
+                && ((int) ($bestDest['approved_riders_count'] ?? 0) > 0);
+
+            $requiresInterHubTransfer = $isRouteServiceable
+                && ((int) $bestOrigin['hub']->id !== (int) $bestDest['hub']->id);
 
             $unserviceableReason = null;
             if (! $bestOrigin) {
-                $unserviceableReason = "No hub in {$sellerProvince} (within " . number_format(self::MAX_COURIER_PICKUP_RADIUS_KM, 0) . " km of store).";
+                $sellerIslandLabel = ucfirst($this->resolveIslandGroup($sellerProvince));
+                $unserviceableReason = "{$profile->business_name} has no active Origin Hub on {$sellerIslandLabel} covering {$sellerMunicipality}, {$sellerProvince}.";
+            } elseif ((int) $bestOrigin['active_couriers_count'] <= 0) {
+                $unserviceableReason = "Origin Hub ({$bestOrigin['hub']->hub_name}) currently has 0 active First-Mile Couriers with available capacity.";
             } elseif (! $bestDest) {
-                $unserviceableReason = "No last-mile hub in {$buyerProvince} covering {$buyerMunicipality} (within " . number_format(self::MAX_RIDER_DELIVERY_RADIUS_KM, 0) . " km of buyer).";
-            } elseif ($bestDest['approved_riders_count'] <= 0) {
-                $unserviceableReason = "Destination hub ({$bestDest['hub']->hub_name}) currently has 0 approved last-mile riders.";
+                $unserviceableReason = "{$profile->business_name} has no active Branch/Main Hub in {$buyerMunicipality}, {$buyerProvince} (Riders only deliver barangay-to-barangay within the same municipality).";
+            } elseif ((int) $bestDest['approved_riders_count'] <= 0) {
+                $brgyNote = $buyerBarangay !== '' ? "Brgy. {$buyerBarangay}, {$buyerMunicipality}" : $buyerMunicipality;
+                $unserviceableReason = "Destination Hub ({$bestDest['hub']->hub_name}) currently has 0 approved Last-Mile Riders covering {$brgyNote}.";
             }
 
             $results[$profile->id] = [
                 'logistics_profile'             => $profile,
-                'is_route_serviceable'          => $isRouteServiceable,
+                'is_route_serviceable'          => $hasActiveFleetForBothEnds,
+                'is_hub_network_connected'      => $isRouteServiceable,
                 'is_fleet_ready'                => $hasActiveFleetForBothEnds,
-                'requires_self_drop_off'        => $bestOrigin ? ($bestOrigin['active_couriers_count'] <= 0) : false,
+                'requires_inter_hub_transfer'   => $requiresInterHubTransfer,
+                'requires_self_drop_off'        => $bestOrigin ? ((int) $bestOrigin['active_couriers_count'] <= 0) : false,
                 'origin_hub'                    => $bestOrigin ? $bestOrigin['hub'] : null,
                 'origin_distance_km'            => $bestOrigin ? $bestOrigin['distance_km'] : null,
                 'origin_couriers_count'         => $bestOrigin ? $bestOrigin['active_couriers_count'] : 0,
@@ -261,7 +434,8 @@ class ShippingCalculatorService
         string $sellerMunicipality,
         string $sellerBarangay = '',
         ?Collection $couriers = null,
-        ?SellerProfile $sellerProfile = null
+        ?SellerProfile $sellerProfile = null,
+        float $totalWeightKg = 0.5
     ): array {
         $normHubProv = $this->addressService->normalizeName($hub->province);
         $normSellerProv = $this->addressService->normalizeName($sellerProvince);
@@ -294,17 +468,21 @@ class ShippingCalculatorService
             ? (float) $hub->max_courier_pickup_radius_km
             : self::MAX_COURIER_PICKUP_RADIUS_KM;
 
-        $sameProvince = $normHubProv !== '' && $normHubProv === $normSellerProv;
+        $sameIsland = $hubIsland !== '' && $hubIsland === $sellerIsland;
+        $sameProvince = $sameIsland && $normHubProv !== '' && $normHubProv === $normSellerProv;
         $sameMunicipality = $sameProvince && $normHubMun !== '' && $normHubMun === $normSellerMun;
-        $withinCourierRadius = ($hubIsland === $sellerIsland) && ($sameProvince || $distanceKm <= $maxCourierRadius);
+        $withinCourierRadius = $sameIsland && ($sameProvince || $distanceKm <= $maxCourierRadius);
 
         $allCouriers = $couriers ?? Courier::with('currentHubAssignment.hub')
             ->where('logistics_profile_id', $hub->parent_logistics_profile_id)
             ->whereIn('status', ['active', 'Active', 'on_delivery'])
             ->get();
 
-        $hubCouriers = $allCouriers->filter(function (Courier $c) use ($hub, $normHubMun) {
+        $hubCouriers = $allCouriers->filter(function (Courier $c) use ($hub, $normHubMun, $totalWeightKg) {
             if (! in_array($c->status, ['active', 'Active', 'on_delivery'], true)) {
+                return false;
+            }
+            if ($totalWeightKg > 0 && $c->remaining_load_capacity_kg < $totalWeightKg) {
                 return false;
             }
             $assignedHub = $c->assigned_hub;
@@ -320,6 +498,7 @@ class ShippingCalculatorService
         return [
             'hub'                   => $hub,
             'is_covered'            => $withinCourierRadius,
+            'same_island'           => $sameIsland,
             'same_province'         => $sameProvince,
             'same_municipality'     => $sameMunicipality,
             'distance_km'           => $distanceKm,
@@ -366,57 +545,82 @@ class ShippingCalculatorService
             ? (float) $hub->max_rider_delivery_radius_km
             : self::MAX_RIDER_DELIVERY_RADIUS_KM;
 
+        $sameIsland = $hubIsland !== '' && $hubIsland === $buyerIsland;
+        $sameProvince = $sameIsland && $normHubProv !== '' && $normHubProv === $normBuyerProv;
+        $sameMunicipality = $sameProvince && $normHubMun !== '' && $normBuyerMun !== '' && $normHubMun === $normBuyerMun;
+
         $allRiders = $riders ?? Rider::with(['currentHubAssignment.hub', 'barangayCoverages'])
             ->where('logistics_profile_id', $hub->parent_logistics_profile_id)
             ->where('status', 'approved')
             ->get();
 
-        $hubRiders = $allRiders->filter(function (Rider $r) use ($hub, $normHubMun) {
+        $hubRidersInSameMunicipality = $allRiders->filter(function (Rider $r) use ($hub, $normHubProv, $normHubMun, $normBuyerMun, $normBuyerBrgy) {
             if ($r->status !== 'approved') {
                 return false;
             }
-            $assignedHub = $r->assigned_hub;
-            if ($assignedHub && (int) $assignedHub->id === (int) $hub->id) {
-                return true;
-            }
-            if ($assignedHub && $this->addressService->normalizeName($assignedHub->municipality) === $normHubMun) {
-                return true;
-            }
-            return false;
-        });
 
-        $explicitCoverageMatch = $hubRiders->contains(function (Rider $r) use ($normBuyerMun, $normBuyerBrgy) {
-            return $r->barangayCoverages->contains(function ($cov) use ($normBuyerMun, $normBuyerBrgy) {
-                if (! $cov->is_active) {
-                    return false;
-                }
+            $assignedHub = $r->assigned_hub;
+            if (! $assignedHub) {
+                return false;
+            }
+
+            $riderHubProv = $this->addressService->normalizeName($assignedHub->province);
+            $riderHubMun = $this->addressService->normalizeName($assignedHub->municipality);
+
+            $belongsToThisHub = ((int) $assignedHub->id === (int) $hub->id)
+                || ($riderHubProv === $normHubProv && $riderHubMun === $normHubMun);
+
+            if (! $belongsToThisHub) {
+                return false;
+            }
+
+            if ($normBuyerMun !== '' && $riderHubMun !== $normBuyerMun) {
+                return false;
+            }
+
+            $activeCoverages = $r->relationLoaded('barangayCoverages')
+                ? $r->barangayCoverages->where('is_active', true)
+                : $r->activeBarangayCoverages()->get();
+
+            if ($activeCoverages->isEmpty()) {
+                return true;
+            }
+
+            if ($normBuyerBrgy === '') {
+                return true;
+            }
+
+            return $activeCoverages->contains(function ($cov) use ($normBuyerMun, $normBuyerBrgy) {
                 $covMun = $this->addressService->normalizeName($cov->municipality ?? '');
                 $covBrgy = $this->addressService->normalizeName($cov->barangay_name ?? '');
-                if ($normBuyerMun !== '' && $covMun !== '' && $covMun !== $normBuyerMun) {
+                if ($covMun !== '' && $normBuyerMun !== '' && $covMun !== $normBuyerMun) {
                     return false;
                 }
-                return $normBuyerBrgy === '' || $covBrgy === $normBuyerBrgy;
+                return $covBrgy === $normBuyerBrgy;
             });
         });
 
-        $exactBrgyRidersCount = $hubRiders->filter(function (Rider $r) use ($normBuyerBrgy) {
+        $exactBrgyRidersCount = $hubRidersInSameMunicipality->filter(function (Rider $r) use ($normBuyerBrgy) {
             if ($normBuyerBrgy === '') {
                 return false;
             }
-            return $r->barangayCoverages->contains(function ($cov) use ($normBuyerBrgy) {
-                return $cov->is_active && $this->addressService->normalizeName($cov->barangay_name ?? '') === $normBuyerBrgy;
+            $activeCoverages = $r->relationLoaded('barangayCoverages')
+                ? $r->barangayCoverages->where('is_active', true)
+                : $r->activeBarangayCoverages()->get();
+
+            if ($activeCoverages->isEmpty()) {
+                return true;
+            }
+
+            return $activeCoverages->contains(function ($cov) use ($normBuyerBrgy) {
+                return $this->addressService->normalizeName($cov->barangay_name ?? '') === $normBuyerBrgy;
             });
         })->count();
 
-        $sameProvince = $normHubProv !== '' && $normHubProv === $normBuyerProv;
-        $sameMunicipality = $sameProvince && ($normBuyerMun === '' || $normHubMun === $normBuyerMun);
-
-        $isGeographicallyCovered = ($hubIsland === $buyerIsland)
-            && $sameProvince
-            && ($sameMunicipality || $explicitCoverageMatch || $distanceKm <= $maxRiderRadius);
+        $isGeographicallyCovered = $sameProvince && $sameMunicipality;
 
         $isCovered = $requireApprovedRider
-            ? ($isGeographicallyCovered && $hubRiders->count() > 0)
+            ? ($isGeographicallyCovered && $hubRidersInSameMunicipality->count() > 0)
             : $isGeographicallyCovered;
 
         return [
@@ -424,10 +628,10 @@ class ShippingCalculatorService
             'is_covered'                  => $isCovered,
             'same_province'               => $sameProvince,
             'same_municipality'           => $sameMunicipality,
-            'explicit_barangay_coverage'  => $explicitCoverageMatch,
+            'explicit_barangay_coverage'  => $exactBrgyRidersCount > 0,
             'distance_km'                 => $distanceKm,
             'max_radius_km'               => $maxRiderRadius,
-            'approved_riders_count'       => $hubRiders->count(),
+            'approved_riders_count'       => $hubRidersInSameMunicipality->count(),
             'exact_barangay_riders_count' => $exactBrgyRidersCount,
         ];
     }
@@ -455,7 +659,8 @@ class ShippingCalculatorService
         string $buyerMunicipality,
         float $totalWeightKg,
         string $sellerBarangay = '',
-        string $buyerBarangay = ''
+        string $buyerBarangay = '',
+        ?SellerProfile $sellerProfile = null
     ): array {
         $normSellerProv = $this->addressService->normalizeName($sellerProvince);
         $normBuyerProv = $this->addressService->normalizeName($buyerProvince);
@@ -468,12 +673,14 @@ class ShippingCalculatorService
         $buyerIsland = $this->resolveIslandGroup($buyerProvince);
 
         $routeCheck = $this->isRouteServiceable(
-            $sellerProvince,
-            $sellerMunicipality,
-            $buyerProvince,
-            $buyerMunicipality,
-            $sellerBarangay,
-            $buyerBarangay
+            sellerProvince: $sellerProvince,
+            sellerMunicipality: $sellerMunicipality,
+            buyerProvince: $buyerProvince,
+            buyerMunicipality: $buyerMunicipality,
+            sellerBarangay: $sellerBarangay,
+            buyerBarangay: $buyerBarangay,
+            totalWeightKg: $totalWeightKg,
+            sellerProfile: $sellerProfile
         );
 
         $distanceKm = CourierMobileSchemaService::calculateDistanceKmBetweenLocations(
@@ -543,20 +750,37 @@ class ShippingCalculatorService
         $weightSurcharge = round($extraWeightKg * $perExtraKgRate, 2);
         $totalShippingFee = round($baseFee + $weightSurcharge, 2);
 
+        /** @var LogisticsProfile|null $matchedProvider */
+        $matchedProvider = $routeCheck['matched_provider'] ?? null;
+        /** @var LogisticsHub|null $originHub */
+        $originHub = $routeCheck['origin_hub'] ?? null;
+        /** @var LogisticsHub|null $destHub */
+        $destHub = $routeCheck['destination_hub'] ?? null;
+
         return [
-            'tier'                 => $tier,
-            'tier_label'           => $tierLabel,
-            'distance_km'          => $distanceKm,
-            'base_fee'             => $baseFee,
-            'chargeable_weight_kg' => $chargeableKg,
-            'extra_weight_kg'      => $extraWeightKg,
-            'per_extra_kg_rate'    => $perExtraKgRate,
-            'weight_surcharge'     => $weightSurcharge,
-            'shipping_fee'         => $totalShippingFee,
-            'seller_island_group'  => $sellerIsland,
-            'buyer_island_group'   => $buyerIsland,
-            'is_serviceable'       => (bool) $routeCheck['is_serviceable'],
-            'unserviceable_reason' => $routeCheck['reason'],
+            'tier'                        => $tier,
+            'tier_label'                  => $tierLabel,
+            'distance_km'                 => $distanceKm,
+            'base_fee'                    => $baseFee,
+            'chargeable_weight_kg'        => $chargeableKg,
+            'extra_weight_kg'             => $extraWeightKg,
+            'per_extra_kg_rate'           => $perExtraKgRate,
+            'weight_surcharge'            => $weightSurcharge,
+            'shipping_fee'                => $totalShippingFee,
+            'seller_island_group'         => $sellerIsland,
+            'buyer_island_group'          => $buyerIsland,
+            'is_serviceable'              => (bool) $routeCheck['is_serviceable'],
+            'unserviceable_reason'        => $routeCheck['reason'],
+            'matched_logistics_id'        => $matchedProvider?->id,
+            'matched_logistics_name'      => $matchedProvider?->business_name,
+            'origin_hub_id'               => $originHub?->id,
+            'origin_hub_name'             => $originHub?->hub_name,
+            'origin_hub_municipality'     => $originHub?->municipality,
+            'destination_hub_id'          => $destHub?->id,
+            'destination_hub_name'        => $destHub?->hub_name,
+            'destination_hub_municipality'=> $destHub?->municipality,
+            'requires_inter_hub_transfer' => (bool) ($routeCheck['requires_inter_hub_transfer'] ?? false),
+            'route_badge_label'           => $routeCheck['route_badge_label'] ?? null,
         ];
     }
 

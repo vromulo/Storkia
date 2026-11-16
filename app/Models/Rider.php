@@ -190,7 +190,7 @@ class Rider extends Authenticatable
     {
         $names = $this->covered_barangay_names;
 
-        return ! empty($names) ? implode(', ', $names) : 'All Hub Barangays';
+        return ! empty($names) ? implode(', ', $names) : 'All Hub Barangays (' . $this->assigned_municipality . ')';
     }
 
     public function getFullNameAttribute(): string
@@ -230,7 +230,7 @@ class Rider extends Authenticatable
         return CourierMobileSchemaService::calculateDistanceKmBetweenLocations($originSnap, $targetSnapshot, $hub, null);
     }
 
-    public function evaluateDeliveryEligibilityForSnapshot(array $deliverySnapshot): array
+    public function evaluateDeliveryEligibilityForSnapshot(array $deliverySnapshot, ?int $requiredHubId = null): array
     {
         $hub = $this->assigned_hub;
         if (! $hub) {
@@ -278,30 +278,46 @@ class Rider extends Authenticatable
             ? (float) $hub->max_rider_delivery_radius_km
             : ShippingCalculatorService::MAX_RIDER_DELIVERY_RADIUS_KM;
 
+        $sameProvince = $hubProv !== '' && $destProv !== '' && $hubProv === $destProv && $hubIsland === $destIsland;
+        $sameMunicipality = $sameProvince && $hubMun !== '' && $destMun !== '' && $hubMun === $destMun;
+
+        $matchesRequiredHub = $requiredHubId === null
+            || (int) $hub->id === (int) $requiredHubId
+            || $sameMunicipality;
+
         $coverages = $this->relationLoaded('barangayCoverages')
             ? $this->barangayCoverages->where('is_active', true)
             : $this->activeBarangayCoverages()->get();
 
-        $exactBrgyMatch = $destBrgy !== '' && $coverages->contains(function ($cov) use ($addressService, $destMun, $destBrgy) {
-            $covMun = $addressService->normalizeName($cov->municipality ?? '');
-            $covBrgy = $addressService->normalizeName($cov->barangay_name ?? '');
-            if ($destMun !== '' && $covMun !== '' && $covMun !== $destMun) {
-                return false;
-            }
-            return $covBrgy === $destBrgy;
-        });
+        $hasRestrictedBarangays = $coverages->isNotEmpty();
 
-        $sameProvince = $hubProv !== '' && $destProv !== '' && $hubProv === $destProv && $hubIsland === $destIsland;
-        $sameMunicipality = $sameProvince && $hubMun !== '' && $destMun !== '' && $hubMun === $destMun;
+        $exactBrgyMatch = false;
+        if (! $hasRestrictedBarangays) {
+            $exactBrgyMatch = $sameMunicipality;
+        } elseif ($destBrgy !== '' && $sameMunicipality) {
+            $exactBrgyMatch = $coverages->contains(function ($cov) use ($addressService, $destMun, $destBrgy) {
+                $covMun = $addressService->normalizeName($cov->municipality ?? '');
+                $covBrgy = $addressService->normalizeName($cov->barangay_name ?? '');
+                if ($destMun !== '' && $covMun !== '' && $covMun !== $destMun) {
+                    return false;
+                }
+                return $covBrgy === $destBrgy;
+            });
+        }
 
-        $isEligible = $sameProvince && ($sameMunicipality || $exactBrgyMatch || $distFromHubKm <= $maxRiderRadius);
+        $isEligible = $sameProvince && $sameMunicipality && $matchesRequiredHub && (! $hasRestrictedBarangays || $exactBrgyMatch);
 
         $reason = null;
         if (! $isEligible) {
             if ($hubIsland !== $destIsland || ! $sameProvince) {
-                $reason = "Rider {$this->full_name} is based in {$hub->municipality}, {$hub->province} and cannot travel across provinces to {$deliverySnapshot['municipality']}, {$deliverySnapshot['province']} (Gasoline & Last-Mile Range Protection).";
+                $reason = "Rider {$this->full_name} is assigned to {$hub->municipality}, {$hub->province} and is strictly prohibited from traveling province-to-province to {$deliverySnapshot['municipality']}, {$deliverySnapshot['province']}.";
+            } elseif (! $sameMunicipality) {
+                $reason = "Rider {$this->full_name} is assigned to {$hub->municipality} and is strictly prohibited from traveling municipality-to-municipality to {$deliverySnapshot['municipality']} (Riders only operate barangay-to-barangay within {$hub->municipality}).";
+            } elseif ($hasRestrictedBarangays && ! $exactBrgyMatch) {
+                $buyerBrgyName = $deliverySnapshot['barangay'] ?? 'the buyer barangay';
+                $reason = "Rider {$this->full_name} in {$hub->municipality} is only assigned to barangays [{$this->formatted_barangay_coverage}] and does not cover Brgy. {$buyerBrgyName}.";
             } else {
-                $reason = "Buyer address in {$deliverySnapshot['municipality']} is {$distFromHubKm} km from {$hub->hub_name}, exceeding the {$maxRiderRadius} km Last-Mile Rider radius.";
+                $reason = "Rider {$this->full_name} is not assigned to the destination hub covering {$deliverySnapshot['municipality']}.";
             }
         }
 

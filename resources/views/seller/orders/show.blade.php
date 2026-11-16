@@ -12,7 +12,7 @@
     $paymentSubmission = $sellerOrder->paymentSubmission;
     $extra = $sellerOrder->extra;
     $evidencePhotos = is_array($extra?->dispute_evidence_photos) ? $extra->dispute_evidence_photos : [];
-    $canRejectUnserviceable = $canRejectUnserviceable ?? false;
+    $routeBadgeLabel = $pickupSnap['route_badge_label'] ?? null;
 
     $unifiedTimeline = collect();
 
@@ -59,39 +59,48 @@
         $origDist = round((float) ($hub->getAttribute('origin_distance_km') ?? 0), 1);
         $origCouriers = (int) ($hub->getAttribute('origin_couriers_count') ?? 0);
         $destHubName = $hub->getAttribute('destination_hub_name');
+        $destHubMun = $hub->getAttribute('destination_hub_municipality');
         $destRiders = (int) ($hub->getAttribute('destination_riders_count') ?? 0);
         $destDist = $hub->getAttribute('destination_distance_km') !== null ? round((float) $hub->getAttribute('destination_distance_km'), 1) : null;
+        $requiresInterHub = (bool) ($hub->getAttribute('requires_inter_hub_transfer') ?? false);
         $isServiceable = (bool) ($hub->getAttribute('is_route_serviceable') ?? true);
         $requiresSelfDrop = (bool) ($hub->getAttribute('requires_self_drop_off') ?? false);
         $unserviceableReason = (string) ($hub->getAttribute('unserviceable_reason') ?? '');
 
         $companyName = $hub->parentLogisticsProfile?->business_name ? ' (' . $hub->parentLogisticsProfile->business_name . ')' : '';
         $statusTag = $isServiceable
-            ? ($requiresSelfDrop ? '[Self Drop-Off Only] ' : '[Serviceable] ')
-            : '[Unserviceable for Buyer] ';
+            ? ($requiresSelfDrop ? '[Self Drop-Off Only] ' : ($requiresInterHub ? '[Inter-Hub Transfer] ' : '[Direct Local Hub] '))
+            : '[Unserviceable Route] ';
 
         return [
-            'id'                     => (string) $hub->id,
-            'label'                  => $statusTag . $hub->hub_name . ' — ' . $hub->municipality . ', ' . $hub->province . $companyName,
-            'origin_distance_km'     => $origDist,
-            'origin_couriers_count'  => $origCouriers,
-            'destination_hub_name'   => $destHubName ?: 'None',
-            'destination_distance_km'=> $destDist,
-            'destination_riders'     => $destRiders,
-            'is_serviceable'         => $isServiceable,
-            'requires_self_drop_off' => $requiresSelfDrop,
-            'unserviceable_reason'   => $unserviceableReason,
+            'id'                          => (string) $hub->id,
+            'label'                       => $statusTag . $hub->hub_name . ' — ' . $hub->municipality . ', ' . $hub->province . $companyName,
+            'origin_distance_km'          => $origDist,
+            'origin_couriers_count'       => $origCouriers,
+            'destination_hub_name'        => $destHubName ?: 'None',
+            'destination_hub_municipality'=> $destHubMun ?: '',
+            'destination_distance_km'     => $destDist,
+            'destination_riders'          => $destRiders,
+            'requires_inter_hub_transfer' => $requiresInterHub,
+            'is_serviceable'              => $isServiceable,
+            'requires_self_drop_off'      => $requiresSelfDrop,
+            'unserviceable_reason'        => $unserviceableReason,
         ];
     })->values();
 
-    $firstServiceableHub = $hubOptions->firstWhere('is_serviceable', true) ?? $hubOptions->first();
+    $lockedOriginHubId = (string) ($sellerOrder->origin_logistics_hub_id ?? ($pickupSnap['origin_hub_id'] ?? ''));
+    $matchedLockedHub = $lockedOriginHubId !== ''
+        ? $hubOptions->firstWhere('id', $lockedOriginHubId)
+        : null;
+    $firstServiceableHub = ($matchedLockedHub && !empty($matchedLockedHub['is_serviceable']))
+        ? $matchedLockedHub
+        : ($hubOptions->firstWhere('is_serviceable', true) ?? $hubOptions->first());
     $firstHubId = (string) ($firstServiceableHub['id'] ?? '');
     $initialHandover = ($firstServiceableHub && !empty($firstServiceableHub['requires_self_drop_off'])) ? 'self_drop_off' : 'courier_pickup';
 @endphp
 
 <div x-data="{
         suspiciousModalOpen: false,
-        unserviceableModalOpen: false,
         gcashScreenshotModalOpen: false,
         proofModalOpen: false,
         evidencePreviewUrl: '',
@@ -162,6 +171,11 @@
                     Ordered: <strong>{{ $sellerOrder->created_at?->format('M d, Y h:i A') }}</strong> &bull;
                     Order Total: <strong class="text-price">&#8369;{{ number_format((float) $sellerOrder->total_amount, 2) }}</strong>
                 </p>
+                @if($routeBadgeLabel)
+                    <div class="mt-1.5 inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-success/10 text-success border border-success/25 text-[11px] font-bold">
+                        <span>Verified Route: {{ $routeBadgeLabel }}</span>
+                    </div>
+                @endif
             </div>
         </div>
 
@@ -181,26 +195,23 @@
         @endif
     </div>
 
-    @if($canRejectUnserviceable)
-        <div class="p-6 rounded-3xl bg-amber-50 border-2 border-amber-300 space-y-3">
-            <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                <div class="space-y-1">
-                    <div class="flex items-center gap-2">
-                        <span class="px-2.5 py-0.5 rounded-full bg-amber-600 text-white text-[10px] font-extrabold uppercase">
-                            SLA Violation Protection Active (0 Strikes)
-                        </span>
-                        <h2 class="text-base font-bold text-amber-950">No Logistics Partner Currently Has Last-Mile Rider Coverage for Buyer's Address</h2>
-                    </div>
-                    <p class="text-xs text-amber-900 leading-relaxed">
-                        The buyer's address in <strong>{{ $deliverySnap['municipality'] ?? '' }}, {{ $deliverySnap['province'] ?? '' }}</strong> currently has no Logistics partner with both an Origin Hub near your store and an approved Last-Mile Rider covering the buyer's municipality/radius. You can cancel this order right now <strong>without receiving any Seller SLA violation strike</strong>.
-                    </p>
-                </div>
-                <button type="button"
-                        @click="unserviceableModalOpen = true"
-                        class="px-5 py-3 rounded-xl bg-amber-700 hover:bg-amber-800 text-white text-xs font-bold shadow-sm transition-colors cursor-pointer shrink-0">
-                    Cancel as Unserviceable Area (0 SLA Strike)
-                </button>
+    @if($sellerOrder->is_unserviceable_exception && in_array($sellerOrder->status, ['cancelled', 'rejected'], true))
+        <div class="p-6 rounded-3xl bg-amber-50 border-2 border-amber-300 space-y-2">
+            <div class="flex flex-wrap items-center gap-2">
+                <span class="px-2.5 py-0.5 rounded-full bg-amber-600 text-white text-[10px] font-extrabold uppercase">
+                    Automated System Protection (0 SLA Strikes)
+                </span>
+                <h2 class="text-base font-bold text-amber-950">Order Automatically Cancelled — Logistics / Rider Route Unavailable</h2>
             </div>
+            <p class="text-xs text-amber-900 leading-relaxed">
+                {{ $sellerOrder->rejection_reason ?: 'This order was automatically cancelled by the platform because no active Origin Courier + Destination Branch Hub + Local Municipality Rider route remained available.' }}
+                <strong>0 SLA violation strikes</strong> were recorded against your store, and reserved product stock was restored automatically.
+                @if($payMethod === 'WALLET')
+                    The buyer's Storkia E-Wallet payment was refunded immediately.
+                @else
+                    Because the buyer selected Cash on Delivery (COD), no payment was collected or refunded.
+                @endif
+            </p>
         </div>
     @endif
 
@@ -298,7 +309,7 @@
                 <p class="text-xs text-text-muted leading-relaxed">
                     Please accept this order before <strong>{{ $sellerOrder->acceptance_deadline_at?->format('M d, Y h:i A') }}</strong>
                     ({{ $sellerOrder->acceptance_deadline_at?->diffForHumans() }}).
-                    If no Logistics partner covers the buyer's destination area, use the <strong>Cancel as Unserviceable Area</strong> button above so you are not penalized with an SLA strike.
+                    This order's Origin Hub, Destination Branch Hub, and Last-Mile Barangay Rider coverage in <strong>Brgy. {{ $deliverySnap['barangay'] ?? '' }}, {{ $deliverySnap['municipality'] ?? '' }}, {{ $deliverySnap['province'] ?? '' }}</strong> were verified at checkout.
                 </p>
             </div>
             <div class="flex items-center gap-2.5 shrink-0">
@@ -318,7 +329,7 @@
                 <div>
                     <h2 class="text-base font-bold text-primary-dark">Step 2: Verify Product Checklist &amp; Select Serviceable Logistics Hub</h2>
                     <p class="text-xs text-text-muted mt-0.5">
-                        Only Logistics partners with both <strong>Origin Hub coverage</strong> and <strong>Destination Last-Mile Rider coverage ({{ $deliverySnap['municipality'] ?? '' }}, {{ $deliverySnap['province'] ?? '' }})</strong> can be dispatched.
+                        Only Logistics partners with an active <strong>Origin Hub on your island</strong> connected to a <strong>Destination Hub in {{ $deliverySnap['municipality'] ?? '' }}, {{ $deliverySnap['province'] ?? '' }}</strong> with an approved Rider covering <strong>Brgy. {{ $deliverySnap['barangay'] ?? 'Buyer Barangay' }}</strong> can be selected.
                     </p>
                 </div>
                 <div class="inline-flex items-center gap-1.5 text-[11px]">
@@ -406,7 +417,7 @@
                                               x-text="'Origin: ' + hub.origin_distance_km + ' km (' + hub.origin_couriers_count + ' Courier(s))'"></span>
                                         <template x-if="hub.is_serviceable">
                                             <span class="px-2 py-0.5 rounded bg-success/15 text-success font-bold"
-                                                  x-text="'Buyer Dest: ' + hub.destination_hub_name + ' (' + hub.destination_riders + ' Rider(s), ~' + (hub.destination_distance_km ?? 0) + ' km)'"></span>
+                                                  x-text="(hub.requires_inter_hub_transfer ? 'Transfer -> ' : 'Same Hub -> ') + hub.destination_hub_name + ' (' + hub.destination_riders + ' Rider(s) in ' + hub.destination_hub_municipality + ')'"></span>
                                         </template>
                                         <template x-if="!hub.is_serviceable">
                                             <span class="px-2 py-0.5 rounded bg-danger/10 text-danger font-bold"
@@ -424,7 +435,12 @@
                                     <span>Origin Hub Distance: <strong x-text="selectedHubObj.origin_distance_km + ' km'"></strong> (<span x-text="selectedHubObj.origin_couriers_count + ' Active Courier(s)'"></span>)</span>
                                     <span class="mx-1.5">&bull;</span>
                                     <template x-if="selectedHubObj.is_serviceable">
-                                        <span>Buyer Covered by <strong x-text="selectedHubObj.destination_hub_name"></strong> (<span x-text="selectedHubObj.destination_riders + ' Approved Rider(s)'"></span>)</span>
+                                        <span>
+                                            <span x-show="selectedHubObj.requires_inter_hub_transfer" class="font-bold text-primary-dark">Inter-Hub Linehaul to </span>
+                                            <span x-show="!selectedHubObj.requires_inter_hub_transfer">Direct Local Hub: </span>
+                                            <strong x-text="selectedHubObj.destination_hub_name"></strong>
+                                            (<span x-text="selectedHubObj.destination_riders + ' Approved Rider(s) in ' + selectedHubObj.destination_hub_municipality"></span>)
+                                        </span>
                                     </template>
                                     <template x-if="!selectedHubObj.is_serviceable">
                                         <span x-text="selectedHubObj.unserviceable_reason"></span>
@@ -794,40 +810,6 @@
             @endif
         </div>
     </div>
-
-    @if($canRejectUnserviceable)
-        <template x-teleport="body">
-            <div x-show="unserviceableModalOpen"
-                 x-cloak
-                 class="fixed inset-0 z-[195] flex items-center justify-center p-4">
-                <div @click="unserviceableModalOpen = false" class="absolute inset-0 bg-black/60 backdrop-blur-xs cursor-pointer"></div>
-                <div @click.stop class="relative z-10 bg-surface rounded-3xl max-w-md w-full p-6 shadow-2xl border border-border-subtle space-y-4">
-                    <div class="flex items-center justify-between pb-3 border-b border-border-subtle">
-                        <h3 class="text-base font-bold text-amber-900">Cancel Order as Unserviceable Area (0 SLA Strikes)</h3>
-                        <button type="button" @click="unserviceableModalOpen = false" class="p-1 text-text-muted hover:text-text-main text-lg font-bold cursor-pointer">&times;</button>
-                    </div>
-                    <p class="text-xs text-text-muted leading-relaxed">
-                        Because no active Logistics partner currently has both Origin Hub coverage and an approved Last-Mile Rider covering <strong>{{ $deliverySnap['municipality'] ?? '' }}, {{ $deliverySnap['province'] ?? '' }}</strong>, you may cancel this order without receiving any SLA violation strike. Reserved product stock, buyer vouchers, Storkia Coins, and wallet payments will be automatically restored.
-                    </p>
-                    <form action="{{ route('seller.orders.reject-unserviceable', $sellerOrder->id) }}" method="POST" class="space-y-4 text-xs">
-                        @csrf
-                        <div>
-                            <label class="block font-bold text-text-muted mb-1">Optional Note to Buyer</label>
-                            <textarea name="rejection_reason"
-                                      rows="3"
-                                      maxlength="300"
-                                      placeholder="No Storkia Logistics Partner currently has an active Last-Mile Rider covering {{ $deliverySnap['municipality'] ?? 'your municipality' }}, {{ $deliverySnap['province'] ?? '' }}."
-                                      class="w-full p-3 rounded-xl border border-border-subtle bg-surface outline-none focus:border-primary"></textarea>
-                        </div>
-                        <div class="flex justify-end gap-2">
-                            <button type="button" @click="unserviceableModalOpen = false" class="px-4 py-2 rounded-xl bg-surface-subtle hover:bg-brand-light/30 text-text-muted hover:text-text-main font-bold transition-colors cursor-pointer">Keep Order</button>
-                            <button type="submit" class="px-5 py-2.5 rounded-xl bg-amber-700 hover:bg-amber-800 text-white font-bold transition-colors cursor-pointer">Confirm Penalty-Free Cancellation</button>
-                        </div>
-                    </form>
-                </div>
-            </div>
-        </template>
-    @endif
 
     @if($paymentSubmission)
         <template x-teleport="body">

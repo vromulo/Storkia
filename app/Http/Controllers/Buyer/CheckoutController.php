@@ -107,25 +107,8 @@ class CheckoutController extends Controller
         $sellerProfile = $product->user?->sellerProfile;
 
         $this->superDealPricingService->assertStoreNotOnVacation($sellerProfile);
+
         $this->assertPerBuyerLimitNotExceeded((int) $request->user()->id, $product, (int) $validated['quantity']);
-
-        $defaultAddress = $request->user()->addresses()->orderByDesc('is_default')->latest('id')->first();
-        if ($defaultAddress && $sellerProfile) {
-            $routeCheck = $this->shippingCalculatorService->isRouteServiceable(
-                $sellerProfile->province,
-                $sellerProfile->municipality,
-                $defaultAddress->province,
-                $defaultAddress->municipality,
-                $sellerProfile->barangay,
-                $defaultAddress->barangay
-            );
-
-            if (! $routeCheck['is_serviceable']) {
-                return back()->withErrors([
-                    'stock' => $routeCheck['reason'],
-                ]);
-            }
-        }
 
         $resolved = $this->inventoryStockService->resolveProductSelection(
             $product,
@@ -137,6 +120,26 @@ class CheckoutController extends Controller
             return back()->withErrors([
                 'stock' => "Only {$resolved['available_stock']} unit(s) available for {$product->name}.",
             ]);
+        }
+
+        $defaultAddress = $request->user()->addresses()->orderByDesc('is_default')->latest('id')->first();
+        if ($defaultAddress && $sellerProfile) {
+            $totalWeightKg = round((float) $resolved['unit_weight'] * max(1, (int) $validated['quantity']), 3);
+            $routeCheck = $this->shippingCalculatorService->isRouteServiceable(
+                sellerProvince: $sellerProfile->province,
+                sellerMunicipality: $sellerProfile->municipality,
+                buyerProvince: $defaultAddress->province,
+                buyerMunicipality: $defaultAddress->municipality,
+                sellerBarangay: $sellerProfile->barangay,
+                buyerBarangay: $defaultAddress->barangay,
+                totalWeightKg: $totalWeightKg,
+                sellerProfile: $sellerProfile
+            );
+            if (! $routeCheck['is_serviceable']) {
+                return back()->withErrors([
+                    'stock' => $routeCheck['reason'],
+                ]);
+            }
         }
 
         if ($sellerProfile) {
@@ -195,7 +198,6 @@ class CheckoutController extends Controller
         $requestedShippingVoucher = trim((string) $request->query('shipping_voucher_code', ''));
         $useStorkiaCoins = $request->boolean('use_storkia_coins');
         $requestedCoinsToUse = $request->filled('coins_to_use') ? (int) $request->query('coins_to_use') : null;
-
         $touchedSlots = collect((array) $request->query('touched_slots', []))
             ->filter(fn ($slot) => is_string($slot) && $slot !== '')
             ->values()
@@ -224,21 +226,28 @@ class CheckoutController extends Controller
             foreach ($checkoutSummary['seller_packages'] as $pkg) {
                 $spId = (int) $pkg['seller_profile']->id;
                 $packagesPayload[$spId] = [
-                    'subtotal'           => (float) $pkg['subtotal'],
-                    'bundle_discount'    => (float) $pkg['bundle_discount'],
-                    'store_discount'     => (float) $pkg['store_discount'],
-                    'platform_discount'  => (float) $pkg['platform_discount'],
-                    'shipping_discount'  => (float) $pkg['shipping_discount'],
-                    'coins_used'         => (int) ($pkg['coins_used'] ?? 0),
-                    'coins_discount'     => (float) ($pkg['coins_discount'] ?? 0),
-                    'shipping_fee'       => (float) ($pkg['shipping']['shipping_fee'] ?? 0),
-                    'distance_km'        => (float) ($pkg['shipping']['distance_km'] ?? 0),
-                    'net_subtotal'       => (float) $pkg['net_subtotal'],
-                    'net_shipping_fee'   => (float) $pkg['net_shipping_fee'],
-                    'total'              => (float) $pkg['total'],
-                    'shipping_tier'      => (string) ($pkg['shipping']['tier'] ?? ''),
-                    'is_serviceable'     => (bool) ($pkg['shipping']['is_serviceable'] ?? true),
-                    'store_voucher_code' => $pkg['store_voucher']?->code ?? '',
+                    'subtotal'                    => (float) $pkg['subtotal'],
+                    'bundle_discount'             => (float) $pkg['bundle_discount'],
+                    'store_discount'              => (float) $pkg['store_discount'],
+                    'platform_discount'           => (float) $pkg['platform_discount'],
+                    'shipping_discount'           => (float) $pkg['shipping_discount'],
+                    'coins_used'                  => (int) ($pkg['coins_used'] ?? 0),
+                    'coins_discount'              => (float) ($pkg['coins_discount'] ?? 0),
+                    'shipping_fee'                => (float) ($pkg['shipping']['shipping_fee'] ?? 0),
+                    'distance_km'                 => (float) ($pkg['shipping']['distance_km'] ?? 0),
+                    'net_subtotal'                => (float) $pkg['net_subtotal'],
+                    'net_shipping_fee'            => (float) $pkg['net_shipping_fee'],
+                    'total'                       => (float) $pkg['total'],
+                    'shipping_tier'               => (string) ($pkg['shipping']['tier'] ?? ''),
+                    'shipping_tier_label'         => (string) ($pkg['shipping']['tier_label'] ?? ''),
+                    'is_serviceable'              => (bool) ($pkg['shipping']['is_serviceable'] ?? false),
+                    'unserviceable_reason'        => $pkg['shipping']['unserviceable_reason'] ?? null,
+                    'route_badge_label'           => $pkg['shipping']['route_badge_label'] ?? null,
+                    'matched_logistics_name'      => $pkg['shipping']['matched_logistics_name'] ?? null,
+                    'origin_hub_name'             => $pkg['shipping']['origin_hub_name'] ?? null,
+                    'destination_hub_name'        => $pkg['shipping']['destination_hub_name'] ?? null,
+                    'requires_inter_hub_transfer' => (bool) ($pkg['shipping']['requires_inter_hub_transfer'] ?? false),
+                    'store_voucher_code'          => $pkg['store_voucher']?->code ?? '',
                 ];
             }
 
@@ -286,6 +295,7 @@ class CheckoutController extends Controller
         $recentWalletTopups = Schema::hasTable('buyer_wallet_topups')
             ? BuyerWalletTopup::where('buyer_id', $user->id)->orderByDesc('created_at')->limit(5)->get()
             : collect();
+
         $idempotencyKey = (string) Str::uuid();
 
         return view('buyer.checkout', [
@@ -364,7 +374,7 @@ class CheckoutController extends Controller
 
         if (! $this->shippingCalculatorService->isAddressServiceable($selectedAddress->province, $selectedAddress->municipality, $selectedAddress->barangay)) {
             return back()->withErrors([
-                'address' => "Delivery to {$selectedAddress->municipality}, {$selectedAddress->province} is currently outside our active Last-Mile Logistics Hub coverage. Please select a serviceable address.",
+                'address' => "Checkout Restricted: Delivery to Brgy. {$selectedAddress->barangay}, {$selectedAddress->municipality}, {$selectedAddress->province} is outside our active Last-Mile Logistics Hub & Rider coverage. Please select a serviceable address.",
             ])->withInput();
         }
 
@@ -463,6 +473,15 @@ class CheckoutController extends Controller
                 /** @var SellerProfile $sellerProfile */
                 $sellerProfile = $pkg['seller_profile'];
                 $spId = (int) $sellerProfile->id;
+
+                if (empty($pkg['shipping']['is_serviceable'])) {
+                    $reasonMsg = $pkg['shipping']['unserviceable_reason']
+                        ?: "Shipping from {$sellerProfile->business_name} ({$sellerProfile->municipality}, {$sellerProfile->province}) to {$selectedAddress->municipality}, {$selectedAddress->province} is unavailable.";
+                    throw ValidationException::withMessages([
+                        'address' => $reasonMsg,
+                    ]);
+                }
+
                 $chosenMethod = strtoupper((string) ($validated['payment_methods'][$spId] ?? 'COD'));
 
                 if (! in_array($chosenMethod, ['COD', 'WALLET'], true)) {
@@ -540,16 +559,24 @@ class CheckoutController extends Controller
                 $buyerNote = trim((string) ($validated['seller_notes'][$spId] ?? ''));
 
                 $pickupSnapshot = [
-                    'business_name' => $sellerProfile->business_name,
-                    'contact_no'    => $sellerProfile->contact_no,
-                    'province'      => $sellerProfile->province,
-                    'municipality'  => $sellerProfile->municipality,
-                    'barangay'      => $sellerProfile->barangay,
-                    'street'        => $sellerProfile->street,
-                    'house_details' => $sellerProfile->house_details,
-                    'latitude'      => $sellerProfile->latitude ?? null,
-                    'longitude'     => $sellerProfile->longitude ?? null,
-                    'full_address'  => $sellerProfile->full_address,
+                    'business_name'               => $sellerProfile->business_name,
+                    'contact_no'                  => $sellerProfile->contact_no,
+                    'province'                    => $sellerProfile->province,
+                    'municipality'                => $sellerProfile->municipality,
+                    'barangay'                    => $sellerProfile->barangay,
+                    'street'                      => $sellerProfile->street,
+                    'house_details'               => $sellerProfile->house_details,
+                    'latitude'                    => $sellerProfile->latitude ?? null,
+                    'longitude'                   => $sellerProfile->longitude ?? null,
+                    'full_address'                => $sellerProfile->full_address,
+                    'matched_logistics_id'        => $pkg['shipping']['matched_logistics_id'] ?? null,
+                    'matched_logistics_name'      => $pkg['shipping']['matched_logistics_name'] ?? null,
+                    'origin_hub_id'               => $pkg['shipping']['origin_hub_id'] ?? null,
+                    'origin_hub_name'             => $pkg['shipping']['origin_hub_name'] ?? null,
+                    'destination_hub_id'          => $pkg['shipping']['destination_hub_id'] ?? null,
+                    'destination_hub_name'        => $pkg['shipping']['destination_hub_name'] ?? null,
+                    'requires_inter_hub_transfer' => (bool) ($pkg['shipping']['requires_inter_hub_transfer'] ?? false),
+                    'route_badge_label'           => $pkg['shipping']['route_badge_label'] ?? null,
                 ];
 
                 $sellerOrderPayload = [
@@ -575,6 +602,12 @@ class CheckoutController extends Controller
 
                 if (Schema::hasColumn('seller_orders', 'seller_to_buyer_distance_km')) {
                     $sellerOrderPayload['seller_to_buyer_distance_km'] = $pkg['shipping']['distance_km'] ?? null;
+                }
+                if (Schema::hasColumn('seller_orders', 'origin_logistics_hub_id')) {
+                    $sellerOrderPayload['origin_logistics_hub_id'] = $pkg['shipping']['origin_hub_id'] ?? null;
+                }
+                if (Schema::hasColumn('seller_orders', 'destination_logistics_hub_id')) {
+                    $sellerOrderPayload['destination_logistics_hub_id'] = $pkg['shipping']['destination_hub_id'] ?? null;
                 }
 
                 $sellerOrder = SellerOrder::create($sellerOrderPayload);
@@ -1053,7 +1086,8 @@ class CheckoutController extends Controller
                 buyerMunicipality: $buyerMunicipality,
                 totalWeightKg: $package['total_weight'],
                 sellerBarangay: $sellerProfile->barangay ?? '',
-                buyerBarangay: $buyerBarangay
+                buyerBarangay: $buyerBarangay,
+                sellerProfile: $sellerProfile
             );
 
             if ($selectedAddress && isset($shipping['is_serviceable']) && $shipping['is_serviceable'] === false) {

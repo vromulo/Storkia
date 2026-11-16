@@ -35,18 +35,24 @@
         $currentStoreVoucherCodes[$spId] = $pkg['store_voucher'] ? (string) $pkg['store_voucher']->code : '';
 
         $initialPackageMetrics[$spId] = [
-            'subtotal'          => (float) ($pkg['subtotal'] ?? 0),
-            'bundle_discount'   => (float) ($pkg['bundle_discount'] ?? 0),
-            'store_discount'    => (float) ($pkg['store_discount'] ?? 0),
-            'platform_discount' => (float) ($pkg['platform_discount'] ?? 0),
-            'shipping_discount' => (float) ($pkg['shipping_discount'] ?? 0),
-            'coins_used'        => (int) ($pkg['coins_used'] ?? 0),
-            'coins_discount'    => (float) ($pkg['coins_discount'] ?? 0),
-            'shipping_fee'      => (float) ($pkg['shipping']['shipping_fee'] ?? 0),
-            'net_subtotal'      => (float) ($pkg['net_subtotal'] ?? 0),
-            'net_shipping_fee'  => (float) ($pkg['net_shipping_fee'] ?? 0),
-            'total'             => (float) ($pkg['total'] ?? 0),
-            'shipping_tier'     => (string) ($pkg['shipping']['tier'] ?? ''),
+            'subtotal'                    => (float) ($pkg['subtotal'] ?? 0),
+            'bundle_discount'             => (float) ($pkg['bundle_discount'] ?? 0),
+            'store_discount'              => (float) ($pkg['store_discount'] ?? 0),
+            'platform_discount'           => (float) ($pkg['platform_discount'] ?? 0),
+            'shipping_discount'           => (float) ($pkg['shipping_discount'] ?? 0),
+            'coins_used'                  => (int) ($pkg['coins_used'] ?? 0),
+            'coins_discount'              => (float) ($pkg['coins_discount'] ?? 0),
+            'shipping_fee'                => (float) ($pkg['shipping']['shipping_fee'] ?? 0),
+            'distance_km'                 => (float) ($pkg['shipping']['distance_km'] ?? 0),
+            'net_subtotal'                => (float) ($pkg['net_subtotal'] ?? 0),
+            'net_shipping_fee'            => (float) ($pkg['net_shipping_fee'] ?? 0),
+            'total'                       => (float) ($pkg['total'] ?? 0),
+            'shipping_tier'               => (string) ($pkg['shipping']['tier'] ?? ''),
+            'shipping_tier_label'         => (string) ($pkg['shipping']['tier_label'] ?? ''),
+            'is_serviceable'              => (bool) ($pkg['shipping']['is_serviceable'] ?? false),
+            'unserviceable_reason'        => $pkg['shipping']['unserviceable_reason'] ?? null,
+            'route_badge_label'           => $pkg['shipping']['route_badge_label'] ?? null,
+            'requires_inter_hub_transfer' => (bool) ($pkg['shipping']['requires_inter_hub_transfer'] ?? false),
         ];
     }
 
@@ -222,6 +228,26 @@
             packageCoinsDiscount(spId) {
                 return this.packageMetrics[spId] ? Number(this.packageMetrics[spId].coins_discount || 0) : 0;
             },
+            packageIsServiceable(spId) {
+                if (!this.packageMetrics[spId]) return this.isAddressServiceable;
+                return this.packageMetrics[spId].is_serviceable !== false;
+            },
+            packageRouteBadge(spId) {
+                return this.packageMetrics[spId] ? (this.packageMetrics[spId].route_badge_label || '') : '';
+            },
+            packageUnserviceableReason(spId) {
+                return this.packageMetrics[spId] ? (this.packageMetrics[spId].unserviceable_reason || '') : '';
+            },
+            firstUnserviceablePackageReason() {
+                const keys = Object.keys(this.packageMetrics || {});
+                for (let i = 0; i < keys.length; i++) {
+                    const m = this.packageMetrics[keys[i]];
+                    if (m && m.is_serviceable === false && m.unserviceable_reason) {
+                        return m.unserviceable_reason;
+                    }
+                }
+                return '';
+            },
             totalWalletRequired() {
                 let sum = 0;
                 Object.keys(this.paymentMethods).forEach((spId) => {
@@ -313,10 +339,11 @@
             },
             checkoutBlockers() {
                 const reasons = [];
+                const pkgUnserviceable = this.firstUnserviceablePackageReason();
                 if (!this.selectedAddress || !this.selectedAddress.id) {
                     reasons.push('Add or select a delivery address.');
-                } else if (!this.isAddressServiceable) {
-                    reasons.push('Your selected delivery address is outside our partner logistics serviceable zones. Please select or add another address.');
+                } else if (!this.isAddressServiceable || pkgUnserviceable !== '') {
+                    reasons.push(pkgUnserviceable || 'Your selected delivery address is outside our active Last-Mile Logistics Hub & Barangay Rider coverage zones. Please select or add another address.');
                 }
                 if (!this.hasSufficientWalletBalance()) {
                     reasons.push('Insufficient Storkia E-Wallet balance (Need ₱' + this.formatMoney(this.walletShortfall()) + ' more). Top up via GCash or switch payment method to Cash on Delivery (COD).');
@@ -510,11 +537,19 @@
             <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
                 <div class="lg:col-span-8 space-y-5 min-w-0">
 
-                    <div class="bg-surface rounded-2xl border border-border-subtle p-5 sm:p-6 shadow-xs relative overflow-hidden">
+                    <div class="bg-surface rounded-2xl border border-border-subtle p-5 sm:p-6 shadow-xs relative overflow-hidden"
+                         :class="(!isAddressServiceable || firstUnserviceablePackageReason() !== '') ? 'border-danger ring-1 ring-danger/30' : 'border-border-subtle'">
                         <div class="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-primary via-secondary to-primary-dark"></div>
                         <div class="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
                             <div>
-                                <h2 class="text-base sm:text-lg font-bold text-primary-dark">Delivery Address</h2>
+                                <div class="flex flex-wrap items-center gap-2">
+                                    <h2 class="text-base sm:text-lg font-bold text-primary-dark">Delivery Address</h2>
+                                    <template x-if="selectedAddress">
+                                        <span :class="(isAddressServiceable && firstUnserviceablePackageReason() === '') ? 'bg-success/15 text-success border-success/25' : 'bg-danger/10 text-danger border-danger/25'"
+                                              class="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase border"
+                                              x-text="(isAddressServiceable && firstUnserviceablePackageReason() === '') ? 'Serviceable Route Verified' : 'Unserviceable Route'"></span>
+                                    </template>
+                                </div>
                                 <template x-if="selectedAddress">
                                     <div>
                                         <p class="text-sm font-bold text-text-main mt-1">
@@ -522,10 +557,10 @@
                                             <span class="text-text-muted font-normal ml-2">+63 <span x-text="selectedAddress.phone_number"></span></span>
                                         </p>
                                         <p class="text-xs sm:text-sm text-text-muted mt-1 leading-relaxed" x-text="selectedAddress.full_address"></p>
-                                        <template x-if="!isAddressServiceable">
-                                            <p class="text-xs text-danger font-bold mt-2">
-                                                This delivery address is currently outside our partner logistics serviceable zones. Please select or add another address.
-                                            </p>
+                                        <template x-if="!isAddressServiceable || firstUnserviceablePackageReason() !== ''">
+                                            <div class="mt-2.5 p-3 rounded-xl bg-danger/10 border border-danger/30 text-xs text-danger font-bold leading-relaxed"
+                                                 x-text="firstUnserviceablePackageReason() || 'This delivery address is currently outside our partner logistics and barangay rider serviceable zones. Please select or add another address.'">
+                                            </div>
                                         </template>
                                     </div>
                                 </template>
@@ -552,13 +587,26 @@
                             $spId = (int) $sellerProfile->id;
                             $storeVouchersForSeller = $availableVouchers->where('scope', 'store')->where('seller_profile_id', $spId)->values();
                         @endphp
-                        <div class="bg-surface rounded-2xl border border-border-subtle shadow-xs overflow-hidden">
-                            <div class="p-4 sm:px-6 bg-surface-subtle/60 border-b border-border-subtle flex flex-wrap items-center justify-between gap-2">
-                                <div class="flex items-center gap-2.5">
-                                    <span class="px-2.5 py-0.5 rounded-lg bg-primary-dark text-surface text-xs font-bold">Package {{ $pkgIndex + 1 }}</span>
-                                    <span class="font-bold text-sm sm:text-base text-primary-dark">{{ $sellerProfile->business_name }}</span>
+                        <div class="bg-surface rounded-2xl border shadow-xs overflow-hidden transition-colors"
+                             :class="packageIsServiceable({{ $spId }}) ? 'border-border-subtle' : 'border-danger ring-1 ring-danger/30'">
+                            <div class="p-4 sm:px-6 bg-surface-subtle/60 border-b border-border-subtle space-y-2">
+                                <div class="flex flex-wrap items-center justify-between gap-2">
+                                    <div class="flex items-center gap-2.5">
+                                        <span class="px-2.5 py-0.5 rounded-lg bg-primary-dark text-surface text-xs font-bold">Package {{ $pkgIndex + 1 }}</span>
+                                        <span class="font-bold text-sm sm:text-base text-primary-dark">{{ $sellerProfile->business_name }}</span>
+                                    </div>
+                                    <span class="text-xs text-text-muted">Ships from: <strong>{{ $sellerProfile->municipality }}, {{ $sellerProfile->province }}</strong></span>
                                 </div>
-                                <span class="text-xs text-text-muted">Ships from: <strong>{{ $sellerProfile->municipality }}, {{ $sellerProfile->province }}</strong></span>
+                                <template x-if="packageIsServiceable({{ $spId }}) && packageRouteBadge({{ $spId }})">
+                                    <div class="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-success/10 text-success border border-success/25 text-[11px] font-bold">
+                                        <span x-text="'Route: ' + packageRouteBadge({{ $spId }})"></span>
+                                    </div>
+                                </template>
+                                <template x-if="!packageIsServiceable({{ $spId }})">
+                                    <div class="p-3 rounded-xl bg-danger/10 border border-danger/30 text-xs text-danger font-bold leading-relaxed"
+                                         x-text="packageUnserviceableReason({{ $spId }}) || 'Unserviceable route between seller and your delivery address.'">
+                                    </div>
+                                </template>
                             </div>
 
                             <div class="divide-y divide-border-subtle/60">
@@ -653,9 +701,9 @@
                                                placeholder="Or enter secret store voucher code..."
                                                class="flex-1 p-2.5 rounded-xl border border-border-subtle bg-surface font-mono uppercase text-xs outline-none focus:border-primary">
                                         <button type="button"
-                                                :disabled="isSyncingCheckout"
-                                                @click="touchSlot('store_{{ $spId }}'); applyVouchersReload('Store voucher code applied.')"
-                                                class="px-4 py-2.5 rounded-xl bg-primary-dark hover:bg-primary text-white font-bold transition-colors cursor-pointer disabled:opacity-50">
+                                               :disabled="isSyncingCheckout"
+                                               @click="touchSlot('store_{{ $spId }}'); applyVouchersReload('Store voucher code applied.')"
+                                               class="px-4 py-2.5 rounded-xl bg-primary-dark hover:bg-primary text-white font-bold transition-colors cursor-pointer disabled:opacity-50">
                                             Apply Code
                                         </button>
                                     </div>
