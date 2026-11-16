@@ -7,7 +7,6 @@ use App\Models\DeliveryAssignment;
 use App\Models\PickupAssignment;
 use App\Models\Rider;
 use App\Models\SellerProfile;
-use App\Models\Shipment;
 use App\Models\ShipmentTracking;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -19,8 +18,29 @@ class OperationalSlaGuardService
     public const MAX_SLA_STRIKES = 3;
     public const DISPATCH_SLA_HOURS = 2;
 
-    public function recordSellerSlaStrike(SellerProfile $sellerProfile, string $reason): void
+    public function recordSellerSlaStrike(SellerProfile $sellerProfile, string $reason, bool $isUnserviceableAreaException = false): void
     {
+        if ($isUnserviceableAreaException) {
+            AuditLoggerService::log(
+                action: 'seller_unserviceable_rejection_exempt',
+                targetType: 'SellerProfile',
+                targetId: (int) $sellerProfile->id,
+                targetReference: $sellerProfile->business_name,
+                oldValues: [
+                    'sla_strikes'    => (int) ($sellerProfile->sla_strikes ?? 0),
+                    'is_on_vacation' => (bool) ($sellerProfile->is_on_vacation ?? false),
+                ],
+                newValues: [
+                    'sla_strikes'    => (int) ($sellerProfile->sla_strikes ?? 0),
+                    'is_on_vacation' => (bool) ($sellerProfile->is_on_vacation ?? false),
+                ],
+                reason: 'Exempt from SLA violation strike (Unserviceable Area / No Available Fleet): ' . $reason,
+                actorType: 'System',
+                actorName: 'Operational SLA Guard'
+            );
+            return;
+        }
+
         if (! Schema::hasColumn('seller_profiles', 'sla_strikes')) {
             return;
         }
@@ -52,6 +72,91 @@ class OperationalSlaGuardService
             actorType: 'System',
             actorName: 'Operational SLA Guard'
         );
+    }
+
+    public function suspendCourierWithActiveJobHandling(
+        Courier $courier,
+        string $reason,
+        string $actorType = 'Logistics',
+        ?int $actorId = null,
+        ?string $actorName = null
+    ): int {
+        $cleanReason = trim($reason);
+        if (strlen($cleanReason) < 10 || strlen($cleanReason) > 300) {
+            throw ValidationException::withMessages([
+                'reason' => 'Suspension reason is required and must be between 10 and 300 characters.',
+            ]);
+        }
+
+        return DB::transaction(function () use ($courier, $cleanReason, $actorType, $actorId, $actorName) {
+            $oldStatus = $courier->status;
+            $oldOnline = (bool) ($courier->is_online ?? false);
+
+            $updateData = [
+                'status' => 'suspended',
+            ];
+            if (Schema::hasColumn('couriers', 'is_online')) {
+                $updateData['is_online'] = false;
+            }
+            $courier->update($updateData);
+
+            $uncollectedPickups = PickupAssignment::with(['shipment.sellerOrder'])
+                ->where('courier_id', $courier->id)
+                ->whereIn('status', ['assigned', 'accepted'])
+                ->lockForUpdate()
+                ->get();
+
+            $unassignedCount = 0;
+
+            foreach ($uncollectedPickups as $assignment) {
+                $assignment->update([
+                    'status' => 'reassigned',
+                    'notes'  => trim(($assignment->notes ? $assignment->notes . ' | ' : '') . "Auto-unassigned due to courier suspension: {$cleanReason}"),
+                ]);
+
+                if ($assignment->shipment && $assignment->shipment->status === 'courier_assigned') {
+                    $assignment->shipment->update([
+                        'current_courier_id' => null,
+                        'status'             => 'pickup_requested',
+                    ]);
+
+                    if ($assignment->shipment->sellerOrder && $assignment->shipment->sellerOrder->status === 'pickup_assigned') {
+                        $assignment->shipment->sellerOrder->update([
+                            'status' => 'ready_for_pickup',
+                        ]);
+                    }
+
+                    ShipmentTracking::create([
+                        'shipment_id'     => $assignment->shipment->id,
+                        'seller_order_id' => $assignment->seller_order_id,
+                        'status'          => 'pickup_requested',
+                        'title'           => 'Returned to Unassigned Pickup Queue (Courier Suspended)',
+                        'description'     => "Courier {$courier->full_name} was suspended before collecting the parcel ({$cleanReason}). Shipment returned to Unassigned Pickup queue.",
+                        'location'        => $courier->assigned_hub?->hub_name ?? 'Sorting Hub',
+                        'actor_type'      => $actorType,
+                        'actor_id'        => $actorId,
+                        'occurred_at'     => now(),
+                    ]);
+
+                    $unassignedCount++;
+                }
+            }
+
+            AuditLoggerService::log(
+                action: 'courier_suspended',
+                targetType: 'Courier',
+                targetId: (int) $courier->id,
+                targetReference: $courier->full_name . ' (' . $courier->plate_number . ')',
+                oldValues: ['status' => $oldStatus, 'is_online' => $oldOnline],
+                newValues: ['status' => 'suspended', 'is_online' => false, 'jobs_returned_to_unassigned' => $unassignedCount],
+                reason: $cleanReason,
+                actorType: $actorType,
+                actorId: $actorId,
+                actorName: $actorName
+            );
+
+            return $unassignedCount;
+        });
     }
 
     public function suspendRiderWithActiveJobHandling(
@@ -151,13 +256,28 @@ class OperationalSlaGuardService
             ->get();
 
         foreach ($overduePickups as $pickup) {
-            DB::transaction(function () use ($pickup) {
-                $courier = $pickup->courier;
-                $shipment = $pickup->shipment;
-                if (! $courier || ! $shipment) {
-                    return;
-                }
+            $courier = $pickup->courier;
+            $shipment = $pickup->shipment;
+            if (! $courier || ! $shipment) {
+                continue;
+            }
 
+            if (Schema::hasColumn('couriers', 'sla_strikes')) {
+                $strikes = (int) $courier->sla_strikes + 1;
+                $courier->update(['sla_strikes' => $strikes]);
+
+                if ($strikes >= self::MAX_SLA_STRIKES) {
+                    $this->suspendCourierWithActiveJobHandling(
+                        courier: $courier,
+                        reason: 'Automated SLA Suspension: Courier missed 3 scheduled pickup assignments.',
+                        actorType: 'System',
+                        actorName: 'Operational SLA Guard'
+                    );
+                    continue;
+                }
+            }
+
+            DB::transaction(function () use ($pickup, $courier, $shipment) {
                 $pickup->update([
                     'status' => 'reassigned',
                     'notes'  => 'SLA Missed: Courier failed to accept pickup within 2 hours.',
@@ -167,16 +287,6 @@ class OperationalSlaGuardService
                     $shipment->update([
                         'current_courier_id' => null,
                         'status'             => 'pickup_requested',
-                    ]);
-                }
-
-                if (Schema::hasColumn('couriers', 'sla_strikes')) {
-                    $strikes = (int) $courier->sla_strikes + 1;
-                    $shouldSuspend = $strikes >= self::MAX_SLA_STRIKES;
-                    $courier->update([
-                        'sla_strikes' => $strikes,
-                        'status'      => $shouldSuspend ? 'suspended' : $courier->status,
-                        'is_online'   => $shouldSuspend ? false : $courier->is_online,
                     ]);
                 }
             });

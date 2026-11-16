@@ -20,6 +20,7 @@ use App\Models\ShipmentVerification;
 use App\Notifications\OrderLifecycleNotification;
 use App\Services\BuyerAbandonmentService;
 use App\Services\BuyerOrderNotificationService;
+use App\Services\CourierMobileSchemaService;
 use App\Services\OperationalSlaGuardService;
 use App\Services\OrderCompletionService;
 use App\Services\RealtimeBroadcastService;
@@ -72,7 +73,13 @@ class RiderDeliveryApiController extends Controller
         $rider->update(['last_seen_at' => now()]);
         $rider->loadMissing(['logisticsProfile', 'currentHubAssignment.hub', 'barangayCoverages']);
 
-        $activeAssignments = DeliveryAssignment::with([
+        $sort = strtolower(trim((string) $request->query('sort', 'nearest')));
+        if (! in_array($sort, ['nearest', 'farthest', 'oldest', 'newest', 'cod_high'], true)) {
+            $sort = 'nearest';
+        }
+        $barangayFilter = trim((string) $request->query('barangay', ''));
+
+        $rawActiveAssignments = DeliveryAssignment::with([
             'shipment.sellerProfile',
             'shipment.packages.verifications',
             'sellerOrder.buyer',
@@ -86,6 +93,36 @@ class RiderDeliveryApiController extends Controller
             ->orderByRaw('COALESCE(assigned_at, created_at) ASC')
             ->orderBy('id', 'asc')
             ->get();
+
+        $availableBarangays = $rawActiveAssignments
+            ->map(fn (DeliveryAssignment $a) => trim((string) ($a->shipment?->delivery_address_snapshot['barangay'] ?? '')))
+            ->filter()
+            ->unique()
+            ->sort()
+            ->values()
+            ->all();
+
+        $decoratedActive = $rawActiveAssignments->map(function (DeliveryAssignment $a) use ($rider) {
+            $delivSnap = (array) ($a->shipment?->delivery_address_snapshot ?? []);
+            $distKm = $rider->distanceToSnapshotKm($delivSnap);
+            $a->setAttribute('rider_distance_km', $distKm);
+            return $a;
+        });
+
+        if ($barangayFilter !== '') {
+            $decoratedActive = $decoratedActive->filter(function (DeliveryAssignment $a) use ($barangayFilter) {
+                $brgy = trim((string) ($a->shipment?->delivery_address_snapshot['barangay'] ?? ''));
+                return strcasecmp($brgy, $barangayFilter) === 0;
+            });
+        }
+
+        $activeAssignments = match ($sort) {
+            'farthest' => $decoratedActive->sortByDesc(fn (DeliveryAssignment $a) => (float) ($a->getAttribute('rider_distance_km') ?? 0))->values(),
+            'newest'   => $decoratedActive->sortByDesc(fn (DeliveryAssignment $a) => ($a->assigned_at ?? $a->created_at)?->timestamp ?? 0)->values(),
+            'oldest'   => $decoratedActive->sortBy(fn (DeliveryAssignment $a) => ($a->assigned_at ?? $a->created_at)?->timestamp ?? 0)->values(),
+            'cod_high' => $decoratedActive->sortByDesc(fn (DeliveryAssignment $a) => (float) ($a->shipment?->cod_amount ?? 0))->values(),
+            default    => $decoratedActive->sortBy(fn (DeliveryAssignment $a) => (float) ($a->getAttribute('rider_distance_km') ?? 9999))->values(),
+        };
 
         $recentCompletedAssignments = DeliveryAssignment::with([
             'shipment.sellerProfile',
@@ -128,14 +165,17 @@ class RiderDeliveryApiController extends Controller
                 : 0.00
         );
 
-        $badges = $this->buildPendingActionBadges($rider, $activeAssignments, $unremittedCollections->count());
+        $badges = $this->buildPendingActionBadges($rider, $rawActiveAssignments, $unremittedCollections->count());
 
         return response()->json([
             'status' => 'success',
             'data'   => [
                 'rider'                 => $this->authApiController->formatRiderProfile($rider),
+                'sort'                  => $sort,
+                'barangay_filter'       => $barangayFilter,
+                'available_barangays'   => $availableBarangays,
                 'metrics'               => [
-                    'active_deliveries'       => $activeAssignments->count(),
+                    'active_deliveries'       => $rawActiveAssignments->count(),
                     'completed_deliveries'    => $completedDeliveriesCount,
                     'failed_deliveries'       => $failedDeliveriesCount,
                     'cod_on_hand'             => $unremittedCodTotal,
@@ -168,6 +208,9 @@ class RiderDeliveryApiController extends Controller
 
         $filter = strtolower(trim((string) $request->query('filter', 'active')));
         $search = trim((string) $request->query('search', ''));
+        $sort = strtolower(trim((string) $request->query('sort', '')));
+        $barangayFilter = trim((string) $request->query('barangay', ''));
+        $municipalityFilter = trim((string) $request->query('municipality', ''));
 
         $query = DeliveryAssignment::with([
             'shipment.sellerProfile',
@@ -237,6 +280,52 @@ class RiderDeliveryApiController extends Controller
             $assignments = $activeItems->concat($completedItems);
         }
 
+        $availableBarangays = $assignments
+            ->map(fn (DeliveryAssignment $a) => trim((string) ($a->shipment?->delivery_address_snapshot['barangay'] ?? '')))
+            ->filter()
+            ->unique()
+            ->sort()
+            ->values()
+            ->all();
+
+        $availableMunicipalities = $assignments
+            ->map(fn (DeliveryAssignment $a) => trim((string) ($a->shipment?->delivery_address_snapshot['municipality'] ?? '')))
+            ->filter()
+            ->unique()
+            ->sort()
+            ->values()
+            ->all();
+
+        $assignments = $assignments->map(function (DeliveryAssignment $a) use ($rider) {
+            $delivSnap = (array) ($a->shipment?->delivery_address_snapshot ?? []);
+            $a->setAttribute('rider_distance_km', $rider->distanceToSnapshotKm($delivSnap));
+            return $a;
+        });
+
+        if ($barangayFilter !== '') {
+            $assignments = $assignments->filter(function (DeliveryAssignment $a) use ($barangayFilter) {
+                $brgy = trim((string) ($a->shipment?->delivery_address_snapshot['barangay'] ?? ''));
+                return strcasecmp($brgy, $barangayFilter) === 0;
+            })->values();
+        }
+
+        if ($municipalityFilter !== '') {
+            $assignments = $assignments->filter(function (DeliveryAssignment $a) use ($municipalityFilter) {
+                $mun = trim((string) ($a->shipment?->delivery_address_snapshot['municipality'] ?? ''));
+                return strcasecmp($mun, $municipalityFilter) === 0;
+            })->values();
+        }
+
+        if (in_array($sort, ['nearest', 'farthest', 'oldest', 'newest', 'cod_high'], true)) {
+            $assignments = match ($sort) {
+                'nearest'  => $assignments->sortBy(fn (DeliveryAssignment $a) => (float) ($a->getAttribute('rider_distance_km') ?? 9999))->values(),
+                'farthest' => $assignments->sortByDesc(fn (DeliveryAssignment $a) => (float) ($a->getAttribute('rider_distance_km') ?? 0))->values(),
+                'newest'   => $assignments->sortByDesc(fn (DeliveryAssignment $a) => ($a->assigned_at ?? $a->created_at)?->timestamp ?? 0)->values(),
+                'oldest'   => $assignments->sortBy(fn (DeliveryAssignment $a) => ($a->assigned_at ?? $a->created_at)?->timestamp ?? 0)->values(),
+                'cod_high' => $assignments->sortByDesc(fn (DeliveryAssignment $a) => (float) ($a->shipment?->cod_amount ?? 0))->values(),
+            };
+        }
+
         $activeAll = DeliveryAssignment::with('shipment.packages.verifications')
             ->where('rider_id', $rider->id)
             ->whereIn('status', ['assigned', 'accepted', 'collected', 'out_for_delivery'])
@@ -247,9 +336,14 @@ class RiderDeliveryApiController extends Controller
         return response()->json([
             'status' => 'success',
             'data'   => [
-                'filter'      => $filter,
-                'badges'      => $this->buildPendingActionBadges($rider, $activeAll, $unremittedCount),
-                'assignments' => $assignments->map(fn (DeliveryAssignment $a) => $this->formatDeliveryAssignment($a, $rider, false))->values()->all(),
+                'filter'                   => $filter,
+                'sort'                     => $sort !== '' ? $sort : 'oldest',
+                'barangay_filter'          => $barangayFilter,
+                'municipality_filter'      => $municipalityFilter,
+                'available_barangays'      => $availableBarangays,
+                'available_municipalities' => $availableMunicipalities,
+                'badges'                   => $this->buildPendingActionBadges($rider, $activeAll, $unremittedCount),
+                'assignments'              => $assignments->map(fn (DeliveryAssignment $a) => $this->formatDeliveryAssignment($a, $rider, false))->values()->all(),
             ],
         ]);
     }
@@ -1805,9 +1899,9 @@ class RiderDeliveryApiController extends Controller
     {
         $shipment = $assignment->shipment;
         $sellerOrder = $assignment->sellerOrder;
-        $delivSnap = $shipment?->delivery_address_snapshot ?? ($sellerOrder?->delivery_address_snapshot ?? []);
-        $pickupSnap = $shipment?->pickup_address_snapshot ?? ($sellerOrder?->pickup_address_snapshot ?? []);
-        $hubSnap = $shipment?->hub_address_snapshot ?? [];
+        $delivSnap = (array) ($shipment?->delivery_address_snapshot ?? ($sellerOrder?->delivery_address_snapshot ?? []));
+        $pickupSnap = (array) ($shipment?->pickup_address_snapshot ?? ($sellerOrder?->pickup_address_snapshot ?? []));
+        $hubSnap = (array) ($shipment?->hub_address_snapshot ?? []);
 
         $packages = $shipment?->packages ?? collect();
         $primaryPackage = $packages->first();
@@ -1857,6 +1951,10 @@ class RiderDeliveryApiController extends Controller
 
         $buyerCoords = $this->resolveCoordinatesForAddress($delivSnap, $sellerOrder?->order?->userAddress);
         $hubCoords = $this->resolveCoordinatesForAddress($hubSnap, null, $rider->assigned_hub);
+
+        $riderEval = $rider->evaluateDeliveryEligibilityForSnapshot($delivSnap);
+        $distFromRiderKm = round((float) ($assignment->getAttribute('rider_distance_km') ?? $riderEval['distance_from_rider_km'] ?? 0), 2);
+        $distFromHubKm = round((float) ($riderEval['distance_from_hub_km'] ?? $shipment?->calculated_buyer_distance_km ?? 0), 2);
 
         $payMethod = $sellerOrder?->effective_payment_method ?? ((float) ($shipment?->cod_amount ?? 0) > 0 ? 'COD' : 'WALLET');
         $codAmount = round((float) ($shipment?->cod_amount ?? 0), 2);
@@ -1909,6 +2007,12 @@ class RiderDeliveryApiController extends Controller
             'cod_amount'                => $codAmount,
             'shipping_fee'              => round((float) ($shipment?->shipping_fee ?? 0), 2),
             'total_weight'              => round((float) ($shipment?->total_weight ?? 0), 3),
+            'distance_from_rider_km'    => $distFromRiderKm,
+            'distance_from_hub_km'      => $distFromHubKm,
+            'distance_label'            => '~' . number_format($distFromRiderKm, 1) . ' km',
+            'is_within_rider_radius'    => (bool) ($riderEval['is_eligible'] ?? true),
+            'exact_barangay_match'      => (bool) ($riderEval['exact_barangay_match'] ?? false),
+            'max_rider_radius_km'       => (float) ($riderEval['max_radius_km'] ?? 20.0),
             'rider_pay'                 => $payBreakdown,
             'is_delayed'                => (bool) ($assignment->is_delayed ?? false),
             'delay_reason'              => $assignment->delay_reason ?? null,
@@ -2030,7 +2134,7 @@ class RiderDeliveryApiController extends Controller
 
     protected function resolveCoordinatesForAddress(array $snapshot, $userAddress = null, $hub = null): array
     {
-        if (isset($snapshot['latitude'], $snapshot['longitude']) && is_numeric($snapshot['latitude']) && is_numeric($snapshot['longitude'])) {
+        if (isset($snapshot['latitude'], $snapshot['longitude']) && is_numeric($snapshot['latitude']) && is_numeric($snapshot['longitude']) && (float) $snapshot['latitude'] != 0.0) {
             return [
                 'latitude'     => round((float) $snapshot['latitude'], 7),
                 'longitude'    => round((float) $snapshot['longitude'], 7),
@@ -2039,7 +2143,7 @@ class RiderDeliveryApiController extends Controller
             ];
         }
 
-        if ($userAddress && $userAddress->latitude !== null && $userAddress->longitude !== null) {
+        if ($userAddress && $userAddress->latitude !== null && $userAddress->longitude !== null && (float) $userAddress->latitude != 0.0) {
             return [
                 'latitude'     => round((float) $userAddress->latitude, 7),
                 'longitude'    => round((float) $userAddress->longitude, 7),
@@ -2048,7 +2152,7 @@ class RiderDeliveryApiController extends Controller
             ];
         }
 
-        if ($hub && $hub->latitude !== null && $hub->longitude !== null) {
+        if ($hub && $hub->latitude !== null && $hub->longitude !== null && (float) $hub->latitude != 0.0) {
             return [
                 'latitude'     => round((float) $hub->latitude, 7),
                 'longitude'    => round((float) $hub->longitude, 7),
@@ -2060,28 +2164,6 @@ class RiderDeliveryApiController extends Controller
         $barangay = trim((string) ($snapshot['barangay'] ?? ($hub?->barangay ?? '')));
         $municipality = trim((string) ($snapshot['municipality'] ?? ($hub?->municipality ?? '')));
         $province = trim((string) ($snapshot['province'] ?? ($hub?->province ?? '')));
-
-        $knownDirectory = [
-            'santa cruz|laguna' => [14.2786, 121.4162],
-            'sta. rosa|laguna'  => [14.3122, 121.1114],
-            'santa rosa|laguna' => [14.3122, 121.1114],
-            'calamba|laguna'    => [14.2118, 121.1653],
-            'san pablo|laguna'  => [14.0693, 121.3266],
-            'pagsanjan|laguna'  => [14.2733, 121.4542],
-            'pila|laguna'       => [14.2339, 121.3636],
-            'los banos|laguna'  => [14.1700, 121.2414],
-            'binan|laguna'      => [14.3364, 121.0842],
-            'cabuyao|laguna'    => [14.2725, 121.1239],
-            'quezon city'       => [14.6760, 121.0437],
-            'makati'            => [14.5547, 121.0244],
-            'pasig'             => [14.5764, 121.0851],
-            'manila'            => [14.5995, 120.9842],
-            'taguig'            => [14.5176, 121.0509],
-            'mandaluyong'       => [14.5794, 121.0359],
-            'cebu city'         => [10.3157, 123.8854],
-            'davao city'        => [7.1907, 125.4553],
-            'imus|cavite'       => [14.4297, 120.9367],
-        ];
 
         $normMun = strtolower(preg_replace('/\b(city of|municipality of|city)\b/', '', strtolower($municipality)));
         $normMun = trim((string) preg_replace('/\s+/', ' ', $normMun));
@@ -2135,23 +2217,13 @@ class RiderDeliveryApiController extends Controller
             }
         }
 
-        foreach ($knownDirectory as $pattern => $coords) {
-            $parts = explode('|', $pattern);
-            if (str_contains($normMun, $parts[0])) {
-                return [
-                    'latitude'     => $coords[0],
-                    'longitude'    => $coords[1],
-                    'is_exact'     => false,
-                    'source_label' => 'Municipality Center Fallback',
-                ];
-            }
-        }
+        $resolvedFallback = CourierMobileSchemaService::resolveCoordinatesForAddress($snapshot, $userAddress ?? $hub);
 
         return [
-            'latitude'     => 14.2786,
-            'longitude'    => 121.4162,
-            'is_exact'     => false,
-            'source_label' => 'Regional Hub Center Fallback',
+            'latitude'     => $resolvedFallback['latitude'],
+            'longitude'    => $resolvedFallback['longitude'],
+            'is_exact'     => ! $resolvedFallback['is_approximate'],
+            'source_label' => 'Provincial / Municipality Centroid',
         ];
     }
 }

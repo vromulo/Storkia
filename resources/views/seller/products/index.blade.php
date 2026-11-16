@@ -94,6 +94,9 @@
                 existingPictures: initialPictures,
                 newPictureFiles: [],
                 newPicturePreviews: [],
+                newPictureBase64: [],
+                existingVariantBase64: {},
+                existingVariantPreviews: {},
                 pictureError: '',
                 maxMainPictures: 10,
                 existingVariants: normalizedExisting,
@@ -106,7 +109,45 @@
                 touched: {},
                 fieldErrors: {},
                 get totalMainPicturesCount() {
-                    return this.existingPictures.length + this.newPictureFiles.length;
+                    return this.existingPictures.length + this.newPicturePreviews.length;
+                },
+                compressToWebpDataUrl(file) {
+                    return new Promise((resolve) => {
+                        const reader = new FileReader();
+                        reader.onload = (e) => {
+                            const dataUrl = e.target.result;
+                            const img = new Image();
+                            img.onload = () => {
+                                try {
+                                    const maxDim = 1600;
+                                    let width = img.width;
+                                    let height = img.height;
+                                    if (width > maxDim || height > maxDim) {
+                                        if (width > height) {
+                                            height = Math.round((height * maxDim) / width);
+                                            width = maxDim;
+                                        } else {
+                                            width = Math.round((width * maxDim) / height);
+                                            height = maxDim;
+                                        }
+                                    }
+                                    const canvas = document.createElement('canvas');
+                                    canvas.width = width;
+                                    canvas.height = height;
+                                    const ctx = canvas.getContext('2d');
+                                    ctx.drawImage(img, 0, 0, width, height);
+                                    const webpUrl = canvas.toDataURL('image/webp', 0.84);
+                                    resolve(webpUrl && webpUrl.startsWith('data:image/') ? webpUrl : dataUrl);
+                                } catch (_) {
+                                    resolve(dataUrl);
+                                }
+                            };
+                            img.onerror = () => resolve(dataUrl);
+                            img.src = dataUrl;
+                        };
+                        reader.onerror = () => resolve('');
+                        reader.readAsDataURL(file);
+                    });
                 },
                 promoteExistingToCover(idx) {
                     if (idx <= 0 || idx >= this.existingPictures.length) return;
@@ -134,7 +175,7 @@
                     }
                     this.existingPictures.splice(idx, 1);
                 },
-                handleEditNewPictures(event) {
+                async handleEditNewPictures(event) {
                     this.pictureError = '';
                     const incoming = Array.from(event.target.files || []);
                     if (!incoming.length) return;
@@ -145,7 +186,7 @@
                             this.pictureError = 'Maximum of 10 main product pictures reached.';
                             break;
                         }
-                        if (!allowedTypes.includes(file.type)) {
+                        if (!allowedTypes.includes((file.type || '').toLowerCase())) {
                             this.pictureError = `"${file.name}" was skipped. Only JPG, PNG, and WEBP images are allowed.`;
                             continue;
                         }
@@ -153,10 +194,17 @@
                             this.pictureError = `"${file.name}" exceeds the 5MB limit.`;
                             continue;
                         }
-                        this.newPictureFiles.push(file);
-                        this.newPicturePreviews.push(URL.createObjectURL(file));
+                        const webpDataUri = await this.compressToWebpDataUrl(file);
+                        if (!webpDataUri) {
+                            this.pictureError = `Could not process "${file.name}".`;
+                            continue;
+                        }
+                        this.newPictureFiles.push({ name: file.name, size: file.size });
+                        this.newPicturePreviews.push(webpDataUri);
+                        this.newPictureBase64.push(webpDataUri);
                     }
                     this.syncEditPicturesInput();
+                    this.validateForm(this.$refs.editForm);
                 },
                 removeEditNewPicture(idx) {
                     this.pictureError = '';
@@ -170,14 +218,57 @@
                     }
                     this.newPictureFiles.splice(idx, 1);
                     this.newPicturePreviews.splice(idx, 1);
+                    this.newPictureBase64.splice(idx, 1);
                     this.syncEditPicturesInput();
+                    this.validateForm(this.$refs.editForm);
                 },
                 syncEditPicturesInput() {
                     const input = this.$refs.editMainPicturesInput;
-                    if (!input || typeof DataTransfer === 'undefined') return;
-                    const dt = new DataTransfer();
-                    this.newPictureFiles.forEach(f => dt.items.add(f));
-                    input.files = dt.files;
+                    if (input) {
+                        input.value = '';
+                    }
+                },
+                async handleExistingVariantImage(event, vIndex) {
+                    const file = event.target.files?.[0];
+                    if (!file) return;
+                    const allowedTypes = ['image/jpeg', 'image/png', 'image/jpg', 'image/webp'];
+                    if (!allowedTypes.includes((file.type || '').toLowerCase()) || file.size > 5 * 1024 * 1024) {
+                        this.showAlert('Variant image must be a JPG, PNG, or WEBP file under 5MB.');
+                        event.target.value = '';
+                        return;
+                    }
+                    const b64 = await this.compressToWebpDataUrl(file);
+                    if (b64) {
+                        this.existingVariantBase64[String(vIndex)] = b64;
+                        this.existingVariantPreviews[String(vIndex)] = b64;
+                        event.target.value = '';
+                    }
+                    this.validateForm(this.$refs.editForm);
+                },
+                async handleNewVariantImage(event, nv) {
+                    const file = event.target.files?.[0];
+                    if (!file || !nv) return;
+                    nv.imageError = '';
+                    const allowedTypes = ['image/jpeg', 'image/png', 'image/jpg', 'image/webp'];
+                    if (!allowedTypes.includes((file.type || '').toLowerCase())) {
+                        nv.imageError = 'Only JPG, PNG, and WEBP images are allowed.';
+                        event.target.value = '';
+                        return;
+                    }
+                    if (file.size > 5 * 1024 * 1024) {
+                        nv.imageError = 'Image exceeds the 5MB limit.';
+                        event.target.value = '';
+                        return;
+                    }
+                    const b64 = await this.compressToWebpDataUrl(file);
+                    if (b64) {
+                        nv.imagePreview = b64;
+                        nv.imageBase64 = b64;
+                        event.target.value = '';
+                        event.target.dispatchEvent(new Event('input', { bubbles: true }));
+                        event.target.dispatchEvent(new Event('change', { bubbles: true }));
+                    }
+                    this.validateForm(this.$refs.editForm);
                 },
                 initForm(formElement) {
                     if(formElement) {
@@ -196,7 +287,7 @@
                         this.isFormValid = formElement.checkValidity();
                         let errs = {};
                         formElement.querySelectorAll('input, select, textarea').forEach(el => {
-                            if (el.name && !el.validity.valid) {
+                            if (el.name && !el.disabled && !el.validity.valid) {
                                 errs[el.name] = true;
                             }
                         });
@@ -267,13 +358,27 @@
                 },
                 addVariant() {
                     let subs = this.hasSubvariants
-                        ? [{ id: this.nextUid(), name: '', price: '', weight: '', stock: '', isCopied: false }]
+                        ? [{ id: this.nextUid(), name: '', price: '', weight: '', stock: '', isCopied: false, promptState: 'active' }]
                         : undefined;
-                    this.newVariants.push({ id: this.nextUid(), name: '', price: '', weight: '', stock: '', subs: subs });
+                    this.newVariants.push({
+                        id: this.nextUid(),
+                        name: '',
+                        price: '',
+                        weight: '',
+                        stock: '',
+                        imagePreview: null,
+                        imageBase64: '',
+                        imageError: '',
+                        isCopied: false,
+                        promptState: 'active',
+                        isSubsCopied: false,
+                        subPromptState: 'active',
+                        subs: subs
+                    });
                 },
                 addSubToNewVariant(nv) {
                     if (!nv.subs) nv.subs = [];
-                    nv.subs.push({ id: this.nextUid(), name: '', price: '', weight: '', stock: '', isCopied: false });
+                    nv.subs.push({ id: this.nextUid(), name: '', price: '', weight: '', stock: '', isCopied: false, promptState: 'active' });
                 },
                 removeNewVariantSub(nv, subIndex) {
                     if (nv.subs && nv.subs.length > 1) {
@@ -282,12 +387,116 @@
                         this.showAlert("This product architecture requires variants to have at least one subvariant.");
                     }
                 },
+                getFirstMainVariantTemplate(excludeNvId = null) {
+                    for (const k of Object.keys(this.existingVariants)) {
+                        const ev = this.existingVariants[k];
+                        if (ev && !ev.archived && (String(ev.price ?? '').trim() !== '' || String(ev.weight ?? '').trim() !== '' || String(ev.stock ?? '').trim() !== '')) {
+                            return ev;
+                        }
+                    }
+                    for (const nv of this.newVariants) {
+                        if (nv && nv.id !== excludeNvId && (String(nv.price ?? '').trim() !== '' || String(nv.weight ?? '').trim() !== '' || String(nv.stock ?? '').trim() !== '')) {
+                            return nv;
+                        }
+                    }
+                    return null;
+                },
+                copyFirstMainToNewVariant(nv) {
+                    const tpl = this.getFirstMainVariantTemplate(nv?.id);
+                    if (!tpl || !nv) return;
+                    nv.price = tpl.price;
+                    nv.weight = tpl.weight;
+                    nv.stock = tpl.stock;
+                    nv.isCopied = true;
+                    nv.promptState = 'copied';
+                    this.validateForm(this.$refs.editForm);
+                },
+                copyFirstMainToAllNewVariants() {
+                    const tpl = this.getFirstMainVariantTemplate();
+                    if (!tpl) return;
+                    this.newVariants.forEach(nv => {
+                        nv.price = tpl.price;
+                        nv.weight = tpl.weight;
+                        nv.stock = tpl.stock;
+                        nv.isCopied = true;
+                        nv.promptState = 'copied';
+                    });
+                    this.validateForm(this.$refs.editForm);
+                },
+                getFirstSubListTemplate(excludeNvId = null) {
+                    for (const k of Object.keys(this.existingVariants)) {
+                        const ev = this.existingVariants[k];
+                        if (!ev || ev.archived) continue;
+                        const activeSubs = [];
+                        if (ev.subs && typeof ev.subs === 'object') {
+                            Object.values(ev.subs).forEach(s => {
+                                if (s && !s.archived && (String(s.name ?? '').trim() !== '' || String(s.price ?? '').trim() !== '' || String(s.weight ?? '').trim() !== '' || String(s.stock ?? '').trim() !== '')) {
+                                    activeSubs.push(s);
+                                }
+                            });
+                        }
+                        if (Array.isArray(this.newExistingSubs[k])) {
+                            this.newExistingSubs[k].forEach(ns => {
+                                if (ns && (String(ns.name ?? '').trim() !== '' || String(ns.price ?? '').trim() !== '' || String(ns.weight ?? '').trim() !== '' || String(ns.stock ?? '').trim() !== '')) {
+                                    activeSubs.push(ns);
+                                }
+                            });
+                        }
+                        if (activeSubs.length > 0) {
+                            return { name: ev.name || '1st Variant', subs: activeSubs };
+                        }
+                    }
+                    for (const nv of this.newVariants) {
+                        if (!nv || nv.id === excludeNvId || !Array.isArray(nv.subs)) continue;
+                        const validSubs = nv.subs.filter(s => s && (String(s.name ?? '').trim() !== '' || String(s.price ?? '').trim() !== '' || String(s.weight ?? '').trim() !== '' || String(s.stock ?? '').trim() !== ''));
+                        if (validSubs.length > 0) {
+                            return { name: nv.name || '1st New Variant', subs: validSubs };
+                        }
+                    }
+                    return null;
+                },
+                copySubListToNewVariant(nv) {
+                    const tpl = this.getFirstSubListTemplate(nv?.id);
+                    if (!tpl || !nv) return;
+                    nv.subs = tpl.subs.map(s => ({
+                        id: this.nextUid(),
+                        name: s.name,
+                        price: s.price,
+                        weight: s.weight,
+                        stock: s.stock,
+                        isCopied: true,
+                        promptState: 'copied'
+                    }));
+                    nv.isSubsCopied = true;
+                    nv.subPromptState = 'copied';
+                    this.validateForm(this.$refs.editForm);
+                },
+                copySubListToAllNewVariants() {
+                    const tpl = this.getFirstSubListTemplate();
+                    if (!tpl) return;
+                    this.newVariants.forEach(nv => {
+                        nv.subs = tpl.subs.map(s => ({
+                            id: this.nextUid(),
+                            name: s.name,
+                            price: s.price,
+                            weight: s.weight,
+                            stock: s.stock,
+                            isCopied: true,
+                            promptState: 'copied'
+                        }));
+                        nv.isSubsCopied = true;
+                        nv.subPromptState = 'copied';
+                    });
+                    this.validateForm(this.$refs.editForm);
+                },
                 copyFirstSubInNewVariant(nv, subIndex) {
                     if (!nv || !nv.subs || !nv.subs[0] || !nv.subs[subIndex]) return;
                     nv.subs[subIndex].price = nv.subs[0].price;
                     nv.subs[subIndex].weight = nv.subs[0].weight;
                     nv.subs[subIndex].stock = nv.subs[0].stock;
                     nv.subs[subIndex].isCopied = true;
+                    nv.subs[subIndex].promptState = 'copied';
+                    this.validateForm(this.$refs.editForm);
                 },
                 getNewSubsForVariant(vKey) {
                     return this.newExistingSubs[String(vKey)] || [];
@@ -295,7 +504,7 @@
                 addNewSubToVariant(vKey) {
                     let k = String(vKey);
                     if (!this.newExistingSubs[k]) this.newExistingSubs[k] = [];
-                    this.newExistingSubs[k].push({ id: this.nextUid(), name: '', price: '', weight: '', stock: '', isCopied: false });
+                    this.newExistingSubs[k].push({ id: this.nextUid(), name: '', price: '', weight: '', stock: '', isCopied: false, promptState: 'active' });
                 },
                 removeNewSubFromVariant(vKey, sId) {
                     let k = String(vKey);
@@ -324,6 +533,8 @@
                     this.newExistingSubs[k][nsIndex].weight = tpl.weight;
                     this.newExistingSubs[k][nsIndex].stock = tpl.stock;
                     this.newExistingSubs[k][nsIndex].isCopied = true;
+                    this.newExistingSubs[k][nsIndex].promptState = 'copied';
+                    this.validateForm(this.$refs.editForm);
                 },
                 get duplicateVariants() {
                     let names = [];
@@ -394,6 +605,7 @@
                     for (let nv of this.newVariants) {
                         if (!nv) continue;
                         if (String(nv.name || '').trim() === '') return true;
+                        if (!nv.imageBase64 && !nv.imagePreview) return true;
                         if (Array.isArray(nv.subs)) {
                             for (let s of nv.subs) {
                                 if (!s) continue;
@@ -1242,7 +1454,7 @@
                                                         <svg class="w-6 h-6 text-danger shrink-0 pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                                                         <div>
                                                             <h4 class="text-sm font-bold text-danger uppercase tracking-wider">Validation Error</h4>
-                                                            <p class="text-xs text-text-main mt-1 font-medium italic">Please ensure 1 to 10 main pictures are present and all variant/subvariant names are filled and unique.</p>
+                                                            <p class="text-xs text-text-main mt-1 font-medium italic">Please ensure 1 to 10 main pictures are present and all variant/subvariant names and photos are filled and unique.</p>
                                                         </div>
                                                     </div>
 
@@ -1313,6 +1525,9 @@
                                                             <template x-for="(picPath, pIdx) in existingPictures" :key="'hidden_' + pIdx + '_' + picPath">
                                                                 <input type="hidden" name="existing_pictures[]" :value="picPath">
                                                             </template>
+                                                            <template x-for="(b64Pic, bIdx) in newPictureBase64" :key="'new_b64_' + bIdx">
+                                                                <input type="hidden" name="pictures_base64[]" :value="b64Pic">
+                                                            </template>
                                                             <div class="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-5 gap-3 bg-surface-subtle p-3.5 rounded-2xl border border-border-subtle">
                                                                 <template x-for="(picPath, pIdx) in existingPictures" :key="picPath + '_' + pIdx">
                                                                     <div :class="pIdx === 0 ? 'border-primary ring-2 ring-primary/20' : 'border-border-subtle'"
@@ -1360,7 +1575,7 @@
                                                                             </button>
                                                                         </div>
                                                                         <div class="p-1.5 bg-brand-light/30 text-primary-dark text-[9px] font-bold text-center">
-                                                                            Queued Upload
+                                                                            WebP Optimized
                                                                         </div>
                                                                     </div>
                                                                 </template>
@@ -1368,7 +1583,7 @@
                                                             <div x-show="totalMainPicturesCount < 10">
                                                                 <input x-ref="editMainPicturesInput"
                                                                        type="file"
-                                                                       name="pictures[]"
+                                                                       :name="newPictureBase64.length > 0 ? null : 'pictures[]'"
                                                                        multiple
                                                                        accept="image/jpeg,image/png,image/jpg,image/webp"
                                                                        @change="handleEditNewPictures($event)"
@@ -1415,6 +1630,7 @@
                                                                     @endphp
                                                                     @if(!empty($item['is_archived']) || $vEffStatus === 'Disapproved') @continue @endif
                                                                     <div x-show="!isVariantArchived('{{ $vKey }}')" class="variant-container p-5 bg-surface rounded-2xl border border-border-subtle shadow-2xs relative">
+                                                                        <input type="hidden" name="variant_pictures_base64[{{ $vIndex }}]" :value="existingVariantBase64['{{ $vIndex }}'] || ''">
                                                                         @if($vEffStatus === 'Pending')
                                                                             <span class="absolute top-3 right-3 px-2.5 py-0.5 bg-brand-light/80 text-primary-dark text-[10px] font-bold rounded-md border border-primary/30 z-10 pointer-events-none">Pending Review</span>
                                                                         @elseif($vEffStatus === 'Approved')
@@ -1435,11 +1651,15 @@
                                                                             <div>
                                                                                 <label class="block text-xs font-bold text-text-main mb-1">Dedicated Variant Image</label>
                                                                                 <div class="flex items-center gap-2">
-                                                                                    @if(!empty($item['image']))
-                                                                                        <img src="{{ asset('storage/'.$item['image']) }}" class="h-10 w-10 object-cover rounded-lg border border-border-subtle shadow-2xs shrink-0 pointer-events-none">
-                                                                                    @endif
+                                                                                    <img :src="existingVariantPreviews['{{ $vIndex }}'] || '{{ !empty($item['image']) ? asset('storage/'.$item['image']) : '' }}'"
+                                                                                         x-show="Boolean(existingVariantPreviews['{{ $vIndex }}'] || '{{ !empty($item['image']) ? '1' : '' }}')"
+                                                                                         class="h-10 w-10 object-cover rounded-lg border border-border-subtle shadow-2xs shrink-0 pointer-events-none">
                                                                                     @if(!$isApprovedProduct || $vEffStatus !== 'Approved')
-                                                                                        <input type="file" name="variant_pictures[{{ $vIndex }}]" accept="image/jpeg,image/png,image/jpg,image/webp" class="w-full p-1.5 text-xs rounded-lg border border-border-subtle cursor-pointer file:cursor-pointer file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:bg-surface-subtle file:text-text-main file:text-[10px] file:font-bold bg-surface">
+                                                                                        <input type="file"
+                                                                                               :name="existingVariantBase64['{{ $vIndex }}'] ? null : 'variant_pictures[{{ $vIndex }}]'"
+                                                                                               accept="image/jpeg,image/png,image/jpg,image/webp"
+                                                                                               @change="handleExistingVariantImage($event, '{{ $vIndex }}')"
+                                                                                               class="w-full p-1.5 text-xs rounded-lg border border-border-subtle cursor-pointer file:cursor-pointer file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:bg-surface-subtle file:text-text-main file:text-[10px] file:font-bold bg-surface">
                                                                                     @endif
                                                                                 </div>
                                                                             </div>
@@ -1552,12 +1772,21 @@
                                                                                             <span class="absolute -top-2.5 left-3 px-2 py-0.5 bg-brand-light border border-primary/30 text-primary-dark text-[9px] font-bold rounded-md z-10 shadow-2xs pointer-events-none">
                                                                                                 {{ $isApprovedProduct ? 'New Subvariant — Pending Approval' : 'New Subvariant' }}
                                                                                             </span>
-                                                                                            <div x-show="!ns.isCopied && getFirstSubTemplateForExisting('{{ $vKey }}')" x-transition class="p-2 bg-brand-light/40 border border-primary/25 rounded-lg flex flex-wrap items-center justify-between gap-2 text-xs text-primary-dark shadow-2xs mt-1">
-                                                                                                <div class="flex items-center gap-2">
-                                                                                                    <svg class="w-4 h-4 text-primary flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M12 8h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                                                                                                    <span>Copy Price, Weight, and Stock from 1st subvariant (<strong x-text="getFirstSubTemplateForExisting('{{ $vKey }}')?.name || '1st Subvariant'"></strong>)?</span>
+                                                                                            <div x-show="!ns.isCopied && getFirstSubTemplateForExisting('{{ $vKey }}')" class="mt-1">
+                                                                                                <div x-show="ns.promptState === 'active'" x-transition class="p-2 bg-brand-light/40 border border-primary/25 rounded-lg flex flex-wrap items-center justify-between gap-2 text-xs text-primary-dark shadow-2xs">
+                                                                                                    <div class="flex items-center gap-2">
+                                                                                                        <svg class="w-4 h-4 text-primary flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M12 8h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                                                                                                        <span>Copy Price, Weight, and Stock from 1st subvariant (<strong x-text="getFirstSubTemplateForExisting('{{ $vKey }}')?.name || '1st Subvariant'"></strong>)?</span>
+                                                                                                    </div>
+                                                                                                    <div class="flex gap-1.5">
+                                                                                                        <button type="button" @click.stop="copyFirstSubToExistingNew('{{ $vKey }}', nsIndex)" class="px-3 py-1 bg-primary text-white font-bold rounded-md hover:bg-primary-dark transition-colors cursor-pointer text-[11px] shadow-2xs">Copy</button>
+                                                                                                        <button type="button" @click.stop="ns.promptState = 'remind_later'" class="px-2.5 py-1 bg-surface border border-primary/30 text-primary font-bold rounded-md hover:bg-brand-light/30 transition-colors cursor-pointer text-[11px]">Not Now</button>
+                                                                                                        <button type="button" @click.stop="ns.isCopied = true; ns.promptState = 'dismissed'" class="px-2.5 py-1 bg-surface-subtle text-text-muted font-bold rounded-md hover:bg-brand-light/20 transition-colors cursor-pointer text-[11px]">Dismiss</button>
+                                                                                                    </div>
                                                                                                 </div>
-                                                                                                <button type="button" @click.stop="copyFirstSubToExistingNew('{{ $vKey }}', nsIndex)" class="px-3 py-1 bg-primary text-white font-bold rounded-md hover:bg-primary-dark transition-colors cursor-pointer text-[11px] shadow-2xs">Copy</button>
+                                                                                                <div x-show="ns.promptState === 'remind_later'" class="flex justify-end mt-1">
+                                                                                                    <button type="button" @click.stop="ns.promptState = 'active'" class="text-[10px] text-primary hover:text-primary-dark underline font-bold cursor-pointer">Show automation prompt</button>
+                                                                                                </div>
                                                                                             </div>
                                                                                             <div class="flex flex-col sm:flex-row items-start gap-3 pt-1">
                                                                                                 <div class="flex-1 w-full min-w-[160px]">
@@ -1629,9 +1858,31 @@
                                                                 <div class="mt-6">
                                                                     <template x-for="(nv, nvIndex) in newVariants" :key="nv.id">
                                                                         <div class="p-5 bg-surface rounded-2xl border border-primary/40 shadow-2xs mb-4 relative mt-4">
+                                                                            <input type="hidden" :name="`new_variant_pictures_base64[${nv.id}]`" :value="nv.imageBase64 || ''">
                                                                             <span class="absolute -top-3 left-5 px-2.5 py-0.5 bg-brand-light border border-primary/30 text-primary-dark text-[10px] font-bold rounded-lg shadow-2xs z-10 pointer-events-none">
                                                                                 {{ $isApprovedProduct ? 'New Variant — Pending Approval' : 'New Variant Block' }}
                                                                             </span>
+
+                                                                            @if($priceDependency === 'main')
+                                                                                <div x-show="!nv.isCopied && getFirstMainVariantTemplate(nv.id)" class="px-2 pt-2 mb-3">
+                                                                                    <div x-show="nv.promptState === 'active'" x-transition class="p-2.5 bg-brand-light/40 border border-primary/25 rounded-xl flex flex-wrap items-center justify-between gap-2 text-xs text-primary-dark shadow-2xs">
+                                                                                        <div class="flex items-center gap-2">
+                                                                                            <svg class="w-4 h-4 text-primary flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M12 8h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                                                                                            <span>Do you want to copy the 1st variant's descriptions (Price, Weight, and Stock) from <strong x-text="getFirstMainVariantTemplate(nv.id)?.name || '1st Variant'"></strong>?</span>
+                                                                                        </div>
+                                                                                        <div class="flex flex-wrap gap-2 mt-2 sm:mt-0">
+                                                                                            <button type="button" @click.stop="copyFirstMainToNewVariant(nv)" class="px-3 py-1 bg-primary text-white font-bold rounded-lg hover:bg-primary-dark transition-colors cursor-pointer shadow-2xs">Copy</button>
+                                                                                            <button type="button" x-show="newVariants.length > 1" @click.stop="copyFirstMainToAllNewVariants()" class="px-3 py-1 bg-primary-dark text-white font-bold rounded-lg hover:bg-primary transition-colors cursor-pointer shadow-2xs">Copy to All</button>
+                                                                                            <button type="button" @click.stop="nv.promptState = 'remind_later'" class="px-3 py-1 bg-surface border border-primary/30 text-primary font-bold rounded-lg hover:bg-brand-light/30 transition-colors cursor-pointer">Not Now</button>
+                                                                                            <button type="button" @click.stop="nv.isCopied = true; nv.promptState = 'dismissed'" class="px-3 py-1 bg-surface-subtle text-text-muted font-bold rounded-lg hover:bg-brand-light/20 transition-colors cursor-pointer">Dismiss</button>
+                                                                                        </div>
+                                                                                    </div>
+                                                                                    <div x-show="nv.promptState === 'remind_later'" class="flex justify-end mt-1">
+                                                                                        <button type="button" @click.stop="nv.promptState = 'active'" class="text-[10px] text-primary hover:text-primary-dark underline font-bold cursor-pointer">Show automation prompt</button>
+                                                                                    </div>
+                                                                                </div>
+                                                                            @endif
+
                                                                             <div class="flex flex-col sm:flex-row sm:items-start gap-6 px-2 mt-2">
                                                                                 <div class="flex-1">
                                                                                     <label class="block text-xs font-bold text-text-main mb-1">New {{ $productVariants['title'] ?? 'Variant' }} Name <span class="text-danger">*</span></label>
@@ -1644,10 +1895,20 @@
                                                                                 </div>
                                                                                 <div>
                                                                                     <label class="block text-xs font-bold text-text-main mb-1">Dedicated Variant Image <span class="text-danger">*</span></label>
-                                                                                    <input type="file" :name="`new_variant_pictures[${nv.id}]`" accept="image/jpeg,image/png,image/jpg,image/webp" required
-                                                                                           :class="hasError(`new_variant_pictures[${nv.id}]`) ? 'border-danger' : 'border-border-subtle'"
-                                                                                           class="w-full p-1.5 text-xs rounded-lg border cursor-pointer file:cursor-pointer file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:bg-surface-subtle file:text-text-main file:text-[10px] file:font-bold bg-surface focus:outline-none">
-                                                                                    <span x-show="hasError(`new_variant_pictures[${nv.id}]`)" x-cloak class="text-danger text-[10px] font-bold mt-1 block">Image is required.</span>
+                                                                                    <div class="flex items-center gap-2">
+                                                                                        <template x-if="nv.imagePreview">
+                                                                                            <img :src="nv.imagePreview" class="h-10 w-10 object-cover rounded-lg border border-primary/40 shadow-2xs shrink-0 pointer-events-none">
+                                                                                        </template>
+                                                                                        <input type="file"
+                                                                                               :name="nv.imageBase64 ? null : `new_variant_pictures[${nv.id}]`"
+                                                                                               accept="image/jpeg,image/png,image/jpg,image/webp"
+                                                                                               :required="!nv.imageBase64 && !nv.imagePreview"
+                                                                                               @change="handleNewVariantImage($event, nv)"
+                                                                                               :class="(!nv.imageBase64 && !nv.imagePreview && hasError(`new_variant_pictures[${nv.id}]`)) ? 'border-danger' : 'border-border-subtle'"
+                                                                                               class="w-full p-1.5 text-xs rounded-lg border cursor-pointer file:cursor-pointer file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:bg-surface-subtle file:text-text-main file:text-[10px] file:font-bold bg-surface focus:outline-none">
+                                                                                    </div>
+                                                                                    <span x-show="!nv.imageBase64 && !nv.imagePreview && hasError(`new_variant_pictures[${nv.id}]`)" x-cloak class="text-danger text-[10px] font-bold mt-1 block">Image is required.</span>
+                                                                                    <span x-show="nv.imageError" x-cloak class="text-danger text-[10px] font-bold mt-1 block" x-text="nv.imageError"></span>
                                                                                 </div>
                                                                             </div>
                                                                             <hr class="border-border-subtle my-4">
@@ -1684,6 +1945,24 @@
                                                                             @endif
                                                                             <template x-if="nv.subs !== undefined">
                                                                                 <div class="px-2 space-y-3">
+                                                                                    <div x-show="!nv.isSubsCopied && getFirstSubListTemplate(nv.id)" class="mb-2">
+                                                                                        <div x-show="nv.subPromptState === 'active'" x-transition class="p-2.5 bg-brand-light/40 border border-primary/25 rounded-xl flex flex-wrap items-center justify-between gap-2 text-xs text-primary-dark shadow-2xs">
+                                                                                            <div class="flex items-center gap-2">
+                                                                                                <svg class="w-4 h-4 text-primary flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M12 8h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                                                                                                <span>Save time! Copy all <strong>{{ $productVariants['sub_title'] ?? 'Subvariants' }}</strong> (Names, Prices, Weights, and Stocks) from <strong x-text="getFirstSubListTemplate(nv.id)?.name || '1st Variant'"></strong>?</span>
+                                                                                            </div>
+                                                                                            <div class="flex flex-wrap gap-1.5 mt-2 sm:mt-0">
+                                                                                                <button type="button" @click.stop="copySubListToNewVariant(nv)" class="px-3 py-1 bg-primary text-white font-bold rounded-lg hover:bg-primary-dark transition-colors cursor-pointer shadow-2xs">Copy to This Variant</button>
+                                                                                                <button type="button" x-show="newVariants.length > 1" @click.stop="copySubListToAllNewVariants()" class="px-3 py-1 bg-primary-dark text-white font-bold rounded-lg hover:bg-primary transition-colors cursor-pointer shadow-2xs">Copy to All New Variants</button>
+                                                                                                <button type="button" @click.stop="nv.subPromptState = 'remind_later'" class="px-2.5 py-1 bg-surface border border-primary/30 text-primary font-bold rounded-lg hover:bg-brand-light/30 transition-colors cursor-pointer">Not Now</button>
+                                                                                                <button type="button" @click.stop="nv.isSubsCopied = true; nv.subPromptState = 'dismissed'" class="px-2.5 py-1 bg-surface-subtle text-text-muted font-bold rounded-lg hover:bg-brand-light/20 transition-colors cursor-pointer">Dismiss</button>
+                                                                                            </div>
+                                                                                        </div>
+                                                                                        <div x-show="nv.subPromptState === 'remind_later'" class="flex justify-end mt-1">
+                                                                                            <button type="button" @click.stop="nv.subPromptState = 'active'" class="text-[10px] text-primary hover:text-primary-dark underline font-bold cursor-pointer">Show sub-variant copy prompt</button>
+                                                                                        </div>
+                                                                                    </div>
+
                                                                                     <div class="flex justify-between items-center mb-2">
                                                                                         <div class="flex items-center gap-2">
                                                                                             <label class="block text-[10px] font-bold text-text-main uppercase tracking-widest pointer-events-none">{{ $productVariants['sub_title'] ?? 'Subvariants' }}</label>
@@ -1693,12 +1972,21 @@
                                                                                     </div>
                                                                                     <template x-for="(sub, subIndex) in nv.subs" :key="sub.id">
                                                                                         <div class="space-y-2 bg-brand-light/10 p-3 rounded-xl border border-brand-light/30 relative">
-                                                                                            <div x-show="subIndex > 0 && !sub.isCopied && nv.subs[0] && (nv.subs[0].price || nv.subs[0].weight || nv.subs[0].stock)" x-transition class="p-2 bg-brand-light/40 border border-primary/25 rounded-lg flex flex-wrap items-center justify-between gap-2 text-xs text-primary-dark shadow-2xs">
-                                                                                                <div class="flex items-center gap-2">
-                                                                                                    <svg class="w-4 h-4 text-primary flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M12 8h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                                                                                                    <span>Copy Price, Weight, and Stock from 1st subvariant (<strong x-text="nv.subs[0].name || '1st Subvariant'"></strong>)?</span>
+                                                                                            <div x-show="subIndex > 0 && !sub.isCopied && nv.subs[0] && (nv.subs[0].price || nv.subs[0].weight || nv.subs[0].stock)" class="mb-1">
+                                                                                                <div x-show="sub.promptState === 'active'" x-transition class="p-2 bg-brand-light/40 border border-primary/25 rounded-lg flex flex-wrap items-center justify-between gap-2 text-xs text-primary-dark shadow-2xs">
+                                                                                                    <div class="flex items-center gap-2">
+                                                                                                        <svg class="w-4 h-4 text-primary flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M12 8h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                                                                                                        <span>Copy Price, Weight, and Stock from 1st subvariant (<strong x-text="nv.subs[0].name || '1st Subvariant'"></strong>)?</span>
+                                                                                                    </div>
+                                                                                                    <div class="flex gap-1.5">
+                                                                                                        <button type="button" @click.stop="copyFirstSubInNewVariant(nv, subIndex)" class="px-3 py-1 bg-primary text-white font-bold rounded-md hover:bg-primary-dark transition-colors cursor-pointer text-[11px] shadow-2xs">Copy</button>
+                                                                                                        <button type="button" @click.stop="sub.promptState = 'remind_later'" class="px-2.5 py-1 bg-surface border border-primary/30 text-primary font-bold rounded-md hover:bg-brand-light/30 transition-colors cursor-pointer text-[11px]">Not Now</button>
+                                                                                                        <button type="button" @click.stop="sub.isCopied = true; sub.promptState = 'dismissed'" class="px-2.5 py-1 bg-surface-subtle text-text-muted font-bold rounded-md hover:bg-brand-light/20 transition-colors cursor-pointer text-[11px]">Dismiss</button>
+                                                                                                    </div>
                                                                                                 </div>
-                                                                                                <button type="button" @click.stop="copyFirstSubInNewVariant(nv, subIndex)" class="px-3 py-1 bg-primary text-white font-bold rounded-md hover:bg-primary-dark transition-colors cursor-pointer text-[11px] shadow-2xs">Copy</button>
+                                                                                                <div x-show="sub.promptState === 'remind_later'" class="flex justify-end mt-1">
+                                                                                                    <button type="button" @click.stop="sub.promptState = 'active'" class="text-[10px] text-primary hover:text-primary-dark underline font-bold cursor-pointer">Show automation prompt</button>
+                                                                                                </div>
                                                                                             </div>
                                                                                             <div class="flex flex-col sm:flex-row items-start gap-3">
                                                                                                 <div class="flex-1 w-full min-w-[160px]">
@@ -1749,14 +2037,14 @@
                                                                             </template>
                                                                             <hr class="border-border-subtle mt-5 mb-4">
                                                                             <div class="flex justify-end px-2">
-                                                                                <button type="button" @click.stop="newVariants.splice(nvIndex, 1)" class="flex items-center gap-1.5 text-sm text-text-muted hover:text-danger font-bold transition-colors cursor-pointer">
+                                                                                <button type="button" @click.stop="newVariants.splice(nvIndex, 1); setTimeout(() => validateForm($refs.editForm), 50);" class="flex items-center gap-1.5 text-sm text-text-muted hover:text-danger font-bold transition-colors cursor-pointer">
                                                                                     <svg class="w-4 h-4 pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
                                                                                     Drop Entire Variant
                                                                                 </button>
                                                                             </div>
                                                                         </div>
                                                                     </template>
-                                                                    <button type="button" @click.stop="addVariant()" class="w-full py-4 bg-primary/5 hover:bg-primary/10 text-primary font-bold rounded-2xl border-2 border-primary/30 border-dashed transition-colors cursor-pointer tracking-wide shadow-2xs">
+                                                                    <button type="button" @click.stop="addVariant(); setTimeout(() => validateForm($refs.editForm), 50);" class="w-full py-4 bg-primary/5 hover:bg-primary/10 text-primary font-bold rounded-2xl border-2 border-primary/30 border-dashed transition-colors cursor-pointer tracking-wide shadow-2xs">
                                                                         + Add New Variant
                                                                     </button>
                                                                 </div>
@@ -1767,12 +2055,12 @@
                                                     <div x-data="{
                                                         enableSpecs: {{ $product->specifications->count() > 0 ? 'true' : 'false' }},
                                                         specs: {{ $product->specifications->count() > 0 ? $existingSpecs : "[{ id: Date.now(), title: '', desc: '' }]" }},
-                                                        addSpec() { this.specs.push({ id: Date.now(), title: '', desc: '' }); },
+                                                        addSpec() { this.specs.push({ id: Date.now() + '_' + Math.random(), title: '', desc: '' }); },
                                                         removeSpec(index) { this.specs.splice(index, 1); }
                                                     }" class="bg-surface p-6 rounded-2xl border border-border-subtle shadow-2xs space-y-4">
                                                         <div class="flex items-center justify-between mb-2">
                                                             <h3 class="text-sm font-bold text-text-main">Specifications <span class="text-xs font-normal italic">(Optional)</span></h3>
-                                                            <button type="button" @click="enableSpecs = !enableSpecs; if(enableSpecs && specs.length === 0) addSpec();"
+                                                            <button type="button" @click="enableSpecs = !enableSpecs; if(enableSpecs && specs.length === 0) addSpec(); setTimeout(() => validateForm($refs.editForm), 50);"
                                                                     class="px-4 py-1.5 text-xs font-bold rounded-lg border transition-colors cursor-pointer"
                                                                     :class="enableSpecs ? 'bg-danger/10 text-danger border-danger/25 hover:bg-danger hover:text-white' : 'bg-primary/10 text-primary border-primary/20 hover:bg-primary hover:text-white'">
                                                                 <span x-text="enableSpecs ? 'Disable Specifications' : 'Enable Specifications'"></span>
@@ -1782,10 +2070,10 @@
                                                             <template x-for="(spec, index) in specs" :key="spec.id">
                                                                 <div class="flex items-start gap-3">
                                                                     <div class="flex-1">
-                                                                        <input type="text" :name="`specifications[${index}][title]`" x-model="spec.title" placeholder="Specification Title (e.g. RAM)" class="w-full p-2.5 text-sm rounded-xl border border-border-subtle bg-surface focus:border-primary outline-none">
+                                                                        <input type="text" :name="`specifications[${index}][title]`" :disabled="!enableSpecs" x-model="spec.title" placeholder="Specification Title (e.g. RAM)" class="w-full p-2.5 text-sm rounded-xl border border-border-subtle bg-surface focus:border-primary outline-none">
                                                                     </div>
                                                                     <div class="flex-1">
-                                                                        <input type="text" :name="`specifications[${index}][description]`" x-model="spec.desc" placeholder="Specification Description (e.g. 8GB)" class="w-full p-2.5 text-sm rounded-xl border border-border-subtle bg-surface focus:border-primary outline-none">
+                                                                        <input type="text" :name="`specifications[${index}][description]`" :disabled="!enableSpecs" x-model="spec.desc" placeholder="Specification Description (e.g. 8GB)" class="w-full p-2.5 text-sm rounded-xl border border-border-subtle bg-surface focus:border-primary outline-none">
                                                                     </div>
                                                                     <button type="button" @click="requestConfirm('Are you sure you want to remove this specification?', () => { removeSpec(index); })" class="p-2.5 text-text-muted hover:text-danger rounded-lg hover:bg-danger/10 transition-colors mt-0.5 cursor-pointer">
                                                                         <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>

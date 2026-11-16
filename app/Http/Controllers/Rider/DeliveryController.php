@@ -56,9 +56,10 @@ class DeliveryController extends Controller
     {
         $shipment->loadMissing(['sellerOrder.extra', 'packages', 'latestPickupAssignment']);
 
-        $hub = ! empty($shipment->hub_address_snapshot)
+        $rawHub = ! empty($shipment->hub_address_snapshot)
             ? $shipment->hub_address_snapshot
             : ($shipment->pickup_address_snapshot ?? []);
+        $hub = is_array($rawHub['destination_hub'] ?? null) ? $rawHub['destination_hub'] : $rawHub;
         $deliv = $shipment->delivery_address_snapshot ?? [];
 
         $originProv = strtolower(trim((string) ($hub['province'] ?? '')));
@@ -154,7 +155,13 @@ class DeliveryController extends Controller
             $tab = 'deliveries';
         }
 
-        $activeAssignments = DeliveryAssignment::with([
+        $sort = $request->query('sort', 'nearest');
+        if (! in_array($sort, ['nearest', 'farthest', 'oldest', 'newest', 'cod_high'], true)) {
+            $sort = 'nearest';
+        }
+        $barangayFilter = trim((string) $request->query('barangay', ''));
+
+        $rawActiveAssignments = DeliveryAssignment::with([
             'shipment.sellerProfile',
             'shipment.packages.verifications',
             'sellerOrder.buyer',
@@ -167,6 +174,35 @@ class DeliveryController extends Controller
             ->orderBy('created_at', 'asc')
             ->orderBy('id', 'asc')
             ->get();
+
+        $availableBarangays = $rawActiveAssignments
+            ->map(fn (DeliveryAssignment $a) => trim((string) ($a->shipment?->delivery_address_snapshot['barangay'] ?? '')))
+            ->filter()
+            ->unique()
+            ->sort()
+            ->values();
+
+        $decoratedActive = $rawActiveAssignments->map(function (DeliveryAssignment $a) use ($rider) {
+            $delivSnap = (array) ($a->shipment?->delivery_address_snapshot ?? []);
+            $distKm = $rider->distanceToSnapshotKm($delivSnap);
+            $a->setAttribute('rider_distance_km', $distKm);
+            return $a;
+        });
+
+        if ($barangayFilter !== '') {
+            $decoratedActive = $decoratedActive->filter(function (DeliveryAssignment $a) use ($barangayFilter) {
+                $brgy = trim((string) ($a->shipment?->delivery_address_snapshot['barangay'] ?? ''));
+                return strcasecmp($brgy, $barangayFilter) === 0;
+            });
+        }
+
+        $activeAssignments = match ($sort) {
+            'farthest' => $decoratedActive->sortByDesc(fn (DeliveryAssignment $a) => (float) ($a->getAttribute('rider_distance_km') ?? 0))->values(),
+            'newest'   => $decoratedActive->sortByDesc(fn (DeliveryAssignment $a) => $a->created_at?->timestamp ?? 0)->values(),
+            'oldest'   => $decoratedActive->sortBy(fn (DeliveryAssignment $a) => $a->created_at?->timestamp ?? 0)->values(),
+            'cod_high' => $decoratedActive->sortByDesc(fn (DeliveryAssignment $a) => (float) ($a->shipment?->cod_amount ?? 0))->values(),
+            default    => $decoratedActive->sortBy(fn (DeliveryAssignment $a) => (float) ($a->getAttribute('rider_distance_km') ?? 9999))->values(),
+        };
 
         $historyAssignments = DeliveryAssignment::with([
             'shipment.sellerProfile',
@@ -203,7 +239,7 @@ class DeliveryController extends Controller
         $verifiedRiderEarnings = round((float) $riderWallet->total_earned, 2);
 
         $metrics = [
-            'active_deliveries'       => $activeAssignments->count(),
+            'active_deliveries'       => $rawActiveAssignments->count(),
             'completed_deliveries'    => $completedDeliveriesCount,
             'cod_on_hand'             => $unremittedCodTotal,
             'pending_rider_comm'      => max($pendingRiderComm, round((float) $riderWallet->pending_balance, 2)),
@@ -226,6 +262,9 @@ class DeliveryController extends Controller
         return view('rider.dashboard', compact(
             'rider',
             'tab',
+            'sort',
+            'barangayFilter',
+            'availableBarangays',
             'activeAssignments',
             'historyAssignments',
             'unremittedCollections',

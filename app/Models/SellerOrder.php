@@ -2,11 +2,13 @@
 
 namespace App\Models;
 
+use App\Services\CourierMobileSchemaService;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
+use Illuminate\Support\Facades\Schema;
 
 class SellerOrder extends Model
 {
@@ -20,13 +22,10 @@ class SellerOrder extends Model
         'returned_to_seller',
     ];
 
-    /**
-     * Queue sort options.
-     * 'oldest' = First In, First Out (FIFO) - "Oldest to Newest" (default).
-     * 'newest' = Last In, First Out (LIFO)  - "Newest to Oldest".
-     */
-    public const QUEUE_SORT_OLDEST = 'oldest';
-    public const QUEUE_SORT_NEWEST = 'newest';
+    public const QUEUE_SORT_OLDEST   = 'oldest';
+    public const QUEUE_SORT_NEWEST   = 'newest';
+    public const QUEUE_SORT_NEAREST  = 'nearest';
+    public const QUEUE_SORT_FARTHEST = 'farthest';
 
     protected $fillable = [
         'order_id',
@@ -42,12 +41,14 @@ class SellerOrder extends Model
         'total_amount',
         'total_weight',
         'shipping_tier',
+        'seller_to_buyer_distance_km',
         'pickup_address_snapshot',
         'delivery_address_snapshot',
         'acceptance_deadline_at',
         'accepted_at',
         'rejected_at',
         'rejection_reason',
+        'is_unserviceable_exception',
         'ready_for_pickup_at',
         'delivered_at',
         'confirmation_deadline_at',
@@ -66,61 +67,67 @@ class SellerOrder extends Model
     protected function casts(): array
     {
         return [
-            'subtotal_amount'           => 'decimal:2',
-            'shipping_fee'              => 'decimal:2',
-            'total_amount'              => 'decimal:2',
-            'total_weight'              => 'decimal:3',
-            'pickup_address_snapshot'   => 'array',
-            'delivery_address_snapshot' => 'array',
-            'acceptance_deadline_at'    => 'datetime',
-            'accepted_at'               => 'datetime',
-            'rejected_at'               => 'datetime',
-            'ready_for_pickup_at'       => 'datetime',
-            'delivered_at'              => 'datetime',
-            'confirmation_deadline_at'  => 'datetime',
-            'buyer_confirmed_at'        => 'datetime',
-            'has_unresolved_dispute'    => 'boolean',
-            'dispute_reported_at'       => 'datetime',
-            'dispute_resolved_at'       => 'datetime',
-            'completed_at'              => 'datetime',
-            'cancelled_at'              => 'datetime',
-            'stock_deducted'            => 'boolean',
-            'stock_restored'            => 'boolean',
-            'stock_restored_at'         => 'datetime',
+            'subtotal_amount'             => 'decimal:2',
+            'shipping_fee'                => 'decimal:2',
+            'total_amount'                => 'decimal:2',
+            'total_weight'                => 'decimal:3',
+            'seller_to_buyer_distance_km' => 'decimal:2',
+            'pickup_address_snapshot'     => 'array',
+            'delivery_address_snapshot'   => 'array',
+            'acceptance_deadline_at'      => 'datetime',
+            'accepted_at'                 => 'datetime',
+            'rejected_at'                 => 'datetime',
+            'is_unserviceable_exception'  => 'boolean',
+            'ready_for_pickup_at'         => 'datetime',
+            'delivered_at'                => 'datetime',
+            'confirmation_deadline_at'    => 'datetime',
+            'buyer_confirmed_at'          => 'datetime',
+            'has_unresolved_dispute'      => 'boolean',
+            'dispute_reported_at'         => 'datetime',
+            'dispute_resolved_at'         => 'datetime',
+            'completed_at'                => 'datetime',
+            'cancelled_at'                => 'datetime',
+            'stock_deducted'              => 'boolean',
+            'stock_restored'              => 'boolean',
+            'stock_restored_at'           => 'datetime',
         ];
     }
 
-    /**
-     * Normalize any incoming value to a supported queue sort option.
-     * Anything unknown falls back to FIFO ("oldest").
-     */
     public static function normalizeQueueSort(?string $sort): string
     {
-        return $sort === self::QUEUE_SORT_NEWEST
-            ? self::QUEUE_SORT_NEWEST
-            : self::QUEUE_SORT_OLDEST;
+        return in_array($sort, [
+            self::QUEUE_SORT_OLDEST,
+            self::QUEUE_SORT_NEWEST,
+            self::QUEUE_SORT_NEAREST,
+            self::QUEUE_SORT_FARTHEST,
+        ], true) ? (string) $sort : self::QUEUE_SORT_OLDEST;
     }
 
-    /**
-     * Operational queue ordering.
-     *
-     * Active orders always stay on top and closed orders always sink to the bottom.
-     * The chosen sort only reverses the order WITHIN each group:
-     *  - 'oldest' (FIFO): active by placed date ASC, closed by close date DESC (original behaviour).
-     *  - 'newest' (LIFO): active by placed date DESC, closed by close date ASC.
-     */
     public function scopeOrderByOperationalQueue(Builder $query, ?string $sort = self::QUEUE_SORT_OLDEST): Builder
     {
         $table = $this->getTable();
+        $normalizedSort = self::normalizeQueueSort($sort);
 
-        $isNewestFirst = self::normalizeQueueSort($sort) === self::QUEUE_SORT_NEWEST;
+        $query->orderByRaw(
+            "CASE WHEN {$table}.status IN ('completed', 'cancelled', 'rejected', 'returned_to_seller') THEN 1 ELSE 0 END ASC"
+        );
+
+        if (
+            in_array($normalizedSort, [self::QUEUE_SORT_NEAREST, self::QUEUE_SORT_FARTHEST], true)
+            && Schema::hasColumn($table, 'seller_to_buyer_distance_km')
+        ) {
+            $distDir = $normalizedSort === self::QUEUE_SORT_FARTHEST ? 'DESC' : 'ASC';
+            return $query
+                ->orderByRaw("COALESCE({$table}.seller_to_buyer_distance_km, 999999) {$distDir}")
+                ->orderBy("{$table}.created_at", 'asc')
+                ->orderBy("{$table}.id", 'asc');
+        }
+
+        $isNewestFirst = $normalizedSort === self::QUEUE_SORT_NEWEST;
         $activeDirection = $isNewestFirst ? 'DESC' : 'ASC';
         $closedDirection = $isNewestFirst ? 'ASC' : 'DESC';
 
         return $query
-            ->orderByRaw(
-                "CASE WHEN {$table}.status IN ('completed', 'cancelled', 'rejected', 'returned_to_seller') THEN 1 ELSE 0 END ASC"
-            )
             ->orderByRaw(
                 "CASE WHEN {$table}.status NOT IN ('completed', 'cancelled', 'rejected', 'returned_to_seller') THEN {$table}.created_at END {$activeDirection}"
             )
@@ -249,6 +256,20 @@ class SellerOrder extends Model
             'accepted',
             'preparing',
         ], true);
+    }
+
+    public function getCalculatedDistanceKmAttribute(): float
+    {
+        if ($this->seller_to_buyer_distance_km !== null && (float) $this->seller_to_buyer_distance_km > 0) {
+            return round((float) $this->seller_to_buyer_distance_km, 2);
+        }
+
+        return CourierMobileSchemaService::calculateDistanceKmBetweenLocations(
+            (array) ($this->pickup_address_snapshot ?? []),
+            (array) ($this->delivery_address_snapshot ?? []),
+            $this->relationLoaded('sellerProfile') ? $this->sellerProfile : null,
+            null
+        );
     }
 
     public function getEffectivePaymentMethodAttribute(): string

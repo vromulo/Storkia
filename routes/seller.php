@@ -61,10 +61,10 @@ Route::middleware('throttle:120,1')->group(function () {
             Route::get('/orders', [OrderController::class, 'index'])->name('orders.index');
             Route::get('/orders/{sellerOrder}', [OrderController::class, 'show'])->name('orders.show');
             Route::post('/orders/{sellerOrder}/accept', [OrderController::class, 'accept'])->name('orders.accept');
+            Route::post('/orders/{sellerOrder}/reject-unserviceable', [OrderController::class, 'rejectUnserviceableOrder'])->name('orders.reject-unserviceable');
             Route::post('/orders/{sellerOrder}/ready-for-pickup', [OrderController::class, 'markReadyForPickup'])->name('orders.ready-for-pickup');
             Route::post('/orders/{sellerOrder}/report-suspicious-payment', [OrderController::class, 'reportSuspiciousPayment'])->name('orders.report-suspicious-payment');
             Route::post('/orders/{sellerOrder}/verify-online-payment', [OrderController::class, 'verifyOnlinePayment'])->name('orders.verify-online-payment');
-
             Route::post('/orders/{sellerOrder}/respond-return', [ReturnRequestController::class, 'legacyRespond'])->name('orders.respond-return');
 
             Route::get('/returns/{returnRequest}', [ReturnRequestController::class, 'show'])->name('returns.show');
@@ -113,7 +113,6 @@ Route::middleware('throttle:120,1')->group(function () {
                 auth()->user()->unreadNotifications->markAsRead();
                 return back()->with('success', 'All notifications marked as read.');
             })->name('notifications.markAllRead');
-
             Route::patch('/notifications/{id}/read', function ($id) {
                 $notification = auth()->user()->notifications()->findOrFail($id);
                 $notification->markAsRead();

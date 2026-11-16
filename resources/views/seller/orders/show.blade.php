@@ -12,6 +12,7 @@
     $paymentSubmission = $sellerOrder->paymentSubmission;
     $extra = $sellerOrder->extra;
     $evidencePhotos = is_array($extra?->dispute_evidence_photos) ? $extra->dispute_evidence_photos : [];
+    $canRejectUnserviceable = $canRejectUnserviceable ?? false;
 
     $unifiedTimeline = collect();
 
@@ -54,30 +55,79 @@
 
     $unifiedTimeline = $unifiedTimeline->sortByDesc(fn ($e) => $e->occurred_at ? $e->occurred_at->timestamp : 0)->values();
 
-    $hubOptions = collect($eligibleHubs ?? [])->map(fn ($hub) => [
-        'id'    => (string) $hub->id,
-        'label' => $hub->hub_name . ' — ' . $hub->municipality . ', ' . $hub->province . ($hub->parentLogisticsProfile?->business_name ? ' (' . $hub->parentLogisticsProfile->business_name . ')' : ''),
-    ])->values();
-    $firstHubId = (string) ($hubOptions->first()['id'] ?? '');
+    $hubOptions = collect($eligibleHubs ?? [])->map(function ($hub) {
+        $origDist = round((float) ($hub->getAttribute('origin_distance_km') ?? 0), 1);
+        $origCouriers = (int) ($hub->getAttribute('origin_couriers_count') ?? 0);
+        $destHubName = $hub->getAttribute('destination_hub_name');
+        $destRiders = (int) ($hub->getAttribute('destination_riders_count') ?? 0);
+        $destDist = $hub->getAttribute('destination_distance_km') !== null ? round((float) $hub->getAttribute('destination_distance_km'), 1) : null;
+        $isServiceable = (bool) ($hub->getAttribute('is_route_serviceable') ?? true);
+        $requiresSelfDrop = (bool) ($hub->getAttribute('requires_self_drop_off') ?? false);
+        $unserviceableReason = (string) ($hub->getAttribute('unserviceable_reason') ?? '');
+
+        $companyName = $hub->parentLogisticsProfile?->business_name ? ' (' . $hub->parentLogisticsProfile->business_name . ')' : '';
+        $statusTag = $isServiceable
+            ? ($requiresSelfDrop ? '[Self Drop-Off Only] ' : '[Serviceable] ')
+            : '[Unserviceable for Buyer] ';
+
+        return [
+            'id'                     => (string) $hub->id,
+            'label'                  => $statusTag . $hub->hub_name . ' — ' . $hub->municipality . ', ' . $hub->province . $companyName,
+            'origin_distance_km'     => $origDist,
+            'origin_couriers_count'  => $origCouriers,
+            'destination_hub_name'   => $destHubName ?: 'None',
+            'destination_distance_km'=> $destDist,
+            'destination_riders'     => $destRiders,
+            'is_serviceable'         => $isServiceable,
+            'requires_self_drop_off' => $requiresSelfDrop,
+            'unserviceable_reason'   => $unserviceableReason,
+        ];
+    })->values();
+
+    $firstServiceableHub = $hubOptions->firstWhere('is_serviceable', true) ?? $hubOptions->first();
+    $firstHubId = (string) ($firstServiceableHub['id'] ?? '');
+    $initialHandover = ($firstServiceableHub && !empty($firstServiceableHub['requires_self_drop_off'])) ? 'self_drop_off' : 'courier_pickup';
 @endphp
 
 <div x-data="{
         suspiciousModalOpen: false,
+        unserviceableModalOpen: false,
         gcashScreenshotModalOpen: false,
         proofModalOpen: false,
         evidencePreviewUrl: '',
         evidenceModalOpen: false,
-        handoverMethod: 'courier_pickup',
+        handoverMethod: @js($initialHandover),
         manifestConfirmed: false,
         hubDropdownOpen: false,
+        hubSortMode: 'nearest',
         selectedHubId: @js($firstHubId),
         hubOptions: @js($hubOptions),
         showAllManifestItems: false,
         showAllOrderedItems: false,
         showAllTimeline: false,
+        get sortedHubOptions() {
+            const list = [...this.hubOptions];
+            if (this.hubSortMode === 'farthest') {
+                return list.sort((a, b) => (b.origin_distance_km || 0) - (a.origin_distance_km || 0));
+            }
+            return list.sort((a, b) => {
+                if (a.is_serviceable !== b.is_serviceable) return a.is_serviceable ? -1 : 1;
+                return (a.origin_distance_km || 0) - (b.origin_distance_km || 0);
+            });
+        },
+        get selectedHubObj() {
+            return this.hubOptions.find(h => String(h.id) === String(this.selectedHubId)) || null;
+        },
         get selectedHubLabel() {
-            const found = this.hubOptions.find(h => String(h.id) === String(this.selectedHubId));
+            const found = this.selectedHubObj;
             return found ? found.label : 'Select approved local logistics hub...';
+        },
+        pickHub(hub) {
+            this.selectedHubId = String(hub.id);
+            if (hub.requires_self_drop_off) {
+                this.handoverMethod = 'self_drop_off';
+            }
+            this.hubDropdownOpen = false;
         },
         openEvidenceModal(url) {
             this.evidencePreviewUrl = url;
@@ -103,6 +153,9 @@
                     <span class="px-2.5 py-1 rounded-full text-[11px] font-bold uppercase {{ $payMethod === 'GCASH' || $payMethod === 'WALLET' ? 'bg-primary/15 text-primary-dark border border-primary/25' : 'bg-surface-subtle text-text-main border border-border-subtle' }}">
                         {{ $payMethod }} ({{ strtoupper($sellerOrder->payment_status) }})
                     </span>
+                    <span class="px-2.5 py-1 rounded-full text-[11px] font-mono font-bold bg-surface-subtle text-primary-dark border border-border-subtle">
+                        ~{{ number_format($sellerOrder->calculated_distance_km, 1) }} km to Buyer
+                    </span>
                 </div>
                 <p class="text-xs text-text-muted mt-0.5">
                     Parent Order: <strong class="select-text">{{ $sellerOrder->order->order_number ?? 'N/A' }}</strong> &bull;
@@ -127,6 +180,29 @@
             </div>
         @endif
     </div>
+
+    @if($canRejectUnserviceable)
+        <div class="p-6 rounded-3xl bg-amber-50 border-2 border-amber-300 space-y-3">
+            <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div class="space-y-1">
+                    <div class="flex items-center gap-2">
+                        <span class="px-2.5 py-0.5 rounded-full bg-amber-600 text-white text-[10px] font-extrabold uppercase">
+                            SLA Violation Protection Active (0 Strikes)
+                        </span>
+                        <h2 class="text-base font-bold text-amber-950">No Logistics Partner Currently Has Last-Mile Rider Coverage for Buyer's Address</h2>
+                    </div>
+                    <p class="text-xs text-amber-900 leading-relaxed">
+                        The buyer's address in <strong>{{ $deliverySnap['municipality'] ?? '' }}, {{ $deliverySnap['province'] ?? '' }}</strong> currently has no Logistics partner with both an Origin Hub near your store and an approved Last-Mile Rider covering the buyer's municipality/radius. You can cancel this order right now <strong>without receiving any Seller SLA violation strike</strong>.
+                    </p>
+                </div>
+                <button type="button"
+                        @click="unserviceableModalOpen = true"
+                        class="px-5 py-3 rounded-xl bg-amber-700 hover:bg-amber-800 text-white text-xs font-bold shadow-sm transition-colors cursor-pointer shrink-0">
+                    Cancel as Unserviceable Area (0 SLA Strike)
+                </button>
+            </div>
+        </div>
+    @endif
 
     @if($sellerOrder->status === 'pending_buyer_response')
         <div class="p-6 rounded-3xl bg-brand-light/40 border-2 border-primary/30 space-y-2">
@@ -157,14 +233,12 @@
                         Review the sender mobile number, payment timestamp, unique reference number, and WebP screenshot below.
                     </p>
                 </div>
-
                 <div class="flex flex-wrap items-center gap-2 shrink-0">
                     <button type="button"
                             @click.stop="gcashScreenshotModalOpen = true"
                             class="px-4 py-2 rounded-xl bg-surface border border-border-subtle hover:border-primary text-primary-dark text-xs font-bold transition-colors cursor-pointer">
                         View Payment Screenshot (WebP)
                     </button>
-
                     @if(!$paymentSubmission->switched_to_cod && in_array($sellerOrder->status, ['pending_seller_acceptance', 'accepted', 'preparing'], true))
                         @if($paymentSubmission->status !== 'verified')
                             <form action="{{ route('seller.orders.verify-online-payment', $sellerOrder->id) }}" method="POST" class="m-0">
@@ -224,7 +298,7 @@
                 <p class="text-xs text-text-muted leading-relaxed">
                     Please accept this order before <strong>{{ $sellerOrder->acceptance_deadline_at?->format('M d, Y h:i A') }}</strong>
                     ({{ $sellerOrder->acceptance_deadline_at?->diffForHumans() }}).
-                    Manual seller rejection is disabled — if no action is taken before the 24-hour timer expires, the platform automatically cancels the order, restores stock, and compensates the buyer with Storkia Coins.
+                    If no Logistics partner covers the buyer's destination area, use the <strong>Cancel as Unserviceable Area</strong> button above so you are not penalized with an SLA strike.
                 </p>
             </div>
             <div class="flex items-center gap-2.5 shrink-0">
@@ -240,29 +314,57 @@
 
     @if(in_array($sellerOrder->status, ['accepted', 'preparing'], true))
         <div class="p-6 rounded-3xl bg-surface border-2 border-primary/30 shadow-xs space-y-5">
-            <div>
-                <h2 class="text-base font-bold text-primary-dark">Step 2: Verify Product Checklist &amp; Select Logistics Handover Method</h2>
-                <p class="text-xs text-text-muted mt-0.5">
-                    Verify all ordered items below, choose between <strong>First-Mile Courier Pickup</strong> or <strong>Seller Self Drop-Off at Hub</strong>, and generate your Shipping Label.
-                </p>
+            <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div>
+                    <h2 class="text-base font-bold text-primary-dark">Step 2: Verify Product Checklist &amp; Select Serviceable Logistics Hub</h2>
+                    <p class="text-xs text-text-muted mt-0.5">
+                        Only Logistics partners with both <strong>Origin Hub coverage</strong> and <strong>Destination Last-Mile Rider coverage ({{ $deliverySnap['municipality'] ?? '' }}, {{ $deliverySnap['province'] ?? '' }})</strong> can be dispatched.
+                    </p>
+                </div>
+                <div class="inline-flex items-center gap-1.5 text-[11px]">
+                    <span class="text-text-muted font-bold">Sort Hubs:</span>
+                    <button type="button"
+                            @click="hubSortMode = 'nearest'"
+                            :class="hubSortMode === 'nearest' ? 'bg-primary text-white' : 'bg-surface-subtle text-text-muted'"
+                            class="px-2.5 py-1 rounded-lg font-bold cursor-pointer">
+                        Nearest First
+                    </button>
+                    <button type="button"
+                            @click="hubSortMode = 'farthest'"
+                            :class="hubSortMode === 'farthest' ? 'bg-primary text-white' : 'bg-surface-subtle text-text-muted'"
+                            class="px-2.5 py-1 rounded-lg font-bold cursor-pointer">
+                        Farthest First
+                    </button>
+                </div>
             </div>
 
             <form action="{{ route('seller.orders.ready-for-pickup', $sellerOrder->id) }}" method="POST" class="space-y-5 text-xs">
                 @csrf
-
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    <label @click="handoverMethod = 'courier_pickup'"
-                           :class="handoverMethod === 'courier_pickup' ? 'border-primary bg-primary/5 shadow-xs' : 'border-border-subtle bg-surface-subtle/50 hover:border-primary/40'"
-                           class="p-4 rounded-2xl border-2 cursor-pointer flex items-start gap-3 transition-all">
-                        <input type="radio" name="handover_method" value="courier_pickup" x-model="handoverMethod" class="mt-0.5 text-primary">
+                    <label @click="if (!selectedHubObj || !selectedHubObj.requires_self_drop_off) handoverMethod = 'courier_pickup'"
+                           :class="[
+                               handoverMethod === 'courier_pickup' ? 'border-primary bg-primary/5 shadow-xs' : 'border-border-subtle bg-surface-subtle/50 hover:border-primary/40',
+                               (selectedHubObj && selectedHubObj.requires_self_drop_off) ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'
+                           ]"
+                           class="p-4 rounded-2xl border-2 flex items-start gap-3 transition-all">
+                        <input type="radio"
+                               name="handover_method"
+                               value="courier_pickup"
+                               x-model="handoverMethod"
+                               :disabled="selectedHubObj && selectedHubObj.requires_self_drop_off"
+                               class="mt-0.5 text-primary">
                         <div>
                             <span class="font-bold text-sm text-primary-dark block">Option A: Request First-Mile Courier Pickup</span>
                             <span class="text-text-muted mt-0.5 block leading-relaxed">
-                                The selected Logistics hub will dispatch an active Courier covering <strong>{{ $pickupSnap['municipality'] ?? 'your municipality' }}</strong> to scan the QR label and collect the package from your facility.
+                                The selected Origin Hub will dispatch an active Courier covering <strong>{{ $pickupSnap['municipality'] ?? 'your area' }}</strong> to collect the package from your store.
                             </span>
+                            <template x-if="selectedHubObj && selectedHubObj.requires_self_drop_off">
+                                <span class="text-danger font-bold text-[11px] mt-1 block">
+                                    Selected Origin Hub currently has 0 active Couriers — use Option B (Self Drop-Off) or pick another hub.
+                                </span>
+                            </template>
                         </div>
                     </label>
-
                     <label @click="handoverMethod = 'self_drop_off'"
                            :class="handoverMethod === 'self_drop_off' ? 'border-primary-dark bg-brand-light/35 shadow-xs' : 'border-border-subtle bg-surface-subtle/50 hover:border-primary/40'"
                            class="p-4 rounded-2xl border-2 cursor-pointer flex items-start gap-3 transition-all">
@@ -270,7 +372,7 @@
                         <div>
                             <span class="font-bold text-sm text-primary-dark block">Option B: Seller Self Drop-Off at Logistics Hub</span>
                             <span class="text-text-muted mt-0.5 block leading-relaxed">
-                                Print and attach the QR Shipping Label yourself and bring the package directly to the selected Logistics sorting hub for immediate intake verification.
+                                Print and attach the QR Shipping Label yourself and bring the package directly to the selected Origin Sorting Hub.
                             </span>
                         </div>
                     </label>
@@ -289,16 +391,47 @@
                         <div x-show="hubDropdownOpen"
                              x-cloak
                              x-transition
-                             class="absolute left-0 right-0 top-full mt-1.5 bg-surface border border-border-subtle rounded-2xl shadow-xl max-h-56 overflow-y-auto custom-scrollbar z-30 divide-y divide-border-subtle/50">
-                            <template x-for="hub in hubOptions" :key="'hub_' + hub.id">
+                             class="absolute left-0 right-0 top-full mt-1.5 bg-surface border border-border-subtle rounded-2xl shadow-xl max-h-64 overflow-y-auto custom-scrollbar z-30 divide-y divide-border-subtle/50">
+                            <template x-for="hub in sortedHubOptions" :key="'hub_' + hub.id">
                                 <button type="button"
-                                        @click="selectedHubId = String(hub.id); hubDropdownOpen = false"
-                                        class="w-full px-4 py-2.5 text-left hover:bg-brand-light/30 flex items-center justify-between gap-2 cursor-pointer">
-                                    <span class="truncate font-semibold text-text-main" x-text="hub.label"></span>
-                                    <span x-show="String(selectedHubId) === String(hub.id)" class="text-primary font-bold shrink-0">&#10003;</span>
+                                        @click="pickHub(hub)"
+                                        :class="hub.is_serviceable ? 'hover:bg-brand-light/30 cursor-pointer' : 'bg-surface-subtle/70 opacity-65 cursor-pointer'"
+                                        class="w-full px-4 py-3 text-left flex flex-col gap-1">
+                                    <div class="flex items-center justify-between gap-2">
+                                        <span class="truncate font-bold text-text-main" x-text="hub.label"></span>
+                                        <span x-show="String(selectedHubId) === String(hub.id)" class="text-primary font-bold shrink-0">&#10003;</span>
+                                    </div>
+                                    <div class="flex flex-wrap items-center gap-2 text-[10px]">
+                                        <span class="px-2 py-0.5 rounded bg-brand-light/50 text-primary-dark font-mono font-bold"
+                                              x-text="'Origin: ' + hub.origin_distance_km + ' km (' + hub.origin_couriers_count + ' Courier(s))'"></span>
+                                        <template x-if="hub.is_serviceable">
+                                            <span class="px-2 py-0.5 rounded bg-success/15 text-success font-bold"
+                                                  x-text="'Buyer Dest: ' + hub.destination_hub_name + ' (' + hub.destination_riders + ' Rider(s), ~' + (hub.destination_distance_km ?? 0) + ' km)'"></span>
+                                        </template>
+                                        <template x-if="!hub.is_serviceable">
+                                            <span class="px-2 py-0.5 rounded bg-danger/10 text-danger font-bold"
+                                                  x-text="hub.unserviceable_reason || 'No Destination Last-Mile Rider coverage'"></span>
+                                        </template>
+                                    </div>
                                 </button>
                             </template>
                         </div>
+
+                        <template x-if="selectedHubObj">
+                            <div class="mt-2 p-3 rounded-xl border text-[11px] flex flex-wrap items-center justify-between gap-2"
+                                 :class="selectedHubObj.is_serviceable ? 'bg-brand-light/25 border-border-subtle text-text-main' : 'bg-danger/10 border-danger/30 text-danger font-semibold'">
+                                <div>
+                                    <span>Origin Hub Distance: <strong x-text="selectedHubObj.origin_distance_km + ' km'"></strong> (<span x-text="selectedHubObj.origin_couriers_count + ' Active Courier(s)'"></span>)</span>
+                                    <span class="mx-1.5">&bull;</span>
+                                    <template x-if="selectedHubObj.is_serviceable">
+                                        <span>Buyer Covered by <strong x-text="selectedHubObj.destination_hub_name"></strong> (<span x-text="selectedHubObj.destination_riders + ' Approved Rider(s)'"></span>)</span>
+                                    </template>
+                                    <template x-if="!selectedHubObj.is_serviceable">
+                                        <span x-text="selectedHubObj.unserviceable_reason"></span>
+                                    </template>
+                                </div>
+                            </div>
+                        </template>
                     </div>
                     <div>
                         <label class="block font-bold text-text-muted uppercase tracking-wider mb-1">Total Packages Count</label>
@@ -311,7 +444,6 @@
                         <span class="font-bold uppercase tracking-wider text-[11px] text-primary-dark">Mandatory Packing Manifest Checklist</span>
                         <span class="text-[11px] text-text-muted">{{ $sellerOrder->items->sum('quantity') }} Total Unit(s) &bull; {{ number_format((float) $sellerOrder->total_weight, 2) }} kg</span>
                     </div>
-
                     <div class="overflow-x-auto bg-surface rounded-xl border border-border-subtle">
                         <table class="w-full text-left border-collapse text-xs">
                             <thead>
@@ -334,7 +466,6 @@
                             </tbody>
                         </table>
                     </div>
-
                     @if($sellerOrder->items->count() > 5)
                         <div>
                             <button type="button"
@@ -343,7 +474,6 @@
                                     x-text="showAllManifestItems ? 'See Less Manifest Items' : 'See All {{ $sellerOrder->items->count() }} Manifest Items'"></button>
                         </div>
                     @endif
-
                     <label class="flex items-center gap-2.5 pt-1 cursor-pointer">
                         <input type="checkbox" name="manifest_confirmed" value="1" x-model="manifestConfirmed" required class="w-4 h-4 rounded text-primary focus:ring-primary">
                         <span class="font-bold text-text-main">
@@ -354,8 +484,8 @@
 
                 <div class="flex justify-end">
                     <button type="submit"
-                            :disabled="!manifestConfirmed"
-                            :class="manifestConfirmed ? 'bg-primary hover:bg-primary-dark text-white cursor-pointer' : 'bg-surface-subtle text-text-muted border border-border-subtle cursor-not-allowed'"
+                            :disabled="!manifestConfirmed || (selectedHubObj && !selectedHubObj.is_serviceable)"
+                            :class="(manifestConfirmed && (!selectedHubObj || selectedHubObj.is_serviceable)) ? 'bg-primary hover:bg-primary-dark text-white cursor-pointer' : 'bg-surface-subtle text-text-muted border border-border-subtle cursor-not-allowed'"
                             class="px-6 py-3 rounded-xl font-bold shadow-xs transition-colors">
                         Confirm Package Ready &amp; Generate QR Shipping Label
                     </button>
@@ -378,7 +508,6 @@
                 : ($rrNeedsReceipt ? $returnRequest->seller_receipt_deadline_at : null);
             $rrShipment      = $returnRequest->returnShipment;
         @endphp
-
         <div class="p-6 rounded-3xl border-2 space-y-4 {{ $rrUrgent ? 'bg-danger/10 border-danger/30' : ($returnRequest->isTerminal() ? 'bg-surface border-border-subtle' : 'bg-brand-light/35 border-primary/30') }}">
             <div class="flex flex-wrap items-center justify-between gap-2">
                 <div>
@@ -408,12 +537,10 @@
                         <p class="text-sm font-semibold text-price mt-0.5">&#8369;{{ number_format((float) $returnRequest->refund_amount, 2) }}</p>
                     </div>
                 </div>
-
                 <div>
                     <span class="font-bold text-text-muted uppercase text-[10px] block">Buyer Explanation</span>
                     <p class="text-sm font-semibold text-text-main mt-0.5 select-text">"{{ $returnRequest->reason }}"</p>
                 </div>
-
                 @if($rrShipment)
                     <div>
                         <span class="font-bold text-text-muted uppercase text-[10px] block">Return Parcel</span>
@@ -648,6 +775,10 @@
                 <p class="text-sm font-bold text-text-main select-text">{{ $deliverySnap['recipient_name'] ?? 'Buyer' }}</p>
                 <p class="text-text-muted font-mono select-text">{{ $deliverySnap['phone_number'] ?? '' }}</p>
                 <p class="text-text-main leading-relaxed select-text">{{ $deliverySnap['full_address'] ?? '' }}</p>
+                <div class="pt-2 border-t border-border-subtle flex items-center justify-between text-[11px]">
+                    <span class="text-text-muted">Distance from Store:</span>
+                    <strong class="font-mono text-primary-dark">~{{ number_format($sellerOrder->calculated_distance_km, 1) }} km</strong>
+                </div>
             </div>
 
             @if($latestProof)
@@ -663,6 +794,40 @@
             @endif
         </div>
     </div>
+
+    @if($canRejectUnserviceable)
+        <template x-teleport="body">
+            <div x-show="unserviceableModalOpen"
+                 x-cloak
+                 class="fixed inset-0 z-[195] flex items-center justify-center p-4">
+                <div @click="unserviceableModalOpen = false" class="absolute inset-0 bg-black/60 backdrop-blur-xs cursor-pointer"></div>
+                <div @click.stop class="relative z-10 bg-surface rounded-3xl max-w-md w-full p-6 shadow-2xl border border-border-subtle space-y-4">
+                    <div class="flex items-center justify-between pb-3 border-b border-border-subtle">
+                        <h3 class="text-base font-bold text-amber-900">Cancel Order as Unserviceable Area (0 SLA Strikes)</h3>
+                        <button type="button" @click="unserviceableModalOpen = false" class="p-1 text-text-muted hover:text-text-main text-lg font-bold cursor-pointer">&times;</button>
+                    </div>
+                    <p class="text-xs text-text-muted leading-relaxed">
+                        Because no active Logistics partner currently has both Origin Hub coverage and an approved Last-Mile Rider covering <strong>{{ $deliverySnap['municipality'] ?? '' }}, {{ $deliverySnap['province'] ?? '' }}</strong>, you may cancel this order without receiving any SLA violation strike. Reserved product stock, buyer vouchers, Storkia Coins, and wallet payments will be automatically restored.
+                    </p>
+                    <form action="{{ route('seller.orders.reject-unserviceable', $sellerOrder->id) }}" method="POST" class="space-y-4 text-xs">
+                        @csrf
+                        <div>
+                            <label class="block font-bold text-text-muted mb-1">Optional Note to Buyer</label>
+                            <textarea name="rejection_reason"
+                                      rows="3"
+                                      maxlength="300"
+                                      placeholder="No Storkia Logistics Partner currently has an active Last-Mile Rider covering {{ $deliverySnap['municipality'] ?? 'your municipality' }}, {{ $deliverySnap['province'] ?? '' }}."
+                                      class="w-full p-3 rounded-xl border border-border-subtle bg-surface outline-none focus:border-primary"></textarea>
+                        </div>
+                        <div class="flex justify-end gap-2">
+                            <button type="button" @click="unserviceableModalOpen = false" class="px-4 py-2 rounded-xl bg-surface-subtle hover:bg-brand-light/30 text-text-muted hover:text-text-main font-bold transition-colors cursor-pointer">Keep Order</button>
+                            <button type="submit" class="px-5 py-2.5 rounded-xl bg-amber-700 hover:bg-amber-800 text-white font-bold transition-colors cursor-pointer">Confirm Penalty-Free Cancellation</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </template>
+    @endif
 
     @if($paymentSubmission)
         <template x-teleport="body">

@@ -5,12 +5,17 @@
     $pickup = $shipment->pickup_address_snapshot ?? [];
     $deliv = $shipment->delivery_address_snapshot ?? [];
     $hubSnap = $shipment->hub_address_snapshot ?? [];
+    $destHubSnap = $hubSnap['destination_hub'] ?? null;
     $packages = $shipment->packages ?? collect();
     $primaryPackage = $packages->first();
     $handoverMethod = $primaryPackage?->handover_method ?? ($hubSnap['handover_method'] ?? 'courier_pickup');
     $isSelfDropOff = $handoverMethod === 'self_drop_off' || $shipment->status === 'awaiting_seller_drop_off';
     $latestAttempt = $shipment->deliveryAttempts->first();
     $latestProof = $shipment->deliveryProofs->first();
+    $courierSort = $courierSort ?? request()->query('courier_sort', 'nearest');
+    $riderSort = $riderSort ?? request()->query('rider_sort', 'nearest');
+    $outOfRangeCouriers = $outOfRangeCouriers ?? collect();
+    $outOfRangeRiders = $outOfRangeRiders ?? collect();
 
     $allHubPackagesVerified = $packages->isNotEmpty() && $packages->every(function ($pkg) {
         if ($pkg->hub_verified_at !== null) {
@@ -28,11 +33,12 @@
 
 <div x-data="{
     proofModalOpen: false,
+    showExcludedCouriers: false,
+    showExcludedRiders: false,
     verificationMethod: 'manual',
     lookupInput: '',
     isSubmittingConfirm: false,
     isSubmittingLookup: false,
-
     qrScannerOpen: false,
     cameraLoading: false,
     noCameraAvailable: false,
@@ -43,7 +49,6 @@
     mediaStream: null,
     scanInterval: null,
     barcodeDetector: null,
-
     async openQrScanner() {
         this.verificationMethod = 'qr';
         this.qrScannerOpen = true;
@@ -51,14 +56,12 @@
         this.noCameraAvailable = false;
         this.cameraError = '';
         this.scanStatusText = 'Starting camera...';
-
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
             this.cameraLoading = false;
             this.noCameraAvailable = true;
             this.cameraError = 'Your device does not have a camera (or browser camera API is unavailable). Please fill in the verification code manually.';
             return;
         }
-
         if ('BarcodeDetector' in window) {
             try {
                 this.barcodeDetector = new window.BarcodeDetector({ formats: ['qr_code'] });
@@ -66,7 +69,6 @@
                 this.barcodeDetector = null;
             }
         }
-
         try {
             const devices = await navigator.mediaDevices.enumerateDevices();
             const videoInputs = devices.filter(d => d.kind === 'videoinput');
@@ -74,24 +76,19 @@
         } catch (e) {
             this.cameras = [];
         }
-
         await this.startCameraStream();
     },
-
     async startCameraStream() {
         this.stopStreamOnly();
         this.cameraLoading = true;
         this.noCameraAvailable = false;
         this.cameraError = '';
-
         const constraints = this.selectedCameraId
             ? { video: { deviceId: { exact: this.selectedCameraId }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false }
             : { video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false };
-
         try {
             const stream = await navigator.mediaDevices.getUserMedia(constraints);
             this.mediaStream = stream;
-
             try {
                 const devices = await navigator.mediaDevices.enumerateDevices();
                 this.cameras = devices.filter(d => d.kind === 'videoinput');
@@ -102,7 +99,6 @@
                     }
                 }
             } catch (err) {}
-
             this.$nextTick(() => {
                 const videoEl = this.$refs.qrVideo;
                 if (videoEl) {
@@ -111,7 +107,6 @@
                     videoEl.play().catch(() => {});
                 }
             });
-
             this.cameraLoading = false;
             this.scanStatusText = 'Align the parcel QR code inside the box. It will confirm automatically once detected.';
             this.startQrScanLoop();
@@ -119,7 +114,6 @@
             this.cameraLoading = false;
             this.noCameraAvailable = true;
             const errName = (err && err.name) ? err.name : '';
-
             if (errName === 'NotFoundError' || errName === 'DevicesNotFoundError' || errName === 'OverconstrainedError') {
                 this.cameraError = 'Your device does not have a camera detected. Please fill in the Tracking / Package Reference code manually.';
             } else if (errName === 'NotAllowedError' || errName === 'PermissionDeniedError') {
@@ -129,17 +123,14 @@
             }
         }
     },
-
     startQrScanLoop() {
         if (this.scanInterval) {
             clearInterval(this.scanInterval);
         }
-
         this.scanInterval = setInterval(async () => {
             if (!this.qrScannerOpen || this.isSubmittingLookup) return;
             const video = this.$refs.qrVideo;
             if (!video || video.readyState < 2 || !video.videoWidth || !video.videoHeight) return;
-
             if (this.barcodeDetector) {
                 try {
                     const codes = await this.barcodeDetector.detect(video);
@@ -149,40 +140,32 @@
                     }
                 } catch (e) {}
             }
-
             if (typeof window.jsQR === 'function') {
                 const canvas = this.$refs.qrCanvas;
                 if (!canvas) return;
                 const ctx = canvas.getContext('2d', { willReadFrequently: true });
                 if (!ctx) return;
-
                 canvas.width = video.videoWidth;
                 canvas.height = video.videoHeight;
                 ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
                 const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
                 const code = window.jsQR(imageData.data, imageData.width, imageData.height, {
                     inversionAttempts: 'dontInvert'
                 });
-
                 if (code && code.data && code.data.trim() !== '') {
                     this.handleQrDetected(code.data);
                 }
             }
         }, 180);
     },
-
     handleQrDetected(rawValue) {
         const cleaned = String(rawValue || '').trim();
         if (!cleaned || this.isSubmittingLookup) return;
-
         this.isSubmittingLookup = true;
         this.verificationMethod = 'qr';
         this.lookupInput = cleaned;
         this.scanStatusText = 'QR Code Detected (' + cleaned + ')! Confirming hub receipt...';
-
         this.stopStreamOnly();
-
         this.$nextTick(() => {
             setTimeout(() => {
                 this.qrScannerOpen = false;
@@ -192,7 +175,6 @@
             }, 250);
         });
     },
-
     stopStreamOnly() {
         if (this.scanInterval) {
             clearInterval(this.scanInterval);
@@ -207,12 +189,10 @@
             videoEl.srcObject = null;
         }
     },
-
     closeQrScanner() {
         this.stopStreamOnly();
         this.qrScannerOpen = false;
     },
-
     switchToManualEntry() {
         this.closeQrScanner();
         this.verificationMethod = 'manual';
@@ -241,11 +221,14 @@
                     <span class="px-2.5 py-1 rounded-full text-[11px] font-bold {{ $isSelfDropOff ? 'bg-purple-100 text-purple-800 border border-purple-200' : 'bg-blue-50 text-blue-800 border border-blue-200' }}">
                         {{ $isSelfDropOff ? 'Option B: Seller Self Drop-Off' : 'Option A: Courier Pickup' }}
                     </span>
+                    <span class="px-2.5 py-1 rounded-full text-[11px] font-mono font-bold bg-surface-subtle text-primary-dark border border-border-subtle">
+                        Origin ~{{ number_format($shipment->calculated_origin_distance_km, 1) }} km &bull; Buyer ~{{ number_format($shipment->calculated_buyer_distance_km, 1) }} km
+                    </span>
                 </div>
                 <p class="text-xs text-text-muted mt-0.5">
                     Seller Order: <strong>{{ $shipment->sellerOrder->seller_order_number ?? 'N/A' }}</strong> &bull;
                     Parent Order: <strong>{{ $shipment->sellerOrder->order->order_number ?? 'N/A' }}</strong> &bull;
-                    COD Amount: <strong class="text-primary">₱{{ number_format((float) $shipment->cod_amount, 2) }}</strong>
+                    COD Amount: <strong class="text-primary">&#8369;{{ number_format((float) $shipment->cod_amount, 2) }}</strong>
                 </p>
             </div>
         </div>
@@ -269,19 +252,28 @@
         <div class="p-6 rounded-3xl bg-surface border-2 border-primary/30 shadow-xs space-y-4">
             <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                 <div>
-                    <h2 class="text-base font-bold text-primary-dark">Step 1: Assign First-Mile Pickup Courier (Municipality Hub Coverage)</h2>
+                    <h2 class="text-base font-bold text-primary-dark">Step 1: Assign First-Mile Pickup Courier (Within 50 km &amp; Vehicle Load Capacity)</h2>
                     <p class="text-xs text-text-muted mt-0.5">
-                        Select an active Courier assigned to the Municipality Hub servicing <strong>{{ $pickup['municipality'] ?? 'Seller Municipality' }}</strong> to collect the package from <strong>{{ $pickup['business_name'] ?? 'the Seller' }}</strong>.
+                        Select an active Courier covering <strong>{{ $pickup['municipality'] ?? 'Seller Municipality' }}, {{ $pickup['province'] ?? '' }}</strong> with sufficient remaining load capacity ({{ number_format((float) $shipment->total_weight, 2) }} kg required).
                     </p>
                 </div>
-                <span class="px-3 py-1 rounded-full text-[11px] font-bold bg-brand-light/40 text-primary-dark self-start sm:self-auto">
-                    Target Hub: {{ $primaryPackage?->logisticsHub?->hub_name ?? ($hubSnap['hub_name'] ?? $profile->business_name) }}
-                </span>
+                <div class="flex flex-wrap items-center gap-1.5 text-[11px]">
+                    <span class="text-text-muted font-bold">Sort Couriers:</span>
+                    @foreach(['nearest' => 'Nearest First', 'farthest' => 'Farthest First', 'capacity' => 'Most Capacity'] as $cKey => $cLabel)
+                        <a href="{{ route('logistics.shipments.show', ['shipment' => $shipment->id, 'courier_sort' => $cKey, 'rider_sort' => $riderSort]) }}"
+                           class="px-2.5 py-1 rounded-lg font-bold transition-colors {{ $courierSort === $cKey ? 'bg-primary text-white' : 'bg-surface-subtle text-text-muted hover:text-text-main' }}">
+                            {{ $cLabel }}
+                        </a>
+                    @endforeach
+                </div>
             </div>
 
             @if($availableCouriers->isEmpty())
-                <div class="p-4 rounded-2xl bg-yellow-50 border border-yellow-200 text-xs text-yellow-800 font-semibold">
-                    No active Couriers found for this hub. <a href="{{ route('logistics.couriers.create') }}" class="underline font-bold">Create a Courier Account</a> or <a href="{{ route('logistics.employees.index') }}" class="underline font-bold">assign a Courier</a> first.
+                <div class="p-4 rounded-2xl bg-yellow-50 border border-yellow-200 text-xs text-yellow-800 font-semibold space-y-1">
+                    <div>
+                        No eligible Couriers with sufficient remaining load capacity found for {{ $pickup['municipality'] ?? 'this seller area' }}.
+                        <a href="{{ route('logistics.couriers.create') }}" class="underline font-bold">Create a Courier Account</a> or <a href="{{ route('logistics.employees.index') }}" class="underline font-bold">assign a Courier</a> first.
+                    </div>
                 </div>
             @else
                 <form action="{{ route('logistics.shipments.assign-courier', $shipment->id) }}" method="POST" class="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
@@ -290,8 +282,13 @@
                         <label class="block text-xs font-bold text-text-muted mb-1">Select Eligible Hub Courier <span class="text-danger">*</span></label>
                         <select name="courier_id" required class="w-full p-3 rounded-xl border border-border-subtle bg-surface text-xs font-semibold outline-none focus:border-primary">
                             @foreach($availableCouriers as $c)
+                                @php
+                                    $cEval = $c->getAttribute('pickup_eval') ?? [];
+                                    $cDist = number_format((float) ($cEval['distance_from_courier_km'] ?? 0), 1);
+                                    $cRemCap = number_format((float) ($cEval['remaining_capacity_kg'] ?? $c->load_capacity), 1);
+                                @endphp
                                 <option value="{{ $c->id }}" {{ (int) $shipment->current_courier_id === (int) $c->id ? 'selected' : '' }}>
-                                    {{ $c->full_name }} — {{ $c->assigned_hub?->municipality ?? 'Main Hub' }} ({{ $c->vehicle_type }} - {{ $c->plate_number }} | {{ $c->load_capacity }}kg)
+                                    [~{{ $cDist }} km] {{ $c->full_name }} — {{ $c->assigned_hub?->municipality ?? 'Main Hub' }} ({{ $c->vehicle_type }} | Rem. Cap: {{ $cRemCap }}/{{ $c->load_capacity }}kg)
                                 </option>
                             @endforeach
                         </select>
@@ -307,6 +304,29 @@
                     </div>
                 </form>
             @endif
+
+            @if($outOfRangeCouriers->isNotEmpty())
+                <div class="pt-2 border-t border-border-subtle text-xs">
+                    <button type="button"
+                            @click="showExcludedCouriers = !showExcludedCouriers"
+                            class="text-[11px] font-bold text-text-muted hover:text-primary cursor-pointer">
+                        <span x-text="showExcludedCouriers ? 'Hide Out-of-Range / Overloaded Couriers (' + {{ $outOfRangeCouriers->count() }} + ')' : 'Show Why ' + {{ $outOfRangeCouriers->count() }} + ' Other Courier(s) Were Excluded (Range / Capacity Guard)'"></span>
+                    </button>
+                    <div x-show="showExcludedCouriers" x-cloak class="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        @foreach($outOfRangeCouriers as $exC)
+                            @php $exCEval = $exC->getAttribute('pickup_eval') ?? []; @endphp
+                            <div class="p-2.5 rounded-xl bg-surface-subtle border border-border-subtle text-[11px] flex items-center justify-between gap-2">
+                                <div>
+                                    <span class="font-bold text-text-main">{{ $exC->full_name }}</span>
+                                    <span class="text-text-muted">({{ $exC->assigned_hub?->municipality ?? 'No Hub' }})</span>
+                                    <p class="text-danger font-semibold mt-0.5">{{ $exCEval['reason'] ?? 'Outside pickup range' }}</p>
+                                </div>
+                                <span class="font-mono font-bold text-text-muted shrink-0">~{{ number_format((float) ($exCEval['distance_from_hub_km'] ?? 0), 1) }} km</span>
+                            </div>
+                        @endforeach
+                    </div>
+                </div>
+            @endif
         </div>
     @endif
 
@@ -315,7 +335,7 @@
             <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-blue-200">
                 <div>
                     @if($isSelfDropOff)
-                        <h2 class="text-base font-bold text-blue-950">Step 1 & 2: Seller Self Drop-Off — Scan QR Camera or Enter Code to Confirm Hub Receipt</h2>
+                        <h2 class="text-base font-bold text-blue-950">Step 1 &amp; 2: Seller Self Drop-Off — Scan QR Camera or Enter Code to Confirm Hub Receipt</h2>
                         <p class="text-xs text-blue-800 mt-0.5">
                             Seller <strong>{{ $shipment->sellerProfile->business_name ?? ($pickup['business_name'] ?? 'Seller') }}</strong> selected Self Drop-Off at <strong>{{ $primaryPackage?->logisticsHub?->hub_name ?? $profile->business_name }}</strong>.
                             Open your camera to scan the package QR Code (or enter the code manually) to confirm physical receipt at the hub.
@@ -387,7 +407,7 @@
                     <button type="submit"
                             :disabled="isSubmittingLookup"
                             class="px-5 py-3 rounded-xl bg-primary hover:bg-primary-dark text-white font-bold cursor-pointer shrink-0 disabled:opacity-60">
-                        <span x-show="!isSubmittingLookup">Verify & Confirm Hub Receipt</span>
+                        <span x-show="!isSubmittingLookup">Verify &amp; Confirm Hub Receipt</span>
                         <span x-show="isSubmittingLookup" x-cloak>Confirming...</span>
                     </button>
                 </form>
@@ -434,7 +454,6 @@
                         <strong>Verification Complete:</strong> Package identity has been verified. Click the button on the right to record physical receipt at the hub.
                     @endif
                 </p>
-
                 <form action="{{ route('logistics.shipments.verify-hub-arrival', $shipment->id) }}"
                       method="POST"
                       @submit="isSubmittingConfirm = true"
@@ -454,38 +473,54 @@
         <div class="p-6 rounded-3xl bg-surface border-2 border-primary/30 shadow-xs space-y-4">
             <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                 <div>
-                    <h2 class="text-base font-bold text-primary-dark">Step 3: Assign Last-Mile Delivery Rider (Barangay Coverage Match)</h2>
+                    <h2 class="text-base font-bold text-primary-dark">Step 3: Assign Last-Mile Delivery Rider (Strict 20 km / Municipality Fuel Protection)</h2>
                     <p class="text-xs text-text-muted mt-0.5">
-                        Assign an approved Rider covering <strong>Barangay {{ $deliv['barangay'] ?? 'N/A' }}, {{ $deliv['municipality'] ?? '' }}</strong> to deliver to <strong>{{ $deliv['recipient_name'] ?? 'Buyer' }}</strong>.
+                        Assign an approved Rider covering <strong>Barangay {{ $deliv['barangay'] ?? 'N/A' }}, {{ $deliv['municipality'] ?? '' }}, {{ $deliv['province'] ?? '' }}</strong>. Out-of-province Riders are automatically blocked to protect Rider gasoline expenses.
                     </p>
                 </div>
-                @if(isset($matchingBarangayRiders) && $matchingBarangayRiders->isNotEmpty())
-                    <span class="px-3 py-1 rounded-full text-[11px] font-bold bg-green-100 text-green-700 border border-green-200 self-start sm:self-auto">
-                        {{ $matchingBarangayRiders->count() }} Rider(s) Match Barangay {{ $deliv['barangay'] ?? '' }}
-                    </span>
-                @endif
+                <div class="flex flex-wrap items-center gap-1.5 text-[11px]">
+                    @if(isset($matchingBarangayRiders) && $matchingBarangayRiders->isNotEmpty())
+                        <span class="px-2.5 py-1 rounded-lg bg-green-100 text-green-700 border border-green-200 font-bold">
+                            {{ $matchingBarangayRiders->count() }} Exact Brgy Match
+                        </span>
+                    @endif
+                    <span class="text-text-muted font-bold ml-1">Sort Riders:</span>
+                    @foreach(['nearest' => 'Nearest First', 'farthest' => 'Farthest First', 'workload' => 'Least Busy'] as $rKey => $rLabel)
+                        <a href="{{ route('logistics.shipments.show', ['shipment' => $shipment->id, 'rider_sort' => $rKey, 'courier_sort' => $courierSort]) }}"
+                           class="px-2.5 py-1 rounded-lg font-bold transition-colors {{ $riderSort === $rKey ? 'bg-primary text-white' : 'bg-surface-subtle text-text-muted hover:text-text-main' }}">
+                            {{ $rLabel }}
+                        </a>
+                    @endforeach
+                </div>
             </div>
 
             @if($availableRiders->isEmpty())
                 <div class="p-4 rounded-2xl bg-yellow-50 border border-yellow-200 text-xs text-yellow-800 font-semibold">
-                    No approved Riders found. <a href="{{ route('rider.register') }}" class="underline font-bold">Create a Rider Account</a> or <a href="{{ route('logistics.employees.index') }}" class="underline font-bold">assign Rider Barangay coverage</a> first.
+                    No approved Riders found within Last-Mile range (same province &amp; within 20 km) of <strong>{{ $deliv['municipality'] ?? '' }}, {{ $deliv['province'] ?? '' }}</strong>.
+                    <a href="{{ route('rider.register') }}" class="underline font-bold">Create a Rider Account</a> or <a href="{{ route('logistics.employees.index') }}" class="underline font-bold">assign Rider Hub &amp; Barangay coverage</a> first.
                 </div>
             @else
                 <form action="{{ route('logistics.shipments.assign-rider', $shipment->id) }}" method="POST" class="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
                     @csrf
                     <div>
-                        <label class="block text-xs font-bold text-text-muted mb-1">Select Approved Rider <span class="text-danger">*</span></label>
+                        <label class="block text-xs font-bold text-text-muted mb-1">Select Approved Last-Mile Rider <span class="text-danger">*</span></label>
                         <select name="rider_id" required class="w-full p-3 rounded-xl border border-border-subtle bg-surface text-xs font-semibold outline-none focus:border-primary">
                             @foreach($availableRiders as $r)
+                                @php
+                                    $rEval = $r->getAttribute('delivery_eval') ?? [];
+                                    $rDist = number_format((float) ($rEval['distance_from_rider_km'] ?? 0), 1);
+                                    $isExactBrgy = !empty($rEval['exact_barangay_match']);
+                                    $activeJobs = (int) ($r->active_deliveries_count ?? 0);
+                                @endphp
                                 <option value="{{ $r->id }}" {{ (int) $shipment->current_rider_id === (int) $r->id ? 'selected' : '' }}>
-                                    {{ $r->full_name }} ({{ $r->vehicle_type }} - {{ $r->plate_number }} | Hub: {{ $r->assigned_hub?->municipality ?? 'Main' }} | Brgy: {{ $r->formatted_barangay_coverage }})
+                                    [~{{ $rDist }} km{{ $isExactBrgy ? ' • Exact Brgy' : '' }}] {{ $r->full_name }} ({{ $r->vehicle_type }} | Hub: {{ $r->assigned_hub?->municipality ?? 'Main' }} | Active Jobs: {{ $activeJobs }})
                                 </option>
                             @endforeach
                         </select>
                     </div>
                     <div>
                         <label class="block text-xs font-bold text-text-muted mb-1">Delivery Notes (Optional)</label>
-                        <input type="text" name="notes" placeholder="e.g. Collect exact COD ₱{{ number_format((float) $shipment->cod_amount, 2) }}" class="w-full p-3 rounded-xl border border-border-subtle bg-surface text-xs outline-none focus:border-primary">
+                        <input type="text" name="notes" placeholder="e.g. Collect exact COD &#8369;{{ number_format((float) $shipment->cod_amount, 2) }}" class="w-full p-3 rounded-xl border border-border-subtle bg-surface text-xs outline-none focus:border-primary">
                     </div>
                     <div>
                         <button type="submit" class="w-full py-3 px-5 rounded-xl bg-primary hover:bg-primary-dark text-surface text-xs font-bold shadow-sm transition-colors cursor-pointer">
@@ -493,6 +528,29 @@
                         </button>
                     </div>
                 </form>
+            @endif
+
+            @if($outOfRangeRiders->isNotEmpty())
+                <div class="pt-2 border-t border-border-subtle text-xs">
+                    <button type="button"
+                            @click="showExcludedRiders = !showExcludedRiders"
+                            class="text-[11px] font-bold text-text-muted hover:text-primary cursor-pointer">
+                        <span x-text="showExcludedRiders ? 'Hide Out-of-Zone Riders (' + {{ $outOfRangeRiders->count() }} + ')' : 'Show Why ' + {{ $outOfRangeRiders->count() }} + ' Other Rider(s) Are Blocked (Gasoline & Range Protection)'"></span>
+                    </button>
+                    <div x-show="showExcludedRiders" x-cloak class="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        @foreach($outOfRangeRiders as $exR)
+                            @php $exREval = $exR->getAttribute('delivery_eval') ?? []; @endphp
+                            <div class="p-2.5 rounded-xl bg-surface-subtle border border-border-subtle text-[11px] flex items-center justify-between gap-2">
+                                <div>
+                                    <span class="font-bold text-text-main">{{ $exR->full_name }}</span>
+                                    <span class="text-text-muted">({{ $exR->assigned_hub?->municipality ?? 'No Hub' }}, {{ $exR->assigned_hub?->province ?? '' }})</span>
+                                    <p class="text-danger font-semibold mt-0.5">{{ $exREval['reason'] ?? 'Outside last-mile radius' }}</p>
+                                </div>
+                                <span class="font-mono font-bold text-text-muted shrink-0">~{{ number_format((float) ($exREval['distance_from_hub_km'] ?? 0), 1) }} km</span>
+                            </div>
+                        @endforeach
+                    </div>
+                </div>
             @endif
         </div>
     @endif
@@ -529,12 +587,16 @@
 
                 <div x-show="resolutionType === 'schedule_redelivery'" class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
-                        <label class="block text-xs font-bold text-text-muted mb-1">Assign / Reassign Rider for Redelivery</label>
+                        <label class="block text-xs font-bold text-text-muted mb-1">Assign / Reassign Eligible Rider for Redelivery</label>
                         <select name="rider_id" class="w-full p-2.5 rounded-xl border border-border-subtle text-xs">
                             <option value="">Assign Rider Later</option>
                             @foreach($availableRiders as $r)
+                                @php
+                                    $rEval = $r->getAttribute('delivery_eval') ?? [];
+                                    $rDist = number_format((float) ($rEval['distance_from_rider_km'] ?? 0), 1);
+                                @endphp
                                 <option value="{{ $r->id }}" {{ (int) $shipment->current_rider_id === (int) $r->id ? 'selected' : '' }}>
-                                    {{ $r->full_name }} ({{ $r->vehicle_type }} - {{ $r->plate_number }})
+                                    [~{{ $rDist }} km] {{ $r->full_name }} ({{ $r->vehicle_type }} - {{ $r->plate_number }})
                                 </option>
                             @endforeach
                         </select>
@@ -556,14 +618,16 @@
 
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div class="lg:col-span-2 space-y-6">
-
             @if($packages->isNotEmpty())
                 <div class="bg-surface rounded-3xl border border-border-subtle p-6 shadow-xs space-y-4">
                     <div class="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-border-subtle">
                         <div>
-                            <h3 class="text-sm font-bold text-primary-dark">Package Identification & Product Manifest</h3>
+                            <h3 class="text-sm font-bold text-primary-dark">Package Identification &amp; Product Manifest</h3>
                             <p class="text-xs text-text-muted">
-                                Designated Hub: <strong>{{ $primaryPackage?->logisticsHub?->hub_name ?? ($hubSnap['hub_name'] ?? $profile->business_name) }}</strong>
+                                Origin Hub: <strong>{{ $primaryPackage?->logisticsHub?->hub_name ?? ($hubSnap['hub_name'] ?? $profile->business_name) }}</strong>
+                                @if(!empty($destHubSnap['hub_name']) && $destHubSnap['hub_name'] !== ($primaryPackage?->logisticsHub?->hub_name ?? ($hubSnap['hub_name'] ?? '')))
+                                    &bull; Destination Hub: <strong>{{ $destHubSnap['hub_name'] }}</strong>
+                                @endif
                             </p>
                         </div>
                         <span class="px-3 py-1 rounded-full text-xs font-bold bg-surface-subtle border border-border-subtle text-text-main">
@@ -621,7 +685,7 @@
             @endif
 
             <div class="bg-surface rounded-3xl border border-border-subtle p-6 shadow-xs space-y-4">
-                <h3 class="text-sm font-bold text-primary-dark">Shipment Tracking & Operational Audit Log</h3>
+                <h3 class="text-sm font-bold text-primary-dark">Shipment Tracking &amp; Operational Audit Log</h3>
                 <div class="relative pl-6 border-l-2 border-primary/30 space-y-5">
                     @foreach($shipment->trackingLogs as $idx => $log)
                         <div class="relative">
@@ -660,7 +724,6 @@
                     </div>
                 </div>
             @endif
-
         </div>
 
         <div class="space-y-6">
@@ -669,6 +732,10 @@
                 <p class="text-sm font-bold text-text-main">{{ $pickup['business_name'] ?? '' }}</p>
                 <p class="text-text-muted">{{ $pickup['contact_no'] ?? '' }}</p>
                 <p class="text-text-main leading-relaxed">{{ $pickup['full_address'] ?? '' }}</p>
+                <div class="pt-2 border-t border-border-subtle flex items-center justify-between text-[11px]">
+                    <span class="text-text-muted">Distance to Origin Hub:</span>
+                    <strong class="font-mono text-primary-dark">~{{ number_format($shipment->calculated_origin_distance_km, 1) }} km</strong>
+                </div>
             </div>
 
             <div class="bg-surface rounded-3xl border border-border-subtle p-6 shadow-xs space-y-3 text-xs">
@@ -683,6 +750,10 @@
                         </span>
                     </div>
                 @endif
+                <div class="pt-2 border-t border-border-subtle flex items-center justify-between text-[11px]">
+                    <span class="text-text-muted">Last-Mile Rider Distance:</span>
+                    <strong class="font-mono text-primary-dark">~{{ number_format($shipment->calculated_buyer_distance_km, 1) }} km</strong>
+                </div>
             </div>
 
             @if($latestProof)
@@ -705,7 +776,6 @@
              x-cloak
              class="fixed inset-0 z-[210] flex items-center justify-center p-4">
             <div @click="closeQrScanner()" class="absolute inset-0 bg-black/75 backdrop-blur-xs cursor-pointer"></div>
-
             <div @click.stop class="relative z-10 bg-surface rounded-3xl max-w-lg w-full p-6 shadow-2xl border border-border-subtle space-y-4">
                 <div class="flex items-center justify-between pb-3 border-b border-border-subtle">
                     <div>
@@ -733,13 +803,11 @@
                 <div x-show="!noCameraAvailable" class="relative rounded-2xl overflow-hidden bg-black aspect-video flex items-center justify-center border border-border-subtle">
                     <video x-ref="qrVideo" class="w-full h-full object-cover" playsinline muted></video>
                     <canvas x-ref="qrCanvas" class="hidden"></canvas>
-
                     <div class="pointer-events-none absolute inset-0 flex items-center justify-center p-6">
                         <div class="w-48 h-48 rounded-2xl border-2 border-primary shadow-[0_0_0_9999px_rgba(0,0,0,0.45)] relative">
                             <div class="absolute inset-x-2 top-1/2 h-0.5 bg-primary/80 animate-pulse"></div>
                         </div>
                     </div>
-
                     <div x-show="cameraLoading" class="absolute inset-0 bg-black/70 flex flex-col items-center justify-center text-white text-xs gap-2">
                         <span class="font-bold">Opening device camera...</span>
                     </div>
@@ -798,6 +866,5 @@
             </div>
         </template>
     @endif
-
 </div>
 @endsection

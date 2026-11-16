@@ -10,6 +10,21 @@
     <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
 </head>
 <body class="bg-surface-subtle/50 font-sans antialiased text-text-main min-h-screen pb-16 overflow-x-hidden">
+    @php
+        $sort = $sort ?? request()->query('sort', 'nearest');
+        $municipalityFilter = $municipalityFilter ?? request()->query('municipality', '');
+        $availableMunicipalities = $availableMunicipalities ?? collect();
+        $courierSortLabels = [
+            'nearest'  => 'Nearest Seller First (km)',
+            'farthest' => 'Farthest Seller First (km)',
+            'oldest'   => 'Oldest Assigned (FIFO)',
+            'newest'   => 'Newest Assigned (LIFO)',
+            'heaviest' => 'Heaviest Parcel First (kg)',
+        ];
+        $activeLoadKg = $courier->active_assigned_weight_kg;
+        $remainingCapKg = $courier->remaining_load_capacity_kg;
+    @endphp
+
     <header class="bg-surface border-b border-border-subtle sticky top-0 z-40">
         <div class="max-w-6xl mx-auto px-4 sm:px-6 py-3 flex flex-wrap items-center justify-between gap-3">
             <div class="flex items-center gap-3">
@@ -19,7 +34,7 @@
                 <div>
                     <h1 class="text-base font-bold text-primary-dark leading-tight">First-Mile Courier Portal</h1>
                     <p class="text-xs text-text-muted">
-                        {{ $courier->full_name }} &bull; {{ $courier->vehicle_type }} ({{ $courier->plate_number }}) &bull; Hub: <strong>{{ $courier->logisticsProfile->business_name ?? $courier->home_hub }}</strong>
+                        {{ $courier->full_name }} &bull; {{ $courier->vehicle_type }} ({{ $courier->plate_number }}) &bull; Hub: <strong>{{ $courier->assigned_hub?->hub_name ?? ($courier->logisticsProfile->business_name ?? $courier->home_hub) }}</strong>
                     </p>
                 </div>
             </div>
@@ -73,7 +88,7 @@
 
         <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             <div class="p-5 bg-surface rounded-2xl border border-border-subtle shadow-xs">
-                <span class="text-xs font-bold uppercase text-text-muted">Active First-Mile Pickups (FIFO)</span>
+                <span class="text-xs font-bold uppercase text-text-muted">Active First-Mile Pickups</span>
                 <p class="text-3xl font-serif font-bold text-primary-dark mt-1">{{ $counts['active'] }}</p>
             </div>
             <div class="p-5 bg-surface rounded-2xl border border-border-subtle shadow-xs">
@@ -82,7 +97,10 @@
             </div>
             <div class="p-5 bg-surface rounded-2xl border border-border-subtle shadow-xs">
                 <span class="text-xs font-bold uppercase text-text-muted">Vehicle Load Capacity</span>
-                <p class="text-3xl font-serif font-bold text-text-main mt-1">{{ number_format($courier->load_capacity) }} kg</p>
+                <p class="text-2xl font-serif font-bold text-text-main mt-1">
+                    {{ number_format($activeLoadKg, 1) }} / {{ number_format($courier->load_capacity) }} kg
+                </p>
+                <span class="text-[11px] text-text-muted">Remaining Capacity: {{ number_format($remainingCapKg, 1) }} kg</span>
             </div>
             <a href="{{ route('courier.report') }}" class="p-5 bg-surface rounded-2xl border border-border-subtle hover:border-primary/50 shadow-xs transition-all block">
                 <span class="text-xs font-bold uppercase text-text-muted">Courier E-Wallet</span>
@@ -91,19 +109,46 @@
             </a>
         </div>
 
-        <div class="flex items-center gap-2">
-            @foreach(['active' => 'Active Pickups (' . $counts['active'] . ')', 'completed' => 'Completed (' . $counts['completed'] . ')', 'all' => 'All History (' . $counts['all'] . ')'] as $key => $label)
-                <a href="{{ route('courier.dashboard', ['status' => $key]) }}"
-                   class="px-4 py-2 rounded-2xl text-xs font-bold border transition-all {{ $statusFilter === $key ? 'bg-primary-dark text-surface border-primary-dark' : 'bg-surface text-text-muted border-border-subtle hover:text-text-main' }}">
-                    {{ $label }}
-                </a>
-            @endforeach
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div class="flex flex-wrap items-center gap-2">
+                @foreach(['active' => 'Active Pickups (' . $counts['active'] . ')', 'completed' => 'Completed (' . $counts['completed'] . ')', 'all' => 'All History (' . $counts['all'] . ')'] as $key => $label)
+                    <a href="{{ route('courier.dashboard', array_filter(['status' => $key, 'sort' => $sort !== 'nearest' ? $sort : null, 'municipality' => $municipalityFilter ?: null])) }}"
+                       class="px-4 py-2 rounded-2xl text-xs font-bold border transition-all {{ $statusFilter === $key ? 'bg-primary-dark text-surface border-primary-dark' : 'bg-surface text-text-muted border-border-subtle hover:text-text-main' }}">
+                        {{ $label }}
+                    </a>
+                @endforeach
+            </div>
+
+            <form method="GET" action="{{ route('courier.dashboard') }}" class="flex flex-wrap items-center gap-2 text-xs">
+                <input type="hidden" name="status" value="{{ $statusFilter }}">
+
+                @if($availableMunicipalities->isNotEmpty())
+                    <select name="municipality"
+                            onchange="this.form.submit()"
+                            class="px-3 py-2 rounded-xl border border-border-subtle bg-surface text-xs font-bold text-text-main outline-none focus:border-primary cursor-pointer">
+                        <option value="">All Seller Municipalities</option>
+                        @foreach($availableMunicipalities as $munOpt)
+                            <option value="{{ $munOpt }}" {{ strcasecmp($municipalityFilter, $munOpt) === 0 ? 'selected' : '' }}>
+                                {{ $munOpt }}
+                            </option>
+                        @endforeach
+                    </select>
+                @endif
+
+                <select name="sort"
+                        onchange="this.form.submit()"
+                        class="px-3.5 py-2 rounded-xl border border-border-subtle bg-surface text-xs font-bold text-primary-dark outline-none focus:border-primary cursor-pointer">
+                    @foreach($courierSortLabels as $sKey => $sLabel)
+                        <option value="{{ $sKey }}" {{ $sort === $sKey ? 'selected' : '' }}>Sort: {{ $sLabel }}</option>
+                    @endforeach
+                </select>
+            </form>
         </div>
 
         @if($assignments->isEmpty())
             <div class="bg-surface rounded-3xl border border-border-subtle p-14 text-center space-y-2">
                 <h3 class="text-base font-bold text-text-main">No pickup assignments in this queue</h3>
-                <p class="text-xs text-text-muted">When your Logistics hub assigns you to collect a package from a Seller, it will appear here in First-In, First-Out (FIFO) order.</p>
+                <p class="text-xs text-text-muted">When your Logistics hub assigns you to collect a package from a Seller within your hub range, it will appear here.</p>
             </div>
         @else
             <div class="space-y-4">
@@ -114,6 +159,8 @@
                         $hub = $shipment->hub_address_snapshot ?? [];
                         $packages = $shipment->packages ?? collect();
                         $allVerified = $packages->every(fn($p) => $p->courier_verified_at !== null);
+                        $courierDistKm = (float) ($assignment->getAttribute('courier_distance_km') ?? $shipment->calculated_origin_distance_km);
+                        $payInfo = \App\Http\Controllers\Courier\PickupController::calculateFirstMileCourierPay($shipment);
                     @endphp
 
                     <div x-data="{
@@ -161,12 +208,18 @@
                          class="bg-surface rounded-3xl border border-border-subtle p-5 sm:p-6 shadow-xs space-y-4">
 
                         <div class="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-border-subtle">
-                            <div class="flex items-center gap-2.5">
+                            <div class="flex flex-wrap items-center gap-2.5">
                                 <span class="font-mono font-bold text-sm text-primary-dark bg-brand-light/40 px-3 py-1 rounded-xl">
                                     {{ $shipment->tracking_number }}
                                 </span>
                                 <span class="text-xs text-text-muted">
                                     Seller Order: <strong>{{ $assignment->sellerOrder->seller_order_number ?? 'N/A' }}</strong>
+                                </span>
+                                <span class="px-2.5 py-0.5 rounded-lg bg-primary/10 text-primary-dark border border-primary/20 text-[11px] font-mono font-bold">
+                                    ~{{ number_format($courierDistKm, 1) }} km to Seller
+                                </span>
+                                <span class="px-2.5 py-0.5 rounded-lg bg-green-50 text-green-800 border border-green-200 text-[11px] font-bold">
+                                    Haulage Pay: &#8369;{{ number_format((float) ($payInfo['total_pay'] ?? 0), 2) }} ({{ $payInfo['distance_tier'] ?? '25% Share' }})
                                 </span>
                             </div>
                             <span class="px-3 py-1 rounded-full text-xs font-bold bg-primary/10 text-primary uppercase">
@@ -183,7 +236,7 @@
                             </div>
                             <div class="p-4 rounded-2xl bg-surface-subtle border border-border-subtle space-y-1">
                                 <span class="text-[10px] font-bold uppercase tracking-wider text-primary-dark block">Step 2: Transport to Sorting Facility</span>
-                                <p class="text-sm font-bold text-text-main">{{ $hub['business_name'] ?? $courier->home_hub }}</p>
+                                <p class="text-sm font-bold text-text-main">{{ $hub['hub_name'] ?? ($hub['business_name'] ?? $courier->home_hub) }}</p>
                                 <p class="text-text-muted">Contact: {{ $hub['contact_no'] ?? '' }}</p>
                                 <p class="text-text-main leading-relaxed">{{ $hub['full_address'] ?? '' }}</p>
                             </div>

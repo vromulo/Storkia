@@ -6,6 +6,8 @@ use App\Http\Controllers\Controller;
 use App\Http\Controllers\Courier\PickupController as WebPickupController;
 use App\Models\Courier;
 use App\Models\DeliveryAssignment;
+use App\Models\LogisticsHub;
+use App\Models\LogisticsProfile;
 use App\Models\OrderStatusHistory;
 use App\Models\PickupAssignment;
 use App\Models\Rider;
@@ -18,6 +20,7 @@ use App\Services\AddressService;
 use App\Services\BuyerAbandonmentService;
 use App\Services\BuyerOrderNotificationService;
 use App\Services\BuyerRewardService;
+use App\Services\CourierMobileSchemaService;
 use App\Services\InventoryStockService;
 use App\Services\OrderCompletionService;
 use App\Services\RealtimeBroadcastService;
@@ -26,6 +29,7 @@ use App\Services\ShipmentVerificationService;
 use App\Services\VoucherService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Validation\ValidationException;
 
 class ShipmentController extends Controller
@@ -44,11 +48,28 @@ class ShipmentController extends Controller
         $this->buyerRewardService = $buyerRewardService ?? app(BuyerRewardService::class);
     }
 
+    protected function resolveLogisticsProfile(?User $user): ?LogisticsProfile
+    {
+        if (! $user) {
+            return null;
+        }
+
+        if ($user->logisticsProfile) {
+            return $user->logisticsProfile;
+        }
+
+        if (method_exists($user, 'isBranchLogisticsAccount') && $user->isBranchLogisticsAccount()) {
+            return $user->branchLogisticsHub?->parentLogisticsProfile;
+        }
+
+        return null;
+    }
+
     public function index(Request $request)
     {
         /** @var User $user */
         $user = $request->user();
-        $profile = $user->logisticsProfile;
+        $profile = $this->resolveLogisticsProfile($user);
 
         if (! $profile) {
             abort(403, 'Your logistics hub must be approved to manage shipments.');
@@ -56,11 +77,16 @@ class ShipmentController extends Controller
 
         $profile->ensureMainHubExists();
         $this->orderCompletionService->runLifecycleMaintenance(logisticsProfileId: (int) $profile->id);
+        $this->backfillShipmentDistances((int) $profile->id);
 
         $activeBranchHub = $user->isBranchLogisticsAccount() ? $user->branchLogisticsHub : null;
 
         $statusTab = $request->query('status', 'all');
         $search = trim((string) $request->query('search', ''));
+        $queueSort = Shipment::normalizeQueueSort($request->query('sort'));
+        $tierFilter = trim((string) $request->query('tier', ''));
+        $municipalityFilter = trim((string) $request->query('municipality', ''));
+        $hubFilter = (int) $request->query('hub_id', 0);
 
         $baseQuery = Shipment::where('logistics_profile_id', $profile->id)
             ->whereHas('sellerOrder', fn ($q) => $q->where('logistics_profile_id', $profile->id));
@@ -68,7 +94,10 @@ class ShipmentController extends Controller
         if ($activeBranchHub) {
             $baseQuery->where(function ($q) use ($activeBranchHub) {
                 $q->whereHas('packages', fn ($pq) => $pq->where('logistics_hub_id', $activeBranchHub->id))
-                  ->orWhere('hub_address_snapshot->logistics_hub_id', $activeBranchHub->id);
+                  ->orWhere('hub_address_snapshot->logistics_hub_id', $activeBranchHub->id)
+                  ->when(Schema::hasColumn('shipments', 'destination_logistics_hub_id'), function ($dq) use ($activeBranchHub) {
+                      $dq->orWhere('destination_logistics_hub_id', $activeBranchHub->id);
+                  });
             });
         }
 
@@ -82,10 +111,29 @@ class ShipmentController extends Controller
             'failed_returned'  => (clone $baseQuery)->whereIn('status', ['delivery_failed', 'returning_to_seller', 'returned_to_seller'])->count(),
         ];
 
+        $companyHubs = LogisticsHub::where('parent_logistics_profile_id', $profile->id)
+            ->where('status', 'active')
+            ->orderByDesc('is_main_hub')
+            ->orderBy('municipality')
+            ->get();
+
+        $availableMunicipalities = (clone $baseQuery)
+            ->select(['pickup_address_snapshot', 'delivery_address_snapshot'])
+            ->get()
+            ->flatMap(function (Shipment $s) {
+                $pMun = trim((string) ($s->pickup_address_snapshot['municipality'] ?? ''));
+                $dMun = trim((string) ($s->delivery_address_snapshot['municipality'] ?? ''));
+                return array_filter([$pMun, $dMun]);
+            })
+            ->unique()
+            ->sort()
+            ->values();
+
         $query = (clone $baseQuery)->with([
             'sellerOrder.buyer',
             'sellerOrder.items',
             'sellerProfile',
+            'destinationLogisticsHub',
             'currentCourier',
             'currentRider',
             'packages.logisticsHub',
@@ -102,6 +150,27 @@ class ShipmentController extends Controller
             default            => null,
         };
 
+        if ($tierFilter !== '') {
+            $query->whereHas('sellerOrder', fn ($sq) => $sq->where('shipping_tier', $tierFilter));
+        }
+
+        if ($municipalityFilter !== '') {
+            $query->where(function ($q) use ($municipalityFilter) {
+                $q->where('delivery_address_snapshot->municipality', $municipalityFilter)
+                  ->orWhere('pickup_address_snapshot->municipality', $municipalityFilter);
+            });
+        }
+
+        if ($hubFilter > 0 && ! $activeBranchHub) {
+            $query->where(function ($q) use ($hubFilter) {
+                $q->whereHas('packages', fn ($pq) => $pq->where('logistics_hub_id', $hubFilter))
+                  ->orWhere('hub_address_snapshot->logistics_hub_id', $hubFilter)
+                  ->when(Schema::hasColumn('shipments', 'destination_logistics_hub_id'), function ($dq) use ($hubFilter) {
+                      $dq->orWhere('destination_logistics_hub_id', $hubFilter);
+                  });
+            });
+        }
+
         if ($search !== '') {
             $query->where(function ($q) use ($search) {
                 $q->where('tracking_number', 'like', "%{$search}%")
@@ -112,7 +181,7 @@ class ShipmentController extends Controller
         }
 
         $shipments = $query
-            ->orderByOperationalQueue()
+            ->orderByOperationalQueue($queueSort)
             ->paginate(10)
             ->withQueryString();
 
@@ -122,15 +191,49 @@ class ShipmentController extends Controller
             'shipments',
             'statusTab',
             'search',
-            'counts'
+            'counts',
+            'queueSort',
+            'tierFilter',
+            'municipalityFilter',
+            'hubFilter',
+            'companyHubs',
+            'availableMunicipalities'
         ));
+    }
+
+    protected function backfillShipmentDistances(int $logisticsProfileId): void
+    {
+        if (! Schema::hasColumn('shipments', 'hub_to_buyer_distance_km')) {
+            return;
+        }
+
+        $missing = Shipment::where('logistics_profile_id', $logisticsProfileId)
+            ->whereNull('hub_to_buyer_distance_km')
+            ->limit(40)
+            ->get();
+
+        foreach ($missing as $shp) {
+            $origDist = CourierMobileSchemaService::calculateDistanceKmBetweenLocations(
+                (array) ($shp->pickup_address_snapshot ?? []),
+                (array) ($shp->hub_address_snapshot ?? [])
+            );
+            $destHubSnap = (array) ($shp->hub_address_snapshot['destination_hub'] ?? $shp->hub_address_snapshot ?? []);
+            $destDist = CourierMobileSchemaService::calculateDistanceKmBetweenLocations(
+                $destHubSnap,
+                (array) ($shp->delivery_address_snapshot ?? [])
+            );
+            $shp->update([
+                'origin_to_hub_distance_km' => $origDist,
+                'hub_to_buyer_distance_km'  => $destDist,
+            ]);
+        }
     }
 
     public function show(Request $request, Shipment $shipment)
     {
         /** @var User $user */
         $user = $request->user();
-        $profile = $user->logisticsProfile;
+        $profile = $this->resolveLogisticsProfile($user);
 
         if (
             ! $profile
@@ -154,6 +257,7 @@ class ShipmentController extends Controller
             'sellerOrder.buyer',
             'sellerOrder.payment',
             'sellerProfile',
+            'destinationLogisticsHub',
             'currentCourier.currentHubAssignment.hub',
             'currentRider.currentHubAssignment.hub',
             'currentRider.barangayCoverages',
@@ -170,19 +274,24 @@ class ShipmentController extends Controller
 
         $primaryPackage = $shipment->packages->first();
         $targetHubId = $primaryPackage?->logistics_hub_id ?? ($shipment->hub_address_snapshot['logistics_hub_id'] ?? null);
+        $destHubId = $shipment->destination_logistics_hub_id ?? ($shipment->hub_address_snapshot['destination_logistics_hub_id'] ?? $targetHubId);
 
         if ($user->isBranchLogisticsAccount() && $user->branchLogisticsHub) {
-            if ($targetHubId && (int) $targetHubId !== (int) $user->branchLogisticsHub->id) {
+            $branchId = (int) $user->branchLogisticsHub->id;
+            if (
+                $targetHubId && (int) $targetHubId !== $branchId
+                && (! $destHubId || (int) $destHubId !== $branchId)
+            ) {
                 abort(403, 'This shipment is assigned to another hub branch.');
             }
         }
 
-        $pickupMun = $this->addressService->normalizeName(
-            $primaryPackage?->logisticsHub?->municipality
-            ?? ($shipment->hub_address_snapshot['municipality'] ?? ($shipment->pickup_address_snapshot['municipality'] ?? ''))
-        );
-        $deliveryMun = $this->addressService->normalizeName($shipment->delivery_address_snapshot['municipality'] ?? '');
-        $deliveryBarangay = $this->addressService->normalizeName($shipment->delivery_address_snapshot['barangay'] ?? '');
+        $pickupSnap = (array) ($shipment->pickup_address_snapshot ?? []);
+        $deliverySnap = (array) ($shipment->delivery_address_snapshot ?? []);
+        $shipmentWeightKg = (float) ($shipment->total_weight ?: 0.5);
+
+        $courierSort = $request->query('courier_sort', 'nearest');
+        $riderSort = $request->query('rider_sort', 'nearest');
 
         $allCouriers = Courier::with(['currentHubAssignment.hub'])
             ->where('logistics_profile_id', $profile->id)
@@ -190,64 +299,67 @@ class ShipmentController extends Controller
             ->orderBy('first_name')
             ->get();
 
-        $availableCouriers = $allCouriers->filter(function (Courier $c) use ($targetHubId, $pickupMun) {
-            $assignedHub = $c->assigned_hub;
-            if (! $assignedHub) {
-                return false;
-            }
-            if ($targetHubId && (int) $assignedHub->id === (int) $targetHubId) {
-                return true;
-            }
-            if ($pickupMun !== '' && $this->addressService->normalizeName($assignedHub->municipality) === $pickupMun) {
-                return true;
-            }
+        $evaluatedCouriers = $allCouriers->map(function (Courier $c) use ($pickupSnap, $shipmentWeightKg) {
+            $eval = $c->evaluatePickupEligibilityForSnapshot($pickupSnap, $shipmentWeightKg);
+            $c->setAttribute('pickup_eval', $eval);
+            return $c;
+        });
 
-            return false;
-        })->values();
+        $eligibleCouriers = $evaluatedCouriers->filter(fn (Courier $c) => (bool) ($c->getAttribute('pickup_eval')['is_eligible'] ?? false));
+
+        $availableCouriers = ($courierSort === 'farthest'
+            ? $eligibleCouriers->sortByDesc(fn (Courier $c) => (float) ($c->getAttribute('pickup_eval')['distance_from_courier_km'] ?? 0))
+            : ($courierSort === 'capacity'
+                ? $eligibleCouriers->sortByDesc(fn (Courier $c) => (float) ($c->getAttribute('pickup_eval')['remaining_capacity_kg'] ?? 0))
+                : $eligibleCouriers->sortBy(fn (Courier $c) => (float) ($c->getAttribute('pickup_eval')['distance_from_courier_km'] ?? 9999))
+            ))->values();
+
+        $outOfRangeCouriers = $evaluatedCouriers->reject(fn (Courier $c) => (bool) ($c->getAttribute('pickup_eval')['is_eligible'] ?? false))->values();
 
         $allRiders = Rider::with(['currentHubAssignment.hub', 'barangayCoverages'])
+            ->withCount([
+                'deliveryAssignments as active_deliveries_count' => function ($q) {
+                    $q->whereIn('status', ['assigned', 'accepted', 'collected', 'out_for_delivery']);
+                },
+            ])
             ->where('logistics_profile_id', $profile->id)
             ->where('status', 'approved')
             ->orderBy('first_name')
             ->get();
 
-        $municipalityRiders = $allRiders->filter(function (Rider $r) use ($targetHubId, $deliveryMun, $pickupMun) {
-            $assignedHub = $r->assigned_hub;
-            if (! $assignedHub) {
-                return false;
-            }
-            $riderMun = $this->addressService->normalizeName($assignedHub->municipality);
-            if ($deliveryMun !== '' && $riderMun === $deliveryMun) {
-                return true;
-            }
-            if ($targetHubId && (int) $assignedHub->id === (int) $targetHubId) {
-                return true;
-            }
-            if ($pickupMun !== '' && $riderMun === $pickupMun) {
-                return true;
-            }
+        $evaluatedRiders = $allRiders->map(function (Rider $r) use ($deliverySnap) {
+            $eval = $r->evaluateDeliveryEligibilityForSnapshot($deliverySnap);
+            $r->setAttribute('delivery_eval', $eval);
+            return $r;
+        });
 
-            return false;
-        })->values();
+        $eligibleRiders = $evaluatedRiders->filter(fn (Rider $r) => (bool) ($r->getAttribute('delivery_eval')['is_eligible'] ?? false));
 
-        $matchingBarangayRiders = $municipalityRiders->filter(function (Rider $r) use ($deliveryBarangay) {
-            if ($deliveryBarangay === '') {
-                return true;
-            }
+        $matchingBarangayRiders = $eligibleRiders->filter(fn (Rider $r) => (bool) ($r->getAttribute('delivery_eval')['exact_barangay_match'] ?? false))->values();
 
-            return $r->barangayCoverages->contains(function ($cov) use ($deliveryBarangay) {
-                return $this->addressService->normalizeName($cov->barangay_name) === $deliveryBarangay;
-            });
-        })->values();
+        $availableRiders = ($riderSort === 'farthest'
+            ? $eligibleRiders->sortByDesc(fn (Rider $r) => (float) ($r->getAttribute('delivery_eval')['distance_from_rider_km'] ?? 0))
+            : ($riderSort === 'workload'
+                ? $eligibleRiders->sortBy(fn (Rider $r) => (int) ($r->active_deliveries_count ?? 0))
+                : $eligibleRiders->sortBy(function (Rider $r) {
+                    $eval = $r->getAttribute('delivery_eval');
+                    $brgyBonus = ! empty($eval['exact_barangay_match']) ? 0 : 50;
+                    return $brgyBonus + (float) ($eval['distance_from_rider_km'] ?? 9999);
+                })
+            ))->values();
 
-        $availableRiders = $matchingBarangayRiders->isNotEmpty() ? $matchingBarangayRiders : $municipalityRiders;
+        $outOfRangeRiders = $evaluatedRiders->reject(fn (Rider $r) => (bool) ($r->getAttribute('delivery_eval')['is_eligible'] ?? false))->values();
 
         return view('logistics.shipments.show', compact(
             'profile',
             'shipment',
             'availableCouriers',
+            'outOfRangeCouriers',
             'availableRiders',
-            'matchingBarangayRiders'
+            'outOfRangeRiders',
+            'matchingBarangayRiders',
+            'courierSort',
+            'riderSort'
         ));
     }
 
@@ -255,7 +367,7 @@ class ShipmentController extends Controller
     {
         /** @var User $user */
         $user = $request->user();
-        $profile = $user->logisticsProfile;
+        $profile = $this->resolveLogisticsProfile($user);
 
         if (! $profile || (int) $shipment->logistics_profile_id !== (int) $profile->id) {
             abort(403, 'This shipment is not assigned to your logistics company.');
@@ -331,7 +443,7 @@ class ShipmentController extends Controller
     {
         /** @var User $user */
         $user = $request->user();
-        $profile = $user->logisticsProfile;
+        $profile = $this->resolveLogisticsProfile($user);
 
         if (! $profile || (int) $shipment->logistics_profile_id !== (int) $profile->id) {
             abort(403, 'This shipment is not assigned to your logistics company.');
@@ -339,11 +451,6 @@ class ShipmentController extends Controller
 
         $shipment->loadMissing('packages.logisticsHub');
         $primaryPackage = $shipment->packages->first();
-        $targetHubId = $primaryPackage?->logistics_hub_id ?? ($shipment->hub_address_snapshot['logistics_hub_id'] ?? null);
-        $pickupMun = $this->addressService->normalizeName(
-            $primaryPackage?->logisticsHub?->municipality
-            ?? ($shipment->hub_address_snapshot['municipality'] ?? ($shipment->pickup_address_snapshot['municipality'] ?? ''))
-        );
 
         if ($shipment->status === 'awaiting_seller_drop_off' || ($primaryPackage && $primaryPackage->handover_method === 'self_drop_off')) {
             return back()->withErrors([
@@ -363,13 +470,14 @@ class ShipmentController extends Controller
             ->whereIn('status', ['active', 'Active', 'on_delivery'])
             ->findOrFail($validated['courier_id']);
 
-        $courierHub = $courier->assigned_hub;
-        $matchesHubOrMun = ($targetHubId && $courierHub && (int) $courierHub->id === (int) $targetHubId)
-            || ($pickupMun !== '' && $courierHub && $this->addressService->normalizeName($courierHub->municipality) === $pickupMun);
+        $pickupEval = $courier->evaluatePickupEligibilityForSnapshot(
+            (array) ($shipment->pickup_address_snapshot ?? []),
+            (float) ($shipment->total_weight ?: 0.5)
+        );
 
-        if (! $matchesHubOrMun) {
+        if (! $pickupEval['is_eligible']) {
             return back()->withErrors([
-                'courier_id' => "Courier {$courier->full_name} is registered to {$courierHub?->municipality} and cannot be assigned to a shipment routed to another hub municipality.",
+                'courier_id' => $pickupEval['reason'] ?: "Courier {$courier->full_name} is not eligible to pick up this shipment.",
             ]);
         }
 
@@ -507,7 +615,7 @@ class ShipmentController extends Controller
     {
         /** @var User $user */
         $user = $request->user();
-        $profile = $user->logisticsProfile;
+        $profile = $this->resolveLogisticsProfile($user);
 
         if (! $profile || (int) $shipment->logistics_profile_id !== (int) $profile->id) {
             abort(403);
@@ -602,7 +710,7 @@ class ShipmentController extends Controller
                 'status' => 'at_logistics_hub',
             ]);
 
-            $receivingHub = $user->activeLogisticsHub();
+            $receivingHub = method_exists($user, 'activeLogisticsHub') ? $user->activeLogisticsHub() : null;
             $hubName = $receivingHub?->hub_name ?? $profile->business_name;
             $hubLocation = ($receivingHub?->municipality ?? $profile->municipality) . ', ' . ($receivingHub?->province ?? $profile->province);
 
@@ -690,7 +798,7 @@ class ShipmentController extends Controller
     {
         /** @var User $user */
         $user = $request->user();
-        $profile = $user->logisticsProfile;
+        $profile = $this->resolveLogisticsProfile($user);
 
         if (! $profile || (int) $shipment->logistics_profile_id !== (int) $profile->id) {
             abort(403, 'This shipment is not assigned to your logistics company.');
@@ -708,25 +816,11 @@ class ShipmentController extends Controller
             ->where('status', 'approved')
             ->findOrFail($validated['rider_id']);
 
-        $shipment->loadMissing('packages.logisticsHub');
-        $primaryPackage = $shipment->packages->first();
-        $targetHubId = $primaryPackage?->logistics_hub_id ?? ($shipment->hub_address_snapshot['logistics_hub_id'] ?? null);
-        $deliveryMun = $this->addressService->normalizeName($shipment->delivery_address_snapshot['municipality'] ?? '');
-        $pickupMun = $this->addressService->normalizeName(
-            $primaryPackage?->logisticsHub?->municipality
-            ?? ($shipment->hub_address_snapshot['municipality'] ?? ($shipment->pickup_address_snapshot['municipality'] ?? ''))
-        );
+        $deliveryEval = $rider->evaluateDeliveryEligibilityForSnapshot((array) ($shipment->delivery_address_snapshot ?? []));
 
-        $riderHub = $rider->assigned_hub;
-        $riderMun = $this->addressService->normalizeName($riderHub?->municipality);
-
-        $matchesMunicipalityOrHub = ($deliveryMun !== '' && $riderMun === $deliveryMun)
-            || ($targetHubId && $riderHub && (int) $riderHub->id === (int) $targetHubId)
-            || ($pickupMun !== '' && $riderMun === $pickupMun);
-
-        if (! $matchesMunicipalityOrHub) {
+        if (! $deliveryEval['is_eligible']) {
             return back()->withErrors([
-                'rider_id' => "Rider {$rider->full_name} is registered to {$riderHub?->municipality} and cannot be assigned to a shipment outside their registered hub municipality.",
+                'rider_id' => $deliveryEval['reason'] ?: "Rider {$rider->full_name} is registered to {$rider->assigned_hub?->municipality} and cannot be assigned to a buyer outside their last-mile hub radius.",
             ]);
         }
 
@@ -826,7 +920,7 @@ class ShipmentController extends Controller
     {
         /** @var User $user */
         $user = $request->user();
-        $profile = $user->logisticsProfile;
+        $profile = $this->resolveLogisticsProfile($user);
 
         if (! $profile || (int) $shipment->logistics_profile_id !== (int) $profile->id) {
             abort(403);
@@ -840,9 +934,17 @@ class ShipmentController extends Controller
 
         $newRider = null;
         if ($validated['resolution'] === 'schedule_redelivery' && ! empty($validated['rider_id'])) {
-            $newRider = Rider::where('logistics_profile_id', $profile->id)
+            $newRider = Rider::with(['currentHubAssignment.hub', 'barangayCoverages'])
+                ->where('logistics_profile_id', $profile->id)
                 ->where('status', 'approved')
                 ->findOrFail($validated['rider_id']);
+
+            $redelivEval = $newRider->evaluateDeliveryEligibilityForSnapshot((array) ($shipment->delivery_address_snapshot ?? []));
+            if (! $redelivEval['is_eligible']) {
+                return back()->withErrors([
+                    'rider_id' => $redelivEval['reason'] ?: "Rider {$newRider->full_name} is outside the Last-Mile delivery range for this buyer.",
+                ]);
+            }
         }
 
         $abandonmentShipment = null;
@@ -1066,7 +1168,7 @@ class ShipmentController extends Controller
     {
         /** @var User $user */
         $user = $request->user();
-        $profile = $user->logisticsProfile;
+        $profile = $this->resolveLogisticsProfile($user);
 
         if (! $profile) {
             abort(403);
@@ -1074,6 +1176,7 @@ class ShipmentController extends Controller
 
         $filter = $request->query('filter', 'all');
         $search = trim((string) $request->query('search', ''));
+        $hubFilter = (int) $request->query('hub_id', 0);
 
         $query = Rider::with(['currentHubAssignment.hub', 'barangayCoverages'])
             ->withCount([
@@ -1090,6 +1193,8 @@ class ShipmentController extends Controller
         if ($user->isBranchLogisticsAccount() && $user->branchLogisticsHub) {
             $branchId = (int) $user->branchLogisticsHub->id;
             $query->whereHas('currentHubAssignment', fn ($q) => $q->where('logistics_hub_id', $branchId)->where('is_current', true));
+        } elseif ($hubFilter > 0) {
+            $query->whereHas('currentHubAssignment', fn ($q) => $q->where('logistics_hub_id', $hubFilter)->where('is_current', true));
         }
 
         if ($filter === 'available') {
@@ -1117,6 +1222,6 @@ class ShipmentController extends Controller
             ->paginate(10)
             ->withQueryString();
 
-        return view('logistics.riders.active-riders', compact('profile', 'riders', 'filter', 'search'));
+        return view('logistics.riders.active-riders', compact('profile', 'riders', 'filter', 'search', 'hubFilter'));
     }
 }

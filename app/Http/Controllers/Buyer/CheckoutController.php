@@ -115,7 +115,9 @@ class CheckoutController extends Controller
                 $sellerProfile->province,
                 $sellerProfile->municipality,
                 $defaultAddress->province,
-                $defaultAddress->municipality
+                $defaultAddress->municipality,
+                $sellerProfile->barangay,
+                $defaultAddress->barangay
             );
 
             if (! $routeCheck['is_serviceable']) {
@@ -194,8 +196,6 @@ class CheckoutController extends Controller
         $useStorkiaCoins = $request->boolean('use_storkia_coins');
         $requestedCoinsToUse = $request->filled('coins_to_use') ? (int) $request->query('coins_to_use') : null;
 
-        // Slots the buyer already decided on by hand (store_{sellerProfileId}, platform, shipping).
-        // Those are never overridden by the automatic "Most Preferred" voucher.
         $touchedSlots = collect((array) $request->query('touched_slots', []))
             ->filter(fn ($slot) => is_string($slot) && $slot !== '')
             ->values()
@@ -232,6 +232,7 @@ class CheckoutController extends Controller
                     'coins_used'         => (int) ($pkg['coins_used'] ?? 0),
                     'coins_discount'     => (float) ($pkg['coins_discount'] ?? 0),
                     'shipping_fee'       => (float) ($pkg['shipping']['shipping_fee'] ?? 0),
+                    'distance_km'        => (float) ($pkg['shipping']['distance_km'] ?? 0),
                     'net_subtotal'       => (float) $pkg['net_subtotal'],
                     'net_shipping_fee'   => (float) $pkg['net_shipping_fee'],
                     'total'              => (float) $pkg['total'],
@@ -361,9 +362,9 @@ class CheckoutController extends Controller
 
         $selectedAddress = $user->addresses()->findOrFail($validated['user_address_id']);
 
-        if (! $this->shippingCalculatorService->isAddressServiceable($selectedAddress->province, $selectedAddress->municipality)) {
+        if (! $this->shippingCalculatorService->isAddressServiceable($selectedAddress->province, $selectedAddress->municipality, $selectedAddress->barangay)) {
             return back()->withErrors([
-                'address' => "Delivery to {$selectedAddress->municipality}, {$selectedAddress->province} is currently unserviceable by our partner logistics hubs. Please select a serviceable address.",
+                'address' => "Delivery to {$selectedAddress->municipality}, {$selectedAddress->province} is currently outside our active Last-Mile Logistics Hub coverage. Please select a serviceable address.",
             ])->withInput();
         }
 
@@ -421,6 +422,8 @@ class CheckoutController extends Controller
             'postcode'          => $selectedAddress->postcode,
             'street_address'    => $selectedAddress->street_address,
             'building_details'  => $selectedAddress->building_details,
+            'latitude'          => $selectedAddress->latitude ?? null,
+            'longitude'         => $selectedAddress->longitude ?? null,
             'full_address'      => collect([
                 $selectedAddress->building_details,
                 $selectedAddress->street_address,
@@ -544,10 +547,12 @@ class CheckoutController extends Controller
                     'barangay'      => $sellerProfile->barangay,
                     'street'        => $sellerProfile->street,
                     'house_details' => $sellerProfile->house_details,
+                    'latitude'      => $sellerProfile->latitude ?? null,
+                    'longitude'     => $sellerProfile->longitude ?? null,
                     'full_address'  => $sellerProfile->full_address,
                 ];
 
-                $sellerOrder = SellerOrder::create([
+                $sellerOrderPayload = [
                     'order_id'                  => $parentOrder->id,
                     'seller_order_number'       => $this->generateUniqueSellerOrderNumber(),
                     'buyer_id'                  => $user->id,
@@ -566,7 +571,13 @@ class CheckoutController extends Controller
                     'acceptance_deadline_at'    => now()->addHours(SellerOrder::ACCEPTANCE_DEADLINE_HOURS),
                     'stock_deducted'            => true,
                     'stock_restored'            => false,
-                ]);
+                ];
+
+                if (Schema::hasColumn('seller_orders', 'seller_to_buyer_distance_km')) {
+                    $sellerOrderPayload['seller_to_buyer_distance_km'] = $pkg['shipping']['distance_km'] ?? null;
+                }
+
+                $sellerOrder = SellerOrder::create($sellerOrderPayload);
 
                 foreach ($pkg['items'] as $itemData) {
                     $labelSuffix = ! empty($itemData['pricing_label']) && $itemData['pricing_label'] !== 'Regular' && $itemData['pricing_label'] !== 'Regular Price'
@@ -898,13 +909,6 @@ class CheckoutController extends Controller
         return $lineItems;
     }
 
-    /**
-     * Builds the checkout preview and automatically equips the "Most Preferred" voucher in every
-     * slot the buyer has not decided on yet. A slot is only filled when a voucher really applies to
-     * the order right now (e.g. minimum spend met); otherwise it stays empty.
-     *
-     * @return array{summary: array, best: array{store: array<int, string>, platform: string, shipping: string}}
-     */
     protected function buildSummaryWithBestVouchers(
         array $rawLineItems,
         $selectedAddress,
@@ -919,7 +923,6 @@ class CheckoutController extends Controller
     ): array {
         $isTouched = fn (string $slot): bool => in_array($slot, $touchedSlots, true);
 
-        // First pass: only the vouchers the buyer picked (or typed) themselves.
         $baseStoreCodes = [];
         foreach ($storeVoucherCodes as $sellerProfileId => $code) {
             if ($isTouched('store_' . $sellerProfileId)) {
@@ -943,7 +946,6 @@ class CheckoutController extends Controller
 
         $best = $this->voucherRecommender->recommend($availableVouchers, $summary, $buyerId, $touchedSlots);
 
-        // Fill every untouched slot that has an eligible voucher.
         $finalStoreCodes = $baseStoreCodes;
         $finalPlatformCode = $basePlatformCode;
         $finalShippingCode = $baseShippingCode;
@@ -1031,7 +1033,7 @@ class CheckoutController extends Controller
         $buyerBarangay = $selectedAddress->barangay ?? '';
 
         $isAddressServiceable = $selectedAddress
-            ? $this->shippingCalculatorService->isAddressServiceable($buyerProvince, $buyerMunicipality)
+            ? $this->shippingCalculatorService->isAddressServiceable($buyerProvince, $buyerMunicipality, $buyerBarangay)
             : false;
 
         $overallSubtotal = 0.0;
@@ -1057,7 +1059,7 @@ class CheckoutController extends Controller
             if ($selectedAddress && isset($shipping['is_serviceable']) && $shipping['is_serviceable'] === false) {
                 $isAddressServiceable = false;
                 $reasonMsg = $shipping['unserviceable_reason']
-                    ?: "Shipping from {$sellerProfile->business_name} ({$sellerProfile->province}) to {$buyerProvince} is currently unavailable because no registered Storkia Logistics Partner covers both islands.";
+                    ?: "Shipping from {$sellerProfile->business_name} ({$sellerProfile->province}) to {$buyerProvince} is currently unavailable because no registered Storkia Logistics Partner covers both origin and last-mile destination.";
                 if ($strictVoucherErrors) {
                     throw ValidationException::withMessages([
                         'address' => $reasonMsg,

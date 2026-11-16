@@ -5,12 +5,54 @@
         $categoriesList = $categoriesList ?? \App\Http\Controllers\Seller\ProductController::getCategoriesList();
         $primaryCategory = auth()->user()->sellerProfile->line_of_business ?? 'Pet';
         $sellerCategory = old('category', $selectedCategory ?? request()->query('category', $primaryCategory));
-
         if (!array_key_exists($sellerCategory, $categoriesList)) {
             $sellerCategory = $primaryCategory;
         }
-
         $subcategories = $categoriesList[$sellerCategory] ?? ($categoriesList[$primaryCategory] ?? []);
+
+        $oldMainPicturesBase64 = array_values(array_filter(
+            (array) old('pictures_base64', []),
+            fn ($item) => is_string($item) && str_starts_with(trim($item), 'data:image/')
+        ));
+
+        $initialVariantState = [
+            'variantTitle'          => old('variant_title', ''),
+            'subVariantTitle'       => old('sub_variant_title', ''),
+            'variantNames'          => old('variant_names', []),
+            'variantPrices'         => old('variant_prices', []),
+            'variantWeights'        => old('variant_weights', []),
+            'variantStocks'         => old('variant_stocks', []),
+            'variantPicturesBase64' => old('variant_pictures_base64', []),
+            'subVariantNames'       => old('sub_variant_names', []),
+            'subVariantPrices'      => old('sub_variant_prices', []),
+            'subVariantWeights'     => old('sub_variant_weights', []),
+            'subVariantStocks'      => old('sub_variant_stocks', []),
+        ];
+
+        $rawOldSpecs = old('specifications', []);
+        $initialSpecs = [];
+        if (is_array($rawOldSpecs)) {
+            foreach ($rawOldSpecs as $sIdx => $sp) {
+                if (!is_array($sp)) {
+                    continue;
+                }
+                $spTitle = trim((string) ($sp['title'] ?? ''));
+                $spDesc = trim((string) ($sp['description'] ?? ''));
+                if ($spTitle !== '' || $spDesc !== '') {
+                    $initialSpecs[] = [
+                        'id'    => 'spec_' . $sIdx . '_' . uniqid(),
+                        'title' => $spTitle,
+                        'desc'  => $spDesc,
+                    ];
+                }
+            }
+        }
+        $hasOldSpecs = count($initialSpecs) > 0;
+        if (!$hasOldSpecs) {
+            $initialSpecs = [
+                ['id' => 'spec_init_1', 'title' => '', 'desc' => ''],
+            ];
+        }
     @endphp
 
     <div x-data="{
@@ -19,7 +61,8 @@
         productName: @js(old('name', '')),
         selectedSubcategory: @js(old('subcategory', '')),
         discountValue: @js(old('discount', 0)),
-        mainPicturesCount: 0,
+        mainPicturesCount: {{ count($oldMainPicturesBase64) }},
+        mainPicturesProcessing: false,
         touched: {},
         fieldErrors: {},
         isFormValid: false,
@@ -51,7 +94,6 @@
                 const form = this.$refs.productForm;
                 if (!form) return;
                 this.isFormValid = form.checkValidity();
-
                 let errs = {};
                 form.querySelectorAll('input, select, textarea').forEach(el => {
                     if (el.name && !el.disabled && !el.validity.valid) {
@@ -78,7 +120,9 @@
                     steps.push('Discount percentage must be between 0% and 99%.');
                 }
             }
-            if (this.mainPicturesCount < 1) {
+            if (this.mainPicturesProcessing) {
+                steps.push('Main product pictures are still optimizing, please wait a moment.');
+            } else if (this.mainPicturesCount < 1) {
                 steps.push('Upload at least 1 Main Product Picture (up to 10 pictures allowed).');
             }
             if (Array.isArray(variantIssues) && variantIssues.length > 0) {
@@ -98,12 +142,10 @@
             this.touched['subcategory'] = true;
             this.touched['pictures[]'] = true;
             this.validateForm();
-
             const missing = this.getMissingSteps(variantIssues);
             if (missing.length > 0) {
                 this.notifyError(missing[0]);
             }
-
             this.$nextTick(() => {
                 if (!form) return;
                 const firstInvalid = form.querySelector(':invalid');
@@ -114,7 +156,8 @@
         }
     }"
     x-init="initForm()"
-    @main-pictures-changed.window="mainPicturesCount = Number($event.detail?.count || 0); touched['pictures[]'] = true; validateForm()">
+    @main-pictures-changed.window="mainPicturesCount = Number($event.detail?.count || 0); mainPicturesProcessing = Boolean($event.detail?.processing); touched['pictures[]'] = true; validateForm()"
+    @storkia-variant-changed.window="validateForm()">
         <div class="max-w-5xl mx-auto select-none">
             <div class="flex items-center mb-8">
                 <a href="{{ route('seller.products.index', ['category' => $sellerCategory]) }}" class="mr-4 p-2.5 bg-surface rounded-full shadow-xs border border-border-subtle hover:bg-brand-light/20 transition-colors text-text-muted hover:text-primary cursor-pointer">
@@ -148,7 +191,7 @@
                   @input="validateForm"
                   @change="validateForm"
                   @submit="if (getMissingSteps(variantIssues).length > 0 || hasValidationErrors || !isFormValid) { $event.preventDefault(); revealAllErrorsAndNotify(variantIssues); }"
-                  x-data="variantManager()"
+                  x-data="variantManager(@js($initialVariantState))"
                   action="{{ route('seller.products.store') }}"
                   method="POST"
                   enctype="multipart/form-data"
@@ -185,7 +228,6 @@
                          class="relative w-full">
                         <label class="block text-sm font-bold text-text-muted mb-1">Subcategory <span class="text-danger">*</span></label>
                         <input type="text" name="subcategory" x-model="selected" required tabindex="-1" class="absolute w-0 h-0 opacity-0 pointer-events-none -z-10">
-
                         <div @click="open = true; $refs.searchInput.focus(); touched['subcategory'] = true;"
                              :class="(hasError('subcategory') || (touched['subcategory'] && !selected)) ? 'border-danger' : 'border-border-subtle hover:border-primary/50 focus-within:border-primary'"
                              class="w-full p-3 bg-surface rounded-2xl border-2 transition-all flex items-center justify-between cursor-text shadow-2xs relative">
@@ -205,9 +247,7 @@
                                 </svg>
                             </button>
                         </div>
-
                         <span x-show="hasError('subcategory') || (touched['subcategory'] && !selected)" x-cloak class="text-danger text-[10px] font-bold mt-1 block">Subcategory is required.</span>
-
                         <div x-show="open"
                              x-cloak
                              x-transition:enter="transition ease-out duration-150"
@@ -254,7 +294,11 @@
                     </div>
                 </div>
 
-                <div x-data="imageUploader(10)" class="space-y-3">
+                <div x-data="imageUploader(10, @js($oldMainPicturesBase64))" class="space-y-3">
+                    <template x-for="(b64, bIdx) in base64Images" :key="'mp_b64_' + bIdx">
+                        <input type="hidden" name="pictures_base64[]" :value="b64">
+                    </template>
+
                     <div class="flex flex-wrap items-center justify-between gap-2">
                         <div>
                             <label class="block text-sm font-bold text-text-muted">
@@ -272,18 +316,16 @@
                     <div @dragover.prevent="isDragging = true"
                          @dragleave.prevent="isDragging = false"
                          @drop.prevent="handleDrop($event); touched['pictures[]'] = true; setTimeout(() => validateForm(), 100)"
-                         :class="(hasError('pictures[]') || (touched['pictures[]'] && previews.length === 0)) ? 'border-danger bg-danger/5 scale-[1.005]' : (isDragging ? 'border-primary bg-primary/10 scale-[1.005]' : 'border-border-subtle bg-surface-subtle/50 hover:bg-brand-light/15')"
+                         :class="(hasError('pictures[]') || (touched['pictures[]'] && previews.length === 0 && !isProcessing)) ? 'border-danger bg-danger/5 scale-[1.005]' : (isDragging ? 'border-primary bg-primary/10 scale-[1.005]' : 'border-border-subtle bg-surface-subtle/50 hover:bg-brand-light/15')"
                          class="border-2 border-dashed rounded-2xl p-8 text-center transition-all cursor-pointer relative flex flex-col items-center justify-center min-h-[190px]">
-
                         <input x-ref="mainFileInput"
                                type="file"
-                               name="pictures[]"
+                               :name="base64Images.length > 0 ? null : 'pictures[]'"
                                multiple
                                accept="image/jpeg,image/png,image/jpg,image/webp"
-                               :required="previews.length === 0"
+                               :required="previews.length === 0 && base64Images.length === 0"
                                @change="handleSelect($event); touched['pictures[]'] = true; setTimeout(() => validateForm(), 100)"
                                class="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10">
-
                         <div class="flex flex-col items-center justify-center space-y-2.5 pointer-events-none">
                             <div class="p-4 bg-primary/10 text-primary rounded-full shadow-inner shrink-0 flex items-center justify-center">
                                 <svg class="w-9 h-9 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -291,13 +333,14 @@
                                 </svg>
                             </div>
                             <p class="text-base font-bold text-primary-dark">
-                                <span class="text-primary underline">Choose 1 to 10 Images</span> or drag &amp; drop here
+                                <span x-show="!isProcessing"><span class="text-primary underline">Choose 1 to 10 Images</span> or drag &amp; drop here</span>
+                                <span x-show="isProcessing" x-cloak class="text-primary">Optimizing image(s) to WebP...</span>
                             </p>
                             <p class="text-xs text-text-muted">Supports JPG, PNG, WEBP up to 5MB each (Automatically optimized to WebP)</p>
                         </div>
                     </div>
 
-                    <span x-show="hasError('pictures[]') || (touched['pictures[]'] && previews.length === 0)" x-cloak class="text-danger text-[10px] font-bold mt-1 block">At least 1 main product picture is required (maximum 10).</span>
+                    <span x-show="(hasError('pictures[]') || (touched['pictures[]'] && previews.length === 0)) && !isProcessing" x-cloak class="text-danger text-[10px] font-bold mt-1 block">At least 1 main product picture is required (maximum 10).</span>
 
                     <template x-if="errorMessage">
                         <p class="text-danger text-xs font-bold mt-2 flex items-center">
@@ -400,25 +443,24 @@
                     <div class="space-y-4">
                         <template x-for="(v, vIndex) in variants" :key="v.id">
                             <div class="bg-surface rounded-xl border border-border-subtle shadow-xs overflow-hidden">
-
                                 <input type="hidden" :name="`variant_pictures_base64[${v.id}]`" :value="v.imageBase64 || ''">
 
-                                <div x-show="vIndex > 0 && !v.isCopied && variants[0] && (variants[0].price || variants[0].weight || variants[0].stock) && priceDependsOn === 'main'"
-                                     x-data="{ promptState: 'active' }"
+                                <div x-show="vIndex > 0 && !v.isCopied && hasFirstVariantMainValues() && priceDependsOn === 'main'"
                                      class="px-4 pt-4">
-                                     <div x-show="promptState === 'active'" x-transition class="p-2.5 bg-brand-light/40 border border-primary/25 rounded-xl flex flex-wrap items-center justify-between gap-2 text-xs text-primary-dark shadow-2xs">
+                                     <div x-show="v.promptState === 'active'" x-transition class="p-2.5 bg-brand-light/40 border border-primary/25 rounded-xl flex flex-wrap items-center justify-between gap-2 text-xs text-primary-dark shadow-2xs">
                                          <div class="flex items-center gap-2">
                                              <svg class="w-4 h-4 text-primary flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M12 8h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                                             <span>Do you want to copy the previous variant's descriptions (Price, Weight, and Stock)?</span>
+                                             <span>Do you want to copy the 1st variant's descriptions (Price, Weight, and Stock) from <strong x-text="variants[0]?.name || '1st Variant'"></strong>?</span>
                                          </div>
-                                         <div class="flex gap-2 mt-2 sm:mt-0">
-                                             <button type="button" @click="v.price = variants[0].price; v.weight = variants[0].weight; v.stock = variants[0].stock; v.isCopied = true; promptState = 'copied'; setTimeout(() => validateForm(), 50);" class="px-3 py-1 bg-primary text-white font-bold rounded-lg hover:bg-primary-dark transition-colors cursor-pointer shadow-2xs">Copy</button>
-                                             <button type="button" @click="promptState = 'remind_later'" class="px-3 py-1 bg-surface border border-primary/30 text-primary font-bold rounded-lg hover:bg-brand-light/30 transition-colors cursor-pointer">Not Now</button>
-                                             <button type="button" @click="v.isCopied = true; promptState = 'dismissed'" class="px-3 py-1 bg-surface-subtle text-text-muted font-bold rounded-lg hover:bg-brand-light/20 transition-colors cursor-pointer">Dismiss</button>
+                                         <div class="flex flex-wrap gap-2 mt-2 sm:mt-0">
+                                             <button type="button" @click="copyFirstVariantValues(v.id); setTimeout(() => validateForm(), 50);" class="px-3 py-1 bg-primary text-white font-bold rounded-lg hover:bg-primary-dark transition-colors cursor-pointer shadow-2xs">Copy</button>
+                                             <button type="button" x-show="variants.length > 2" @click="copyFirstVariantValuesToAll(); setTimeout(() => validateForm(), 50);" class="px-3 py-1 bg-primary-dark text-white font-bold rounded-lg hover:bg-primary transition-colors cursor-pointer shadow-2xs">Copy to All</button>
+                                             <button type="button" @click="v.promptState = 'remind_later'" class="px-3 py-1 bg-surface border border-primary/30 text-primary font-bold rounded-lg hover:bg-brand-light/30 transition-colors cursor-pointer">Not Now</button>
+                                             <button type="button" @click="v.isCopied = true; v.promptState = 'dismissed'" class="px-3 py-1 bg-surface-subtle text-text-muted font-bold rounded-lg hover:bg-brand-light/20 transition-colors cursor-pointer">Dismiss</button>
                                          </div>
                                      </div>
-                                     <div x-show="promptState === 'remind_later'" class="flex justify-end mt-1">
-                                         <button type="button" @click="promptState = 'active'" class="text-[10px] text-primary hover:text-primary-dark underline font-bold cursor-pointer">Show automation prompt</button>
+                                     <div x-show="v.promptState === 'remind_later'" class="flex justify-end mt-1">
+                                         <button type="button" @click="v.promptState = 'active'" class="text-[10px] text-primary hover:text-primary-dark underline font-bold cursor-pointer">Show automation prompt</button>
                                      </div>
                                 </div>
 
@@ -446,22 +488,22 @@
                                             <div @dragover.prevent="v.isDragging = true"
                                                  @dragleave.prevent="v.isDragging = false"
                                                  @drop.prevent="handleVariantDrop($event, v.id); touched[`variant_pictures[${v.id}]`] = true; setTimeout(() => validateForm(), 120)"
-                                                 :class="(!v.imagePreview && !v.imageBase64 && (hasError(`variant_pictures[${v.id}]`) || touched[`variant_pictures[${v.id}]`])) ? 'border-danger bg-danger/5' : (v.isDragging ? 'border-primary bg-primary/10' : 'border-border-subtle bg-surface hover:bg-brand-light/10')"
+                                                 :class="(!v.imagePreview && !v.imageBase64 && !v.isProcessing && (hasError(`variant_pictures[${v.id}]`) || touched[`variant_pictures[${v.id}]`])) ? 'border-danger bg-danger/5' : (v.isDragging ? 'border-primary bg-primary/10' : 'border-border-subtle bg-surface hover:bg-brand-light/10')"
                                                  class="relative flex-1 border-2 border-dashed rounded-xl p-3 transition-all text-center flex items-center justify-center min-h-[64px]">
                                                 <input :id="`variant_picture_input_${v.id}`"
                                                        type="file"
-                                                       :name="`variant_pictures[${v.id}]`"
+                                                       :name="v.imageBase64 ? null : `variant_pictures[${v.id}]`"
                                                        accept="image/jpeg,image/png,image/jpg,image/webp"
                                                        :required="!v.imageBase64 && !v.imagePreview"
                                                        @change="handleVariantImage($event, v.id); touched[`variant_pictures[${v.id}]`] = true; setTimeout(() => validateForm(), 120)"
                                                        class="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10">
                                                 <span class="text-xs font-semibold text-text-muted pointer-events-none flex items-center justify-center gap-1.5">
                                                     <svg class="w-5 h-5 text-primary shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
-                                                    <span x-text="v.imagePreview ? 'Replace Variant Photo' : 'Variant Photo: Drag & drop or browse'"></span>
+                                                    <span x-text="v.isProcessing ? 'Optimizing Variant Photo...' : (v.imagePreview ? 'Replace Variant Photo' : 'Variant Photo: Drag & drop or browse')"></span>
                                                 </span>
                                             </div>
                                         </div>
-                                        <span x-show="!v.imagePreview && !v.imageBase64 && (hasError(`variant_pictures[${v.id}]`) || touched[`variant_pictures[${v.id}]`])" x-cloak class="text-danger text-[10px] font-bold mt-1 block">Dedicated variant image is required.</span>
+                                        <span x-show="!v.imagePreview && !v.imageBase64 && !v.isProcessing && (hasError(`variant_pictures[${v.id}]`) || touched[`variant_pictures[${v.id}]`])" x-cloak class="text-danger text-[10px] font-bold mt-1 block">Dedicated variant image is required.</span>
                                         <span x-show="v.imageError" x-cloak class="text-danger text-[10px] font-bold mt-1 block" x-text="v.imageError"></span>
                                     </div>
 
@@ -503,6 +545,25 @@
 
                                 <template x-if="priceDependsOn === 'sub'">
                                     <div class="p-4 bg-surface space-y-3">
+                                        <div x-show="vIndex > 0 && !v.isSubsCopied && hasFirstVariantSubValues()"
+                                             class="mb-2">
+                                            <div x-show="v.subPromptState === 'active'" x-transition class="p-3 bg-brand-light/40 border border-primary/25 rounded-xl flex flex-wrap items-center justify-between gap-2 text-xs text-primary-dark shadow-2xs">
+                                                <div class="flex items-center gap-2">
+                                                    <svg class="w-4 h-4 text-primary flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M12 8h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                                                    <span>Save time! Copy all <strong x-text="subVariantTitle || 'Sub-Variants'"></strong> (Names, Prices, Weights, and Stocks) from <strong x-text="variants[0]?.name || '1st Variant'"></strong>?</span>
+                                                </div>
+                                                <div class="flex flex-wrap gap-2 mt-2 sm:mt-0">
+                                                    <button type="button" @click="copySubVariantsToVariant(v.id); setTimeout(() => validateForm(), 50);" class="px-3 py-1 bg-primary text-white font-bold rounded-lg hover:bg-primary-dark transition-colors cursor-pointer shadow-2xs">Copy to This Variant</button>
+                                                    <button type="button" x-show="variants.length > 2" @click="copySubVariants(); setTimeout(() => validateForm(), 50);" class="px-3 py-1 bg-primary-dark text-white font-bold rounded-lg hover:bg-primary transition-colors cursor-pointer shadow-2xs">Copy to All Variants</button>
+                                                    <button type="button" @click="v.subPromptState = 'remind_later'" class="px-3 py-1 bg-surface border border-primary/30 text-primary font-bold rounded-lg hover:bg-brand-light/30 transition-colors cursor-pointer">Not Now</button>
+                                                    <button type="button" @click="v.isSubsCopied = true; v.subPromptState = 'dismissed'" class="px-3 py-1 bg-surface-subtle text-text-muted font-bold rounded-lg hover:bg-brand-light/20 transition-colors cursor-pointer">Dismiss</button>
+                                                </div>
+                                            </div>
+                                            <div x-show="v.subPromptState === 'remind_later'" class="flex justify-end mt-1">
+                                                <button type="button" @click="v.subPromptState = 'active'" class="text-[10px] text-primary hover:text-primary-dark underline font-bold cursor-pointer">Show sub-variant copy prompt</button>
+                                            </div>
+                                        </div>
+
                                         <div class="flex justify-between items-center mb-2">
                                             <div class="flex items-center gap-2">
                                                 <span class="text-xs font-bold text-text-muted uppercase tracking-wider" x-text="subVariantTitle"></span>
@@ -519,22 +580,21 @@
 
                                         <template x-for="(sub, sIndex) in v.subs" :key="sub.id">
                                             <div class="space-y-2 bg-brand-light/10 p-3 rounded-xl border border-brand-light/30">
-                                                <div x-show="sIndex > 0 && !sub.isCopied && v.subs[0] && (v.subs[0].price || v.subs[0].weight || v.subs[0].stock)"
-                                                     x-data="{ promptState: 'active' }"
+                                                <div x-show="sIndex > 0 && !sub.isCopied && hasFirstSubValues(v)"
                                                      class="mb-2">
-                                                     <div x-show="promptState === 'active'" x-transition class="p-2.5 bg-brand-light/40 border border-primary/25 rounded-xl flex flex-wrap items-center justify-between gap-2 text-xs text-primary-dark shadow-2xs">
+                                                     <div x-show="sub.promptState === 'active'" x-transition class="p-2.5 bg-brand-light/40 border border-primary/25 rounded-xl flex flex-wrap items-center justify-between gap-2 text-xs text-primary-dark shadow-2xs">
                                                          <div class="flex items-center gap-2">
                                                              <svg class="w-4 h-4 text-primary flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M12 8h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                                                             <span>Do you want to copy the previous subvariant descriptions (Price, Weight, Stock) from <strong x-text="v.subs[0].name || '1st Subvariant'"></strong>?</span>
+                                                             <span>Do you want to copy the previous subvariant descriptions (Price, Weight, Stock) from <strong x-text="v.subs[0]?.name || '1st Subvariant'"></strong>?</span>
                                                          </div>
                                                          <div class="flex gap-2 mt-2 sm:mt-0">
-                                                             <button type="button" @click="copyFirstSubValues(v.id, sIndex); promptState = 'copied'; setTimeout(() => validateForm(), 50);" class="px-3 py-1 bg-primary text-white font-bold rounded-lg hover:bg-primary-dark transition-colors cursor-pointer shadow-2xs">Copy</button>
-                                                             <button type="button" @click="promptState = 'remind_later'" class="px-3 py-1 bg-surface border border-primary/30 text-primary font-bold rounded-lg hover:bg-brand-light/30 transition-colors cursor-pointer">Not Now</button>
-                                                             <button type="button" @click="sub.isCopied = true; promptState = 'dismissed'" class="px-3 py-1 bg-surface-subtle text-text-muted font-bold rounded-lg hover:bg-brand-light/20 transition-colors cursor-pointer">Dismiss</button>
+                                                             <button type="button" @click="copyFirstSubValues(v.id, sIndex); setTimeout(() => validateForm(), 50);" class="px-3 py-1 bg-primary text-white font-bold rounded-lg hover:bg-primary-dark transition-colors cursor-pointer shadow-2xs">Copy</button>
+                                                             <button type="button" @click="sub.promptState = 'remind_later'" class="px-3 py-1 bg-surface border border-primary/30 text-primary font-bold rounded-lg hover:bg-brand-light/30 transition-colors cursor-pointer">Not Now</button>
+                                                             <button type="button" @click="sub.isCopied = true; sub.promptState = 'dismissed'" class="px-3 py-1 bg-surface-subtle text-text-muted font-bold rounded-lg hover:bg-brand-light/20 transition-colors cursor-pointer">Dismiss</button>
                                                          </div>
                                                      </div>
-                                                     <div x-show="promptState === 'remind_later'" class="flex justify-end mt-1">
-                                                         <button type="button" @click="promptState = 'active'" class="text-[10px] text-primary hover:text-primary-dark underline font-bold cursor-pointer">Show automation prompt</button>
+                                                     <div x-show="sub.promptState === 'remind_later'" class="flex justify-end mt-1">
+                                                         <button type="button" @click="sub.promptState = 'active'" class="text-[10px] text-primary hover:text-primary-dark underline font-bold cursor-pointer">Show automation prompt</button>
                                                      </div>
                                                 </div>
 
@@ -547,7 +607,6 @@
                                                         <span x-show="hasError(`sub_variant_names[${v.id}][${sub.id}]`)" x-cloak class="text-danger text-[9px] font-bold mt-1 block">Required</span>
                                                         <span x-show="isSubVariantDuplicate(v, sub.name)" class="text-danger text-[9px] font-bold mt-1 block">Sub-variant must be unique.</span>
                                                     </div>
-
                                                     <div class="flex flex-wrap gap-2 w-full md:w-auto">
                                                         <div class="flex flex-col flex-1 min-w-[100px]">
                                                             <div class="relative w-full">
@@ -585,18 +644,6 @@
                                                 </div>
                                             </div>
                                         </template>
-
-                                        <div x-show="v.subs.length === 0" class="space-y-4 mt-2">
-                                            <div x-show="vIndex !== 0 && variants[0].subs.length > 0 && !isCopied && v.name.trim() !== ''" x-transition class="p-4 bg-brand-light/40 border border-primary/25 rounded-xl flex flex-col sm:flex-row items-center justify-between shadow-2xs">
-                                                <div class="flex items-center text-primary-dark text-sm mb-3 sm:mb-0">
-                                                    <svg class="w-5 h-5 mr-2 text-primary flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M12 8h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                                                    <span>Save time! Do all variants share the same sub-variants?</span>
-                                                </div>
-                                                <button type="button" @click="copySubVariants(); setTimeout(() => validateForm(), 50);" class="w-full sm:w-auto px-4 py-2 bg-primary text-white text-xs font-bold rounded-lg shadow-2xs hover:bg-primary-dark transition-colors cursor-pointer">
-                                                    Copy from 1st Variant
-                                                </button>
-                                            </div>
-                                        </div>
                                     </div>
                                 </template>
                             </div>
@@ -609,9 +656,9 @@
                 </div>
 
                 <div x-data="{
-                    enableSpecs: false,
-                    specs: [{ id: Date.now(), title: '', desc: '' }],
-                    addSpec() { this.specs.push({ id: Date.now(), title: '', desc: '' }); },
+                    enableSpecs: @js($hasOldSpecs),
+                    specs: @js($initialSpecs),
+                    addSpec() { this.specs.push({ id: Date.now() + '_' + Math.random(), title: '', desc: '' }); },
                     removeSpec(index) { this.specs.splice(index, 1); }
                 }" class="border border-border-subtle rounded-2xl p-6 bg-brand-light/10 space-y-4">
                     <div class="flex items-center justify-between">
@@ -619,7 +666,7 @@
                             <h3 class="text-sm font-bold text-text-muted">Specifications <span class="text-xs font-normal italic">(Optional)</span></h3>
                             <p class="text-xs text-text-muted mt-1">Add dynamic product specifications depending on the item.</p>
                         </div>
-                        <button type="button" @click="enableSpecs = !enableSpecs; if(enableSpecs && specs.length === 0) addSpec();"
+                        <button type="button" @click="enableSpecs = !enableSpecs; if(enableSpecs && specs.length === 0) addSpec(); setTimeout(() => validateForm(), 50);"
                                 class="px-4 py-2 text-xs font-bold rounded-lg border transition-colors cursor-pointer"
                                 :class="enableSpecs ? 'bg-danger/10 text-danger border-danger/25 hover:bg-danger hover:text-white' : 'bg-primary/10 text-primary border-primary/20 hover:bg-primary hover:text-white'">
                             <span x-text="enableSpecs ? 'Disable Specifications' : 'Enable Specifications'"></span>
@@ -630,10 +677,10 @@
                         <template x-for="(spec, index) in specs" :key="spec.id">
                             <div class="flex items-start gap-3">
                                 <div class="flex-1">
-                                    <input type="text" :name="`specifications[${index}][title]`" x-model="spec.title" placeholder="Specification Title (e.g. RAM, Warranty)" class="w-full p-2.5 text-sm rounded-xl border border-border-subtle bg-surface focus:border-primary outline-none">
+                                    <input type="text" :name="`specifications[${index}][title]`" :disabled="!enableSpecs" x-model="spec.title" placeholder="Specification Title (e.g. RAM, Warranty)" class="w-full p-2.5 text-sm rounded-xl border border-border-subtle bg-surface focus:border-primary outline-none">
                                 </div>
                                 <div class="flex-1">
-                                    <input type="text" :name="`specifications[${index}][description]`" x-model="spec.desc" placeholder="Specification Description (e.g. 8GB, 1 Year)" class="w-full p-2.5 text-sm rounded-xl border border-border-subtle bg-surface focus:border-primary outline-none">
+                                    <input type="text" :name="`specifications[${index}][description]`" :disabled="!enableSpecs" x-model="spec.desc" placeholder="Specification Description (e.g. 8GB, 1 Year)" class="w-full p-2.5 text-sm rounded-xl border border-border-subtle bg-surface focus:border-primary outline-none">
                                 </div>
                                 <button type="button" @click="removeSpec(index)" class="p-2.5 text-text-muted hover:text-danger rounded-lg hover:bg-danger/10 transition-colors mt-0.5 cursor-pointer">
                                     <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
@@ -649,7 +696,7 @@
                     <textarea name="description" rows="3" class="w-full p-3 rounded-xl border border-border-subtle bg-surface focus:border-primary outline-none custom-scrollbar cursor-text">{{ old('description') }}</textarea>
                 </div>
 
-                <div x-data="{ enableAddDesc: false }">
+                <div x-data="{ enableAddDesc: @js(filled(old('additional_descriptions'))) }">
                     <div class="flex items-center justify-between mb-2">
                         <label class="block text-sm font-bold text-text-muted">Additional Descriptions <span class="text-xs font-normal italic">(Optional)</span></label>
                         <button type="button" @click="enableAddDesc = !enableAddDesc" class="text-xs text-primary font-bold hover:underline cursor-pointer" x-text="enableAddDesc ? 'Disable Field' : 'Enable Field'"></button>
@@ -688,7 +735,6 @@
                         <span class="text-xs text-text-muted font-semibold">
                             Total Calculated Stock Across Variants: <strong class="text-primary-dark" x-text="totalStock + ' unit(s)'"></strong>
                         </span>
-
                         <button type="submit"
                                 @click="if (getMissingSteps(variantIssues).length > 0 || hasValidationErrors || !isFormValid) { $event.preventDefault(); revealAllErrorsAndNotify(variantIssues); }"
                                 :aria-disabled="getMissingSteps(variantIssues).length > 0 || hasValidationErrors || !isFormValid"

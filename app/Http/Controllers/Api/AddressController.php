@@ -5,11 +5,13 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\User;
 use App\Models\UserAddress;
+use App\Services\CourierMobileSchemaService;
 use App\Services\PsgcService;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Validation\ValidationException;
 
 class AddressController extends Controller
@@ -204,6 +206,8 @@ class AddressController extends Controller
             'postcode'          => ['required', 'string', 'regex:/^\d{4}$/'],
             'street_address'    => ['required', 'string', 'min:5', 'max:150'],
             'building_details'  => ['nullable', 'string', 'max:150'],
+            'latitude'          => ['nullable', 'numeric', 'between:-90,90'],
+            'longitude'         => ['nullable', 'numeric', 'between:-180,180'],
             'is_default'        => ['nullable', 'boolean'],
         ], [
             'first_name.regex'   => 'First name may only contain letters, spaces, hyphens, apostrophes, and periods.',
@@ -214,10 +218,24 @@ class AddressController extends Controller
             'street_address.min' => 'Please enter a complete street address (at least 5 characters).',
         ]);
 
-        if (! $this->psgc->isLocationServiceable($validated['province'], $validated['municipality'])) {
+        if (! $this->psgc->isLocationServiceable($validated['province'], $validated['municipality'], $validated['barangay'])) {
             throw ValidationException::withMessages([
-                'province' => 'Sorry, this island or municipality is currently outside our serviceable delivery zones.',
+                'province' => "Sorry, {$validated['municipality']}, {$validated['province']} is currently outside our active Last-Mile Rider coverage zones.",
             ]);
+        }
+
+        if (
+            Schema::hasColumn('user_addresses', 'latitude')
+            && Schema::hasColumn('user_addresses', 'longitude')
+            && (empty($validated['latitude']) || empty($validated['longitude']))
+        ) {
+            $coords = CourierMobileSchemaService::resolveCoordinatesForAddress([
+                'province'     => $validated['province'],
+                'municipality' => $validated['municipality'],
+                'barangay'     => $validated['barangay'],
+            ]);
+            $validated['latitude'] = $coords['latitude'];
+            $validated['longitude'] = $coords['longitude'];
         }
 
         return $validated;
@@ -230,10 +248,19 @@ class AddressController extends Controller
 
     protected function orderedAddresses(User $user): Collection
     {
-        return UserAddress::where('user_id', $user->id)
+        $addresses = UserAddress::where('user_id', $user->id)
             ->orderByDesc('is_default')
             ->orderByDesc('id')
             ->get();
+
+        foreach ($addresses as $addr) {
+            $addr->setAttribute(
+                'is_serviceable',
+                $this->psgc->isLocationServiceable($addr->province, $addr->municipality, $addr->barangay)
+            );
+        }
+
+        return $addresses;
     }
 
     protected function meta(int $count): array
@@ -247,6 +274,13 @@ class AddressController extends Controller
 
     protected function saved(User $user, string $message, ?UserAddress $address, int $status = 200): JsonResponse
     {
+        if ($address) {
+            $address->setAttribute(
+                'is_serviceable',
+                $this->psgc->isLocationServiceable($address->province, $address->municipality, $address->barangay)
+            );
+        }
+
         $addresses = $this->orderedAddresses($user);
 
         return response()->json([

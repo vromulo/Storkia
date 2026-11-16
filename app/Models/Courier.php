@@ -2,8 +2,12 @@
 
 namespace App\Models;
 
+use App\Services\AddressService;
+use App\Services\CourierMobileSchemaService;
+use App\Services\ShippingCalculatorService;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use Laravel\Sanctum\HasApiTokens;
 
@@ -156,5 +160,115 @@ class Courier extends Authenticatable
         }
 
         return 'Issued by Logistics Hub';
+    }
+
+    public function getActiveAssignedWeightKgAttribute(): float
+    {
+        $activePickupWeight = (float) PickupAssignment::where('courier_id', $this->id)
+            ->whereIn('status', ['assigned', 'accepted', 'picked_up', 'in_transit_to_hub'])
+            ->with('shipment:id,total_weight')
+            ->get()
+            ->sum(fn ($pa) => (float) ($pa->shipment?->total_weight ?? 0));
+
+        return round($activePickupWeight, 2);
+    }
+
+    public function getRemainingLoadCapacityKgAttribute(): float
+    {
+        $maxCap = max(1.0, (float) ($this->load_capacity ?: 100));
+
+        return max(0.0, round($maxCap - $this->active_assigned_weight_kg, 2));
+    }
+
+    public function distanceToSnapshotKm(array $targetSnapshot): float
+    {
+        $hub = $this->assigned_hub;
+        $originSnap = [
+            'province'     => $hub?->province ?? ($this->logisticsProfile?->province ?? ''),
+            'municipality' => $hub?->municipality ?? ($this->logisticsProfile?->municipality ?? ''),
+            'barangay'     => $hub?->barangay ?? ($this->logisticsProfile?->barangay ?? ''),
+            'latitude'     => $this->current_latitude ?: $hub?->latitude,
+            'longitude'    => $this->current_longitude ?: $hub?->longitude,
+        ];
+
+        return CourierMobileSchemaService::calculateDistanceKmBetweenLocations($originSnap, $targetSnapshot, $hub, null);
+    }
+
+    public function evaluatePickupEligibilityForSnapshot(array $pickupSnapshot, float $shipmentWeightKg = 0.0): array
+    {
+        $hub = $this->assigned_hub;
+        if (! $hub) {
+            return [
+                'is_eligible'              => false,
+                'has_load_capacity'        => false,
+                'same_municipality'        => false,
+                'same_province'            => false,
+                'distance_from_hub_km'     => 9999.0,
+                'distance_from_courier_km' => 9999.0,
+                'active_load_kg'           => 0.0,
+                'remaining_capacity_kg'    => (float) ($this->load_capacity ?: 100),
+                'reason'                   => 'Courier does not have an assigned sorting hub.',
+            ];
+        }
+
+        $addressService = app(AddressService::class);
+        $shippingService = app(ShippingCalculatorService::class);
+
+        $hubProv = $addressService->normalizeName($hub->province);
+        $hubMun = $addressService->normalizeName($hub->municipality);
+
+        $origProv = $addressService->normalizeName($pickupSnapshot['province'] ?? '');
+        $origMun = $addressService->normalizeName($pickupSnapshot['municipality'] ?? '');
+
+        $hubIsland = $shippingService->resolveIslandGroup($hub->province);
+        $origIsland = $shippingService->resolveIslandGroup($pickupSnapshot['province'] ?? '');
+
+        $distFromHubKm = CourierMobileSchemaService::calculateDistanceKmBetweenLocations(
+            [
+                'province'     => $hub->province,
+                'municipality' => $hub->municipality,
+                'barangay'     => $hub->barangay,
+                'latitude'     => $hub->latitude,
+                'longitude'    => $hub->longitude,
+            ],
+            $pickupSnapshot,
+            $hub,
+            null
+        );
+
+        $distFromCourierKm = $this->distanceToSnapshotKm($pickupSnapshot);
+
+        $maxCourierRadius = Schema::hasColumn('logistics_hubs', 'max_courier_pickup_radius_km') && (float) ($hub->max_courier_pickup_radius_km ?? 0) > 0
+            ? (float) $hub->max_courier_pickup_radius_km
+            : ShippingCalculatorService::MAX_COURIER_PICKUP_RADIUS_KM;
+
+        $sameProvince = $hubProv !== '' && $origProv !== '' && $hubProv === $origProv && $hubIsland === $origIsland;
+        $sameMunicipality = $sameProvince && $hubMun !== '' && $origMun !== '' && $hubMun === $origMun;
+
+        $withinRange = ($hubIsland === $origIsland) && ($sameProvince || $distFromHubKm <= $maxCourierRadius);
+
+        $activeLoadKg = $this->active_assigned_weight_kg;
+        $remainingCapKg = $this->remaining_load_capacity_kg;
+        $hasCapacity = $shipmentWeightKg <= 0 || $remainingCapKg >= $shipmentWeightKg;
+
+        $reason = null;
+        if (! $withinRange) {
+            $reason = "Seller in {$pickupSnapshot['municipality']}, {$pickupSnapshot['province']} is {$distFromHubKm} km from {$hub->hub_name} (exceeds {$maxCourierRadius} km First-Mile Courier limit).";
+        } elseif (! $hasCapacity) {
+            $reason = "Courier {$this->full_name} has {$activeLoadKg} kg active load / {$this->load_capacity} kg max capacity (needs {$shipmentWeightKg} kg).";
+        }
+
+        return [
+            'is_eligible'              => $withinRange && $hasCapacity,
+            'within_range'             => $withinRange,
+            'has_load_capacity'        => $hasCapacity,
+            'same_municipality'        => $sameMunicipality,
+            'same_province'            => $sameProvince,
+            'distance_from_hub_km'     => $distFromHubKm,
+            'distance_from_courier_km' => $distFromCourierKm,
+            'active_load_kg'           => $activeLoadKg,
+            'remaining_capacity_kg'    => $remainingCapKg,
+            'reason'                   => $reason,
+        ];
     }
 }

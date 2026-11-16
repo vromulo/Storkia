@@ -11,6 +11,19 @@
     <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
 </head>
 <body class="bg-surface-subtle/50 font-sans antialiased text-text-main min-h-screen pb-16">
+    @php
+        $sort = $sort ?? request()->query('sort', 'nearest');
+        $barangayFilter = $barangayFilter ?? request()->query('barangay', '');
+        $availableBarangays = $availableBarangays ?? collect();
+        $riderSortLabels = [
+            'nearest'  => 'Nearest to Me First (km)',
+            'farthest' => 'Farthest First (km)',
+            'oldest'   => 'Oldest Assigned (FIFO)',
+            'newest'   => 'Newest Assigned (LIFO)',
+            'cod_high' => 'Highest COD Amount',
+        ];
+    @endphp
+
     <header class="bg-surface border-b border-border-subtle sticky top-0 z-40">
         <div class="max-w-6xl mx-auto px-4 sm:px-6 py-3 flex flex-wrap items-center justify-between gap-3">
             <div class="flex items-center gap-3">
@@ -104,20 +117,49 @@
             </a>
         </div>
 
-        <div class="flex flex-wrap items-center gap-2">
-            @foreach(['deliveries' => 'Active Deliveries (' . $activeAssignments->count() . ')', 'remittance' => 'COD Collections & 100% Remittance (' . $unremittedCollections->count() . ')', 'history' => 'Delivery History'] as $key => $label)
-                <a href="{{ route('rider.dashboard', ['tab' => $key]) }}"
-                   class="px-4 py-2.5 rounded-2xl text-xs font-bold border transition-all {{ $tab === $key ? 'bg-primary-dark text-surface border-primary-dark shadow-xs' : 'bg-surface text-text-muted border-border-subtle hover:text-text-main' }}">
-                    {{ $label }}
-                </a>
-            @endforeach
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div class="flex flex-wrap items-center gap-2">
+                @foreach(['deliveries' => 'Active Deliveries (' . $activeAssignments->count() . ')', 'remittance' => 'COD Collections & 100% Remittance (' . $unremittedCollections->count() . ')', 'history' => 'Delivery History'] as $key => $label)
+                    <a href="{{ route('rider.dashboard', ['tab' => $key]) }}"
+                       class="px-4 py-2.5 rounded-2xl text-xs font-bold border transition-all {{ $tab === $key ? 'bg-primary-dark text-surface border-primary-dark shadow-xs' : 'bg-surface text-text-muted border-border-subtle hover:text-text-main' }}">
+                        {{ $label }}
+                    </a>
+                @endforeach
+            </div>
+
+            @if($tab === 'deliveries')
+                <form method="GET" action="{{ route('rider.dashboard') }}" class="flex flex-wrap items-center gap-2 text-xs">
+                    <input type="hidden" name="tab" value="deliveries">
+
+                    @if($availableBarangays->isNotEmpty())
+                        <select name="barangay"
+                                onchange="this.form.submit()"
+                                class="px-3 py-2 rounded-xl border border-border-subtle bg-surface text-xs font-bold text-text-main outline-none focus:border-primary cursor-pointer">
+                            <option value="">All Barangays</option>
+                            @foreach($availableBarangays as $brgyOpt)
+                                <option value="{{ $brgyOpt }}" {{ strcasecmp($barangayFilter, $brgyOpt) === 0 ? 'selected' : '' }}>
+                                    Brgy. {{ $brgyOpt }}
+                                </option>
+                            @endforeach
+                        </select>
+                    @endif
+
+                    <select name="sort"
+                            onchange="this.form.submit()"
+                            class="px-3.5 py-2 rounded-xl border border-border-subtle bg-surface text-xs font-bold text-primary-dark outline-none focus:border-primary cursor-pointer">
+                        @foreach($riderSortLabels as $sKey => $sLabel)
+                            <option value="{{ $sKey }}" {{ $sort === $sKey ? 'selected' : '' }}>Sort: {{ $sLabel }}</option>
+                        @endforeach
+                    </select>
+                </form>
+            @endif
         </div>
 
         @if($tab === 'deliveries')
             @if($activeAssignments->isEmpty())
                 <div class="bg-surface rounded-3xl border border-border-subtle p-14 text-center space-y-2">
                     <h3 class="text-base font-bold text-text-main">No active delivery assignments</h3>
-                    <p class="text-xs text-text-muted">When your Logistics sorting hub assigns a parcel in your Barangay coverage to you, it will appear here.</p>
+                    <p class="text-xs text-text-muted">When your Logistics sorting hub assigns a parcel in your Barangay coverage to you, it will appear here sorted by proximity.</p>
                 </div>
             @else
                 <div class="space-y-5">
@@ -131,6 +173,7 @@
                             $payInfo = \App\Http\Controllers\Rider\DeliveryController::calculateDistanceScaledRiderPay($shipment);
                             $riderComm = (float) ($payInfo['total_pay'] ?? 50.00);
                             $distanceTierLabel = $payInfo['distance_tier'] ?? 'Standard';
+                            $riderDistKm = (float) ($assignment->getAttribute('rider_distance_km') ?? $shipment->calculated_buyer_distance_km);
 
                             $isTaskAccepted = in_array($assignment->status, ['accepted', 'collected', 'out_for_delivery'], true)
                                 || ($primaryPackage && $primaryPackage->rider_accepted_at !== null);
@@ -217,6 +260,9 @@
                                             Brgy. {{ $deliv['barangay'] }}
                                         </span>
                                     @endif
+                                    <span class="px-2.5 py-0.5 rounded-lg bg-primary/10 text-primary-dark border border-primary/20 text-[11px] font-mono font-bold">
+                                        ~{{ number_format($riderDistKm, 1) }} km from you
+                                    </span>
                                 </div>
                                 <span class="px-3 py-1 rounded-full text-xs font-bold bg-blue-100 text-blue-800 uppercase">
                                     {{ str_replace('_', ' ', $assignment->status) }}

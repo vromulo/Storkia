@@ -2,8 +2,12 @@
 
 namespace App\Models;
 
+use App\Services\AddressService;
+use App\Services\CourierMobileSchemaService;
+use App\Services\ShippingCalculatorService;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use Laravel\Sanctum\HasApiTokens;
 
@@ -210,5 +214,106 @@ class Rider extends Authenticatable
         }
 
         return 'Issued by Logistics Hub';
+    }
+
+    public function distanceToSnapshotKm(array $targetSnapshot): float
+    {
+        $hub = $this->assigned_hub;
+        $originSnap = [
+            'province'     => $hub?->province ?? ($this->logisticsProfile?->province ?? ''),
+            'municipality' => $hub?->municipality ?? ($this->logisticsProfile?->municipality ?? ''),
+            'barangay'     => $hub?->barangay ?? ($this->logisticsProfile?->barangay ?? ''),
+            'latitude'     => $this->current_latitude ?: $hub?->latitude,
+            'longitude'    => $this->current_longitude ?: $hub?->longitude,
+        ];
+
+        return CourierMobileSchemaService::calculateDistanceKmBetweenLocations($originSnap, $targetSnapshot, $hub, null);
+    }
+
+    public function evaluateDeliveryEligibilityForSnapshot(array $deliverySnapshot): array
+    {
+        $hub = $this->assigned_hub;
+        if (! $hub) {
+            return [
+                'is_eligible'            => false,
+                'exact_barangay_match'   => false,
+                'same_municipality'      => false,
+                'same_province'          => false,
+                'distance_from_hub_km'   => 9999.0,
+                'distance_from_rider_km' => 9999.0,
+                'max_radius_km'          => ShippingCalculatorService::MAX_RIDER_DELIVERY_RADIUS_KM,
+                'reason'                 => 'Rider does not have an assigned sorting hub.',
+            ];
+        }
+
+        $addressService = app(AddressService::class);
+        $shippingService = app(ShippingCalculatorService::class);
+
+        $hubProv = $addressService->normalizeName($hub->province);
+        $hubMun = $addressService->normalizeName($hub->municipality);
+
+        $destProv = $addressService->normalizeName($deliverySnapshot['province'] ?? '');
+        $destMun = $addressService->normalizeName($deliverySnapshot['municipality'] ?? '');
+        $destBrgy = $addressService->normalizeName($deliverySnapshot['barangay'] ?? '');
+
+        $hubIsland = $shippingService->resolveIslandGroup($hub->province);
+        $destIsland = $shippingService->resolveIslandGroup($deliverySnapshot['province'] ?? '');
+
+        $distFromHubKm = CourierMobileSchemaService::calculateDistanceKmBetweenLocations(
+            [
+                'province'     => $hub->province,
+                'municipality' => $hub->municipality,
+                'barangay'     => $hub->barangay,
+                'latitude'     => $hub->latitude,
+                'longitude'    => $hub->longitude,
+            ],
+            $deliverySnapshot,
+            $hub,
+            null
+        );
+
+        $distFromRiderKm = $this->distanceToSnapshotKm($deliverySnapshot);
+
+        $maxRiderRadius = Schema::hasColumn('logistics_hubs', 'max_rider_delivery_radius_km') && (float) ($hub->max_rider_delivery_radius_km ?? 0) > 0
+            ? (float) $hub->max_rider_delivery_radius_km
+            : ShippingCalculatorService::MAX_RIDER_DELIVERY_RADIUS_KM;
+
+        $coverages = $this->relationLoaded('barangayCoverages')
+            ? $this->barangayCoverages->where('is_active', true)
+            : $this->activeBarangayCoverages()->get();
+
+        $exactBrgyMatch = $destBrgy !== '' && $coverages->contains(function ($cov) use ($addressService, $destMun, $destBrgy) {
+            $covMun = $addressService->normalizeName($cov->municipality ?? '');
+            $covBrgy = $addressService->normalizeName($cov->barangay_name ?? '');
+            if ($destMun !== '' && $covMun !== '' && $covMun !== $destMun) {
+                return false;
+            }
+            return $covBrgy === $destBrgy;
+        });
+
+        $sameProvince = $hubProv !== '' && $destProv !== '' && $hubProv === $destProv && $hubIsland === $destIsland;
+        $sameMunicipality = $sameProvince && $hubMun !== '' && $destMun !== '' && $hubMun === $destMun;
+
+        $isEligible = $sameProvince && ($sameMunicipality || $exactBrgyMatch || $distFromHubKm <= $maxRiderRadius);
+
+        $reason = null;
+        if (! $isEligible) {
+            if ($hubIsland !== $destIsland || ! $sameProvince) {
+                $reason = "Rider {$this->full_name} is based in {$hub->municipality}, {$hub->province} and cannot travel across provinces to {$deliverySnapshot['municipality']}, {$deliverySnapshot['province']} (Gasoline & Last-Mile Range Protection).";
+            } else {
+                $reason = "Buyer address in {$deliverySnapshot['municipality']} is {$distFromHubKm} km from {$hub->hub_name}, exceeding the {$maxRiderRadius} km Last-Mile Rider radius.";
+            }
+        }
+
+        return [
+            'is_eligible'            => $isEligible,
+            'exact_barangay_match'   => $exactBrgyMatch,
+            'same_municipality'      => $sameMunicipality,
+            'same_province'          => $sameProvince,
+            'distance_from_hub_km'   => $distFromHubKm,
+            'distance_from_rider_km' => $distFromRiderKm,
+            'max_radius_km'          => $maxRiderRadius,
+            'reason'                 => $reason,
+        ];
     }
 }

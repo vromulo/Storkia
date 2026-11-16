@@ -12,12 +12,14 @@ use App\Models\ShipmentVerification;
 use App\Models\WalletTransaction;
 use App\Notifications\OrderLifecycleNotification;
 use App\Services\CommissionCalculatorService;
+use App\Services\OperationalSlaGuardService;
 use App\Services\OrderCompletionService;
 use App\Services\RoleWalletService;
 use App\Services\ShippingCalculatorService;
 use App\Services\StorkSchemaBootstrapService;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
+use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
@@ -27,8 +29,11 @@ class PickupController extends Controller
 {
     public function __construct(
         protected OrderCompletionService $orderCompletionService,
-        protected RoleWalletService $roleWalletService
-    ) {}
+        protected RoleWalletService $roleWalletService,
+        protected ?OperationalSlaGuardService $slaGuardService = null
+    ) {
+        $this->slaGuardService = $slaGuardService ?? app(OperationalSlaGuardService::class);
+    }
 
     public static function calculateFirstMileCourierPay(Shipment $shipment): array
     {
@@ -94,7 +99,17 @@ class PickupController extends Controller
 
         /** @var \App\Models\Courier $courier */
         $courier = Auth::guard('courier')->user();
+
+        if ($courier->logistics_profile_id) {
+            $this->slaGuardService?->sweepOverdueEmployeeAssignments((int) $courier->logistics_profile_id);
+        }
+
         $statusFilter = $request->query('status', 'active');
+        $sort = $request->query('sort', 'nearest');
+        if (! in_array($sort, ['nearest', 'farthest', 'oldest', 'newest', 'heaviest'], true)) {
+            $sort = 'nearest';
+        }
+        $municipalityFilter = trim((string) $request->query('municipality', ''));
 
         $query = PickupAssignment::with([
             'shipment.sellerProfile',
@@ -102,10 +117,7 @@ class PickupController extends Controller
             'shipment.packages',
             'sellerOrder.items',
             'sellerOrder.extra',
-        ])
-            ->where('courier_id', $courier->id)
-            ->orderBy('created_at', 'asc')
-            ->orderBy('id', 'asc');
+        ])->where('courier_id', $courier->id);
 
         if ($statusFilter === 'active') {
             $query->whereIn('status', ['assigned', 'accepted', 'picked_up', 'in_transit_to_hub']);
@@ -113,7 +125,46 @@ class PickupController extends Controller
             $query->where('status', 'completed');
         }
 
-        $assignments = $query->paginate(15)->withQueryString();
+        $allMatching = $query->orderBy('created_at', 'asc')->orderBy('id', 'asc')->get();
+
+        $availableMunicipalities = $allMatching
+            ->map(fn (PickupAssignment $a) => trim((string) ($a->shipment?->pickup_address_snapshot['municipality'] ?? '')))
+            ->filter()
+            ->unique()
+            ->sort()
+            ->values();
+
+        $decorated = $allMatching->map(function (PickupAssignment $a) use ($courier) {
+            $pickupSnap = (array) ($a->shipment?->pickup_address_snapshot ?? []);
+            $distKm = $courier->distanceToSnapshotKm($pickupSnap);
+            $a->setAttribute('courier_distance_km', $distKm);
+            return $a;
+        });
+
+        if ($municipalityFilter !== '') {
+            $decorated = $decorated->filter(function (PickupAssignment $a) use ($municipalityFilter) {
+                $mun = trim((string) ($a->shipment?->pickup_address_snapshot['municipality'] ?? ''));
+                return strcasecmp($mun, $municipalityFilter) === 0;
+            });
+        }
+
+        $sorted = match ($sort) {
+            'farthest' => $decorated->sortByDesc(fn (PickupAssignment $a) => (float) ($a->getAttribute('courier_distance_km') ?? 0))->values(),
+            'newest'   => $decorated->sortByDesc(fn (PickupAssignment $a) => $a->created_at?->timestamp ?? 0)->values(),
+            'oldest'   => $decorated->sortBy(fn (PickupAssignment $a) => $a->created_at?->timestamp ?? 0)->values(),
+            'heaviest' => $decorated->sortByDesc(fn (PickupAssignment $a) => (float) ($a->shipment?->total_weight ?? 0))->values(),
+            default    => $decorated->sortBy(fn (PickupAssignment $a) => (float) ($a->getAttribute('courier_distance_km') ?? 9999))->values(),
+        };
+
+        $perPage = 15;
+        $currentPage = LengthAwarePaginator::resolveCurrentPage();
+        $assignments = new LengthAwarePaginator(
+            $sorted->forPage($currentPage, $perPage)->values(),
+            $sorted->count(),
+            $perPage,
+            $currentPage,
+            ['path' => $request->url(), 'query' => $request->query()]
+        );
 
         $counts = [
             'active'    => PickupAssignment::where('courier_id', $courier->id)
@@ -142,6 +193,9 @@ class PickupController extends Controller
             'courier',
             'assignments',
             'statusFilter',
+            'sort',
+            'municipalityFilter',
+            'availableMunicipalities',
             'counts',
             'courierWallet',
             'withdrawalRequests'

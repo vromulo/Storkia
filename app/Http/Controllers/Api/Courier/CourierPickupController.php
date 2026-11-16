@@ -51,7 +51,13 @@ class CourierPickupController extends Controller
 
         $courier->forceFill(['last_seen_at' => now()])->save();
 
-        $activeAssignments = PickupAssignment::with([
+        $sort = strtolower(trim((string) $request->query('sort', 'nearest')));
+        if (! in_array($sort, ['nearest', 'farthest', 'oldest', 'newest', 'heaviest'], true)) {
+            $sort = 'nearest';
+        }
+        $municipalityFilter = trim((string) $request->query('municipality', ''));
+
+        $rawActiveAssignments = PickupAssignment::with([
             'shipment.sellerProfile',
             'shipment.logisticsProfile',
             'shipment.packages.logisticsHub',
@@ -69,6 +75,35 @@ class CourierPickupController extends Controller
             ->orderBy('id', 'asc')
             ->get();
 
+        $availableMunicipalities = $rawActiveAssignments
+            ->map(fn (PickupAssignment $a) => trim((string) ($a->shipment?->pickup_address_snapshot['municipality'] ?? '')))
+            ->filter()
+            ->unique()
+            ->sort()
+            ->values()
+            ->all();
+
+        $decoratedActive = $rawActiveAssignments->map(function (PickupAssignment $a) use ($courier) {
+            $pickupSnap = (array) ($a->shipment?->pickup_address_snapshot ?? []);
+            $a->setAttribute('courier_distance_km', $courier->distanceToSnapshotKm($pickupSnap));
+            return $a;
+        });
+
+        if ($municipalityFilter !== '') {
+            $decoratedActive = $decoratedActive->filter(function (PickupAssignment $a) use ($municipalityFilter) {
+                $mun = trim((string) ($a->shipment?->pickup_address_snapshot['municipality'] ?? ''));
+                return strcasecmp($mun, $municipalityFilter) === 0;
+            });
+        }
+
+        $activeAssignments = match ($sort) {
+            'farthest' => $decoratedActive->sortByDesc(fn (PickupAssignment $a) => (float) ($a->getAttribute('courier_distance_km') ?? 0))->values(),
+            'newest'   => $decoratedActive->sortByDesc(fn (PickupAssignment $a) => ($a->assigned_at ?? $a->created_at)?->timestamp ?? 0)->values(),
+            'oldest'   => $decoratedActive->sortBy(fn (PickupAssignment $a) => ($a->assigned_at ?? $a->created_at)?->timestamp ?? 0)->values(),
+            'heaviest' => $decoratedActive->sortByDesc(fn (PickupAssignment $a) => (float) ($a->shipment?->total_weight ?? 0))->values(),
+            default    => $decoratedActive->sortBy(fn (PickupAssignment $a) => (float) ($a->getAttribute('courier_distance_km') ?? 9999))->values(),
+        };
+
         $recentCompletedAssignments = PickupAssignment::with([
             'shipment.sellerProfile',
             'shipment.logisticsProfile',
@@ -85,8 +120,8 @@ class CourierPickupController extends Controller
             ->limit(10)
             ->get();
 
-        $unacceptedCount = $activeAssignments->where('status', 'assigned')->count();
-        $acceptedCount = $activeAssignments->where('status', 'accepted')->count();
+        $unacceptedCount = $rawActiveAssignments->where('status', 'assigned')->count();
+        $acceptedCount = $rawActiveAssignments->where('status', 'accepted')->count();
         $inTransitCount = PickupAssignment::where('courier_id', $courier->id)
             ->where('logistics_profile_id', $courier->logistics_profile_id)
             ->whereIn('status', ['picked_up', 'in_transit_to_hub'])
@@ -121,13 +156,19 @@ class CourierPickupController extends Controller
         return response()->json([
             'status' => 'success',
             'data'   => [
-                'metrics' => [
-                    'active_pickups'             => $activeAssignments->count(),
+                'sort'                     => $sort,
+                'municipality_filter'      => $municipalityFilter,
+                'available_municipalities' => $availableMunicipalities,
+                'metrics'                  => [
+                    'active_pickups'             => $rawActiveAssignments->count(),
                     'unaccepted_pickups'         => $unacceptedCount,
                     'accepted_pickups'           => $acceptedCount,
                     'in_transit_pickups'         => $inTransitCount,
                     'completed_pickups'          => $completedCount,
                     'pending_return_deliveries'  => $pendingReturnDeliveries,
+                    'load_capacity_kg'           => (int) $courier->load_capacity,
+                    'active_assigned_weight_kg'  => $courier->active_assigned_weight_kg,
+                    'remaining_capacity_kg'      => $courier->remaining_load_capacity_kg,
                     'wallet_available'           => number_format((float) $wallet->available_balance, 2, '.', ''),
                     'wallet_available_raw'       => round((float) $wallet->available_balance, 2),
                     'wallet_pending'             => number_format((float) $wallet->pending_balance, 2, '.', ''),
@@ -138,12 +179,12 @@ class CourierPickupController extends Controller
                     'today_earnings_raw'         => round($todayEarnings, 2),
                     'unread_notifications_count' => $unreadNotificationsCount,
                 ],
-                'active_assignments'    => $activeAssignments
-                    ->map(fn (PickupAssignment $a) => $this->formatAssignmentPayload($a, false))
+                'active_assignments'       => $activeAssignments
+                    ->map(fn (PickupAssignment $a) => $this->formatAssignmentPayload($a, false, $courier))
                     ->values()
                     ->all(),
-                'completed_assignments' => $recentCompletedAssignments
-                    ->map(fn (PickupAssignment $a) => $this->formatAssignmentPayload($a, false))
+                'completed_assignments'    => $recentCompletedAssignments
+                    ->map(fn (PickupAssignment $a) => $this->formatAssignmentPayload($a, false, $courier))
                     ->values()
                     ->all(),
             ],
@@ -164,6 +205,8 @@ class CourierPickupController extends Controller
 
         $filter = strtolower(trim((string) $request->query('filter', 'active')));
         $search = trim((string) $request->query('search', ''));
+        $sort = strtolower(trim((string) $request->query('sort', '')));
+        $municipalityFilter = trim((string) $request->query('municipality', ''));
         $fromDate = $request->query('from_date');
         $toDate = $request->query('to_date');
 
@@ -268,6 +311,37 @@ class CourierPickupController extends Controller
             $assignments = $activeItems->concat($completedItems);
         }
 
+        $availableMunicipalities = $assignments
+            ->map(fn (PickupAssignment $a) => trim((string) ($a->shipment?->pickup_address_snapshot['municipality'] ?? '')))
+            ->filter()
+            ->unique()
+            ->sort()
+            ->values()
+            ->all();
+
+        $assignments = $assignments->map(function (PickupAssignment $a) use ($courier) {
+            $pickupSnap = (array) ($a->shipment?->pickup_address_snapshot ?? []);
+            $a->setAttribute('courier_distance_km', $courier->distanceToSnapshotKm($pickupSnap));
+            return $a;
+        });
+
+        if ($municipalityFilter !== '') {
+            $assignments = $assignments->filter(function (PickupAssignment $a) use ($municipalityFilter) {
+                $mun = trim((string) ($a->shipment?->pickup_address_snapshot['municipality'] ?? ''));
+                return strcasecmp($mun, $municipalityFilter) === 0;
+            })->values();
+        }
+
+        if (in_array($sort, ['nearest', 'farthest', 'oldest', 'newest', 'heaviest'], true)) {
+            $assignments = match ($sort) {
+                'nearest'  => $assignments->sortBy(fn (PickupAssignment $a) => (float) ($a->getAttribute('courier_distance_km') ?? 9999))->values(),
+                'farthest' => $assignments->sortByDesc(fn (PickupAssignment $a) => (float) ($a->getAttribute('courier_distance_km') ?? 0))->values(),
+                'newest'   => $assignments->sortByDesc(fn (PickupAssignment $a) => ($a->assigned_at ?? $a->created_at)?->timestamp ?? 0)->values(),
+                'oldest'   => $assignments->sortBy(fn (PickupAssignment $a) => ($a->assigned_at ?? $a->created_at)?->timestamp ?? 0)->values(),
+                'heaviest' => $assignments->sortByDesc(fn (PickupAssignment $a) => (float) ($a->shipment?->total_weight ?? 0))->values(),
+            };
+        }
+
         $countsBase = PickupAssignment::where('courier_id', $courier->id)
             ->where('logistics_profile_id', $courier->logistics_profile_id)
             ->whereHas('shipment', function ($q) {
@@ -286,8 +360,11 @@ class CourierPickupController extends Controller
         return response()->json([
             'status' => 'success',
             'data'   => [
-                'filter'      => $filter,
-                'counts'      => [
+                'filter'                   => $filter,
+                'sort'                     => $sort !== '' ? $sort : 'oldest',
+                'municipality_filter'      => $municipalityFilter,
+                'available_municipalities' => $availableMunicipalities,
+                'counts'                   => [
                     'active'          => (clone $countsBase)->whereIn('status', ['assigned', 'accepted', 'picked_up'])->count(),
                     'assigned'        => (clone $countsBase)->where('status', 'assigned')->count(),
                     'accepted'        => (clone $countsBase)->where('status', 'accepted')->count(),
@@ -295,8 +372,8 @@ class CourierPickupController extends Controller
                     'history'         => (clone $countsBase)->whereIn('status', ['completed', 'in_transit_to_hub', 'declined', 'reassigned'])->count(),
                     'returns'         => $pendingReturnDeliveries,
                 ],
-                'assignments' => $assignments
-                    ->map(fn (PickupAssignment $a) => $this->formatAssignmentPayload($a, false))
+                'assignments'              => $assignments
+                    ->map(fn (PickupAssignment $a) => $this->formatAssignmentPayload($a, false, $courier))
                     ->values()
                     ->all(),
             ],
@@ -346,7 +423,7 @@ class CourierPickupController extends Controller
 
         return response()->json([
             'status' => 'success',
-            'data'   => $this->formatAssignmentPayload($assignment, true),
+            'data'   => $this->formatAssignmentPayload($assignment, true, $courier),
         ]);
     }
 
@@ -399,7 +476,7 @@ class CourierPickupController extends Controller
                 return response()->json([
                     'status'  => 'success',
                     'message' => 'Pickup assignment is already accepted.',
-                    'data'    => $this->formatAssignmentPayload($locked->fresh(['shipment.sellerProfile', 'shipment.logisticsProfile', 'shipment.packages.logisticsHub', 'sellerOrder.items']), true),
+                    'data'    => $this->formatAssignmentPayload($locked->fresh(['shipment.sellerProfile', 'shipment.logisticsProfile', 'shipment.packages.logisticsHub', 'sellerOrder.items']), true, $courier),
                 ]);
             }
 
@@ -450,7 +527,7 @@ class CourierPickupController extends Controller
             return response()->json([
                 'status'  => 'success',
                 'message' => 'Pickup assignment accepted! Navigate to the Seller and scan the package QR code or verify the tracking number.',
-                'data'    => $this->formatAssignmentPayload($fresh, true),
+                'data'    => $this->formatAssignmentPayload($fresh, true, $courier),
             ]);
         });
     }
@@ -661,7 +738,7 @@ class CourierPickupController extends Controller
                 return response()->json([
                     'status'  => 'success',
                     'message' => 'Package collection has already been confirmed.',
-                    'data'    => $this->formatAssignmentPayload($locked->fresh(['shipment.sellerProfile', 'shipment.logisticsProfile', 'shipment.packages.logisticsHub', 'sellerOrder.items']), true),
+                    'data'    => $this->formatAssignmentPayload($locked->fresh(['shipment.sellerProfile', 'shipment.logisticsProfile', 'shipment.packages.logisticsHub', 'sellerOrder.items']), true, $courier),
                 ]);
             }
 
@@ -792,7 +869,7 @@ class CourierPickupController extends Controller
             return response()->json([
                 'status'  => 'success',
                 'message' => 'Package collection confirmed! Proceed to transport the parcel to the assigned Logistics Sorting Hub.',
-                'data'    => $this->formatAssignmentPayload($fresh, true),
+                'data'    => $this->formatAssignmentPayload($fresh, true, $courier),
             ]);
         });
     }
@@ -875,7 +952,7 @@ class CourierPickupController extends Controller
                 return response()->json([
                     'status'  => 'success',
                     'message' => 'Arrival and handover at Sorting Hub is already recorded.',
-                    'data'    => $this->formatAssignmentPayload($locked->fresh(['shipment.sellerProfile', 'shipment.logisticsProfile', 'shipment.packages.logisticsHub', 'sellerOrder.items']), true),
+                    'data'    => $this->formatAssignmentPayload($locked->fresh(['shipment.sellerProfile', 'shipment.logisticsProfile', 'shipment.packages.logisticsHub', 'sellerOrder.items']), true, $courier),
                     'pay'     => $payInfo,
                 ]);
             }
@@ -957,7 +1034,7 @@ class CourierPickupController extends Controller
                 'message' => $isCod
                     ? "Handover recorded at {$hubName}! ₱" . number_format((float) $payInfo['total_pay'], 2) . " First-Mile Pickup Task Pay (25% of Shipping/Ops Fee) credited to your Pending Escrow and will release to Available E-Wallet upon Admin COD Remittance verification."
                     : "Handover recorded at {$hubName}! ₱" . number_format((float) $payInfo['total_pay'], 2) . " First-Mile Pickup Task Pay (25% of Shipping/Ops Fee) credited to your Courier E-Wallet.",
-                'data'    => $this->formatAssignmentPayload($fresh, true),
+                'data'    => $this->formatAssignmentPayload($fresh, true, $courier),
             ]);
         });
     }
@@ -1091,7 +1168,7 @@ class CourierPickupController extends Controller
         return response()->json([
             'status'  => 'success',
             'message' => 'Delay report submitted and Logistics has been notified with your updated ETA.',
-            'data'    => $this->formatAssignmentPayload($fresh, true),
+            'data'    => $this->formatAssignmentPayload($fresh, true, $courier),
         ]);
     }
 
@@ -1216,7 +1293,7 @@ class CourierPickupController extends Controller
         return response()->json([
             'status'  => 'success',
             'message' => 'Vehicle breakdown report and photo submitted to Logistics for immediate reassignment.',
-            'data'    => $this->formatAssignmentPayload($fresh, true),
+            'data'    => $this->formatAssignmentPayload($fresh, true, $courier),
         ]);
     }
 
@@ -1281,20 +1358,21 @@ class CourierPickupController extends Controller
         return response()->json([
             'status'  => 'success',
             'message' => 'Discrepancy note saved and recorded in the audit log.',
-            'data'    => $this->formatAssignmentPayload($fresh, true),
+            'data'    => $this->formatAssignmentPayload($fresh, true, $courier),
         ]);
     }
 
-    public function formatAssignmentPayload(PickupAssignment $assignment, bool $detailed = false): array
+    public function formatAssignmentPayload(PickupAssignment $assignment, bool $detailed = false, ?Courier $courier = null): array
     {
         $shipment = $assignment->shipment;
         $sellerOrder = $assignment->sellerOrder ?? $shipment?->sellerOrder;
         $sellerProfile = $shipment?->sellerProfile ?? $sellerOrder?->sellerProfile;
         $logisticsProfile = $shipment?->logisticsProfile ?? $assignment->logisticsProfile;
+        $courierModel = $courier ?? $assignment->courier;
 
-        $pickupSnap = $shipment?->pickup_address_snapshot ?? ($sellerOrder?->pickup_address_snapshot ?? []);
-        $hubSnap = $shipment?->hub_address_snapshot ?? [];
-        $deliverySnap = $shipment?->delivery_address_snapshot ?? ($sellerOrder?->delivery_address_snapshot ?? []);
+        $pickupSnap = (array) ($shipment?->pickup_address_snapshot ?? ($sellerOrder?->pickup_address_snapshot ?? []));
+        $hubSnap = (array) ($shipment?->hub_address_snapshot ?? []);
+        $deliverySnap = (array) ($shipment?->delivery_address_snapshot ?? ($sellerOrder?->delivery_address_snapshot ?? []));
 
         $packages = $shipment?->packages ?? collect();
         $primaryPackage = $packages->first();
@@ -1303,6 +1381,14 @@ class CourierPickupController extends Controller
 
         $sellerCoords = CourierMobileSchemaService::resolveCoordinatesForAddress($pickupSnap, $sellerProfile);
         $hubCoords = CourierMobileSchemaService::resolveCoordinatesForAddress($hubSnap, $assignedHubModel ?? $logisticsProfile);
+
+        $weightKg = round((float) ($shipment?->total_weight ?? $sellerOrder?->total_weight ?? 0), 3);
+        $pickupEval = $courierModel
+            ? $courierModel->evaluatePickupEligibilityForSnapshot($pickupSnap, $weightKg)
+            : null;
+
+        $distFromCourierKm = round((float) ($assignment->getAttribute('courier_distance_km') ?? $pickupEval['distance_from_courier_km'] ?? $shipment?->calculated_origin_distance_km ?? 0), 2);
+        $distFromHubKm = round((float) ($pickupEval['distance_from_hub_km'] ?? $shipment?->calculated_origin_distance_km ?? 0), 2);
 
         $sellerFullAddress = $pickupSnap['full_address']
             ?? $sellerProfile?->full_address
@@ -1394,40 +1480,45 @@ class CourierPickupController extends Controller
         };
 
         $payload = [
-            'id'                      => (int) $assignment->id,
-            'assignment_id'           => (int) $assignment->id,
-            'shipment_id'             => (int) ($shipment?->id ?? $assignment->shipment_id),
-            'seller_order_id'         => (int) ($sellerOrder?->id ?? $assignment->seller_order_id),
-            'tracking_number'         => (string) ($shipment?->tracking_number ?? 'TRK-N/A'),
-            'tracking_code'           => (string) ($shipment?->tracking_number ?? 'TRK-N/A'),
-            'seller_order_number'     => (string) ($sellerOrder?->seller_order_number ?? 'SO-N/A'),
-            'status'                  => (string) $assignment->status,
-            'status_label'            => $statusLabel,
-            'shipment_status'         => (string) ($shipment?->status ?? ''),
-            'shipment_status_label'   => (string) ($shipment?->status_label ?? ''),
-            'total_weight'            => round((float) ($shipment?->total_weight ?? $sellerOrder?->total_weight ?? 0), 3),
-            'total_weight_formatted'  => number_format((float) ($shipment?->total_weight ?? $sellerOrder?->total_weight ?? 0), 2) . ' kg',
-            'cod_amount'              => number_format((float) ($shipment?->cod_amount ?? 0), 2, '.', ''),
-            'payment_method'          => $sellerOrder?->effective_payment_method ?? 'COD',
-            'verified_packages_count' => $verifiedPackagesCount,
-            'total_packages_count'    => $totalPackagesCount,
-            'all_packages_verified'   => $allPackagesVerified,
-            'seal_number'             => $assignment->seal_number ?? null,
-            'is_delayed'              => (bool) ($assignment->is_delayed ?? false),
-            'delay_reason'            => $assignment->delay_reason ?? null,
-            'estimated_arrival_at'    => $assignment->estimated_arrival_at
+            'id'                       => (int) $assignment->id,
+            'assignment_id'            => (int) $assignment->id,
+            'shipment_id'              => (int) ($shipment?->id ?? $assignment->shipment_id),
+            'seller_order_id'          => (int) ($sellerOrder?->id ?? $assignment->seller_order_id),
+            'tracking_number'          => (string) ($shipment?->tracking_number ?? 'TRK-N/A'),
+            'tracking_code'            => (string) ($shipment?->tracking_number ?? 'TRK-N/A'),
+            'seller_order_number'      => (string) ($sellerOrder?->seller_order_number ?? 'SO-N/A'),
+            'status'                   => (string) $assignment->status,
+            'status_label'             => $statusLabel,
+            'shipment_status'          => (string) ($shipment?->status ?? ''),
+            'shipment_status_label'    => (string) ($shipment?->status_label ?? ''),
+            'total_weight'             => $weightKg,
+            'total_weight_formatted'   => number_format($weightKg, 2) . ' kg',
+            'distance_from_courier_km' => $distFromCourierKm,
+            'distance_from_hub_km'     => $distFromHubKm,
+            'distance_label'           => '~' . number_format($distFromCourierKm, 1) . ' km',
+            'within_courier_range'     => (bool) ($pickupEval['within_range'] ?? true),
+            'has_load_capacity'        => (bool) ($pickupEval['has_load_capacity'] ?? true),
+            'cod_amount'               => number_format((float) ($shipment?->cod_amount ?? 0), 2, '.', ''),
+            'payment_method'           => $sellerOrder?->effective_payment_method ?? 'COD',
+            'verified_packages_count'  => $verifiedPackagesCount,
+            'total_packages_count'     => $totalPackagesCount,
+            'all_packages_verified'    => $allPackagesVerified,
+            'seal_number'              => $assignment->seal_number ?? null,
+            'is_delayed'               => (bool) ($assignment->is_delayed ?? false),
+            'delay_reason'             => $assignment->delay_reason ?? null,
+            'estimated_arrival_at'     => $assignment->estimated_arrival_at
                 ? Carbon::parse($assignment->estimated_arrival_at)->toIso8601String()
                 : null,
-            'has_discrepancy'         => (bool) ($assignment->has_discrepancy ?? false),
-            'discrepancy_notes'       => $assignment->discrepancy_notes ?? null,
-            'decline_reason'          => $assignment->decline_reason ?? null,
-            'notes'                   => $assignment->notes,
-            'assigned_at'             => $assignment->assigned_at?->toIso8601String(),
-            'accepted_at'             => $assignment->accepted_at?->toIso8601String(),
-            'picked_up_at'            => $assignment->picked_up_at?->toIso8601String(),
-            'handed_over_at'          => $assignment->handed_over_at?->toIso8601String(),
-            'hub_verified_at'         => $assignment->hub_verified_at?->toIso8601String(),
-            'seller'                  => [
+            'has_discrepancy'          => (bool) ($assignment->has_discrepancy ?? false),
+            'discrepancy_notes'        => $assignment->discrepancy_notes ?? null,
+            'decline_reason'           => $assignment->decline_reason ?? null,
+            'notes'                    => $assignment->notes,
+            'assigned_at'              => $assignment->assigned_at?->toIso8601String(),
+            'accepted_at'              => $assignment->accepted_at?->toIso8601String(),
+            'picked_up_at'             => $assignment->picked_up_at?->toIso8601String(),
+            'handed_over_at'           => $assignment->handed_over_at?->toIso8601String(),
+            'hub_verified_at'          => $assignment->hub_verified_at?->toIso8601String(),
+            'seller'                   => [
                 'id'             => (int) ($sellerProfile?->id ?? 0),
                 'business_name'  => (string) ($sellerProfile?->business_name ?? ($pickupSnap['business_name'] ?? 'Seller Store')),
                 'contact_no'     => (string) ($pickupSnap['contact_no'] ?? ($sellerProfile?->contact_no ?? '')),
@@ -1441,7 +1532,7 @@ class CourierPickupController extends Controller
                 'longitude'      => $sellerCoords['longitude'],
                 'is_approximate' => $sellerCoords['is_approximate'],
             ],
-            'destination_hub'         => [
+            'destination_hub'          => [
                 'hub_id'         => (int) ($assignedHubModel?->id ?? ($hubSnap['logistics_hub_id'] ?? 0)),
                 'hub_code'       => (string) ($assignedHubModel?->hub_code ?? ($hubSnap['hub_code'] ?? 'HUB-MAIN')),
                 'hub_name'       => $hubName,
@@ -1456,12 +1547,12 @@ class CourierPickupController extends Controller
                 'longitude'      => $hubCoords['longitude'],
                 'is_approximate' => $hubCoords['is_approximate'],
             ],
-            'recipient_summary'       => [
+            'recipient_summary'        => [
                 'municipality' => (string) ($deliverySnap['municipality'] ?? ''),
                 'province'     => (string) ($deliverySnap['province'] ?? ''),
                 'barangay'     => (string) ($deliverySnap['barangay'] ?? ''),
             ],
-            'courier_pay'             => [
+            'courier_pay'              => [
                 'base_pay'       => number_format((float) $payInfo['base_pay'], 2, '.', ''),
                 'distance_tier'  => (string) $payInfo['distance_tier'],
                 'distance_bonus' => number_format((float) $payInfo['distance_bonus'], 2, '.', ''),
@@ -1469,8 +1560,8 @@ class CourierPickupController extends Controller
                 'total_pay'      => number_format((float) $payInfo['total_pay'], 2, '.', ''),
                 'total_pay_raw'  => round((float) $payInfo['total_pay'], 2),
             ],
-            'packages'                => $formattedPackages,
-            'items'                   => $itemsList,
+            'packages'                 => $formattedPackages,
+            'items'                    => $itemsList,
         ];
 
         if ($detailed && $shipment) {

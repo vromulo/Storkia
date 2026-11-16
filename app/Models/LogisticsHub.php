@@ -26,14 +26,22 @@ class LogisticsHub extends Model
         'barangay',
         'street',
         'house_details',
+        'latitude',
+        'longitude',
         'status',
+        'max_courier_pickup_radius_km',
+        'max_rider_delivery_radius_km',
         'created_by',
     ];
 
     protected function casts(): array
     {
         return [
-            'is_main_hub' => 'boolean',
+            'is_main_hub'                  => 'boolean',
+            'latitude'                     => 'decimal:7',
+            'longitude'                    => 'decimal:7',
+            'max_courier_pickup_radius_km' => 'decimal:2',
+            'max_rider_delivery_radius_km' => 'decimal:2',
         ];
     }
 

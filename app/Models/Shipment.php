@@ -2,11 +2,13 @@
 
 namespace App\Models;
 
+use App\Services\CourierMobileSchemaService;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
+use Illuminate\Support\Facades\Schema;
 
 class Shipment extends Model
 {
@@ -15,18 +17,27 @@ class Shipment extends Model
         'returned_to_seller',
     ];
 
+    public const QUEUE_SORT_OLDEST   = 'oldest';
+    public const QUEUE_SORT_NEWEST   = 'newest';
+    public const QUEUE_SORT_NEAREST  = 'nearest';
+    public const QUEUE_SORT_FARTHEST = 'farthest';
+    public const QUEUE_SORT_HEAVIEST = 'heaviest';
+
     protected $fillable = [
         'tracking_number',
         'order_id',
         'seller_order_id',
         'seller_profile_id',
         'logistics_profile_id',
+        'destination_logistics_hub_id',
         'current_courier_id',
         'current_rider_id',
         'status',
         'total_weight',
         'cod_amount',
         'shipping_fee',
+        'origin_to_hub_distance_km',
+        'hub_to_buyer_distance_km',
         'delivery_attempts_count',
         'pickup_address_snapshot',
         'hub_address_snapshot',
@@ -49,6 +60,8 @@ class Shipment extends Model
             'total_weight'              => 'decimal:3',
             'cod_amount'                => 'decimal:2',
             'shipping_fee'              => 'decimal:2',
+            'origin_to_hub_distance_km' => 'decimal:2',
+            'hub_to_buyer_distance_km'  => 'decimal:2',
             'delivery_attempts_count'   => 'integer',
             'pickup_address_snapshot'   => 'array',
             'hub_address_snapshot'      => 'array',
@@ -65,19 +78,53 @@ class Shipment extends Model
         ];
     }
 
-    public function scopeOrderByOperationalQueue(Builder $query): Builder
+    public static function normalizeQueueSort(?string $sort): string
+    {
+        return in_array($sort, [
+            self::QUEUE_SORT_OLDEST,
+            self::QUEUE_SORT_NEWEST,
+            self::QUEUE_SORT_NEAREST,
+            self::QUEUE_SORT_FARTHEST,
+            self::QUEUE_SORT_HEAVIEST,
+        ], true) ? (string) $sort : self::QUEUE_SORT_OLDEST;
+    }
+
+    public function scopeOrderByOperationalQueue(Builder $query, ?string $sort = self::QUEUE_SORT_OLDEST): Builder
     {
         $table = $this->getTable();
+        $normalizedSort = self::normalizeQueueSort($sort);
+
+        $query->orderByRaw(
+            "CASE WHEN {$table}.status IN ('delivered', 'returned_to_seller') THEN 1 ELSE 0 END ASC"
+        );
+
+        if ($normalizedSort === self::QUEUE_SORT_HEAVIEST) {
+            return $query
+                ->orderByDesc("{$table}.total_weight")
+                ->orderBy("{$table}.created_at", 'asc')
+                ->orderBy("{$table}.id", 'asc');
+        }
+
+        if (
+            in_array($normalizedSort, [self::QUEUE_SORT_NEAREST, self::QUEUE_SORT_FARTHEST], true)
+            && Schema::hasColumn($table, 'hub_to_buyer_distance_km')
+        ) {
+            $dir = $normalizedSort === self::QUEUE_SORT_FARTHEST ? 'DESC' : 'ASC';
+            return $query
+                ->orderByRaw("COALESCE({$table}.hub_to_buyer_distance_km, {$table}.origin_to_hub_distance_km, 999999) {$dir}")
+                ->orderBy("{$table}.created_at", 'asc')
+                ->orderBy("{$table}.id", 'asc');
+        }
+
+        $isNewest = $normalizedSort === self::QUEUE_SORT_NEWEST;
+        $activeDir = $isNewest ? 'DESC' : 'ASC';
 
         return $query
             ->orderByRaw(
-                "CASE WHEN {$table}.status IN ('delivered', 'returned_to_seller') THEN 1 ELSE 0 END ASC"
+                "CASE WHEN {$table}.status NOT IN ('delivered', 'returned_to_seller') THEN {$table}.created_at END {$activeDir}"
             )
             ->orderByRaw(
-                "CASE WHEN {$table}.status NOT IN ('delivered', 'returned_to_seller') THEN {$table}.created_at END ASC"
-            )
-            ->orderByRaw(
-                "CASE WHEN {$table}.status NOT IN ('delivered', 'returned_to_seller') THEN {$table}.id END ASC"
+                "CASE WHEN {$table}.status NOT IN ('delivered', 'returned_to_seller') THEN {$table}.id END {$activeDir}"
             )
             ->orderByRaw(
                 "CASE WHEN {$table}.status IN ('delivered', 'returned_to_seller') THEN COALESCE({$table}.delivered_at, {$table}.returned_at, {$table}.updated_at) END DESC"
@@ -108,6 +155,11 @@ class Shipment extends Model
     public function logisticsProfile(): BelongsTo
     {
         return $this->belongsTo(LogisticsProfile::class, 'logistics_profile_id');
+    }
+
+    public function destinationLogisticsHub(): BelongsTo
+    {
+        return $this->belongsTo(LogisticsHub::class, 'destination_logistics_hub_id');
     }
 
     public function currentCourier(): BelongsTo
@@ -183,6 +235,32 @@ class Shipment extends Model
     public function codCollection(): HasOne
     {
         return $this->hasOne(CodCollection::class, 'shipment_id');
+    }
+
+    public function getCalculatedOriginDistanceKmAttribute(): float
+    {
+        if ($this->origin_to_hub_distance_km !== null && (float) $this->origin_to_hub_distance_km > 0) {
+            return round((float) $this->origin_to_hub_distance_km, 2);
+        }
+
+        return CourierMobileSchemaService::calculateDistanceKmBetweenLocations(
+            (array) ($this->pickup_address_snapshot ?? []),
+            (array) ($this->hub_address_snapshot ?? [])
+        );
+    }
+
+    public function getCalculatedBuyerDistanceKmAttribute(): float
+    {
+        if ($this->hub_to_buyer_distance_km !== null && (float) $this->hub_to_buyer_distance_km > 0) {
+            return round((float) $this->hub_to_buyer_distance_km, 2);
+        }
+
+        $destHubSnap = (array) ($this->hub_address_snapshot['destination_hub'] ?? $this->hub_address_snapshot ?? []);
+
+        return CourierMobileSchemaService::calculateDistanceKmBetweenLocations(
+            $destHubSnap,
+            (array) ($this->delivery_address_snapshot ?? [])
+        );
     }
 
     public function getStatusLabelAttribute(): string

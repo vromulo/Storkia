@@ -405,9 +405,9 @@ class CheckoutController extends Controller
 
         $selectedAddress = $user->addresses()->findOrFail($validated['user_address_id']);
 
-        if (! $this->shippingCalculatorService->isAddressServiceable($selectedAddress->province, $selectedAddress->municipality)) {
+        if (! $this->shippingCalculatorService->isAddressServiceable($selectedAddress->province, $selectedAddress->municipality, $selectedAddress->barangay)) {
             throw ValidationException::withMessages([
-                'address' => "Delivery to {$selectedAddress->municipality}, {$selectedAddress->province} is currently unserviceable by our partner logistics hubs. Please select a serviceable address.",
+                'address' => "Delivery to {$selectedAddress->municipality}, {$selectedAddress->province} is currently outside our active Last-Mile Logistics Hub coverage. Please select a serviceable address.",
             ]);
         }
 
@@ -460,6 +460,8 @@ class CheckoutController extends Controller
             'postcode'          => $selectedAddress->postcode,
             'street_address'    => $selectedAddress->street_address,
             'building_details'  => $selectedAddress->building_details,
+            'latitude'          => $selectedAddress->latitude ?? null,
+            'longitude'         => $selectedAddress->longitude ?? null,
             'full_address'      => collect([
                 $selectedAddress->building_details,
                 $selectedAddress->street_address,
@@ -590,10 +592,12 @@ class CheckoutController extends Controller
                     'barangay'      => $sellerProfile->barangay,
                     'street'        => $sellerProfile->street,
                     'house_details' => $sellerProfile->house_details,
+                    'latitude'      => $sellerProfile->latitude ?? null,
+                    'longitude'     => $sellerProfile->longitude ?? null,
                     'full_address'  => $sellerProfile->full_address,
                 ];
 
-                $sellerOrder = SellerOrder::create([
+                $sellerOrderPayload = [
                     'order_id'                  => $parentOrder->id,
                     'seller_order_number'       => $this->generateUniqueSellerOrderNumber(),
                     'buyer_id'                  => $user->id,
@@ -612,7 +616,13 @@ class CheckoutController extends Controller
                     'acceptance_deadline_at'    => now()->addHours(SellerOrder::ACCEPTANCE_DEADLINE_HOURS),
                     'stock_deducted'            => true,
                     'stock_restored'            => false,
-                ]);
+                ];
+
+                if (Schema::hasColumn('seller_orders', 'seller_to_buyer_distance_km')) {
+                    $sellerOrderPayload['seller_to_buyer_distance_km'] = $pkg['shipping']['distance_km'] ?? null;
+                }
+
+                $sellerOrder = SellerOrder::create($sellerOrderPayload);
 
                 foreach ($pkg['raw_items'] as $itemData) {
                     $labelSuffix = ! empty($itemData['pricing_label']) && $itemData['pricing_label'] !== 'Regular' && $itemData['pricing_label'] !== 'Regular Price'
@@ -994,7 +1004,7 @@ class CheckoutController extends Controller
         $buyerBarangay = $selectedAddress?->barangay ?? '';
 
         $isAddressServiceable = $selectedAddress
-            ? $this->shippingCalculatorService->isAddressServiceable($buyerProvince, $buyerMunicipality)
+            ? $this->shippingCalculatorService->isAddressServiceable($buyerProvince, $buyerMunicipality, $buyerBarangay)
             : false;
 
         $overallSubtotal = 0.0;
@@ -1020,7 +1030,7 @@ class CheckoutController extends Controller
             if ($selectedAddress && isset($shipping['is_serviceable']) && $shipping['is_serviceable'] === false) {
                 $isAddressServiceable = false;
                 $reasonMsg = $shipping['unserviceable_reason']
-                    ?: "Shipping from {$sellerProfile->business_name} ({$sellerProfile->province}) to {$buyerProvince} is currently unavailable because no registered Storkia Logistics Partner covers both islands.";
+                    ?: "Shipping from {$sellerProfile->business_name} ({$sellerProfile->province}) to {$buyerProvince} is currently unavailable because no registered Storkia Logistics Partner covers both origin and last-mile destination.";
                 if ($strictVoucherErrors) {
                     throw ValidationException::withMessages([
                         'address' => $reasonMsg,

@@ -1,8 +1,33 @@
 @extends('layouts.logistics', ['title' => 'Storkia - Logistics Shipments'])
 
 @section('content')
-<div class="max-w-7xl mx-auto space-y-6 select-none">
+@php
+    $queueSort = \App\Models\Shipment::normalizeQueueSort($queueSort ?? request()->query('sort'));
+    $tierFilter = $tierFilter ?? request()->query('tier', '');
+    $municipalityFilter = $municipalityFilter ?? request()->query('municipality', '');
+    $hubFilter = (int) ($hubFilter ?? request()->query('hub_id', 0));
+    $companyHubs = $companyHubs ?? collect();
+    $availableMunicipalities = $availableMunicipalities ?? collect();
 
+    $sortLabels = [
+        'oldest'   => 'Oldest First (FIFO)',
+        'newest'   => 'Newest First (LIFO)',
+        'nearest'  => 'Nearest to Hub First (km)',
+        'farthest' => 'Farthest from Hub First (km)',
+        'heaviest' => 'Heaviest Parcel First (kg)',
+    ];
+
+    $tierLabels = [
+        ''                  => 'All Distance Tiers',
+        'same_barangay'     => 'Same Barangay',
+        'same_municipality' => 'Same Municipality',
+        'same_province'     => 'Same Province',
+        'inter_province'    => 'Inter-Provincial',
+        'inter_island'      => 'Inter-Island',
+    ];
+@endphp
+
+<div class="max-w-7xl mx-auto space-y-6 select-none">
     <div class="flex flex-col md:flex-row md:items-end justify-between gap-4">
         <div>
             <div class="flex flex-wrap items-center gap-2.5">
@@ -17,13 +42,25 @@
                 @endif
             </div>
             <p class="text-sm text-text-muted mt-1">
-                Active shipments are prioritized at the top in First-In, First-Out (FIFO) sequence; once delivered or returned, they automatically move to the bottom sorted by most recent.
+                Active shipments are prioritized at the top while delivered or returned shipments move to the bottom. Filter by hub, municipality, or sort by nearest/farthest distance.
             </p>
         </div>
 
         <form method="GET" action="{{ route('logistics.shipments.index') }}" class="flex items-center gap-2">
             @if($statusTab && $statusTab !== 'all')
                 <input type="hidden" name="status" value="{{ $statusTab }}">
+            @endif
+            @if($queueSort !== 'oldest')
+                <input type="hidden" name="sort" value="{{ $queueSort }}">
+            @endif
+            @if($tierFilter !== '')
+                <input type="hidden" name="tier" value="{{ $tierFilter }}">
+            @endif
+            @if($municipalityFilter !== '')
+                <input type="hidden" name="municipality" value="{{ $municipalityFilter }}">
+            @endif
+            @if($hubFilter > 0)
+                <input type="hidden" name="hub_id" value="{{ $hubFilter }}">
             @endif
             <input type="text"
                    name="search"
@@ -50,35 +87,99 @@
         </div>
     @endif
 
-    <div class="flex flex-wrap items-center gap-2">
-        @php
-            $tabs = [
-                'all'              => ['label' => 'All Shipments', 'count' => $counts['all']],
-                'to_pickup'        => ['label' => 'To Pick Up / Drop-Off', 'count' => $counts['to_pickup']],
-                'in_transit_hub'   => ['label' => 'Picked Up / To Hub', 'count' => $counts['in_transit_hub']],
-                'at_hub'           => ['label' => 'At Sorting Hub', 'count' => $counts['at_hub']],
-                'out_for_delivery' => ['label' => 'Out for Delivery', 'count' => $counts['out_for_delivery']],
-                'delivered'        => ['label' => 'Delivered', 'count' => $counts['delivered']],
-                'failed_returned'  => ['label' => 'Failed / Returned', 'count' => $counts['failed_returned']],
-            ];
-        @endphp
+    <div class="flex flex-col xl:flex-row xl:items-center justify-between gap-3">
+        <div class="flex flex-wrap items-center gap-2">
+            @php
+                $tabs = [
+                    'all'              => ['label' => 'All Shipments', 'count' => $counts['all']],
+                    'to_pickup'        => ['label' => 'To Pick Up / Drop-Off', 'count' => $counts['to_pickup']],
+                    'in_transit_hub'   => ['label' => 'Picked Up / To Hub', 'count' => $counts['in_transit_hub']],
+                    'at_hub'           => ['label' => 'At Sorting Hub', 'count' => $counts['at_hub']],
+                    'out_for_delivery' => ['label' => 'Out for Delivery', 'count' => $counts['out_for_delivery']],
+                    'delivered'        => ['label' => 'Delivered', 'count' => $counts['delivered']],
+                    'failed_returned'  => ['label' => 'Failed / Returned', 'count' => $counts['failed_returned']],
+                ];
+            @endphp
+            @foreach($tabs as $key => $tab)
+                <a href="{{ route('logistics.shipments.index', array_filter([
+                        'status'       => $key === 'all' ? null : $key,
+                        'search'       => $search,
+                        'sort'         => $queueSort !== 'oldest' ? $queueSort : null,
+                        'tier'         => $tierFilter ?: null,
+                        'municipality' => $municipalityFilter ?: null,
+                        'hub_id'       => $hubFilter > 0 ? $hubFilter : null,
+                   ])) }}"
+                   class="inline-flex items-center gap-2 px-4 py-2 rounded-2xl text-xs font-bold border transition-all {{ $statusTab === $key || ($key === 'all' && !$statusTab) ? 'bg-primary-dark text-surface border-primary-dark shadow-xs' : 'bg-surface text-text-muted border-border-subtle hover:text-text-main hover:bg-surface-subtle' }}">
+                    <span>{{ $tab['label'] }}</span>
+                    <span class="px-2 py-0.5 rounded-full text-[10px] {{ $statusTab === $key || ($key === 'all' && !$statusTab) ? 'bg-surface/20 text-surface' : 'bg-surface-subtle text-text-main' }}">
+                        {{ $tab['count'] }}
+                    </span>
+                </a>
+            @endforeach
+        </div>
 
-        @foreach($tabs as $key => $tab)
-            <a href="{{ route('logistics.shipments.index', array_filter(['status' => $key === 'all' ? null : $key, 'search' => $search])) }}"
-               class="inline-flex items-center gap-2 px-4 py-2 rounded-2xl text-xs font-bold border transition-all {{ $statusTab === $key || ($key === 'all' && !$statusTab) ? 'bg-primary-dark text-surface border-primary-dark shadow-xs' : 'bg-surface text-text-muted border-border-subtle hover:text-text-main hover:bg-surface-subtle' }}">
-                <span>{{ $tab['label'] }}</span>
-                <span class="px-2 py-0.5 rounded-full text-[10px] {{ $statusTab === $key || ($key === 'all' && !$statusTab) ? 'bg-surface/20 text-surface' : 'bg-surface-subtle text-text-main' }}">
-                    {{ $tab['count'] }}
-                </span>
-            </a>
-        @endforeach
+        <form method="GET" action="{{ route('logistics.shipments.index') }}" class="flex flex-wrap items-center gap-2 text-xs">
+            @if($statusTab && $statusTab !== 'all')
+                <input type="hidden" name="status" value="{{ $statusTab }}">
+            @endif
+            @if($search !== '')
+                <input type="hidden" name="search" value="{{ $search }}">
+            @endif
+
+            @if(empty($activeBranchHub) && $companyHubs->count() > 1)
+                <select name="hub_id"
+                        onchange="this.form.submit()"
+                        class="px-3 py-2 rounded-xl border border-border-subtle bg-surface text-xs font-bold text-text-main outline-none focus:border-primary cursor-pointer max-w-[190px]">
+                    <option value="">All Company Hubs</option>
+                    @foreach($companyHubs as $cHub)
+                        <option value="{{ $cHub->id }}" {{ $hubFilter === (int) $cHub->id ? 'selected' : '' }}>
+                            {{ $cHub->hub_name }} ({{ $cHub->municipality }})
+                        </option>
+                    @endforeach
+                </select>
+            @endif
+
+            @if($availableMunicipalities->isNotEmpty())
+                <select name="municipality"
+                        onchange="this.form.submit()"
+                        class="px-3 py-2 rounded-xl border border-border-subtle bg-surface text-xs font-bold text-text-main outline-none focus:border-primary cursor-pointer max-w-[170px]">
+                    <option value="">All Municipalities</option>
+                    @foreach($availableMunicipalities as $munOpt)
+                        <option value="{{ $munOpt }}" {{ $municipalityFilter === $munOpt ? 'selected' : '' }}>{{ $munOpt }}</option>
+                    @endforeach
+                </select>
+            @endif
+
+            <select name="tier"
+                    onchange="this.form.submit()"
+                    class="px-3 py-2 rounded-xl border border-border-subtle bg-surface text-xs font-bold text-text-main outline-none focus:border-primary cursor-pointer">
+                @foreach($tierLabels as $tVal => $tLabel)
+                    <option value="{{ $tVal }}" {{ $tierFilter === $tVal ? 'selected' : '' }}>{{ $tLabel }}</option>
+                @endforeach
+            </select>
+
+            <select name="sort"
+                    onchange="this.form.submit()"
+                    class="px-3.5 py-2 rounded-xl border border-border-subtle bg-surface text-xs font-bold text-primary-dark outline-none focus:border-primary cursor-pointer">
+                @foreach($sortLabels as $sVal => $sLabel)
+                    <option value="{{ $sVal }}" {{ $queueSort === $sVal ? 'selected' : '' }}>Sort: {{ $sLabel }}</option>
+                @endforeach
+            </select>
+
+            @if($tierFilter !== '' || $municipalityFilter !== '' || $hubFilter > 0 || $queueSort !== 'oldest')
+                <a href="{{ route('logistics.shipments.index', array_filter(['status' => $statusTab === 'all' ? null : $statusTab, 'search' => $search])) }}"
+                   class="px-3 py-2 rounded-xl bg-surface-subtle hover:bg-brand-light/30 text-text-muted hover:text-text-main font-bold transition-colors cursor-pointer">
+                    Reset
+                </a>
+            @endif
+        </form>
     </div>
 
     <div class="bg-surface rounded-3xl border border-border-subtle shadow-xs overflow-hidden">
         @if($shipments->isEmpty())
             <div class="py-16 px-6 text-center space-y-2">
                 <h3 class="text-base font-bold text-text-main">No shipments found</h3>
-                <p class="text-xs text-text-muted">Shipments assigned to {{ $activeBranchHub->hub_name ?? $profile->business_name }} will appear here.</p>
+                <p class="text-xs text-text-muted">Shipments assigned to {{ $activeBranchHub->hub_name ?? $profile->business_name }} matching your filter will appear here.</p>
             </div>
         @else
             <div class="overflow-x-auto">
@@ -106,6 +207,9 @@
                                 $primaryPkg = $shipment->packages->first();
                                 $handoverMethod = $primaryPkg?->handover_method ?? ($hubSnap['handover_method'] ?? 'courier_pickup');
                                 $assignedHubName = $primaryPkg?->logisticsHub?->hub_name ?? ($hubSnap['hub_name'] ?? $profile->business_name);
+                                $destHubName = $shipment->destinationLogisticsHub?->hub_name ?? ($hubSnap['destination_hub']['hub_name'] ?? null);
+                                $origDistKm = $shipment->calculated_origin_distance_km;
+                                $buyerDistKm = $shipment->calculated_buyer_distance_km;
                                 $badgeClass = match($shipment->status) {
                                     'delivered' => 'bg-green-100 text-green-700 border-green-200',
                                     'delivery_failed', 'returning_to_seller', 'returned_to_seller' => 'bg-red-100 text-red-700 border-red-200',
@@ -155,6 +259,11 @@
                                 <td class="py-4 px-4 align-top">
                                     <div class="font-bold text-text-main">{{ $shipment->sellerProfile->business_name ?? ($pickup['business_name'] ?? 'Seller') }}</div>
                                     <div class="text-text-muted mt-0.5">{{ $pickup['municipality'] ?? '' }}, {{ $pickup['province'] ?? '' }}</div>
+                                    <div class="mt-1">
+                                        <span class="px-2 py-0.5 rounded bg-surface-subtle border border-border-subtle text-[10px] font-mono font-bold text-text-muted">
+                                            ~{{ number_format($origDistKm, 1) }} km to Origin Hub
+                                        </span>
+                                    </div>
                                 </td>
 
                                 <td class="py-4 px-4 align-top">
@@ -165,12 +274,22 @@
                                         @endif
                                         {{ $deliv['municipality'] ?? '' }}, {{ $deliv['province'] ?? '' }}
                                     </div>
+                                    <div class="mt-1">
+                                        <span class="px-2 py-0.5 rounded bg-brand-light/50 border border-border-subtle text-[10px] font-mono font-bold text-primary-dark">
+                                            ~{{ number_format($buyerDistKm, 1) }} km Last-Mile
+                                        </span>
+                                    </div>
                                 </td>
 
                                 <td class="py-4 px-4 align-top space-y-1">
-                                    <div class="text-[11px] font-bold text-primary-dark truncate max-w-[200px]" title="{{ $assignedHubName }}">
-                                        Hub: {{ $assignedHubName }}
+                                    <div class="text-[11px] font-bold text-primary-dark truncate max-w-[210px]" title="{{ $assignedHubName }}">
+                                        Origin Hub: {{ $assignedHubName }}
                                     </div>
+                                    @if($destHubName && $destHubName !== $assignedHubName)
+                                        <div class="text-[11px] font-bold text-blue-700 truncate max-w-[210px]" title="{{ $destHubName }}">
+                                            Dest Hub: {{ $destHubName }}
+                                        </div>
+                                    @endif
                                     <div>
                                         <span class="text-text-muted">Courier:</span>
                                         <span class="font-semibold text-text-main">
@@ -184,8 +303,8 @@
                                 </td>
 
                                 <td class="py-4 px-4 align-top space-y-0.5">
-                                    <div class="font-bold text-primary">COD: ₱{{ number_format((float) $shipment->cod_amount, 2) }}</div>
-                                    <div class="text-text-muted">Ship Fee: ₱{{ number_format((float) $shipment->shipping_fee, 2) }}</div>
+                                    <div class="font-bold text-primary">COD: &#8369;{{ number_format((float) $shipment->cod_amount, 2) }}</div>
+                                    <div class="text-text-muted">Ship Fee: &#8369;{{ number_format((float) $shipment->shipping_fee, 2) }}</div>
                                     <div class="text-text-muted">Weight: {{ number_format((float) $shipment->total_weight, 2) }} kg</div>
                                 </td>
 

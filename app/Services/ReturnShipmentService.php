@@ -19,33 +19,29 @@ class ReturnShipmentService
         protected ReturnRefundService $returnRefundService,
         protected ReturnRefundLedgerService $ledger,
         protected AddressService $addressService
-    ) {
-    }
+    ) {}
 
     public function eligibleRiders(ReturnShipment $returnShipment, Collection $riders): Collection
     {
-        $municipalityMatches = $riders
+        $pickupSnap = (array) ($returnShipment->pickup_address_snapshot ?? []);
+
+        return $riders
             ->filter(fn (Rider $rider) => $this->riderCoversReturn($rider, $returnShipment))
+            ->sortBy(function (Rider $rider) use ($pickupSnap) {
+                $eval = $rider->evaluateDeliveryEligibilityForSnapshot($pickupSnap);
+                $priority = $eval['exact_barangay_match'] ? 0 : ($eval['same_municipality'] ? 100 : 200);
+                return $priority + ($eval['distance_from_rider_km'] ?? 0);
+            })
             ->values();
-
-        $buyerBarangay = $this->addressService->normalizeName($returnShipment->pickup_address_snapshot['barangay'] ?? '');
-        if ($buyerBarangay === '') {
-            return $municipalityMatches;
-        }
-
-        $barangayMatches = $municipalityMatches
-            ->filter(fn (Rider $rider) => $rider->barangayCoverages->contains(
-                fn ($coverage) => $this->addressService->normalizeName($coverage->barangay_name) === $buyerBarangay
-            ))
-            ->values();
-
-        return $barangayMatches->isNotEmpty() ? $barangayMatches : $municipalityMatches;
     }
 
     public function eligibleCouriers(ReturnShipment $returnShipment, Collection $couriers): Collection
     {
+        $returnSnap = (array) ($returnShipment->return_address_snapshot ?? []);
+
         return $couriers
             ->filter(fn (Courier $courier) => $this->courierServesHub($courier, $returnShipment))
+            ->sortBy(fn (Courier $courier) => $courier->distanceToSnapshotKm($returnSnap))
             ->values();
     }
 
@@ -78,8 +74,8 @@ class ReturnShipmentService
             }
 
             if (! $this->riderCoversReturn($rider, $locked)) {
-                $this->fail("Rider {$rider->full_name} is registered to " . ($rider->assigned_hub?->municipality ?? 'no hub')
-                    . ' and cannot collect a parcel outside their hub area.');
+                $eval = $rider->evaluateDeliveryEligibilityForSnapshot((array) ($locked->pickup_address_snapshot ?? []));
+                $this->fail($eval['reason'] ?: ("Rider {$rider->full_name} is registered to " . ($rider->assigned_hub?->municipality ?? 'no hub') . ' and cannot collect a parcel outside their last-mile hub area.'));
             }
 
             $locked->update([
@@ -100,6 +96,7 @@ class ReturnShipmentService
             );
 
             $order = $locked->sellerOrder;
+
             $this->queue(
                 $pending,
                 $rider,
@@ -110,6 +107,7 @@ class ReturnShipmentService
                 $this->url('rider.returns.index'),
                 $locked
             );
+
             $this->queue(
                 $pending,
                 $order?->buyer,
@@ -168,6 +166,7 @@ class ReturnShipmentService
 
             $hubName = $locked->hub_address_snapshot['hub_name'] ?? ($locked->hub_address_snapshot['name'] ?? 'the sorting hub');
             $note = $notes !== null && trim($notes) !== '' ? ' Note: ' . trim($notes) : '';
+
             $locked->recordEvent(
                 'Received at Sorting Hub',
                 "The returned parcel was checked and received at {$hubName}.{$note}",
@@ -178,6 +177,7 @@ class ReturnShipmentService
             );
 
             $order = $locked->sellerOrder;
+
             $this->queue(
                 $pending,
                 $order?->buyer,
@@ -187,6 +187,7 @@ class ReturnShipmentService
                 $this->url('user.orders.show', $order?->id),
                 $locked
             );
+
             $this->queue(
                 $pending,
                 $order?->seller,
@@ -243,7 +244,7 @@ class ReturnShipmentService
 
             if (! $this->courierServesHub($courier, $locked)) {
                 $this->fail("Courier {$courier->full_name} is registered to " . ($courier->assigned_hub?->municipality ?? 'no hub')
-                    . ' and cannot carry a parcel routed through another hub.');
+                    . ' and cannot carry a parcel routed to a seller outside their hub province.');
             }
 
             $previousCourierId = $locked->current_courier_id ? (int) $locked->current_courier_id : null;
@@ -259,6 +260,7 @@ class ReturnShipmentService
             $locked->update($updates);
 
             $courier->update(['status' => 'on_delivery']);
+
             if ($previousCourierId && $previousCourierId !== (int) $courier->id) {
                 $this->releaseCourier($previousCourierId, (int) $locked->id);
             }
@@ -274,6 +276,7 @@ class ReturnShipmentService
             );
 
             $order = $locked->sellerOrder;
+
             $this->queue(
                 $pending,
                 $courier,
@@ -284,6 +287,7 @@ class ReturnShipmentService
                 $this->url('courier.returns.index'),
                 $locked
             );
+
             $this->queue(
                 $pending,
                 $order?->seller,
@@ -335,6 +339,7 @@ class ReturnShipmentService
             );
 
             $order = $locked->sellerOrder;
+
             $this->queue(
                 $pending,
                 $order?->buyer,
@@ -344,6 +349,7 @@ class ReturnShipmentService
                 $this->url('user.orders.show', $order?->id),
                 $locked
             );
+
             $this->queue(
                 $pending,
                 $order?->seller,
@@ -353,6 +359,7 @@ class ReturnShipmentService
                 $this->url('seller.returns.show', $locked->return_request_id),
                 $locked
             );
+
             $this->queue(
                 $pending,
                 $order?->logisticsProfile?->user,
@@ -433,6 +440,7 @@ class ReturnShipmentService
                 $this->url('user.orders.show', $order?->id),
                 $locked
             );
+
             $this->queue(
                 $pending,
                 $order?->logisticsProfile?->user,
@@ -507,6 +515,7 @@ class ReturnShipmentService
             );
 
             $order = $locked->sellerOrder;
+
             $this->queue(
                 $pending,
                 $order?->seller,
@@ -558,6 +567,7 @@ class ReturnShipmentService
                 $updates['delivery_failure_reason'] = mb_substr($full, 0, 150);
                 $updates['delivery_failed_at'] = now();
             }
+
             $locked->update($updates);
 
             $this->releaseCourier((int) $courier->id, (int) $locked->id);
@@ -573,6 +583,7 @@ class ReturnShipmentService
             );
 
             $order = $locked->sellerOrder;
+
             $this->queue(
                 $pending,
                 $order?->seller,
@@ -582,6 +593,7 @@ class ReturnShipmentService
                 $this->url('seller.returns.show', $locked->return_request_id),
                 $locked
             );
+
             $this->queue(
                 $pending,
                 $order?->logisticsProfile?->user,
@@ -697,23 +709,21 @@ class ReturnShipmentService
 
     protected function riderCoversReturn(Rider $rider, ReturnShipment $returnShipment): bool
     {
-        $hub = $rider->assigned_hub;
-        if (! $hub) {
-            return false;
-        }
+        $pickupSnap = (array) ($returnShipment->pickup_address_snapshot ?? []);
+        $eval = $rider->evaluateDeliveryEligibilityForSnapshot($pickupSnap);
 
-        $riderMunicipality = $this->addressService->normalizeName($hub->municipality);
-        $buyerMunicipality = $this->addressService->normalizeName($returnShipment->pickup_address_snapshot['municipality'] ?? '');
-        $hubMunicipality = $this->addressService->normalizeName($returnShipment->hub_address_snapshot['municipality'] ?? '');
-        $targetHubId = $returnShipment->hub_address_snapshot['logistics_hub_id'] ?? null;
-
-        return ($buyerMunicipality !== '' && $riderMunicipality === $buyerMunicipality)
-            || ($targetHubId && (int) $hub->id === (int) $targetHubId)
-            || ($hubMunicipality !== '' && $riderMunicipality === $hubMunicipality);
+        return (bool) $eval['is_eligible'];
     }
 
     protected function courierServesHub(Courier $courier, ReturnShipment $returnShipment): bool
     {
+        $returnSnap = (array) ($returnShipment->return_address_snapshot ?? []);
+        $eval = $courier->evaluatePickupEligibilityForSnapshot($returnSnap, (float) ($returnShipment->total_weight ?? 0));
+
+        if ($eval['within_range']) {
+            return true;
+        }
+
         $hub = $courier->assigned_hub;
         if (! $hub) {
             return false;
@@ -774,6 +784,7 @@ class ReturnShipmentService
         }
 
         $order = $returnShipment->sellerOrder;
+
         $pending[] = [
             $recipient,
             new OrderLifecycleNotification(

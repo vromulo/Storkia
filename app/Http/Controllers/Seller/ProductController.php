@@ -330,16 +330,34 @@ class ProductController extends Controller
         $validated = $request->validated();
 
         $mainPicturePaths = [];
-        $uploadedMainPictures = $request->file('pictures', []);
+        $base64MainPictures = array_values(array_filter(
+            (array) $request->input('pictures_base64', []),
+            fn ($item) => is_string($item) && str_starts_with(trim($item), 'data:image/')
+        ));
+        $uploadedMainPictures = array_filter(
+            (array) $request->file('pictures', []),
+            fn ($f) => $f && $f->isValid()
+        );
 
-        if (count($uploadedMainPictures) < 1 || count($uploadedMainPictures) > 10) {
+        if (! empty($base64MainPictures)) {
+            foreach (array_slice($base64MainPictures, 0, 10) as $b64Pic) {
+                $stored = $this->storeBase64Webp((string) $b64Pic, 'products/main');
+                if ($stored) {
+                    $mainPicturePaths[] = $stored;
+                }
+            }
+        }
+
+        if (empty($mainPicturePaths) && ! empty($uploadedMainPictures)) {
+            foreach (array_slice($uploadedMainPictures, 0, 10) as $picFile) {
+                $mainPicturePaths[] = $this->encodeAndStoreWebp($picFile, 'products/main');
+            }
+        }
+
+        if (count($mainPicturePaths) < 1 || count($mainPicturePaths) > 10) {
             throw ValidationException::withMessages([
                 'pictures' => 'Please upload between 1 and 10 main product pictures.',
             ]);
-        }
-
-        foreach (array_slice($uploadedMainPictures, 0, 10) as $picFile) {
-            $mainPicturePaths[] = $this->encodeAndStoreWebp($picFile, 'products/main');
         }
 
         $variantTitle = trim((string) ($validated['variant_title'] ?? 'Variants'));
@@ -351,7 +369,7 @@ class ProductController extends Controller
         $variantPricesInput = $validated['variant_prices'] ?? [];
         $variantWeightsInput = $validated['variant_weights'] ?? [];
         $variantStocksInput = $validated['variant_stocks'] ?? [];
-        $variantPicturesFiles = $request->file('variant_pictures', []);
+        $variantPicturesFiles = (array) $request->file('variant_pictures', []);
         $variantPicturesBase64 = (array) $request->input('variant_pictures_base64', []);
 
         $subNamesInput = $validated['sub_variant_names'] ?? [];
@@ -377,10 +395,11 @@ class ProductController extends Controller
             $seenVariantNames[] = $normVName;
 
             $variantImgPath = null;
-            if (isset($variantPicturesFiles[$vKey])) {
-                $variantImgPath = $this->encodeAndStoreWebp($variantPicturesFiles[$vKey], 'products/variants');
-            } elseif (! empty($variantPicturesBase64[$vKey])) {
+            if (! empty($variantPicturesBase64[$vKey])) {
                 $variantImgPath = $this->storeBase64Webp((string) $variantPicturesBase64[$vKey], 'products/variants');
+            }
+            if (! $variantImgPath && isset($variantPicturesFiles[$vKey]) && $variantPicturesFiles[$vKey] && $variantPicturesFiles[$vKey]->isValid()) {
+                $variantImgPath = $this->encodeAndStoreWebp($variantPicturesFiles[$vKey], 'products/variants');
             }
 
             if (! $variantImgPath) {
@@ -551,17 +570,37 @@ class ProductController extends Controller
         $currentPictures = is_array($product->pictures) ? $product->pictures : [];
         $updatedPictures = $currentPictures;
 
-        if ($request->has('existing_pictures') || $request->hasFile('pictures')) {
+        $base64MainUploads = array_values(array_filter(
+            (array) $request->input('pictures_base64', []),
+            fn ($item) => is_string($item) && str_starts_with(trim($item), 'data:image/')
+        ));
+        $newFileUploads = array_filter(
+            (array) $request->file('pictures', []),
+            fn ($f) => $f && $f->isValid()
+        );
+
+        if ($request->has('existing_pictures') || ! empty($base64MainUploads) || ! empty($newFileUploads)) {
             $retained = $request->has('existing_pictures')
                 ? array_values(array_intersect((array) $request->input('existing_pictures', []), $currentPictures))
                 : ($isApprovedProduct ? $currentPictures : []);
 
-            $newUploads = $request->file('pictures', []);
-            foreach ($newUploads as $newPic) {
-                if (count($retained) >= 10) {
-                    break;
+            if (! empty($base64MainUploads)) {
+                foreach ($base64MainUploads as $b64Pic) {
+                    if (count($retained) >= 10) {
+                        break;
+                    }
+                    $stored = $this->storeBase64Webp((string) $b64Pic, 'products/main');
+                    if ($stored) {
+                        $retained[] = $stored;
+                    }
                 }
-                $retained[] = $this->encodeAndStoreWebp($newPic, 'products/main');
+            } else {
+                foreach ($newFileUploads as $newPic) {
+                    if (count($retained) >= 10) {
+                        break;
+                    }
+                    $retained[] = $this->encodeAndStoreWebp($newPic, 'products/main');
+                }
             }
 
             if (empty($retained)) {
@@ -583,7 +622,7 @@ class ProductController extends Controller
         $variantPricesInput = $request->input('variant_prices', []);
         $variantWeightsInput = $request->input('variant_weights', []);
         $variantStocksInput = $request->input('variant_stocks', []);
-        $variantPicsFiles = $request->file('variant_pictures', []);
+        $variantPicsFiles = (array) $request->file('variant_pictures', []);
         $variantPicsBase64 = (array) $request->input('variant_pictures_base64', []);
         $archiveVariantsInput = $request->input('archive_variants', []);
 
@@ -611,13 +650,13 @@ class ProductController extends Controller
             if (! $isArchived && isset($variantNamesInput[$vIdx])) {
                 $item['name'] = trim((string) $variantNamesInput[$vIdx]);
             }
-            if (! $isArchived && isset($variantPicsFiles[$vIdx])) {
-                $item['image'] = $this->encodeAndStoreWebp($variantPicsFiles[$vIdx], 'products/variants');
-            } elseif (! $isArchived && ! empty($variantPicsBase64[$vIdx])) {
+            if (! $isArchived && ! empty($variantPicsBase64[$vIdx])) {
                 $decodedImg = $this->storeBase64Webp((string) $variantPicsBase64[$vIdx], 'products/variants');
                 if ($decodedImg) {
                     $item['image'] = $decodedImg;
                 }
+            } elseif (! $isArchived && isset($variantPicsFiles[$vIdx]) && $variantPicsFiles[$vIdx] && $variantPicsFiles[$vIdx]->isValid()) {
+                $item['image'] = $this->encodeAndStoreWebp($variantPicsFiles[$vIdx], 'products/variants');
             }
 
             $itemStatus = $item['status'] ?? 'Approved';
@@ -747,7 +786,7 @@ class ProductController extends Controller
         $newVariantPrices = $request->input('new_variant_prices', []);
         $newVariantWeights = $request->input('new_variant_weights', []);
         $newVariantStocks = $request->input('new_variant_stocks', []);
-        $newVariantPics = $request->file('new_variant_pictures', []);
+        $newVariantPics = (array) $request->file('new_variant_pictures', []);
         $newVariantPicsBase64 = (array) $request->input('new_variant_pictures_base64', []);
 
         $newSubNames = $request->input('new_sub_variant_names', []);
@@ -762,10 +801,11 @@ class ProductController extends Controller
             }
 
             $nvImgPath = null;
-            if (isset($newVariantPics[$nvId])) {
-                $nvImgPath = $this->encodeAndStoreWebp($newVariantPics[$nvId], 'products/variants');
-            } elseif (! empty($newVariantPicsBase64[$nvId])) {
+            if (! empty($newVariantPicsBase64[$nvId])) {
                 $nvImgPath = $this->storeBase64Webp((string) $newVariantPicsBase64[$nvId], 'products/variants');
+            }
+            if (! $nvImgPath && isset($newVariantPics[$nvId]) && $newVariantPics[$nvId] && $newVariantPics[$nvId]->isValid()) {
+                $nvImgPath = $this->encodeAndStoreWebp($newVariantPics[$nvId], 'products/variants');
             }
 
             $nvStatus = $isApprovedProduct ? 'Pending' : 'Approved';
