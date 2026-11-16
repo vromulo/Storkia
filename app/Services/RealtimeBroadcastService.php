@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Events\StorkiaRealtimeUpdated;
 use App\Models\DeliveryAssignment;
+use App\Models\InterHubTransfer;
 use App\Models\PickupAssignment;
 use App\Models\ReturnRequest;
 use App\Models\ReturnShipment;
@@ -12,12 +13,6 @@ use App\Models\Shipment;
 
 class RealtimeBroadcastService
 {
-    /**
-     * Broadcast a real-time update to one or more private/public channels.
-     *
-     * @param  array<int, string>  $channels
-     * @param  array<string, mixed>  $payload
-     */
     public static function send(
         array $channels,
         string $scope,
@@ -41,7 +36,6 @@ class RealtimeBroadcastService
                 publicChannels: $cleanPublic
             ));
         } catch (\Throwable $e) {
-            // Prevent broadcast transport issues from interrupting database transactions
         }
     }
 
@@ -57,15 +51,12 @@ class RealtimeBroadcastService
         if ($sellerOrder->buyer_id) {
             $channels[] = 'user.' . $sellerOrder->buyer_id;
         }
-
         if ($sellerOrder->seller_id) {
             $channels[] = 'user.' . $sellerOrder->seller_id;
         }
-
         if ($sellerOrder->seller_profile_id) {
             $channels[] = 'seller.' . $sellerOrder->seller_profile_id;
         }
-
         if ($sellerOrder->logistics_profile_id) {
             $channels[] = 'logistics.' . $sellerOrder->logistics_profile_id;
         }
@@ -75,6 +66,9 @@ class RealtimeBroadcastService
             $channels[] = 'shipment.' . $shipment->id;
             if ($shipment->current_courier_id) {
                 $channels[] = 'courier.' . $shipment->current_courier_id;
+            }
+            if ($shipment->linehaul_courier_id) {
+                $channels[] = 'courier.' . $shipment->linehaul_courier_id;
             }
             if ($shipment->current_rider_id) {
                 $channels[] = 'rider.' . $shipment->current_rider_id;
@@ -112,19 +106,18 @@ class RealtimeBroadcastService
         if ($shipment->logistics_profile_id) {
             $channels[] = 'logistics.' . $shipment->logistics_profile_id;
         }
-
         if ($shipment->seller_profile_id) {
             $channels[] = 'seller.' . $shipment->seller_profile_id;
         }
-
         if ($shipment->current_courier_id) {
             $channels[] = 'courier.' . $shipment->current_courier_id;
         }
-
+        if ($shipment->linehaul_courier_id) {
+            $channels[] = 'courier.' . $shipment->linehaul_courier_id;
+        }
         if ($shipment->current_rider_id) {
             $channels[] = 'rider.' . $shipment->current_rider_id;
         }
-
         if ($sellerOrder) {
             $channels[] = 'order.' . $sellerOrder->id;
             if ($sellerOrder->buyer_id) {
@@ -140,14 +133,15 @@ class RealtimeBroadcastService
             scope: 'shipment',
             action: $action,
             payload: array_merge([
-                'shipment_id'       => (int) $shipment->id,
-                'seller_order_id'   => (int) $shipment->seller_order_id,
-                'tracking_number'   => (string) $shipment->tracking_number,
-                'status'            => (string) $shipment->status,
-                'status_label'      => (string) $shipment->status_label,
-                'order_status'      => $sellerOrder ? (string) $sellerOrder->status : null,
-                'current_courier_id'=> $shipment->current_courier_id ? (int) $shipment->current_courier_id : null,
-                'current_rider_id'  => $shipment->current_rider_id ? (int) $shipment->current_rider_id : null,
+                'shipment_id'         => (int) $shipment->id,
+                'seller_order_id'     => (int) $shipment->seller_order_id,
+                'tracking_number'     => (string) $shipment->tracking_number,
+                'status'              => (string) $shipment->status,
+                'status_label'        => (string) $shipment->status_label,
+                'order_status'        => $sellerOrder ? (string) $sellerOrder->status : null,
+                'current_courier_id'  => $shipment->current_courier_id ? (int) $shipment->current_courier_id : null,
+                'linehaul_courier_id' => $shipment->linehaul_courier_id ? (int) $shipment->linehaul_courier_id : null,
+                'current_rider_id'    => $shipment->current_rider_id ? (int) $shipment->current_rider_id : null,
             ], $extra)
         );
     }
@@ -165,18 +159,15 @@ class RealtimeBroadcastService
         if ($assignment->courier_id) {
             $channels[] = 'courier.' . $assignment->courier_id;
         }
-
         if ($assignment->logistics_profile_id) {
             $channels[] = 'logistics.' . $assignment->logistics_profile_id;
         }
-
         if ($shipment) {
             $channels[] = 'shipment.' . $shipment->id;
             if ($shipment->seller_profile_id) {
                 $channels[] = 'seller.' . $shipment->seller_profile_id;
             }
         }
-
         if ($sellerOrder) {
             $channels[] = 'order.' . $sellerOrder->id;
             if ($sellerOrder->buyer_id) {
@@ -203,6 +194,57 @@ class RealtimeBroadcastService
         );
     }
 
+    public static function forInterHubTransfer(InterHubTransfer $transfer, string $action = 'updated', array $extra = []): void
+    {
+        $transfer->loadMissing(['shipment.sellerOrder']);
+        $shipment = $transfer->shipment;
+        $sellerOrder = $shipment?->sellerOrder;
+
+        $channels = [
+            'admin.global',
+        ];
+
+        if ($transfer->courier_id) {
+            $channels[] = 'courier.' . $transfer->courier_id;
+        }
+        if ($transfer->logistics_profile_id) {
+            $channels[] = 'logistics.' . $transfer->logistics_profile_id;
+        }
+        if ($shipment) {
+            $channels[] = 'shipment.' . $shipment->id;
+            if ($shipment->seller_profile_id) {
+                $channels[] = 'seller.' . $shipment->seller_profile_id;
+            }
+        }
+        if ($sellerOrder) {
+            $channels[] = 'order.' . $sellerOrder->id;
+            if ($sellerOrder->buyer_id) {
+                $channels[] = 'user.' . $sellerOrder->buyer_id;
+            }
+            if ($sellerOrder->seller_id) {
+                $channels[] = 'user.' . $sellerOrder->seller_id;
+            }
+        }
+
+        self::send(
+            channels: $channels,
+            scope: 'inter_hub_transfer',
+            action: $action,
+            payload: array_merge([
+                'inter_hub_transfer_id' => (int) $transfer->id,
+                'transfer_reference'    => (string) $transfer->transfer_reference,
+                'shipment_id'           => (int) $transfer->shipment_id,
+                'seller_order_id'       => (int) $transfer->seller_order_id,
+                'courier_id'            => $transfer->courier_id ? (int) $transfer->courier_id : null,
+                'origin_hub_id'         => (int) $transfer->origin_hub_id,
+                'destination_hub_id'    => (int) $transfer->destination_hub_id,
+                'status'                => (string) $transfer->status,
+                'shipment_status'       => $shipment ? (string) $shipment->status : null,
+                'tracking_number'       => $shipment ? (string) $shipment->tracking_number : null,
+            ], $extra)
+        );
+    }
+
     public static function forDeliveryAssignment(DeliveryAssignment $assignment, string $action = 'updated', array $extra = []): void
     {
         $assignment->loadMissing(['shipment', 'sellerOrder']);
@@ -216,18 +258,15 @@ class RealtimeBroadcastService
         if ($assignment->rider_id) {
             $channels[] = 'rider.' . $assignment->rider_id;
         }
-
         if ($assignment->logistics_profile_id) {
             $channels[] = 'logistics.' . $assignment->logistics_profile_id;
         }
-
         if ($shipment) {
             $channels[] = 'shipment.' . $shipment->id;
             if ($shipment->seller_profile_id) {
                 $channels[] = 'seller.' . $shipment->seller_profile_id;
             }
         }
-
         if ($sellerOrder) {
             $channels[] = 'order.' . $sellerOrder->id;
             if ($sellerOrder->buyer_id) {
@@ -266,19 +305,15 @@ class RealtimeBroadcastService
         if ($returnRequest->buyer_id) {
             $channels[] = 'user.' . $returnRequest->buyer_id;
         }
-
         if ($returnRequest->seller_id) {
             $channels[] = 'user.' . $returnRequest->seller_id;
         }
-
         if ($returnRequest->seller_profile_id) {
             $channels[] = 'seller.' . $returnRequest->seller_profile_id;
         }
-
         if ($returnRequest->seller_order_id) {
             $channels[] = 'order.' . $returnRequest->seller_order_id;
         }
-
         if ($rs) {
             if ($rs->logistics_profile_id) {
                 $channels[] = 'logistics.' . $rs->logistics_profile_id;
@@ -318,23 +353,18 @@ class RealtimeBroadcastService
         if ($returnShipment->logistics_profile_id) {
             $channels[] = 'logistics.' . $returnShipment->logistics_profile_id;
         }
-
         if ($returnShipment->seller_profile_id) {
             $channels[] = 'seller.' . $returnShipment->seller_profile_id;
         }
-
         if ($returnShipment->current_rider_id) {
             $channels[] = 'rider.' . $returnShipment->current_rider_id;
         }
-
         if ($returnShipment->current_courier_id) {
             $channels[] = 'courier.' . $returnShipment->current_courier_id;
         }
-
         if ($returnShipment->seller_order_id) {
             $channels[] = 'order.' . $returnShipment->seller_order_id;
         }
-
         if ($req) {
             if ($req->buyer_id) {
                 $channels[] = 'user.' . $req->buyer_id;
@@ -374,6 +404,7 @@ class RealtimeBroadcastService
         ?int $assignmentId = null
     ): void {
         $normType = strtolower($driverType) === 'courier' ? 'courier' : 'rider';
+
         $channels = [
             $normType . '.' . $driverId,
         ];
@@ -381,11 +412,9 @@ class RealtimeBroadcastService
         if ($logisticsProfileId) {
             $channels[] = 'logistics.' . $logisticsProfileId;
         }
-
         if ($shipmentId) {
             $channels[] = 'shipment.' . $shipmentId;
         }
-
         if ($sellerOrderId) {
             $channels[] = 'order.' . $sellerOrderId;
             $buyerId = SellerOrder::where('id', $sellerOrderId)->value('buyer_id');

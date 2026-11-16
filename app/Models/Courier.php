@@ -99,6 +99,16 @@ class Courier extends Authenticatable
         return $this->hasMany(PickupAssignment::class, 'courier_id')->latest('id');
     }
 
+    public function returnShipments()
+    {
+        return $this->hasMany(ReturnShipment::class, 'current_courier_id')->latest('id');
+    }
+
+    public function interHubTransfers()
+    {
+        return $this->hasMany(InterHubTransfer::class, 'courier_id')->latest('id');
+    }
+
     public function locations()
     {
         return $this->hasMany(CourierLocation::class, 'courier_id')->latest('recorded_at');
@@ -112,6 +122,39 @@ class Courier extends Authenticatable
     public function activeShipments()
     {
         return $this->hasMany(Shipment::class, 'current_courier_id');
+    }
+
+    public function hasActiveWorkAssignments(bool $includeAssigned = false): bool
+    {
+        $pickupStatuses = $includeAssigned
+            ? ['assigned', 'accepted', 'picked_up', 'in_transit_to_hub']
+            : ['accepted', 'picked_up', 'in_transit_to_hub'];
+
+        if (PickupAssignment::where('courier_id', $this->id)->whereIn('status', $pickupStatuses)->exists()) {
+            return true;
+        }
+
+        if (Schema::hasTable('return_shipments')) {
+            $returnStatuses = $includeAssigned
+                ? [ReturnShipment::STATUS_COURIER_ASSIGNED, ReturnShipment::STATUS_OUT_FOR_RETURN_DELIVERY]
+                : [ReturnShipment::STATUS_OUT_FOR_RETURN_DELIVERY];
+
+            if (ReturnShipment::where('current_courier_id', $this->id)->whereIn('status', $returnStatuses)->exists()) {
+                return true;
+            }
+        }
+
+        if (Schema::hasTable('inter_hub_transfers')) {
+            $transferStatuses = $includeAssigned
+                ? ['assigned', 'accepted', 'in_transit', 'arrived_destination_hub']
+                : ['accepted', 'in_transit', 'arrived_destination_hub'];
+
+            if (InterHubTransfer::where('courier_id', $this->id)->whereIn('status', $transferStatuses)->exists()) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public function getAssignedHubAttribute(): ?LogisticsHub
@@ -170,7 +213,24 @@ class Courier extends Authenticatable
             ->get()
             ->sum(fn ($pa) => (float) ($pa->shipment?->total_weight ?? 0));
 
-        return round($activePickupWeight, 2);
+        $activeReturnWeight = Schema::hasTable('return_shipments')
+            ? (float) ReturnShipment::where('current_courier_id', $this->id)
+                ->whereIn('status', [
+                    ReturnShipment::STATUS_COURIER_ASSIGNED,
+                    ReturnShipment::STATUS_OUT_FOR_RETURN_DELIVERY,
+                ])
+                ->sum('total_weight')
+            : 0.0;
+
+        $activeLinehaulWeight = Schema::hasTable('inter_hub_transfers')
+            ? (float) InterHubTransfer::where('courier_id', $this->id)
+                ->whereIn('status', ['assigned', 'accepted', 'in_transit', 'arrived_destination_hub'])
+                ->with('shipment:id,total_weight')
+                ->get()
+                ->sum(fn ($iht) => (float) ($iht->shipment?->total_weight ?? 0))
+            : 0.0;
+
+        return round($activePickupWeight + $activeReturnWeight + $activeLinehaulWeight, 2);
     }
 
     public function getRemainingLoadCapacityKgAttribute(): float

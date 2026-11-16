@@ -80,6 +80,7 @@ class OrderCompletionService
         $shippingCalculator = app(ShippingCalculatorService::class);
         $slaGuard = app(OperationalSlaGuardService::class);
         $autoCancelledCount = 0;
+        $peso = "\u{20B1}";
 
         foreach ($candidates as $candidate) {
             $pickupSnap = (array) ($candidate->pickup_address_snapshot ?? []);
@@ -115,7 +116,7 @@ class OrderCompletionService
             $cancelledOrder = null;
 
             try {
-                DB::transaction(function () use ($candidate, $reason, $slaGuard, &$notifications, &$autoCancelledCount, &$cancelledOrder) {
+                DB::transaction(function () use ($candidate, $reason, $slaGuard, $peso, &$notifications, &$autoCancelledCount, &$cancelledOrder) {
                     $locked = SellerOrder::with(['order', 'payment', 'paymentSubmission', 'extra', 'buyer', 'seller', 'sellerProfile', 'shipment'])
                         ->where('id', $candidate->id)
                         ->lockForUpdate()
@@ -176,7 +177,7 @@ class OrderCompletionService
                     }
 
                     $paymentRemark = $wasPrepaidWallet
-                        ? ' Buyer Storkia E-Wallet payment of ₱' . number_format($refundedWalletAmount, 2) . ' was refunded immediately.'
+                        ? " Buyer Storkia E-Wallet payment of {$peso}" . number_format($refundedWalletAmount, 2) . ' was refunded immediately.'
                         : ' Payment method was Cash on Delivery (COD), so no payment was collected or refunded.';
 
                     OrderStatusHistory::create([
@@ -195,7 +196,7 @@ class OrderCompletionService
 
                     if ($locked->buyer) {
                         $buyerMsg = $wasPrepaidWallet
-                            ? "Order #{$locked->seller_order_number} was automatically cancelled because logistics/rider coverage for your route became unavailable ({$reason}). Your E-Wallet payment of ₱" . number_format($refundedWalletAmount, 2) . " was refunded immediately!"
+                            ? "Order #{$locked->seller_order_number} was automatically cancelled because logistics/rider coverage for your route became unavailable ({$reason}). Your E-Wallet payment of {$peso}" . number_format($refundedWalletAmount, 2) . " was refunded immediately!"
                             : "Order #{$locked->seller_order_number} (COD) was automatically cancelled because logistics/rider coverage for your route became unavailable ({$reason}). Because this was a Cash on Delivery order, no payment was charged.";
 
                         $notifications[] = [
@@ -279,6 +280,7 @@ class OrderCompletionService
         }
 
         $overdueDisputes = $query->limit(50)->get();
+        $peso = "\u{20B1}";
 
         foreach ($overdueDisputes as $disputedOrder) {
             $extra = $disputedOrder->extra;
@@ -289,7 +291,7 @@ class OrderCompletionService
             $notifications = [];
 
             try {
-                DB::transaction(function () use ($disputedOrder, &$notifications, &$approvedCount) {
+                DB::transaction(function () use ($disputedOrder, $peso, &$notifications, &$approvedCount) {
                     $locked = SellerOrder::with(['order', 'payment', 'extra', 'buyer', 'seller'])
                         ->where('id', $disputedOrder->id)
                         ->lockForUpdate()
@@ -325,6 +327,9 @@ class OrderCompletionService
                         (float) $locked->total_amount,
                         'Auto-Approved Return & Refund (3-Day Seller Timeout)'
                     );
+
+                    $this->inventoryStockService->restoreStockForSellerOrder($locked);
+                    $this->voucherService->restoreVouchersForSellerOrder($locked);
                     $this->buyerRewardService?->restoreCoinsForSellerOrder($locked);
 
                     $locked->update([
@@ -346,7 +351,7 @@ class OrderCompletionService
                         'to_status'       => 'returned_to_seller',
                         'actor_type'      => 'System',
                         'actor_id'        => null,
-                        'remarks'         => 'Return and refund request automatically approved after Seller failed to respond within 3 days (72 hours). Refund credited to Buyer E-Wallet.',
+                        'remarks'         => 'Return and refund request automatically approved after Seller failed to respond within 3 days (72 hours). Refund credited to Buyer E-Wallet and stock restored.',
                     ]);
 
                     if ($locked->order) {
@@ -358,7 +363,7 @@ class OrderCompletionService
                             'recipient'    => $locked->buyer,
                             'notification' => new OrderLifecycleNotification(
                                 title: 'Return & Refund Auto-Approved (Credited to E-Wallet)',
-                                message: "Your return and refund request for Order #{$locked->seller_order_number} was automatically approved and ₱" . number_format((float) $locked->total_amount, 2) . " was credited to your Storkia E-Wallet.",
+                                message: "Your return and refund request for Order #{$locked->seller_order_number} was automatically approved and {$peso}" . number_format((float) $locked->total_amount, 2) . " was credited to your Storkia E-Wallet.",
                                 type: 'info',
                                 url: route('user.orders.show', $locked->id),
                                 orderId: $locked->order_id,
@@ -573,8 +578,9 @@ class OrderCompletionService
     public function confirmSellerOrder(SellerOrder $sellerOrder, string $actorType = 'Buyer', ?int $actorId = null, bool $isAutoCompleted = false): SellerOrder
     {
         $notifications = [];
+        $peso = "\u{20B1}";
 
-        $updatedSellerOrder = DB::transaction(function () use ($sellerOrder, $actorType, $actorId, $isAutoCompleted, &$notifications) {
+        $updatedSellerOrder = DB::transaction(function () use ($sellerOrder, $actorType, $actorId, $isAutoCompleted, $peso, &$notifications) {
             /** @var SellerOrder $locked */
             $locked = SellerOrder::with(['order', 'seller', 'buyer', 'logisticsProfile.user', 'shipment.currentRider', 'payment', 'extra', 'codCollection'])
                 ->where('id', $sellerOrder->id)
@@ -653,8 +659,8 @@ class OrderCompletionService
                     'notification' => new OrderLifecycleNotification(
                         title: $isSettledNow ? 'Order Completed & E-Wallet Credited' : 'Order Confirmed by Buyer (Awaiting COD Remittance)',
                         message: $isSettledNow
-                            ? "Order #{$locked->seller_order_number} is now completed! Your 90% net merchandise earning (₱" . number_format((float) $commissionRecord->seller_net_earning, 2) . ") has been released to your Available Seller E-Wallet."
-                            : "Order #{$locked->seller_order_number} was confirmed by the buyer! Your 90% net earning (₱" . number_format((float) $commissionRecord->seller_net_earning, 2) . ") will move from Pending Escrow to Available E-Wallet once Logistics remits the COD to Admin.",
+                            ? "Order #{$locked->seller_order_number} is now completed! Your 90% net merchandise earning ({$peso}" . number_format((float) $commissionRecord->seller_net_earning, 2) . ") has been released to your Available Seller E-Wallet."
+                            : "Order #{$locked->seller_order_number} was confirmed by the buyer! Your 90% net earning ({$peso}" . number_format((float) $commissionRecord->seller_net_earning, 2) . ") will move from Pending Escrow to Available E-Wallet once Logistics remits the COD to Admin.",
                         type: 'info',
                         url: route('seller.settlements.index'),
                         orderId: $locked->order_id,
@@ -668,7 +674,7 @@ class OrderCompletionService
                     'recipient'    => $locked->logisticsProfile->user,
                     'notification' => new OrderLifecycleNotification(
                         title: 'Shipping & Operational Revenue Credited to Hub E-Wallet',
-                        message: "Order #{$locked->seller_order_number} completed. ₱" . number_format((float) $commissionRecord->logistics_total_earning, 2) . " has been credited to your Available Logistics E-Wallet.",
+                        message: "Order #{$locked->seller_order_number} completed. {$peso}" . number_format((float) $commissionRecord->logistics_total_earning, 2) . " has been credited to your Available Logistics E-Wallet.",
                         type: 'info',
                         url: route('logistics.finance.index'),
                         orderId: $locked->order_id,

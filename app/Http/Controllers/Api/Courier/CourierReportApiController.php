@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api\Courier;
 
 use App\Http\Controllers\Api\Concerns\ResolvesReportPeriod;
 use App\Http\Controllers\Controller;
+use App\Models\InterHubTransfer;
 use App\Models\PickupAssignment;
 use App\Models\ReturnShipment;
 use App\Models\WalletTransaction;
@@ -57,6 +58,17 @@ class CourierReportApiController extends Controller
 
         $totalWeightHauled = $completedPickups->sum(fn ($a) => (float) ($a->shipment->total_weight ?? 0));
 
+        $interHubTransfersCount = 0;
+        if (Schema::hasTable('inter_hub_transfers')) {
+            $completedTransfers = InterHubTransfer::with('shipment:id,total_weight')
+                ->where('courier_id', $courier->id)
+                ->whereIn('status', ['arrived_destination_hub', 'completed'])
+                ->whereBetween('updated_at', [$from, $to])
+                ->get();
+            $interHubTransfersCount = $completedTransfers->count();
+            $totalWeightHauled += $completedTransfers->sum(fn ($tr) => (float) ($tr->shipment?->total_weight ?? 0));
+        }
+
         $ledger = WalletTransaction::where('owner_type', 'Courier')
             ->where('owner_id', $courier->id)
             ->whereBetween('created_at', [$from, $to]);
@@ -104,16 +116,17 @@ class CourierReportApiController extends Controller
                     'to_date'   => $toDate,
                 ],
                 'summary'             => [
-                    'total_assigned'           => $assignmentsInPeriod->count(),
-                    'completed_count'          => $completedPickups->count(),
-                    'active_count'             => $assignmentsInPeriod->whereIn('status', self::ACTIVE_PICKUP_STATUSES)->count(),
-                    'reassigned_count'         => $assignmentsInPeriod->where('status', 'reassigned')->count(),
-                    'total_weight_hauled'      => round((float) $totalWeightHauled, 2),
-                    'period_return_deliveries' => (clone $returnDeliveries)->count(),
-                    'period_return_pay'        => $returnDeliveryPay,
-                    'wallet_available'         => round((float) $wallet->available_balance, 2),
-                    'wallet_pending'           => round((float) $wallet->pending_balance, 2),
-                    'total_earned'             => round((float) $wallet->total_earned, 2),
+                    'total_assigned'              => $assignmentsInPeriod->count() + $interHubTransfersCount,
+                    'completed_count'             => $completedPickups->count() + $interHubTransfersCount,
+                    'active_count'                => $assignmentsInPeriod->whereIn('status', self::ACTIVE_PICKUP_STATUSES)->count(),
+                    'reassigned_count'            => $assignmentsInPeriod->where('status', 'reassigned')->count(),
+                    'total_weight_hauled'         => round((float) $totalWeightHauled, 2),
+                    'period_inter_hub_transfers'  => $interHubTransfersCount,
+                    'period_return_deliveries'    => (clone $returnDeliveries)->count(),
+                    'period_return_pay'           => $returnDeliveryPay,
+                    'wallet_available'            => round((float) $wallet->available_balance, 2),
+                    'wallet_pending'              => round((float) $wallet->pending_balance, 2),
+                    'total_earned'                => round((float) $wallet->total_earned, 2),
                 ],
                 'formal_report'       => [
                     'document_number' => $formalPayload['document_number'] ?? '',

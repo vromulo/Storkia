@@ -36,6 +36,7 @@ use App\Http\Controllers\Api\Rider\RiderFinanceApiController;
 use App\Http\Controllers\Api\Rider\RiderReportApiController;
 use App\Http\Controllers\Api\Rider\RiderReturnPickupController;
 use App\Http\Controllers\Api\Courier\AuthApiController as CourierAuthApiController;
+use App\Http\Controllers\Api\Courier\CourierInterHubTransferController;
 use App\Http\Controllers\Api\Courier\CourierLocationController;
 use App\Http\Controllers\Api\Courier\CourierNotificationController;
 use App\Http\Controllers\Api\Courier\CourierPackageVerificationController;
@@ -68,7 +69,6 @@ Route::prefix('v1')->group(function () {
         Route::get('/bundles', [BundleDealController::class, 'index']);
         Route::post('/bundles/{id}/add', [BundleDealController::class, 'addToCart'])->whereNumber('id')->middleware('throttle:30,1');
         Route::get('/trends', [TrendController::class, 'index']);
-
         Route::get('/announcements', [AnnouncementController::class, 'index']);
         Route::get('/announcements/unread-count', [AnnouncementController::class, 'unreadCount']);
         Route::match(['post', 'patch'], '/announcements/read-all', [AnnouncementController::class, 'markAllAsRead']);
@@ -150,6 +150,7 @@ Route::prefix('v1')->group(function () {
         Route::post('/orders/{id}/buy-again', [OrderController::class, 'buyAgain'])->whereNumber('id');
         Route::post('/orders/{id}/report-dispute', [ReturnRequestController::class, 'legacyReport'])->whereNumber('id');
         Route::post('/orders/{id}/escalate-dispute', [ReturnRequestController::class, 'legacyEscalate'])->whereNumber('id');
+
         Route::get('/orders/{id}/return', [ReturnRequestController::class, 'options'])->whereNumber('id');
         Route::post('/orders/{id}/return', [ReturnRequestController::class, 'store'])->whereNumber('id')->middleware('throttle:10,1');
         Route::get('/returns/{id}', [ReturnRequestController::class, 'show'])->whereNumber('id');
@@ -231,10 +232,12 @@ Route::prefix('v1/rider')->group(function () {
             Route::post('/cod/remit-all', [RiderFinanceApiController::class, 'remitAllCod']);
             Route::post('/cod/{codCollectionId}/remit', [RiderFinanceApiController::class, 'remitSingleCod'])->whereNumber('codCollectionId');
             Route::post('/cod/{remittanceId}/confirm', [RiderFinanceApiController::class, 'confirmRemittanceBlocked']);
+
             Route::get('/earnings', [RiderFinanceApiController::class, 'earningsAndWallet']);
             Route::post('/withdrawals', [RiderFinanceApiController::class, 'requestWithdrawal']);
             Route::get('/ratings', [RiderFinanceApiController::class, 'ratings']);
             Route::get('/reports', [RiderReportApiController::class, 'index']);
+
             Route::get('/notifications', [RiderFinanceApiController::class, 'notifications']);
             Route::patch('/notifications/read-all', [RiderFinanceApiController::class, 'markAllNotificationsRead']);
             Route::patch('/notifications/{id}/read', [RiderFinanceApiController::class, 'markNotificationRead']);
@@ -278,6 +281,11 @@ Route::prefix('v1/courier')->group(function () {
             Route::post('/pickups/{id}/report-delay', [CourierPickupController::class, 'reportDelay'])->whereNumber('id');
             Route::post('/pickups/{id}/report-breakdown', [CourierPickupController::class, 'reportBreakdown'])->whereNumber('id');
             Route::post('/pickups/{id}/discrepancy-note', [CourierPickupController::class, 'submitDiscrepancyNote'])->whereNumber('id');
+
+            Route::get('/transfers', [CourierInterHubTransferController::class, 'index']);
+            Route::get('/transfers/{id}', [CourierInterHubTransferController::class, 'show'])->whereNumber('id');
+            Route::post('/transfers/{id}/depart', [CourierInterHubTransferController::class, 'departOriginHub'])->whereNumber('id')->middleware('throttle:30,1');
+            Route::post('/transfers/{id}/arrive', [CourierInterHubTransferController::class, 'confirmDestinationArrival'])->whereNumber('id')->middleware('throttle:30,1');
 
             Route::get('/returns', [CourierReturnDeliveryController::class, 'index']);
             Route::get('/returns/{id}', [CourierReturnDeliveryController::class, 'show'])->whereNumber('id');

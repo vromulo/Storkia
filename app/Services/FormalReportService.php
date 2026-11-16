@@ -8,8 +8,10 @@ use App\Models\Admin;
 use App\Models\CommissionRecord;
 use App\Models\Courier;
 use App\Models\DeliveryAssignment;
+use App\Models\InterHubTransfer;
 use App\Models\LogisticsProfile;
 use App\Models\PickupAssignment;
+use App\Models\ReturnShipment;
 use App\Models\Rider;
 use App\Models\RoleWallet;
 use App\Models\SellerProfile;
@@ -32,18 +34,19 @@ class FormalReportService
         $period = $this->resolvePeriod($request);
         $from = $period['from'];
         $to = $period['to'];
+
         $normalizedRole = ucfirst(strtolower(trim($role)));
 
         $verifierName = $entityName;
         $verifierTitle = 'Authorized Account Holder / Verifier';
         $businessName = $entityName;
-
         $kpis = [];
         $roleSummaries = [];
         $rows = [];
         $grossTotal = 0.00;
         $deductionTotal = 0.00;
         $netTotal = 0.00;
+        $peso = "\u{20B1}";
 
         if ($normalizedRole === 'Seller') {
             $profile = SellerProfile::with('user')->find($entityId);
@@ -84,10 +87,10 @@ class FormalReportService
 
             $kpis = [
                 ['label' => 'Completed Orders', 'value' => number_format($records->count())],
-                ['label' => 'Gross Product Sales', 'value' => '₱' . number_format($grossTotal, 2)],
-                ['label' => 'Admin 10% Fee', 'value' => '-₱' . number_format($deductionTotal, 2)],
-                ['label' => 'Net Realized (90%)', 'value' => '₱' . number_format($netTotal, 2)],
-                ['label' => 'Available E-Wallet', 'value' => '₱' . number_format((float) ($wallet?->available_balance ?? 0), 2)],
+                ['label' => 'Gross Product Sales', 'value' => $peso . number_format($grossTotal, 2)],
+                ['label' => 'Admin 10% Fee', 'value' => '-' . $peso . number_format($deductionTotal, 2)],
+                ['label' => 'Net Realized (90%)', 'value' => $peso . number_format($netTotal, 2)],
+                ['label' => 'Available E-Wallet', 'value' => $peso . number_format((float) ($wallet?->available_balance ?? 0), 2)],
             ];
         } elseif ($normalizedRole === 'Logistics') {
             $profile = LogisticsProfile::with('user')->find($entityId);
@@ -131,10 +134,10 @@ class FormalReportService
 
             $kpis = [
                 ['label' => 'Delivered Shipments', 'value' => number_format($records->count())],
-                ['label' => 'Gross Shipping & Ops Pool', 'value' => '₱' . number_format($grossTotal, 2)],
-                ['label' => 'Courier & Rider Task Pay', 'value' => '-₱' . number_format($deductionTotal, 2)],
-                ['label' => 'Hub Net Share', 'value' => '₱' . number_format($netTotal, 2)],
-                ['label' => 'Available Hub Wallet', 'value' => '₱' . number_format((float) ($wallet?->available_balance ?? 0), 2)],
+                ['label' => 'Gross Shipping & Ops Pool', 'value' => $peso . number_format($grossTotal, 2)],
+                ['label' => 'Courier & Rider Task Pay', 'value' => '-' . $peso . number_format($deductionTotal, 2)],
+                ['label' => 'Hub Net Share', 'value' => $peso . number_format($netTotal, 2)],
+                ['label' => 'Available Hub Wallet', 'value' => $peso . number_format((float) ($wallet?->available_balance ?? 0), 2)],
             ];
         } elseif ($normalizedRole === 'Rider') {
             $rider = Rider::with('logisticsProfile')->find($entityId);
@@ -174,12 +177,40 @@ class FormalReportService
                 ];
             }
 
+            if (Schema::hasTable('return_shipments')) {
+                $returnPickups = ReturnShipment::with(['sellerOrder'])
+                    ->where('current_rider_id', $entityId)
+                    ->whereNotNull('rider_paid_at')
+                    ->whereBetween('rider_paid_at', [$from, $to])
+                    ->orderBy('rider_paid_at', 'asc')
+                    ->get();
+
+                foreach ($returnPickups as $ret) {
+                    $amount = round((float) ($ret->rider_pay ?? 0), 2);
+                    if ($amount <= 0) {
+                        continue;
+                    }
+                    $grossTotal += $amount;
+                    $netTotal += $amount;
+
+                    $rows[] = [
+                        'date'        => $ret->rider_paid_at?->timezone('Asia/Manila')->format('M d, Y h:i A') ?? '',
+                        'reference'   => $ret->tracking_number,
+                        'description' => 'Return Pickup from Buyer — Order #' . ($ret->sellerOrder->seller_order_number ?? 'N/A'),
+                        'gross'       => $amount,
+                        'deduction'   => 0.00,
+                        'net'         => $amount,
+                        'status'      => 'RETURN PICKED UP',
+                    ];
+                }
+            }
+
             $kpis = [
-                ['label' => 'Completed Deliveries', 'value' => number_format($deliveries->count())],
-                ['label' => 'Gross Rider Task Pay', 'value' => '₱' . number_format($grossTotal, 2)],
-                ['label' => 'Deductions', 'value' => '₱0.00'],
-                ['label' => 'Net Rider Earnings', 'value' => '₱' . number_format($netTotal, 2)],
-                ['label' => 'Available E-Wallet', 'value' => '₱' . number_format((float) ($wallet?->available_balance ?? 0), 2)],
+                ['label' => 'Completed Tasks', 'value' => number_format(count($rows))],
+                ['label' => 'Gross Rider Task Pay', 'value' => $peso . number_format($grossTotal, 2)],
+                ['label' => 'Deductions', 'value' => $peso . '0.00'],
+                ['label' => 'Net Rider Earnings', 'value' => $peso . number_format($netTotal, 2)],
+                ['label' => 'Available E-Wallet', 'value' => $peso . number_format((float) ($wallet?->available_balance ?? 0), 2)],
             ];
         } elseif ($normalizedRole === 'Courier') {
             $courier = Courier::with('logisticsProfile')->find($entityId);
@@ -219,12 +250,85 @@ class FormalReportService
                 ];
             }
 
+            if (Schema::hasTable('inter_hub_transfers')) {
+                $transfers = InterHubTransfer::with(['shipment', 'originHub', 'destinationHub'])
+                    ->where('courier_id', $entityId)
+                    ->whereIn('status', ['arrived_destination_hub', 'completed'])
+                    ->whereBetween('updated_at', [$from, $to])
+                    ->orderBy('updated_at', 'asc')
+                    ->get();
+
+                $commissionCalc = app(CommissionCalculatorService::class);
+
+                foreach ($transfers as $tr) {
+                    $origSnap = [
+                        'province'     => $tr->originHub?->province ?? '',
+                        'municipality' => $tr->originHub?->municipality ?? '',
+                        'barangay'     => $tr->originHub?->barangay ?? '',
+                    ];
+                    $destSnap = [
+                        'province'     => $tr->destinationHub?->province ?? '',
+                        'municipality' => $tr->destinationHub?->municipality ?? '',
+                        'barangay'     => $tr->destinationHub?->barangay ?? '',
+                    ];
+                    $payInfo = $commissionCalc->calculateDistanceScaledDriverPay(
+                        'pickup',
+                        $origSnap,
+                        $destSnap,
+                        (float) ($tr->shipment?->total_weight ?: 0.5)
+                    );
+                    $amount = round((float) ($payInfo['total_pay'] ?? 15.00), 2);
+
+                    $grossTotal += $amount;
+                    $netTotal += $amount;
+
+                    $rows[] = [
+                        'date'        => ($tr->arrived_destination_hub_at ?? $tr->updated_at)?->timezone('Asia/Manila')->format('M d, Y h:i A') ?? '',
+                        'reference'   => $tr->transfer_reference,
+                        'description' => 'Inter-Hub Linehaul (' . ($tr->originHub?->hub_name ?? 'Origin Hub') . ' → ' . ($tr->destinationHub?->hub_name ?? 'Destination Hub') . ')',
+                        'gross'       => $amount,
+                        'deduction'   => 0.00,
+                        'net'         => $amount,
+                        'status'      => strtoupper($tr->status),
+                    ];
+                }
+            }
+
+            if (Schema::hasTable('return_shipments')) {
+                $returnDeliveries = ReturnShipment::with(['sellerOrder.sellerProfile'])
+                    ->where('current_courier_id', $entityId)
+                    ->whereNotNull('courier_paid_at')
+                    ->whereBetween('courier_paid_at', [$from, $to])
+                    ->orderBy('courier_paid_at', 'asc')
+                    ->get();
+
+                foreach ($returnDeliveries as $ret) {
+                    $amount = round((float) ($ret->courier_pay ?? 0), 2);
+                    if ($amount <= 0) {
+                        continue;
+                    }
+                    $grossTotal += $amount;
+                    $netTotal += $amount;
+
+                    $sellerName = $ret->sellerOrder?->sellerProfile?->business_name ?? 'Seller';
+                    $rows[] = [
+                        'date'        => $ret->courier_paid_at?->timezone('Asia/Manila')->format('M d, Y h:i A') ?? '',
+                        'reference'   => $ret->tracking_number,
+                        'description' => "Return-to-Seller Delivery — {$sellerName}",
+                        'gross'       => $amount,
+                        'deduction'   => 0.00,
+                        'net'         => $amount,
+                        'status'      => 'DELIVERED TO SELLER',
+                    ];
+                }
+            }
+
             $kpis = [
-                ['label' => 'Completed Pickups', 'value' => number_format($pickups->count())],
-                ['label' => 'Gross Haulage Pay', 'value' => '₱' . number_format($grossTotal, 2)],
-                ['label' => 'Deductions', 'value' => '₱0.00'],
-                ['label' => 'Net Courier Earnings', 'value' => '₱' . number_format($netTotal, 2)],
-                ['label' => 'Available E-Wallet', 'value' => '₱' . number_format((float) ($wallet?->available_balance ?? 0), 2)],
+                ['label' => 'Completed Haulage Runs', 'value' => number_format(count($rows))],
+                ['label' => 'Gross Haulage Pay', 'value' => $peso . number_format($grossTotal, 2)],
+                ['label' => 'Deductions', 'value' => $peso . '0.00'],
+                ['label' => 'Net Courier Earnings', 'value' => $peso . number_format($netTotal, 2)],
+                ['label' => 'Available E-Wallet', 'value' => $peso . number_format((float) ($wallet?->available_balance ?? 0), 2)],
             ];
         } else {
             $adminUser = Auth::guard('admin')->user() ?: Admin::find($entityId) ?: Admin::first();
@@ -263,6 +367,7 @@ class FormalReportService
                 $subsidy = $extra
                     ? round($platDisc + $coinsDisc + (float) ($extra->shipping_voucher_discount ?? 0), 2)
                     : 0.00;
+
                 $netAdminOrder = round($admin10 - $subsidy, 2);
 
                 $totalProductVolume += $prodSub;
@@ -283,7 +388,7 @@ class FormalReportService
                 $rows[] = [
                     'date'        => $rec->created_at?->timezone('Asia/Manila')->format('M d, Y h:i A') ?? '',
                     'reference'   => $orderNo,
-                    'description' => "{$storeName} via {$hubName} (Prod ₱" . number_format($prodSub, 2) . " | Ship/Ops ₱" . number_format($shipFee, 2) . ")",
+                    'description' => "{$storeName} via {$hubName} (Prod {$peso}" . number_format($prodSub, 2) . " | Ship/Ops {$peso}" . number_format($shipFee, 2) . ")",
                     'gross'       => $admin10,
                     'deduction'   => $subsidy,
                     'net'         => $netAdminOrder,
@@ -337,10 +442,10 @@ class FormalReportService
 
             $kpis = [
                 ['label' => 'Completed Orders', 'value' => number_format($records->count())],
-                ['label' => 'Gross Merchandise GMV', 'value' => '₱' . number_format($totalProductVolume, 2)],
-                ['label' => 'Admin 10% Commission', 'value' => '₱' . number_format($grossTotal, 2)],
-                ['label' => 'Voucher & Coin Subsidies', 'value' => '-₱' . number_format($deductionTotal, 2)],
-                ['label' => 'Net Admin Profit', 'value' => '₱' . number_format($netTotal, 2)],
+                ['label' => 'Gross Merchandise GMV', 'value' => $peso . number_format($totalProductVolume, 2)],
+                ['label' => 'Admin 10% Commission', 'value' => $peso . number_format($grossTotal, 2)],
+                ['label' => 'Voucher & Coin Subsidies', 'value' => '-' . $peso . number_format($deductionTotal, 2)],
+                ['label' => 'Net Admin Profit', 'value' => $peso . number_format($netTotal, 2)],
             ];
         }
 

@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api\Courier;
 use App\Http\Controllers\Controller;
 use App\Http\Controllers\Courier\PickupController as WebPickupController;
 use App\Models\Courier;
+use App\Models\InterHubTransfer;
 use App\Models\OrderServiceRating;
 use App\Models\PickupAssignment;
 use App\Models\ReturnShipment;
@@ -48,20 +49,27 @@ class CourierNotificationController extends Controller
                 ->count()
             : 0;
 
-        $totalPickupsBadge = $unacceptedCount + $acceptedCount + $inTransitCount + $pendingReturnDeliveries;
+        $pendingInterHubTransfers = Schema::hasTable('inter_hub_transfers')
+            ? InterHubTransfer::where('courier_id', $courier->id)
+                ->whereIn('status', ['assigned', 'accepted', 'in_transit'])
+                ->count()
+            : 0;
+
+        $totalPickupsBadge = $unacceptedCount + $acceptedCount + $inTransitCount + $pendingReturnDeliveries + $pendingInterHubTransfers;
         $unreadNotificationsCount = $courier->unreadNotifications()->count();
 
         return response()->json([
             'status' => 'success',
             'data'   => [
-                'unaccepted_pickups_count'   => $unacceptedCount,
-                'accepted_pickups_count'     => $acceptedCount,
-                'in_transit_pickups_count'   => $inTransitCount,
-                'pending_return_deliveries'  => $pendingReturnDeliveries,
-                'total_pickups_badge'        => $totalPickupsBadge,
-                'pickups_count'              => $totalPickupsBadge,
-                'unread_notifications_count' => $unreadNotificationsCount,
-                'unread_count'               => $unreadNotificationsCount,
+                'unaccepted_pickups_count'    => $unacceptedCount,
+                'accepted_pickups_count'      => $acceptedCount,
+                'in_transit_pickups_count'    => $inTransitCount,
+                'pending_return_deliveries'   => $pendingReturnDeliveries,
+                'pending_inter_hub_transfers' => $pendingInterHubTransfers,
+                'total_pickups_badge'         => $totalPickupsBadge,
+                'pickups_count'               => $totalPickupsBadge,
+                'unread_notifications_count'  => $unreadNotificationsCount,
+                'unread_count'                => $unreadNotificationsCount,
             ],
         ]);
     }
@@ -79,9 +87,31 @@ class CourierNotificationController extends Controller
             $data = is_array($notif->data) ? $notif->data : [];
             $shipmentId = $data['shipment_id'] ?? null;
             $sellerOrderId = $data['seller_order_id'] ?? null;
+            $titleLower = strtolower((string) ($data['title'] ?? ''));
 
             $pickupAssignmentId = $data['pickup_assignment_id'] ?? null;
-            if (! $pickupAssignmentId && ($shipmentId || $sellerOrderId)) {
+            $returnShipmentId = $data['return_shipment_id'] ?? null;
+            $interHubTransferId = $data['inter_hub_transfer_id'] ?? null;
+
+            if (! $returnShipmentId && ($shipmentId || $sellerOrderId) && str_contains($titleLower, 'return') && Schema::hasTable('return_shipments')) {
+                $matchedReturn = ReturnShipment::where('current_courier_id', $courier->id)
+                    ->when($shipmentId, fn ($q) => $q->where('shipment_id', (int) $shipmentId))
+                    ->when(! $shipmentId && $sellerOrderId, fn ($q) => $q->where('seller_order_id', (int) $sellerOrderId))
+                    ->latest('id')
+                    ->first();
+                $returnShipmentId = $matchedReturn?->id;
+            }
+
+            if (! $interHubTransferId && ($shipmentId || $sellerOrderId) && (str_contains($titleLower, 'linehaul') || str_contains($titleLower, 'inter-hub') || str_contains($titleLower, 'transfer')) && Schema::hasTable('inter_hub_transfers')) {
+                $matchedTransfer = InterHubTransfer::where('courier_id', $courier->id)
+                    ->when($shipmentId, fn ($q) => $q->where('shipment_id', (int) $shipmentId))
+                    ->when(! $shipmentId && $sellerOrderId, fn ($q) => $q->where('seller_order_id', (int) $sellerOrderId))
+                    ->latest('id')
+                    ->first();
+                $interHubTransferId = $matchedTransfer?->id;
+            }
+
+            if (! $pickupAssignmentId && ! $returnShipmentId && ! $interHubTransferId && ($shipmentId || $sellerOrderId)) {
                 $matchedAssignment = PickupAssignment::where('courier_id', $courier->id)
                     ->when($shipmentId, fn ($q) => $q->where('shipment_id', (int) $shipmentId))
                     ->when(! $shipmentId && $sellerOrderId, fn ($q) => $q->where('seller_order_id', (int) $sellerOrderId))
@@ -91,14 +121,18 @@ class CourierNotificationController extends Controller
             }
 
             $data['pickup_assignment_id'] = $pickupAssignmentId;
+            $data['return_shipment_id'] = $returnShipmentId;
+            $data['inter_hub_transfer_id'] = $interHubTransferId;
 
             return [
-                'id'                   => (string) $notif->id,
-                'type'                 => (string) $notif->type,
-                'data'                 => $data,
-                'pickup_assignment_id' => $pickupAssignmentId,
-                'read_at'              => $notif->read_at?->toIso8601String(),
-                'created_at'           => $notif->created_at?->toIso8601String(),
+                'id'                    => (string) $notif->id,
+                'type'                  => (string) $notif->type,
+                'data'                  => $data,
+                'pickup_assignment_id'  => $pickupAssignmentId,
+                'return_shipment_id'    => $returnShipmentId,
+                'inter_hub_transfer_id' => $interHubTransferId,
+                'read_at'               => $notif->read_at?->toIso8601String(),
+                'created_at'            => $notif->created_at?->toIso8601String(),
             ];
         })->values()->all();
 

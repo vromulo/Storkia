@@ -4,7 +4,9 @@ namespace App\Services;
 
 use App\Models\Courier;
 use App\Models\DeliveryAssignment;
+use App\Models\InterHubTransfer;
 use App\Models\PickupAssignment;
+use App\Models\ReturnShipment;
 use App\Models\Rider;
 use App\Models\SellerProfile;
 use App\Models\ShipmentTracking;
@@ -38,6 +40,7 @@ class OperationalSlaGuardService
                 actorType: 'System',
                 actorName: 'Operational SLA Guard'
             );
+
             return;
         }
 
@@ -142,6 +145,66 @@ class OperationalSlaGuardService
                 }
             }
 
+            if (Schema::hasTable('inter_hub_transfers')) {
+                $uncollectedTransfers = InterHubTransfer::with('shipment')
+                    ->where('courier_id', $courier->id)
+                    ->whereIn('status', ['assigned', 'accepted', 'awaiting_courier'])
+                    ->lockForUpdate()
+                    ->get();
+
+                foreach ($uncollectedTransfers as $transfer) {
+                    $transfer->update([
+                        'courier_id' => null,
+                        'status'     => 'awaiting_courier',
+                        'notes'      => trim(($transfer->notes ? $transfer->notes . ' | ' : '') . "Auto-unassigned due to courier suspension: {$cleanReason}"),
+                    ]);
+
+                    if ($transfer->shipment && (int) ($transfer->shipment->linehaul_courier_id ?? 0) === (int) $courier->id) {
+                        $transfer->shipment->update([
+                            'linehaul_courier_id' => null,
+                            'status'              => 'awaiting_inter_hub_transfer',
+                        ]);
+
+                        ShipmentTracking::create([
+                            'shipment_id'     => $transfer->shipment->id,
+                            'seller_order_id' => $transfer->seller_order_id,
+                            'status'          => 'awaiting_inter_hub_transfer',
+                            'title'           => 'Returned to Unassigned Inter-Hub Transfer Queue (Courier Suspended)',
+                            'description'     => "Linehaul Courier {$courier->full_name} was suspended before departing Origin Hub ({$cleanReason}).",
+                            'location'        => $courier->assigned_hub?->hub_name ?? 'Origin Hub',
+                            'actor_type'      => $actorType,
+                            'actor_id'        => $actorId,
+                            'occurred_at'     => now(),
+                        ]);
+
+                        $count++;
+                    }
+                }
+            }
+
+            if (Schema::hasTable('return_shipments')) {
+                $uncollectedReturns = ReturnShipment::where('current_courier_id', $courier->id)
+                    ->where('status', ReturnShipment::STATUS_COURIER_ASSIGNED)
+                    ->lockForUpdate()
+                    ->get();
+
+                foreach ($uncollectedReturns as $ret) {
+                    $ret->update([
+                        'current_courier_id' => null,
+                        'status'             => ReturnShipment::STATUS_RECEIVED_AT_HUB,
+                    ]);
+                    $ret->recordEvent(
+                        'Returned to Hub Queue (Courier Suspended)',
+                        "Courier {$courier->full_name} was suspended before collecting the return parcel from the hub ({$cleanReason}).",
+                        $courier->assigned_hub?->hub_name ?? 'Sorting Hub',
+                        $actorType,
+                        $actorId,
+                        ReturnShipment::STATUS_RECEIVED_AT_HUB
+                    );
+                    $count++;
+                }
+            }
+
             AuditLoggerService::log(
                 action: 'courier_suspended',
                 targetType: 'Courier',
@@ -229,6 +292,29 @@ class OperationalSlaGuardService
                         'occurred_at'     => now(),
                     ]);
 
+                    $count++;
+                }
+            }
+
+            if (Schema::hasTable('return_shipments')) {
+                $uncollectedReturns = ReturnShipment::where('current_rider_id', $rider->id)
+                    ->where('status', ReturnShipment::STATUS_RIDER_ASSIGNED)
+                    ->lockForUpdate()
+                    ->get();
+
+                foreach ($uncollectedReturns as $ret) {
+                    $ret->update([
+                        'current_rider_id' => null,
+                        'status'           => ReturnShipment::STATUS_AWAITING_RIDER,
+                    ]);
+                    $ret->recordEvent(
+                        'Returned to Unassigned Return Pickup Queue (Rider Suspended)',
+                        "Rider {$rider->full_name} was suspended before collecting the return parcel from the buyer ({$cleanReason}).",
+                        $rider->assigned_hub?->hub_name ?? 'Sorting Hub',
+                        $actorType,
+                        $actorId,
+                        ReturnShipment::STATUS_AWAITING_RIDER
+                    );
                     $count++;
                 }
             }

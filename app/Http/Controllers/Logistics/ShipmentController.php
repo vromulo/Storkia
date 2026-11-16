@@ -16,11 +16,13 @@ use App\Models\Shipment;
 use App\Models\ShipmentTracking;
 use App\Models\ShipmentVerification;
 use App\Models\User;
+use App\Models\WalletTransaction;
 use App\Notifications\OrderLifecycleNotification;
 use App\Services\AddressService;
 use App\Services\BuyerAbandonmentService;
 use App\Services\BuyerOrderNotificationService;
 use App\Services\BuyerRewardService;
+use App\Services\CommissionCalculatorService;
 use App\Services\CourierMobileSchemaService;
 use App\Services\InventoryStockService;
 use App\Services\OrderCompletionService;
@@ -639,6 +641,10 @@ class ShipmentController extends Controller
             }
         }
         if ($previousCourierId && $previousCourierId !== (int) $courier->id) {
+            $prevCourier = Courier::find($previousCourierId);
+            if ($prevCourier && $prevCourier->status === 'on_delivery' && ! $prevCourier->hasActiveWorkAssignments(true)) {
+                $prevCourier->update(['status' => 'active']);
+            }
             RealtimeBroadcastService::send(
                 channels: ['courier.' . $previousCourierId],
                 scope: 'pickup',
@@ -782,11 +788,7 @@ class ShipmentController extends Controller
 
                 $this->roleWalletService->recordFirstMileCourierTaskCredit($locked, $locked->currentCourier, $creditedPayInfo);
 
-                $remainingActive = PickupAssignment::where('courier_id', $locked->currentCourier->id)
-                    ->whereIn('status', ['assigned', 'accepted', 'picked_up', 'in_transit_to_hub'])
-                    ->exists();
-
-                if (! $remainingActive && $locked->currentCourier->status === 'on_delivery') {
+                if (! $locked->currentCourier->hasActiveWorkAssignments(true) && $locked->currentCourier->status === 'on_delivery') {
                     $locked->currentCourier->update(['status' => 'active']);
                 }
             }
@@ -921,9 +923,11 @@ class ShipmentController extends Controller
             ]);
         }
 
+        $previousLinehaulCourierId = $shipment->linehaul_courier_id ? (int) $shipment->linehaul_courier_id : null;
         $destHub = null;
+        $createdTransfer = null;
 
-        DB::transaction(function () use ($shipment, $courier, $profile, $user, $validated, &$destHub) {
+        DB::transaction(function () use ($shipment, $courier, $profile, $user, $validated, &$destHub, &$createdTransfer) {
             $locked = Shipment::with(['sellerOrder', 'originLogisticsHub', 'destinationLogisticsHub', 'packages'])
                 ->where('id', $shipment->id)
                 ->lockForUpdate()
@@ -967,7 +971,7 @@ class ShipmentController extends Controller
             $courier->update(['status' => 'on_delivery']);
 
             if (Schema::hasTable('inter_hub_transfers')) {
-                InterHubTransfer::updateOrCreate(
+                $createdTransfer = InterHubTransfer::updateOrCreate(
                     [
                         'shipment_id'        => $locked->id,
                         'origin_hub_id'      => $originHub->id,
@@ -1037,7 +1041,26 @@ class ShipmentController extends Controller
         } catch (\Throwable $e) {
         }
 
+        if ($createdTransfer) {
+            RealtimeBroadcastService::forInterHubTransfer($createdTransfer->fresh(), 'inter_hub_transfer.assigned');
+        }
         RealtimeBroadcastService::forShipment($shipment->fresh(), 'shipment.in_transit_to_destination_hub');
+
+        if ($previousLinehaulCourierId && $previousLinehaulCourierId !== (int) $courier->id) {
+            $prevCourier = Courier::find($previousLinehaulCourierId);
+            if ($prevCourier && $prevCourier->status === 'on_delivery' && ! $prevCourier->hasActiveWorkAssignments(true)) {
+                $prevCourier->update(['status' => 'active']);
+            }
+            RealtimeBroadcastService::send(
+                channels: ['courier.' . $previousLinehaulCourierId],
+                scope: 'inter_hub_transfer',
+                action: 'inter_hub_transfer.reassigned',
+                payload: [
+                    'shipment_id'     => (int) $shipment->id,
+                    'tracking_number' => (string) $shipment->tracking_number,
+                ]
+            );
+        }
 
         return back()->with('success', "Linehaul Courier {$courier->full_name} dispatched to transport Shipment #{$shipment->tracking_number} to {$destHub?->hub_name} ({$destHub?->municipality})!");
     }
@@ -1055,9 +1078,20 @@ class ShipmentController extends Controller
         }
 
         $destHub = null;
+        $completedTransfer = null;
+        $creditedLinehaulCourier = null;
+        $creditedLinehaulAmount = 0.0;
 
-        DB::transaction(function () use ($shipment, $profile, $user, &$destHub) {
-            $locked = Shipment::with(['sellerOrder.buyer', 'originLogisticsHub', 'destinationLogisticsHub', 'linehaulCourier', 'packages'])
+        DB::transaction(function () use (
+            $shipment,
+            $profile,
+            $user,
+            &$destHub,
+            &$completedTransfer,
+            &$creditedLinehaulCourier,
+            &$creditedLinehaulAmount
+        ) {
+            $locked = Shipment::with(['sellerOrder.buyer', 'sellerOrder.payment', 'originLogisticsHub', 'destinationLogisticsHub', 'linehaulCourier', 'packages'])
                 ->where('id', $shipment->id)
                 ->lockForUpdate()
                 ->firstOrFail();
@@ -1099,25 +1133,70 @@ class ShipmentController extends Controller
             }
 
             if (Schema::hasTable('inter_hub_transfers')) {
-                InterHubTransfer::where('shipment_id', $locked->id)
-                    ->whereIn('status', ['pending_origin_arrival', 'awaiting_courier', 'in_transit'])
-                    ->update([
+                $transfer = InterHubTransfer::where('shipment_id', $locked->id)
+                    ->whereIn('status', ['pending_origin_arrival', 'awaiting_courier', 'assigned', 'accepted', 'in_transit', 'arrived_destination_hub'])
+                    ->latest('id')
+                    ->first();
+
+                if ($transfer) {
+                    $transfer->update([
                         'status'                     => 'completed',
                         'received_by'                => $user->id,
-                        'arrived_destination_hub_at' => now(),
+                        'arrived_destination_hub_at' => $transfer->arrived_destination_hub_at ?? now(),
                     ]);
+                    $completedTransfer = $transfer->fresh();
+                }
             }
 
-            if ($locked->linehaulCourier && $locked->linehaulCourier->status === 'on_delivery') {
-                $hasActivePickup = PickupAssignment::where('courier_id', $locked->linehaulCourier->id)
-                    ->whereIn('status', ['assigned', 'accepted', 'picked_up', 'in_transit_to_hub'])
+            if ($locked->linehaulCourier) {
+                $alreadyPaid = WalletTransaction::where('owner_type', 'Courier')
+                    ->where('owner_id', $locked->linehaulCourier->id)
+                    ->where('shipment_id', $locked->id)
+                    ->where('entry_type', 'inter_hub_linehaul_pay')
                     ->exists();
-                $hasActiveLinehaul = Schema::hasTable('inter_hub_transfers')
-                    && InterHubTransfer::where('courier_id', $locked->linehaulCourier->id)
-                        ->where('status', 'in_transit')
-                        ->exists();
 
-                if (! $hasActivePickup && ! $hasActiveLinehaul) {
+                if (! $alreadyPaid) {
+                    $origHub = $locked->originLogisticsHub;
+                    $calc = app(CommissionCalculatorService::class)->calculateDistanceScaledDriverPay(
+                        'pickup',
+                        [
+                            'province'     => $origHub?->province ?? '',
+                            'municipality' => $origHub?->municipality ?? '',
+                            'barangay'     => $origHub?->barangay ?? '',
+                        ],
+                        [
+                            'province'     => $destHub->province ?? '',
+                            'municipality' => $destHub->municipality ?? '',
+                            'barangay'     => $destHub->barangay ?? '',
+                        ],
+                        (float) ($locked->total_weight ?: 0.5),
+                        true
+                    );
+                    $payAmount = round((float) ($calc['total_pay'] ?? 15.00), 2);
+                    if ($payAmount > 0) {
+                        $method = $locked->sellerOrder?->effective_payment_method ?? 'COD';
+                        $origName = $origHub?->hub_name ?? 'Origin Hub';
+                        $this->roleWalletService->creditAvailableDirect(
+                            ownerType: 'Courier',
+                            ownerId: (int) $locked->linehaulCourier->id,
+                            ownerName: $locked->linehaulCourier->full_name,
+                            amount: $payAmount,
+                            sellerOrderId: (int) $locked->seller_order_id,
+                            shipmentId: (int) $locked->id,
+                            entryType: 'inter_hub_linehaul_pay',
+                            paymentMethod: $method,
+                            description: "Inter-Hub Linehaul Transfer Pay ({$origName} → {$destHub->hub_name}) for Shipment #{$locked->tracking_number}",
+                            meta: array_merge($calc, [
+                                'transfer_id'        => $completedTransfer?->id,
+                                'transfer_reference' => $completedTransfer?->transfer_reference,
+                            ])
+                        );
+                        $creditedLinehaulCourier = $locked->linehaulCourier;
+                        $creditedLinehaulAmount = $payAmount;
+                    }
+                }
+
+                if ($locked->linehaulCourier->status === 'on_delivery' && ! $locked->linehaulCourier->hasActiveWorkAssignments(true)) {
                     $locked->linehaulCourier->update(['status' => 'active']);
                 }
             }
@@ -1161,6 +1240,15 @@ class ShipmentController extends Controller
         } catch (\Throwable $e) {
         }
 
+        if ($completedTransfer) {
+            RealtimeBroadcastService::forInterHubTransfer($completedTransfer, 'inter_hub_transfer.completed');
+        }
+        if ($creditedLinehaulCourier && $creditedLinehaulAmount > 0) {
+            RealtimeBroadcastService::forWalletUpdate('Courier', (int) $creditedLinehaulCourier->id, 'inter_hub_linehaul_pay.credited', [
+                'shipment_id' => (int) $shipment->id,
+                'total_pay'   => $creditedLinehaulAmount,
+            ]);
+        }
         RealtimeBroadcastService::forShipment($shipment->fresh(), 'shipment.received_at_destination_hub');
 
         return back()->with('success', "Shipment #{$shipment->tracking_number} confirmed at Destination Branch Hub ({$destHub?->hub_name})! You can now assign an approved local Last-Mile Rider in {$destHub?->municipality}.");

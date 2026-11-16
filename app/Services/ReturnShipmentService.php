@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\Courier;
+use App\Models\InterHubTransfer;
 use App\Models\PickupAssignment;
 use App\Models\ReturnRequest;
 use App\Models\ReturnShipment;
@@ -86,6 +87,7 @@ class ReturnShipmentService
             ]);
 
             $note = $notes !== null && trim($notes) !== '' ? ' Note: ' . trim($notes) : '';
+
             $locked->recordEvent(
                 'Rider Assigned for Return Pickup',
                 "Rider {$rider->full_name} ({$rider->vehicle_type} - {$rider->plate_number}) will collect the parcel from the buyer.{$note}",
@@ -266,6 +268,7 @@ class ReturnShipmentService
             }
 
             $note = $notes !== null && trim($notes) !== '' ? ' Note: ' . trim($notes) : '';
+
             $locked->recordEvent(
                 'Courier Assigned for Return Delivery',
                 "Courier {$courier->full_name} ({$courier->vehicle_type} - {$courier->plate_number}) will bring the parcel back to the seller.{$note}",
@@ -329,6 +332,7 @@ class ReturnShipmentService
             ]);
 
             $note = $notes !== null && trim($notes) !== '' ? ' Note: ' . trim($notes) : '';
+
             $locked->recordEvent(
                 'Picked Up From Buyer',
                 "Rider {$rider->full_name} collected the parcel from the buyer and is heading to the sorting hub.{$note}",
@@ -414,6 +418,7 @@ class ReturnShipmentService
             ]);
 
             $max = ReturnShipment::MAX_PICKUP_ATTEMPTS;
+
             $locked->recordEvent(
                 "Return Pickup Failed (Attempt {$attempts} of {$max})",
                 "Rider {$rider->full_name} could not collect the parcel: {$full}",
@@ -573,6 +578,7 @@ class ReturnShipmentService
             $this->releaseCourier((int) $courier->id, (int) $locked->id);
 
             $max = ReturnShipment::MAX_DELIVERY_ATTEMPTS;
+
             $locked->recordEvent(
                 "Return Delivery to Seller Unsuccessful (Attempt {$attempts} of {$max})",
                 "Courier {$courier->full_name} could not hand over the returned parcel to the seller ({$full}). Parcel returned to the sorting hub for re-dispatch.",
@@ -638,9 +644,11 @@ class ReturnShipmentService
             ]);
 
             $this->ledger->creditReturnLegPay($locked, 'courier');
+
             $this->releaseCourier((int) $courier->id, (int) $locked->id);
 
             $note = $notes !== null && trim($notes) !== '' ? ' Note: ' . trim($notes) : '';
+
             $locked->recordEvent(
                 'Delivered to Seller',
                 "Courier {$courier->full_name} handed the returned parcel to the seller.{$note}",
@@ -719,7 +727,6 @@ class ReturnShipmentService
     {
         $returnSnap = (array) ($returnShipment->return_address_snapshot ?? []);
         $eval = $courier->evaluatePickupEligibilityForSnapshot($returnSnap, (float) ($returnShipment->total_weight ?? 0));
-
         if ($eval['within_range']) {
             return true;
         }
@@ -755,7 +762,12 @@ class ReturnShipmentService
             ])
             ->exists();
 
-        if (! $busyWithPickup && ! $busyWithReturn) {
+        $busyWithLinehaul = Schema::hasTable('inter_hub_transfers')
+            && InterHubTransfer::where('courier_id', $courierId)
+                ->whereIn('status', ['assigned', 'accepted', 'in_transit', 'arrived_destination_hub'])
+                ->exists();
+
+        if (! $busyWithPickup && ! $busyWithReturn && ! $busyWithLinehaul) {
             $courier->update(['status' => 'active']);
         }
     }

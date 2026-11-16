@@ -2,6 +2,7 @@
 
 use App\Models\Admin;
 use App\Models\Courier;
+use App\Models\InterHubTransfer;
 use App\Models\ReturnShipment;
 use App\Models\Rider;
 use App\Models\SellerOrder;
@@ -33,7 +34,6 @@ Broadcast::channel('logistics.{id}', function ($user, $id) {
         return false;
     }
     $effectiveId = (int) ($user->effectiveLogisticsProfile()?->id ?? $user->logisticsProfile?->id ?? 0);
-
     return $effectiveId === (int) $id;
 }, ['guards' => ['web']]);
 
@@ -61,7 +61,6 @@ Broadcast::channel('order.{id}', function ($actor, $id) {
         }
         if ($actor->role === 'Logistics') {
             $logId = (int) ($actor->effectiveLogisticsProfile()?->id ?? $actor->logisticsProfile?->id ?? 0);
-
             return $logId > 0 && (int) $order->logistics_profile_id === $logId;
         }
     }
@@ -79,10 +78,16 @@ Broadcast::channel('order.{id}', function ($actor, $id) {
     }
 
     if ($actor instanceof Courier) {
-        if ((int) ($order->shipment?->current_courier_id ?? 0) === (int) $actor->id) {
+        if (
+            (int) ($order->shipment?->current_courier_id ?? 0) === (int) $actor->id
+            || (int) ($order->shipment?->linehaul_courier_id ?? 0) === (int) $actor->id
+        ) {
             return true;
         }
         if ($order->shipment && $order->shipment->pickupAssignments()->where('courier_id', $actor->id)->exists()) {
+            return true;
+        }
+        if (Schema::hasTable('inter_hub_transfers') && InterHubTransfer::where('seller_order_id', $order->id)->where('courier_id', $actor->id)->exists()) {
             return true;
         }
         if (Schema::hasTable('return_shipments') && ReturnShipment::where('seller_order_id', $order->id)->where('current_courier_id', $actor->id)->exists()) {
@@ -105,24 +110,26 @@ Broadcast::channel('shipment.{id}', function ($actor, $id) {
 
     if ($actor instanceof Courier) {
         return (int) $shipment->current_courier_id === (int) $actor->id
-            || $shipment->pickupAssignments()->where('courier_id', $actor->id)->exists();
+            || (int) ($shipment->linehaul_courier_id ?? 0) === (int) $actor->id
+            || $shipment->pickupAssignments()->where('courier_id', $actor->id)->exists()
+            || (Schema::hasTable('inter_hub_transfers') && InterHubTransfer::where('shipment_id', $shipment->id)->where('courier_id', $actor->id)->exists())
+            || (Schema::hasTable('return_shipments') && ReturnShipment::where('shipment_id', $shipment->id)->where('current_courier_id', $actor->id)->exists());
     }
 
     if ($actor instanceof Rider) {
         return (int) $shipment->current_rider_id === (int) $actor->id
-            || $shipment->deliveryAssignments()->where('rider_id', $actor->id)->exists();
+            || $shipment->deliveryAssignments()->where('rider_id', $actor->id)->exists()
+            || (Schema::hasTable('return_shipments') && ReturnShipment::where('shipment_id', $shipment->id)->where('current_rider_id', $actor->id)->exists());
     }
 
     if ($actor instanceof User) {
         if ($actor->role === 'Logistics') {
             $logId = (int) ($actor->effectiveLogisticsProfile()?->id ?? $actor->logisticsProfile?->id ?? 0);
-
             return $logId > 0 && (int) $shipment->logistics_profile_id === $logId;
         }
         if ($actor->role === 'Seller') {
             return (int) ($actor->sellerProfile?->id ?? 0) === (int) $shipment->seller_profile_id;
         }
-
         return SellerOrder::where('id', $shipment->seller_order_id)
             ->where('buyer_id', $actor->id)
             ->exists();

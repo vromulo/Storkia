@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api\Courier;
 use App\Http\Controllers\Controller;
 use App\Http\Controllers\Courier\PickupController as WebPickupController;
 use App\Models\Courier;
+use App\Models\InterHubTransfer;
 use App\Models\LogisticsHub;
 use App\Models\OrderStatusHistory;
 use App\Models\PickupAssignment;
@@ -140,6 +141,12 @@ class CourierPickupController extends Controller
                 ->count()
             : 0;
 
+        $pendingInterHubTransfers = Schema::hasTable('inter_hub_transfers')
+            ? InterHubTransfer::where('courier_id', $courier->id)
+                ->whereIn('status', ['assigned', 'accepted', 'in_transit'])
+                ->count()
+            : 0;
+
         $wallet = $this->roleWalletService->getOrCreateWallet('Courier', (int) $courier->id, $courier->full_name);
 
         $todayStart = now()->timezone('Asia/Manila')->startOfDay();
@@ -160,24 +167,25 @@ class CourierPickupController extends Controller
                 'municipality_filter'      => $municipalityFilter,
                 'available_municipalities' => $availableMunicipalities,
                 'metrics'                  => [
-                    'active_pickups'             => $rawActiveAssignments->count(),
-                    'unaccepted_pickups'         => $unacceptedCount,
-                    'accepted_pickups'           => $acceptedCount,
-                    'in_transit_pickups'         => $inTransitCount,
-                    'completed_pickups'          => $completedCount,
-                    'pending_return_deliveries'  => $pendingReturnDeliveries,
-                    'load_capacity_kg'           => (int) $courier->load_capacity,
-                    'active_assigned_weight_kg'  => $courier->active_assigned_weight_kg,
-                    'remaining_capacity_kg'      => $courier->remaining_load_capacity_kg,
-                    'wallet_available'           => number_format((float) $wallet->available_balance, 2, '.', ''),
-                    'wallet_available_raw'       => round((float) $wallet->available_balance, 2),
-                    'wallet_pending'             => number_format((float) $wallet->pending_balance, 2, '.', ''),
-                    'wallet_pending_raw'         => round((float) $wallet->pending_balance, 2),
-                    'total_earned'               => number_format((float) $wallet->total_earned, 2, '.', ''),
-                    'total_earned_raw'           => round((float) $wallet->total_earned, 2),
-                    'today_earnings'             => number_format($todayEarnings, 2, '.', ''),
-                    'today_earnings_raw'         => round($todayEarnings, 2),
-                    'unread_notifications_count' => $unreadNotificationsCount,
+                    'active_pickups'              => $rawActiveAssignments->count(),
+                    'unaccepted_pickups'          => $unacceptedCount,
+                    'accepted_pickups'            => $acceptedCount,
+                    'in_transit_pickups'          => $inTransitCount,
+                    'completed_pickups'           => $completedCount,
+                    'pending_return_deliveries'   => $pendingReturnDeliveries,
+                    'pending_inter_hub_transfers' => $pendingInterHubTransfers,
+                    'load_capacity_kg'            => (int) $courier->load_capacity,
+                    'active_assigned_weight_kg'   => $courier->active_assigned_weight_kg,
+                    'remaining_capacity_kg'       => $courier->remaining_load_capacity_kg,
+                    'wallet_available'            => number_format((float) $wallet->available_balance, 2, '.', ''),
+                    'wallet_available_raw'        => round((float) $wallet->available_balance, 2),
+                    'wallet_pending'              => number_format((float) $wallet->pending_balance, 2, '.', ''),
+                    'wallet_pending_raw'          => round((float) $wallet->pending_balance, 2),
+                    'total_earned'                => number_format((float) $wallet->total_earned, 2, '.', ''),
+                    'total_earned_raw'            => round((float) $wallet->total_earned, 2),
+                    'today_earnings'              => number_format($todayEarnings, 2, '.', ''),
+                    'today_earnings_raw'          => round($todayEarnings, 2),
+                    'unread_notifications_count'  => $unreadNotificationsCount,
                 ],
                 'active_assignments'       => $activeAssignments
                     ->map(fn (PickupAssignment $a) => $this->formatAssignmentPayload($a, false, $courier))
@@ -357,6 +365,12 @@ class CourierPickupController extends Controller
                 ->count()
             : 0;
 
+        $pendingInterHubTransfers = Schema::hasTable('inter_hub_transfers')
+            ? InterHubTransfer::where('courier_id', $courier->id)
+                ->whereIn('status', ['assigned', 'accepted', 'in_transit'])
+                ->count()
+            : 0;
+
         return response()->json([
             'status' => 'success',
             'data'   => [
@@ -365,12 +379,13 @@ class CourierPickupController extends Controller
                 'municipality_filter'      => $municipalityFilter,
                 'available_municipalities' => $availableMunicipalities,
                 'counts'                   => [
-                    'active'          => (clone $countsBase)->whereIn('status', ['assigned', 'accepted', 'picked_up'])->count(),
-                    'assigned'        => (clone $countsBase)->where('status', 'assigned')->count(),
-                    'accepted'        => (clone $countsBase)->where('status', 'accepted')->count(),
-                    'en_route_to_hub' => (clone $countsBase)->whereIn('status', ['picked_up', 'in_transit_to_hub'])->count(),
-                    'history'         => (clone $countsBase)->whereIn('status', ['completed', 'in_transit_to_hub', 'declined', 'reassigned'])->count(),
-                    'returns'         => $pendingReturnDeliveries,
+                    'active'              => (clone $countsBase)->whereIn('status', ['assigned', 'accepted', 'picked_up'])->count(),
+                    'assigned'            => (clone $countsBase)->where('status', 'assigned')->count(),
+                    'accepted'            => (clone $countsBase)->where('status', 'accepted')->count(),
+                    'en_route_to_hub'     => (clone $countsBase)->whereIn('status', ['picked_up', 'in_transit_to_hub'])->count(),
+                    'history'             => (clone $countsBase)->whereIn('status', ['completed', 'in_transit_to_hub', 'declined', 'reassigned'])->count(),
+                    'returns'             => $pendingReturnDeliveries,
+                    'inter_hub_transfers' => $pendingInterHubTransfers,
                 ],
                 'assignments'              => $assignments
                     ->map(fn (PickupAssignment $a) => $this->formatAssignmentPayload($a, false, $courier))
@@ -615,11 +630,7 @@ class CourierPickupController extends Controller
                 ]);
             }
 
-            $remainingActive = PickupAssignment::where('courier_id', $courier->id)
-                ->whereIn('status', ['assigned', 'accepted', 'picked_up', 'in_transit_to_hub'])
-                ->exists();
-
-            if (! $remainingActive && $courier->status === 'on_delivery') {
+            if (! $courier->hasActiveWorkAssignments(true) && $courier->status === 'on_delivery') {
                 $courier->update(['status' => 'active']);
             }
 

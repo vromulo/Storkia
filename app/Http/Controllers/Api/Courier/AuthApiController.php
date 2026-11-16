@@ -4,7 +4,6 @@ namespace App\Http\Controllers\Api\Courier;
 
 use App\Http\Controllers\Controller;
 use App\Models\Courier;
-use App\Models\PickupAssignment;
 use App\Models\Rider;
 use App\Notifications\OrderLifecycleNotification;
 use App\Services\AuditLoggerService;
@@ -72,10 +71,7 @@ class AuthApiController extends Controller
             $courier->refresh();
         }
 
-        $hasActiveDelivery = PickupAssignment::where('courier_id', $courier->id)
-            ->whereIn('status', ['accepted', 'picked_up', 'in_transit_to_hub'])
-            ->exists();
-
+        $hasActiveDelivery = $courier->hasActiveWorkAssignments(false);
         $safeStatus = $hasActiveDelivery ? 'on_delivery' : 'active';
 
         $courier->forceFill([
@@ -108,11 +104,9 @@ class AuthApiController extends Controller
         $courier = $request->user();
 
         if ($courier) {
-            $hasActivePickups = PickupAssignment::where('courier_id', $courier->id)
-                ->whereIn('status', ['accepted', 'picked_up', 'in_transit_to_hub'])
-                ->exists();
+            $hasActiveTasks = $courier->hasActiveWorkAssignments(false);
 
-            if (! $hasActivePickups && Schema::hasColumn('couriers', 'is_online')) {
+            if (! $hasActiveTasks && Schema::hasColumn('couriers', 'is_online')) {
                 $courier->forceFill([
                     'is_online'    => false,
                     'last_seen_at' => now(),
@@ -188,14 +182,10 @@ class AuthApiController extends Controller
         $wantsOnline = (bool) $validated['is_online'];
 
         if (! $wantsOnline) {
-            $activeInProgress = PickupAssignment::where('courier_id', $courier->id)
-                ->whereIn('status', ['accepted', 'picked_up', 'in_transit_to_hub'])
-                ->first();
-
-            if ($activeInProgress) {
+            if ($courier->hasActiveWorkAssignments(false)) {
                 return response()->json([
                     'status'  => 'error',
-                    'message' => 'You cannot go Off Duty while you have an active pickup or package in transit. Please complete hub handover first.',
+                    'message' => 'You cannot go Off Duty while you have an active pickup, inter-hub linehaul transfer, or return delivery in transit. Please complete handover first.',
                 ], 422);
             }
 
@@ -250,10 +240,7 @@ class AuthApiController extends Controller
             }
         }
 
-        $hasActiveTask = PickupAssignment::where('courier_id', $courier->id)
-            ->whereIn('status', ['accepted', 'picked_up', 'in_transit_to_hub'])
-            ->exists();
-
+        $hasActiveTask = $courier->hasActiveWorkAssignments(false);
         $nextStatus = $hasActiveTask ? 'on_delivery' : 'active';
 
         DB::transaction(function () use ($courier, $validated, $nextStatus) {
@@ -341,9 +328,7 @@ class AuthApiController extends Controller
             return $failureResponse;
         }
 
-        $hasActiveTask = PickupAssignment::where('courier_id', $courier->id)
-            ->whereIn('status', ['accepted', 'picked_up', 'in_transit_to_hub'])
-            ->exists();
+        $hasActiveTask = $courier->hasActiveWorkAssignments(false);
 
         $lat = round((float) $request->input('latitude'), 7);
         $lng = round((float) $request->input('longitude'), 7);
@@ -670,14 +655,10 @@ class AuthApiController extends Controller
         /** @var Courier $courier */
         $courier = $request->user();
 
-        $hasActiveTrip = PickupAssignment::where('courier_id', $courier->id)
-            ->whereIn('status', ['accepted', 'picked_up', 'in_transit_to_hub'])
-            ->exists();
-
-        if ($hasActiveTrip) {
+        if ($courier->hasActiveWorkAssignments(false)) {
             return response()->json([
                 'status'  => 'error',
-                'message' => 'Vehicle details and compliance documents cannot be modified while an active pickup task is in progress.',
+                'message' => 'Vehicle details and compliance documents cannot be modified while an active pickup, linehaul transfer, or return delivery is in progress.',
             ], 422);
         }
 
@@ -1011,11 +992,7 @@ class AuthApiController extends Controller
             return;
         }
 
-        $hasActiveTask = PickupAssignment::where('courier_id', $courier->id)
-            ->whereIn('status', ['accepted', 'picked_up', 'in_transit_to_hub'])
-            ->exists();
-
-        if ($hasActiveTask) {
+        if ($courier->hasActiveWorkAssignments(false)) {
             return;
         }
 
