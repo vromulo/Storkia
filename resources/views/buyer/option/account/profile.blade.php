@@ -22,20 +22,34 @@
     ];
 @endphp
 
-<div x-data="profileManager(null, {{ json_encode($profileConfig) }})" class="space-y-6 pt-0 select-none">
+<div x-data="profileManager(null, {{ json_encode($profileConfig) }})"
+     x-init="
+        $watch('avatarError', val => {
+            if (val) {
+                window.dispatchEvent(new CustomEvent('toast', {
+                    detail: { title: 'Avatar Upload Alert', message: val, type: 'danger' }
+                }));
+            }
+        });
+        $watch('usernameError', val => {
+            if (val) {
+                window.dispatchEvent(new CustomEvent('toast', {
+                    detail: { title: 'Username Alert', message: val, type: 'danger' }
+                }));
+            }
+        });
+     "
+     class="space-y-6 pt-0 select-none">
 
-    <!-- Card: Public Profile -->
     <div class="bg-surface rounded-3xl border border-border-subtle p-6 sm:p-8 shadow-xs space-y-6">
         <div class="border-b border-border-subtle pb-4">
-            <h2 class="text-lg font-bold text-text-main">Public Profile</h2>
+            <h2 class="text-lg font-bold text-primary-dark">Public Profile</h2>
             <p class="text-xs text-text-muted mt-0.5">Customize your public avatar and username handle.</p>
         </div>
 
-        <!-- 1. Avatar Upload -->
         <div class="transition-all duration-200" :class="isDimmed('avatar') ? 'opacity-40' : ''">
             <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-6">
                 <div class="flex items-center gap-5">
-                    <!-- Circle Preview -->
                     <div class="relative w-24 h-24 rounded-full border-2 border-border-subtle bg-brand-light/30 flex items-center justify-center overflow-hidden shadow-inner shrink-0 group">
                         <img x-show="avatarUrl"
                              :src="avatarUrl"
@@ -49,7 +63,6 @@
                               x-text="((username || 'U').charAt(0)).toUpperCase()"
                               @if($avatarUrl) style="display: none;" @endif>{{ $initial }}</span>
 
-                        <!-- Uploading Spinner Overlay -->
                         <div x-show="isUploadingAvatar" x-cloak class="absolute inset-0 bg-black/50 backdrop-blur-xs flex items-center justify-center">
                             <span class="inline-flex items-center gap-1">
                                 <span class="w-1.5 h-1.5 bg-white rounded-full animate-bounce" style="animation-delay: -0.32s;"></span>
@@ -68,11 +81,10 @@
                     </div>
                 </div>
 
-                <!-- Upload / Remove Actions -->
                 <div class="flex items-center gap-3 shrink-0">
                     <label for="buyer_avatar_input"
-                           :class="(isEditing() || isUploadingAvatar || isRemovingAvatar) ? 'pointer-events-none opacity-50' : 'cursor-pointer hover:bg-dark-grey active:scale-95'"
-                           class="px-4 py-2.5 bg-text-main text-surface text-xs font-semibold rounded-xl transition-all shadow-xs inline-flex items-center gap-2">
+                           :class="(isEditing() || isUploadingAvatar || isRemovingAvatar) ? 'pointer-events-none opacity-50' : 'cursor-pointer hover:bg-primary-dark active:scale-95'"
+                           class="px-4 py-2.5 bg-primary text-surface text-xs font-semibold rounded-xl transition-all shadow-xs inline-flex items-center gap-2">
                         <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                             <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
                         </svg>
@@ -89,7 +101,7 @@
                             x-cloak
                             @click="removeAvatar()"
                             :disabled="isEditing() || isUploadingAvatar || isRemovingAvatar"
-                            class="px-3.5 py-2.5 border border-border-subtle text-danger hover:bg-red-50 text-xs font-semibold rounded-xl transition-colors cursor-pointer disabled:opacity-50">
+                            class="px-3.5 py-2.5 border border-border-subtle text-danger hover:bg-danger/10 text-xs font-semibold rounded-xl transition-colors cursor-pointer disabled:opacity-50">
                         Remove
                     </button>
                 </div>
@@ -98,7 +110,6 @@
 
         <hr class="border-border-subtle" />
 
-        <!-- 2. Username Row -->
         <div class="transition-all duration-200" :class="isDimmed('username') ? 'opacity-40' : ''">
             <div class="flex items-start justify-between gap-4">
                 <div>
@@ -112,7 +123,7 @@
                         <span class="text-sm font-semibold text-text-main" x-text="username ? '@' + username : 'Not set'">{{ $currentUsername ? '@' . $currentUsername : 'Not set' }}</span>
                         <span x-show="!canChangeUsername && cooldownText"
                               x-cloak
-                              class="text-[11px] font-medium text-amber-700 bg-amber-50 px-2.5 py-0.5 rounded-full border border-amber-200"
+                              class="text-[11px] font-medium text-primary-dark bg-brand-light/50 px-2.5 py-0.5 rounded-full border border-primary/25"
                               x-text="cooldownText">{{ $cooldownText }}</span>
                     </div>
                 </div>
@@ -122,13 +133,12 @@
                             @click="toggle('username')"
                             :disabled="isDimmed('username') || isSavingUsername"
                             :class="(isDimmed('username') || isSavingUsername) ? 'pointer-events-none cursor-not-allowed' : 'cursor-pointer'"
-                            class="text-sm font-light underline text-text-main hover:opacity-75 transition-opacity inline-block leading-none">
+                            class="text-sm font-bold text-primary hover:text-primary-dark underline transition-colors inline-block leading-none">
                         <span x-text="activeEdit === 'username' ? 'Cancel' : 'Edit'">Edit</span>
                     </button>
                 </div>
             </div>
 
-            <!-- Inline Username Form -->
             <div x-show="activeEdit === 'username'" x-cloak class="mt-4">
                 <form action="{{ route('user.profile.update-username') }}"
                       method="POST"
@@ -139,7 +149,7 @@
 
                     <div class="w-full max-w-lg">
                         <div class="border rounded-xl p-3 bg-surface transition-colors flex items-center"
-                             :class="usernameError ? 'border-danger' : 'border-neutral-400 focus-within:border-text-main'">
+                             :class="usernameError ? 'border-danger' : 'border-border-subtle focus-within:border-primary'">
                             <span class="text-base font-normal text-text-muted pr-1.5 select-none shrink-0">@</span>
                             <input type="text"
                                    id="username"
@@ -166,7 +176,7 @@
                         <button type="submit"
                                 :disabled="isSavingUsername"
                                 :class="isSavingUsername ? 'pointer-events-none opacity-80' : 'cursor-pointer active:scale-95'"
-                                class="h-10 w-20 flex items-center justify-center bg-text-main hover:bg-dark-grey text-surface font-semibold text-sm rounded-xl transition-colors select-none">
+                                class="h-10 w-24 flex items-center justify-center bg-primary hover:bg-primary-dark text-surface font-semibold text-sm rounded-xl transition-colors select-none">
                             <span x-show="!isSavingUsername">Save</span>
                             <span x-show="isSavingUsername" x-cloak class="inline-flex items-center justify-center gap-1">
                                 <span class="w-1.5 h-1.5 bg-surface rounded-full animate-bounce" style="animation-delay: -0.32s;"></span>

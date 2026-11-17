@@ -12,11 +12,11 @@
         'delivered'    => 'Delivered to Seller',
         'cancelled'    => 'Cancelled',
     ];
-    $activeTab = array_key_exists($statusTab, $tabs) ? $statusTab : 'all';
+    $activeTab = array_key_exists($statusTab, $tabs) ?$statusTab : 'all';
 @endphp
 
-<div class="max-w-7xl mx-auto space-y-6 select-none">
-
+<div x-data="{ visibleReturnsLimit: 8 }"
+     class="max-w-7xl mx-auto space-y-6 select-none">
     <div class="flex flex-col md:flex-row md:items-end justify-between gap-4">
         <div>
             <div class="flex flex-wrap items-center gap-2.5">
@@ -26,7 +26,7 @@
                 </span>
                 @if(!empty($activeBranchHub))
                     <span class="px-2.5 py-0.5 rounded-full text-xs font-bold bg-primary text-white">
-                        {{ $activeBranchHub->hub_name }} ({{ $activeBranchHub->municipality }})
+                        {{ $activeBranchHub->hub_name }} ({{$activeBranchHub->municipality }})
                     </span>
                 @endif
             </div>
@@ -44,32 +44,18 @@
                    value="{{ $search }}"
                    placeholder="Return #, request #, order, store..."
                    class="px-4 py-2.5 rounded-2xl border border-border-subtle bg-surface text-xs text-text-main outline-none focus:border-primary w-64">
-            <button type="submit" class="px-4 py-2.5 rounded-2xl bg-primary-dark hover:bg-text-main text-surface text-xs font-bold transition-colors cursor-pointer">
+            <button type="submit" class="px-4 py-2.5 rounded-2xl bg-primary-dark hover:bg-primary text-surface text-xs font-bold transition-colors cursor-pointer">
                 Search
             </button>
         </form>
     </div>
 
-    @if(session('success'))
-        <div class="p-4 rounded-2xl bg-green-50 border border-green-200 text-green-700 text-xs sm:text-sm font-bold">
-            {{ session('success') }}
-        </div>
-    @endif
-
-    @if($errors->any())
-        <div class="p-4 rounded-2xl bg-red-50 border border-red-200 text-red-700 text-xs sm:text-sm space-y-1">
-            @foreach($errors->all() as $err)
-                <p class="font-semibold">{{ $err }}</p>
-            @endforeach
-        </div>
-    @endif
-
     <div class="flex flex-wrap items-center gap-2">
-        @foreach($tabs as $key => $label)
-            <a href="{{ route('logistics.returns.index', array_filter(['status' => $key === 'all' ? null : $key, 'search' => $search])) }}"
-               class="inline-flex items-center gap-2 px-4 py-2 rounded-2xl text-xs font-bold border transition-all {{ $activeTab === $key ? 'bg-primary-dark text-surface border-primary-dark shadow-xs' : 'bg-surface text-text-muted border-border-subtle hover:text-text-main hover:bg-surface-subtle' }}">
+        @foreach($tabs as $key =>$label)
+            <a href="{{ route('logistics.returns.index', array_filter(['status' => $key === 'all' ? null : $key, 'search' =>$search])) }}"
+               class="inline-flex items-center gap-2 px-4 py-2 rounded-2xl text-xs font-bold border transition-all cursor-pointer {{ $activeTab ===$key ? 'bg-primary-dark text-surface border-primary-dark shadow-xs' : 'bg-surface text-text-muted border-border-subtle hover:text-text-main hover:bg-surface-subtle' }}">
                 <span>{{ $label }}</span>
-                <span class="px-2 py-0.5 rounded-full text-[10px] {{ $activeTab === $key ? 'bg-surface/20 text-surface' : 'bg-surface-subtle text-text-main' }}">
+                <span class="px-2 py-0.5 rounded-full text-[10px] {{ $activeTab ===$key ? 'bg-surface/20 text-surface' : 'bg-surface-subtle text-text-main' }}">
                     {{ $counts[$key] ?? 0 }}
                 </span>
             </a>
@@ -79,7 +65,7 @@
     <div class="bg-surface rounded-3xl border border-border-subtle shadow-xs overflow-hidden">
         @if($returnShipments->isEmpty())
             <div class="py-16 px-6 text-center space-y-2">
-                <h3 class="text-base font-bold text-text-main">No return shipments found</h3>
+                <h3 class="text-base font-bold text-primary-dark">No return shipments found</h3>
                 <p class="text-xs text-text-muted">
                     When a seller or Storkia Admin approves a return, the parcel appears here for {{ $activeBranchHub->hub_name ?? $profile->business_name }}.
                 </p>
@@ -99,18 +85,18 @@
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-border-subtle text-xs">
-                        @foreach($returnShipments as $rs)
+                        @foreach($returnShipments as $rIdx =>$rs)
                             @php
                                 $isTerminal = in_array($rs->status, ['delivered_to_seller', 'cancelled'], true);
-                                $pickup = $rs->pickup_address_snapshot ?? [];
-                                $sellerAddr = $rs->return_address_snapshot ?? [];
-                                $hubSnap = $rs->hub_address_snapshot ?? [];
-                                $hubName = $hubSnap['hub_name'] ?? ($hubSnap['name'] ?? $profile->business_name);
+                                $pickup =$rs->pickup_address_snapshot ?? [];
+                                $sellerAddr =$rs->return_address_snapshot ?? [];
+                                $hubSnap =$rs->hub_address_snapshot ?? [];
+                                $hubName =$hubSnap['hub_name'] ?? ($hubSnap['name'] ?? $profile->business_name);
                                 $badgeClass = match($rs->status) {
-                                    'delivered_to_seller' => 'bg-green-100 text-green-700 border-green-200',
-                                    'pickup_failed', 'cancelled' => 'bg-red-100 text-red-700 border-red-200',
-                                    'awaiting_rider_assignment' => 'bg-yellow-100 text-yellow-800 border-yellow-200',
-                                    default => 'bg-blue-100 text-blue-700 border-blue-200',
+                                    'delivered_to_seller' => 'bg-success/15 text-success border-success/25',
+                                    'pickup_failed', 'cancelled' => 'bg-danger/10 text-danger border-danger/25',
+                                    'awaiting_rider_assignment' => 'bg-brand-light/70 text-primary-dark border-primary/30',
+                                    default => 'bg-primary/10 text-primary-dark border-primary/25',
                                 };
                                 $actionLabel = match($rs->status) {
                                     'awaiting_rider_assignment', 'pickup_failed' => 'Assign Rider',
@@ -120,16 +106,17 @@
                                 };
                                 $needsAction = in_array($rs->status, ['awaiting_rider_assignment', 'pickup_failed', 'picked_up_from_buyer', 'received_at_hub'], true);
                             @endphp
-                            <tr class="hover:bg-surface-subtle/40 transition-colors {{ $isTerminal ? 'bg-surface-subtle/20 opacity-85' : '' }}">
+                            <tr x-show="{{ $rIdx }} < visibleReturnsLimit"
+                                class="hover:bg-surface-subtle/40 transition-colors {{ $isTerminal ? 'bg-surface-subtle/20 opacity-85' : '' }}">
                                 <td class="py-4 px-5 align-top">
                                     <div class="flex flex-wrap items-center gap-1.5">
-                                        <span class="font-mono font-bold text-sm text-primary-dark">{{ $rs->tracking_number }}</span>
+                                        <span class="font-mono font-bold text-sm text-primary-dark select-text">{{ $rs->tracking_number }}</span>
                                         @if(! $isTerminal)
                                             <span class="px-2 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20 text-[10px] font-extrabold">
                                                 Active Queue
                                             </span>
                                         @else
-                                            <span class="px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 border border-gray-200 text-[10px] font-bold">
+                                            <span class="px-2 py-0.5 rounded-full bg-surface-subtle text-text-muted border border-border-subtle text-[10px] font-bold">
                                                 Closed
                                             </span>
                                         @endif
@@ -137,7 +124,7 @@
                                     <div class="text-text-muted mt-0.5">Request: {{ $rs->returnRequest?->request_number ?? 'N/A' }}</div>
                                     <div class="text-text-muted">Order: {{ $rs->sellerOrder?->seller_order_number ?? 'N/A' }}</div>
                                     <div class="text-[11px] text-text-muted">
-                                        {{ $isTerminal ? 'Closed: ' . ($rs->delivered_to_seller_at ?? $rs->cancelled_at ?? $rs->updated_at)?->format('M d, Y h:i A') : 'Created: ' . $rs->created_at?->format('M d, Y h:i A') }}
+                                        {{ $isTerminal ? 'Closed: ' . ($rs->delivered_to_seller_at ?? $rs->cancelled_at ?? $rs->updated_at)?->format('M d, Y h:i A') : 'Created: ' .$rs->created_at?->format('M d, Y h:i A') }}
                                     </div>
                                 </td>
 
@@ -147,13 +134,13 @@
                                         @if(!empty($pickup['barangay']))
                                             Brgy. {{ $pickup['barangay'] }},
                                         @endif
-                                        {{ $pickup['municipality'] ?? '' }}, {{ $pickup['province'] ?? '' }}
+                                        {{ $pickup['municipality'] ?? '' }}, {{$pickup['province'] ?? '' }}
                                     </div>
                                 </td>
 
                                 <td class="py-4 px-4 align-top">
                                     <div class="font-bold text-text-main">{{ $rs->sellerOrder?->sellerProfile?->business_name ?? ($sellerAddr['business_name'] ?? 'Seller') }}</div>
-                                    <div class="text-text-muted mt-0.5">{{ $sellerAddr['municipality'] ?? '' }}, {{ $sellerAddr['province'] ?? '' }}</div>
+                                    <div class="text-text-muted mt-0.5">{{ $sellerAddr['municipality'] ?? '' }}, {{$sellerAddr['province'] ?? '' }}</div>
                                 </td>
 
                                 <td class="py-4 px-4 align-top space-y-1">
@@ -188,7 +175,7 @@
 
                                 <td class="py-4 px-5 align-top text-right">
                                     <a href="{{ route('logistics.returns.show', $rs->id) }}"
-                                       class="inline-flex items-center px-4 py-2 rounded-xl text-xs font-bold shadow-xs transition-colors {{ $needsAction ? 'bg-primary hover:bg-primary-dark text-surface' : 'bg-surface border border-border-subtle text-primary-dark hover:border-primary' }}">
+                                       class="inline-flex items-center px-4 py-2 rounded-xl text-xs font-bold shadow-xs transition-colors cursor-pointer {{ $needsAction ? 'bg-primary hover:bg-primary-dark text-surface' : 'bg-surface border border-border-subtle text-primary-dark hover:border-primary' }}">
                                         {{ $actionLabel }}
                                     </a>
                                 </td>
@@ -197,6 +184,16 @@
                     </tbody>
                 </table>
             </div>
+
+            @if($returnShipments->count() > 8)
+                <div class="p-4 border-t border-border-subtle bg-surface-subtle/30 flex justify-center">
+                    <button type="button"
+                            @click="visibleReturnsLimit = visibleReturnsLimit >= {{ $returnShipments->count() }} ? 8 : visibleReturnsLimit + 8"
+                            class="inline-flex items-center gap-2 px-5 py-2 rounded-full bg-primary/10 hover:bg-primary text-primary hover:text-white border border-primary/30 text-xs font-extrabold transition-colors cursor-pointer">
+                        <span x-text="visibleReturnsLimit >= {{ $returnShipments->count() }} ? 'See Less Return Shipments' : 'See More Return Shipments (' + ({{$returnShipments->count() }} - visibleReturnsLimit) + ' remaining on this page)'"></span>
+                    </button>
+                </div>
+            @endif
 
             @if($returnShipments->hasPages())
                 <div class="px-5 py-4 border-t border-border-subtle">

@@ -10,12 +10,20 @@
     $refDate = $refDate ?? $maxDate;
     $canGoNext = $canGoNext ?? ($offset > 0);
     $chartSeries = $chartSeries ?? [];
+    $recentShipments = $recentShipments ?? collect();
 @endphp
 
 <div x-data="{
         activeMetric: 'revenue',
         hoverIndex: null,
         leaveTimer: null,
+        intervalsExpanded: false,
+        shipmentsQueueExpanded: false,
+        datePickerOpen: false,
+        selectedRefDate: '{{ $refDate }}',
+        maxAllowedDate: '{{ $maxDate }}',
+        calYear: Number('{{ \Carbon\Carbon::parse($refDate)->year }}'),
+        calMonth: Number('{{ \Carbon\Carbon::parse($refDate)->month - 1 }}'),
         series: @js($chartSeries),
         metricMeta: {
             revenue: {
@@ -30,15 +38,65 @@
                 unitLabel: 'PHP (\u20B1)',
                 prefix: '\u20B1',
                 decimals: 2,
-                color: '#0D9488'
+                color: '#5D3140'
             },
             shipments: {
                 label: 'Dispatched Hub Shipments Volume',
                 unitLabel: 'Shipments',
                 prefix: '',
                 decimals: 0,
-                color: '#5D3140'
+                color: '#292524'
             }
+        },
+        get monthYearLabel() {
+            const months = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+            return (months[this.calMonth] || '') + ' ' + this.calYear;
+        },
+        get calendarDays() {
+            const firstDay = new Date(this.calYear, this.calMonth, 1).getDay();
+            const daysInMonth = new Date(this.calYear, this.calMonth + 1, 0).getDate();
+            const cells = [];
+            for (let i = 0; i < firstDay; i++) {
+                cells.push({ day: null, iso: '' });
+            }
+            for (let d = 1; d <= daysInMonth; d++) {
+                const m = String(this.calMonth + 1).padStart(2, '0');
+                const dayStr = String(d).padStart(2, '0');
+                const iso = `${this.calYear}-${m}-${dayStr}`;
+                cells.push({
+                    day: d,
+                    iso: iso,
+                    disabled: iso > this.maxAllowedDate,
+                    selected: iso === this.selectedRefDate
+                });
+            }
+            return cells;
+        },
+        prevCalendarMonth() {
+            if (this.calMonth === 0) {
+                this.calMonth = 11;
+                this.calYear--;
+            } else {
+                this.calMonth--;
+            }
+        },
+        nextCalendarMonth() {
+            if (this.calMonth === 11) {
+                this.calMonth = 0;
+                this.calYear++;
+            } else {
+                this.calMonth++;
+            }
+        },
+        pickCalendarDate(cell) {
+            if (!cell || !cell.iso || cell.disabled) return;
+            this.selectedRefDate = cell.iso;
+            this.datePickerOpen = false;
+            this.$nextTick(() => {
+                if (this.$refs.refDateForm) {
+                    this.$refs.refDateForm.submit();
+                }
+            });
         },
         setHover(idx) {
             if (this.leaveTimer) {
@@ -178,19 +236,19 @@
      class="max-w-7xl mx-auto space-y-8 select-none">
 
     @if($latestApp && $latestApp->status === 'pending')
-        <div class="p-6 bg-yellow-50 border border-yellow-200 rounded-3xl shadow-xs">
-            <h3 class="text-base font-bold text-yellow-900">Hub Application Under Review</h3>
-            <p class="text-xs sm:text-sm text-yellow-800 mt-1">
+        <div class="p-6 bg-brand-light/35 border border-primary/25 rounded-3xl shadow-xs">
+            <h3 class="text-base font-bold text-primary-dark">Hub Application Under Review</h3>
+            <p class="text-xs sm:text-sm text-text-main mt-1">
                 Your application for <strong>{{ $latestApp->business_name }}</strong> (revision v{{ $latestApp->version }}) is pending administrative approval. Dispatch and operational routing will unlock once verified.
             </p>
         </div>
     @elseif($latestApp && $latestApp->status === 'rejected')
-        <div class="p-6 bg-red-50 border border-red-200 rounded-3xl shadow-xs flex justify-between items-center">
+        <div class="p-6 bg-danger/10 border border-danger/30 rounded-3xl shadow-xs flex justify-between items-center gap-4">
             <div>
-                <h3 class="text-base font-bold text-red-900">Application Rejected</h3>
-                <p class="text-xs sm:text-sm text-red-800 mt-1">Reason: <em>"{{ $latestApp->rejection_reason }}"</em></p>
+                <h3 class="text-base font-bold text-danger">Application Rejected</h3>
+                <p class="text-xs sm:text-sm text-text-main mt-1">Reason: <em>"{{ $latestApp->rejection_reason }}"</em></p>
             </div>
-            <a href="{{ route('logistics.reapply') }}" class="px-5 py-2.5 bg-primary text-white text-xs font-bold rounded-xl shadow-md">
+            <a href="{{ route('logistics.reapply') }}" class="px-5 py-2.5 bg-primary hover:bg-primary-dark text-white text-xs font-bold rounded-xl shadow-md transition-colors cursor-pointer shrink-0">
                 Update &amp; Re-apply
             </a>
         </div>
@@ -222,48 +280,83 @@
                         'year'  => 'Year',
                     ] as $pKey => $pText)
                         <a href="{{ route('logistics.logistics-dashboard', ['period' => $pKey]) }}"
-                           class="px-3 py-2 rounded-xl text-xs font-bold transition-all {{ $period === $pKey ? 'bg-primary-dark text-white shadow-xs' : 'text-text-muted hover:text-text-main hover:bg-surface-subtle' }}">
+                           class="px-3 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer {{ $period === $pKey ? 'bg-primary-dark text-white shadow-xs' : 'text-text-muted hover:text-text-main hover:bg-surface-subtle' }}">
                             {{ $pText }}
                         </a>
                     @endforeach
                 </div>
 
-                <div class="inline-flex items-center gap-1.5 p-1.5 rounded-2xl bg-surface border border-border-subtle shadow-2xs text-xs">
+                <div class="inline-flex items-center gap-1.5 p-1.5 rounded-2xl bg-surface border border-border-subtle shadow-2xs text-xs relative">
                     <a href="{{ route('logistics.logistics-dashboard', ['period' => $period, 'offset' => $offset + 1]) }}"
                        title="Browse previous {{ $period === 'today' ? 'day' : ($period === 'year' ? 'year' : 'period') }}"
-                       class="px-3 py-1.5 rounded-xl bg-surface-subtle hover:bg-brand-light/40 text-text-main font-bold transition-colors">
+                       class="px-3 py-1.5 rounded-xl bg-surface-subtle hover:bg-brand-light/40 text-text-main font-bold transition-colors cursor-pointer">
                         &larr; Prev
                     </a>
 
-                    <form method="GET" action="{{ route('logistics.logistics-dashboard') }}" class="inline-flex items-center m-0">
+                    <form x-ref="refDateForm" method="GET" action="{{ route('logistics.logistics-dashboard') }}" class="inline-flex items-center m-0 relative" @click.away="datePickerOpen = false">
                         <input type="hidden" name="period" value="{{ $period }}">
-                        <input type="date"
-                               name="ref_date"
-                               value="{{ $refDate }}"
-                               max="{{ $maxDate }}"
-                               onchange="this.form.submit()"
-                               title="Jump to any past date (future dates disabled)"
-                               class="px-2.5 py-1 rounded-xl border border-border-subtle bg-surface text-xs font-mono font-bold text-primary-dark outline-none focus:border-primary cursor-pointer">
+                        <input type="hidden" name="ref_date" :value="selectedRefDate">
+                        <button type="button"
+                                @click="datePickerOpen = !datePickerOpen"
+                                title="Jump to any past date (future dates disabled)"
+                                class="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl border border-border-subtle hover:border-primary bg-surface text-xs font-mono font-bold text-primary-dark transition-colors cursor-pointer">
+                            <svg class="w-3.5 h-3.5 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                            </svg>
+                            <span x-text="selectedRefDate"></span>
+                        </button>
+
+                        <div x-show="datePickerOpen"
+                             x-cloak
+                             x-transition
+                             class="absolute top-full right-0 mt-2 w-72 bg-surface border border-border-subtle rounded-2xl shadow-2xl p-4 z-50">
+                            <div class="flex items-center justify-between mb-3">
+                                <button type="button" @click="prevCalendarMonth()" class="p-1.5 rounded-lg hover:bg-surface-subtle text-text-main cursor-pointer">
+                                    <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/></svg>
+                                </button>
+                                <span class="text-xs font-extrabold text-primary-dark" x-text="monthYearLabel"></span>
+                                <button type="button" @click="nextCalendarMonth()" class="p-1.5 rounded-lg hover:bg-surface-subtle text-text-main cursor-pointer">
+                                    <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
+                                </button>
+                            </div>
+                            <div class="grid grid-cols-7 gap-1 text-[10px] font-bold text-text-muted text-center mb-1">
+                                <span>Su</span><span>Mo</span><span>Tu</span><span>We</span><span>Th</span><span>Fr</span><span>Sa</span>
+                            </div>
+                            <div class="grid grid-cols-7 gap-1">
+                                <template x-for="(cell, cIdx) in calendarDays" :key="'lcal_' + cIdx">
+                                    <div>
+                                        <template x-if="cell.day !== null">
+                                            <button type="button"
+                                                    :disabled="cell.disabled"
+                                                    @click="pickCalendarDate(cell)"
+                                                    :class="cell.selected ? 'bg-primary text-white font-extrabold' : (cell.disabled ? 'text-text-muted/30 cursor-not-allowed' : 'text-text-main hover:bg-brand-light/40 font-semibold cursor-pointer')"
+                                                    class="w-8 h-8 rounded-lg text-xs flex items-center justify-center transition-colors"
+                                                    x-text="cell.day"></button>
+                                        </template>
+                                    </div>
+                                </template>
+                            </div>
+                        </div>
                     </form>
 
                     @if($canGoNext)
                         <a href="{{ route('logistics.logistics-dashboard', ['period' => $period, 'offset' => max(0, $offset - 1)]) }}"
-                           class="px-3 py-1.5 rounded-xl bg-surface-subtle hover:bg-brand-light/40 text-text-main font-bold transition-colors">
+                           class="px-3 py-1.5 rounded-xl bg-surface-subtle hover:bg-brand-light/40 text-text-main font-bold transition-colors cursor-pointer">
                             Next &rarr;
                         </a>
                         <a href="{{ route('logistics.logistics-dashboard', ['period' => $period]) }}"
-                           class="px-2.5 py-1.5 rounded-xl bg-primary/10 text-primary hover:bg-primary hover:text-white font-bold transition-colors">
+                           class="px-2.5 py-1.5 rounded-xl bg-primary/10 text-primary hover:bg-primary hover:text-white font-bold transition-colors cursor-pointer">
                             Current
                         </a>
                     @else
-                        <span class="px-3 py-1.5 rounded-xl bg-gray-100 text-gray-400 font-bold cursor-not-allowed" title="Future dates are disabled">
+                        <span class="px-3 py-1.5 rounded-xl bg-surface-subtle text-text-muted/50 font-bold cursor-not-allowed" title="Future dates are disabled">
                             Next &rarr;
                         </span>
                     @endif
                 </div>
 
                 <a href="{{ route('logistics.finance.index') }}"
-                   class="px-4 py-2.5 rounded-2xl bg-primary hover:bg-primary-dark text-white text-xs font-bold shadow-xs transition-colors">
+                   class="px-4 py-2.5 rounded-2xl bg-primary hover:bg-primary-dark text-white text-xs font-bold shadow-xs transition-colors cursor-pointer">
                     E-Wallet &amp; Reports
                 </a>
             </div>
@@ -279,35 +372,35 @@
 
         <div class="p-5 bg-surface rounded-2xl shadow-sm border border-border-subtle">
             <h3 class="text-[11px] font-bold uppercase text-text-muted">Pending Escrow (Delivered)</h3>
-            <p class="text-2xl font-serif font-bold text-amber-600 mt-1.5">&#8369;{{ number_format($walletPendingEscrow ?? 0, 2) }}</p>
+            <p class="text-2xl font-serif font-bold text-primary-dark mt-1.5">&#8369;{{ number_format($walletPendingEscrow ?? 0, 2) }}</p>
             <span class="text-[10px] text-text-muted mt-1 block">Awaiting Buyer Confirmation</span>
         </div>
 
         <a href="{{ $profile ? route('logistics.shipments.index', ['status' => 'to_pickup']) : '#' }}"
-           class="p-5 bg-surface rounded-2xl shadow-sm border border-border-subtle hover:border-primary/50 transition-all">
+           class="p-5 bg-surface rounded-2xl shadow-sm border border-border-subtle hover:border-primary/50 transition-all cursor-pointer">
             <h3 class="text-[11px] font-bold uppercase text-text-muted">Parcels to Pick Up</h3>
             <p class="text-2xl font-serif font-bold text-primary-dark mt-1.5">{{ $pendingPickupsCount ?? 0 }}</p>
             <span class="text-[11px] text-primary font-semibold mt-1 inline-block">Assign Courier &rarr;</span>
         </a>
 
         <a href="{{ $profile ? route('logistics.shipments.index', ['status' => 'at_hub']) : '#' }}"
-           class="p-5 bg-surface rounded-2xl shadow-sm border border-border-subtle hover:border-primary/50 transition-all">
+           class="p-5 bg-surface rounded-2xl shadow-sm border border-border-subtle hover:border-primary/50 transition-all cursor-pointer">
             <h3 class="text-[11px] font-bold uppercase text-text-muted">Sorting Hub Queue</h3>
             <p class="text-2xl font-serif font-bold text-primary-dark mt-1.5">{{ $atHubCount ?? 0 }}</p>
             <span class="text-[11px] text-primary font-semibold mt-1 inline-block">Verify &amp; Dispatch &rarr;</span>
         </a>
 
         <a href="{{ $profile ? route('logistics.shipments.index', ['status' => 'out_for_delivery']) : '#' }}"
-           class="p-5 bg-surface rounded-2xl shadow-sm border border-border-subtle hover:border-primary/50 transition-all">
+           class="p-5 bg-surface rounded-2xl shadow-sm border border-border-subtle hover:border-primary/50 transition-all cursor-pointer">
             <h3 class="text-[11px] font-bold uppercase text-text-muted">Out for Delivery</h3>
-            <p class="text-2xl font-serif font-bold text-blue-700 mt-1.5">{{ $inTransitCount ?? 0 }}</p>
+            <p class="text-2xl font-serif font-bold text-primary mt-1.5">{{ $inTransitCount ?? 0 }}</p>
             <span class="text-[11px] text-text-muted mt-1 inline-block">Failed/RTS: {{ $failedDeliveriesCount ?? 0 }}</span>
         </a>
 
         <a href="{{ $profile ? route('logistics.finance.index') : '#' }}"
-           class="p-5 bg-surface rounded-2xl shadow-sm border border-border-subtle hover:border-primary/50 transition-all">
+           class="p-5 bg-surface rounded-2xl shadow-sm border border-border-subtle hover:border-primary/50 transition-all cursor-pointer">
             <h3 class="text-[11px] font-bold uppercase text-text-muted">Pending Remittances</h3>
-            <p class="text-2xl font-serif font-bold text-green-700 mt-1.5">{{ $pendingRemittancesCount ?? 0 }}</p>
+            <p class="text-2xl font-serif font-bold text-success mt-1.5">{{ $pendingRemittancesCount ?? 0 }}</p>
             <span class="text-[11px] text-primary font-semibold mt-1 inline-block">Verify COD &rarr;</span>
         </a>
     </div>
@@ -339,13 +432,13 @@
                     </button>
                     <button type="button"
                             @click="activeMetric = 'gross_shipping'"
-                            :class="activeMetric === 'gross_shipping' ? 'bg-teal-600 text-white font-bold shadow-2xs' : 'text-text-muted hover:text-text-main font-semibold'"
+                            :class="activeMetric === 'gross_shipping' ? 'bg-primary-dark text-white font-bold shadow-2xs' : 'text-text-muted hover:text-text-main font-semibold'"
                             class="px-3.5 py-1.5 rounded-xl transition-all cursor-pointer">
                         Gross Shipping (&#8369;)
                     </button>
                     <button type="button"
                             @click="activeMetric = 'shipments'"
-                            :class="activeMetric === 'shipments' ? 'bg-primary-dark text-white font-bold shadow-2xs' : 'text-text-muted hover:text-text-main font-semibold'"
+                            :class="activeMetric === 'shipments' ? 'bg-text-main text-white font-bold shadow-2xs' : 'text-text-muted hover:text-text-main font-semibold'"
                             class="px-3.5 py-1.5 rounded-xl transition-all cursor-pointer">
                         Shipments Volume
                     </button>
@@ -362,18 +455,18 @@
                     <span class="text-[10px] text-text-muted font-mono">{{ $dateRangeLabel }}</span>
                 </div>
                 <div class="p-3.5 rounded-2xl border transition-all cursor-pointer"
-                     :class="activeMetric === 'gross_shipping' ? 'bg-teal-50 border-teal-500/40' : 'bg-surface-subtle/60 border-border-subtle'"
+                     :class="activeMetric === 'gross_shipping' ? 'bg-brand-light/40 border-primary-dark/40' : 'bg-surface-subtle/60 border-border-subtle'"
                      @click="activeMetric = 'gross_shipping'">
                     <span class="text-[10px] font-bold uppercase text-text-muted block">Gross Shipping Fees</span>
-                    <strong class="text-base sm:text-lg font-serif font-extrabold text-teal-700 block mt-0.5"
+                    <strong class="text-base sm:text-lg font-serif font-extrabold text-primary-dark block mt-0.5"
                             x-text="formatMetric(totalGrossShipping, 'gross_shipping')"></strong>
                     <span class="text-[10px] text-text-muted">90% Hub / 10% Rider</span>
                 </div>
                 <div class="p-3.5 rounded-2xl border transition-all cursor-pointer"
-                     :class="activeMetric === 'shipments' ? 'bg-brand-light/40 border-primary-dark/40' : 'bg-surface-subtle/60 border-border-subtle'"
+                     :class="activeMetric === 'shipments' ? 'bg-surface border-text-main/40' : 'bg-surface-subtle/60 border-border-subtle'"
                      @click="activeMetric = 'shipments'">
                     <span class="text-[10px] font-bold uppercase text-text-muted block">Dispatched Shipments</span>
-                    <strong class="text-base sm:text-lg font-serif font-extrabold text-primary-dark block mt-0.5"
+                    <strong class="text-base sm:text-lg font-serif font-extrabold text-text-main block mt-0.5"
                             x-text="totalShipmentsCount.toLocaleString() + ' Parcel(s)'"></strong>
                     <span class="text-[10px] text-text-muted" x-text="'Avg: ' + formatMetric(avgMetricValue) + ' / slot'"></span>
                 </div>
@@ -477,9 +570,10 @@
                     <span class="text-[11px] font-extrabold uppercase tracking-wider text-text-muted">Date &amp; Statistical Numbers Breakdown</span>
                     <span class="text-[11px] text-text-muted font-mono">{{ $dateRangeLabel }}</span>
                 </div>
-                <div class="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-7 gap-2 max-h-48 overflow-y-auto custom-scrollbar pr-1">
+                <div class="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-7 gap-2 pr-1">
                     <template x-for="(row, rIdx) in series" :key="'log_stat_' + rIdx">
-                        <div @mouseenter="setHover(rIdx)"
+                        <div x-show="rIdx < 14 || intervalsExpanded"
+                             @mouseenter="setHover(rIdx)"
                              :class="hoverIndex === rIdx ? 'border-primary bg-primary/5 ring-1 ring-primary/30' : 'border-border-subtle bg-surface-subtle/50 hover:border-primary/40'"
                              class="p-2.5 rounded-xl border text-xs transition-colors cursor-pointer">
                             <div class="font-bold text-primary-dark truncate" :title="row.full_date" x-text="row.label"></div>
@@ -490,18 +584,25 @@
                         </div>
                     </template>
                 </div>
+                <div x-show="series.length > 14" x-cloak class="pt-3 flex justify-center">
+                    <button type="button"
+                            @click="intervalsExpanded = !intervalsExpanded"
+                            class="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full bg-primary/10 hover:bg-primary text-primary hover:text-white border border-primary/30 text-xs font-extrabold transition-colors cursor-pointer">
+                        <span x-text="intervalsExpanded ? 'See Less Intervals' : 'See All ' + series.length + ' Intervals'"></span>
+                    </button>
+                </div>
             </div>
         </div>
     @endif
 
-    @if($profile && isset($recentShipments) && $recentShipments->isNotEmpty())
+    @if($profile && $recentShipments->isNotEmpty())
         <div class="bg-surface rounded-3xl border border-border-subtle shadow-xs overflow-hidden">
             <div class="p-5 border-b border-border-subtle flex flex-wrap items-center justify-between gap-2">
                 <div>
                     <h2 class="text-base font-bold text-primary-dark">Assigned Hub Shipments Queue (Active FIFO at Top &bull; Delivered/Returned at Bottom — {{ $totalShipmentsCount ?? $recentShipments->count() }} Total)</h2>
                     <p class="text-xs text-text-muted">Active shipments are prioritized at the top in FIFO sequence; delivered or returned shipments automatically move to the bottom.</p>
                 </div>
-                <a href="{{ route('logistics.shipments.index') }}" class="text-xs font-bold text-primary hover:underline">Open Full Shipments Console &rarr;</a>
+                <a href="{{ route('logistics.shipments.index') }}" class="text-xs font-bold text-primary hover:underline cursor-pointer">Open Full Shipments Console &rarr;</a>
             </div>
             <div class="overflow-x-auto">
                 <table class="w-full text-left border-collapse text-xs">
@@ -516,13 +617,14 @@
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-border-subtle">
-                        @foreach($recentShipments as $sh)
+                        @foreach($recentShipments as $shIdx => $sh)
                             @php
                                 $isTerminal = method_exists($sh, 'isTerminalStatus')
                                     ? $sh->isTerminalStatus()
                                     : in_array($sh->status, ['delivered', 'returned_to_seller'], true);
                             @endphp
-                            <tr class="hover:bg-surface-subtle/30 {{ $isTerminal ? 'bg-surface-subtle/20 opacity-85' : '' }}">
+                            <tr x-show="{{ $shIdx }} < 6 || shipmentsQueueExpanded"
+                                class="hover:bg-surface-subtle/30 {{ $isTerminal ? 'bg-surface-subtle/20 opacity-85' : '' }}">
                                 <td class="py-3.5 px-5">
                                     <div class="flex items-center gap-2">
                                         <span class="font-mono font-bold text-primary-dark">{{ $sh->tracking_number }}</span>
@@ -531,7 +633,7 @@
                                                 Active
                                             </span>
                                         @else
-                                            <span class="px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 border border-gray-200 text-[10px] font-bold">
+                                            <span class="px-2 py-0.5 rounded-full bg-surface-subtle text-text-muted border border-border-subtle text-[10px] font-bold">
                                                 Closed
                                             </span>
                                         @endif
@@ -544,20 +646,29 @@
                                 <td class="py-3.5 px-4 text-text-muted">
                                     C: {{ $sh->currentCourier?->full_name ?? '-' }} / R: {{ $sh->currentRider?->full_name ?? '-' }}
                                 </td>
-                                <td class="py-3.5 px-4 font-bold text-primary">&#8369;{{ number_format((float) $sh->cod_amount, 2) }}</td>
+                                <td class="py-3.5 px-4 font-bold text-price">&#8369;{{ number_format((float) $sh->cod_amount, 2) }}</td>
                                 <td class="py-3.5 px-4">
                                     <span class="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-brand-light/40 text-primary-dark">
                                         {{ $sh->status_label }}
                                     </span>
                                 </td>
                                 <td class="py-3.5 px-5 text-right">
-                                    <a href="{{ route('logistics.shipments.show', $sh->id) }}" class="text-primary font-bold hover:underline">Manage</a>
+                                    <a href="{{ route('logistics.shipments.show', $sh->id) }}" class="text-primary font-bold hover:underline cursor-pointer">Manage &rarr;</a>
                                 </td>
                             </tr>
                         @endforeach
                     </tbody>
                 </table>
             </div>
+            @if($recentShipments->count() > 6)
+                <div class="p-4 border-t border-border-subtle bg-surface-subtle/30 flex justify-center">
+                    <button type="button"
+                            @click="shipmentsQueueExpanded = !shipmentsQueueExpanded"
+                            class="inline-flex items-center gap-2 px-5 py-2 rounded-full bg-primary/10 hover:bg-primary text-primary hover:text-white border border-primary/30 text-xs font-extrabold transition-colors cursor-pointer">
+                        <span x-text="shipmentsQueueExpanded ? 'See Less Shipments' : 'See More Shipments (' + ({{ $recentShipments->count() }} - 6) + ' more)'"></span>
+                    </button>
+                </div>
+            @endif
             @if(method_exists($recentShipments, 'hasPages') && $recentShipments->hasPages())
                 <div class="px-5 py-3 border-t border-border-subtle">
                     {{ $recentShipments->links() }}

@@ -4,6 +4,13 @@
 @php
     $filter = $filter ?? request()->query('filter', 'all');
     $search = $search ?? request()->query('search', '');
+    $vehicleTypesList = [
+        'Motorcycle',
+        'Bicycle / E-Bike',
+        'Tricycle / Three-Wheeler',
+        'Sedan / Hatchback',
+        'MPV / Utility Van',
+    ];
 @endphp
 
 <div x-data="{
@@ -18,6 +25,11 @@
     licenseFileName: '',
     orCrFileName: '',
     isSubmittingEdit: false,
+    vehicleDropdownOpen: false,
+    expiryCalOpen: false,
+    calYear: new Date().getFullYear(),
+    calMonth: new Date().getMonth(),
+    vehicleTypes: @js($vehicleTypesList),
     suspendModalOpen: false,
     suspendingRider: null,
     suspendReason: '',
@@ -35,7 +47,43 @@
         this.licenseFileName = '';
         this.orCrFileName = '';
         this.isSubmittingEdit = false;
+        this.vehicleDropdownOpen = false;
+        this.expiryCalOpen = false;
+        const d = this.editingRider.license_expiry_date ? new Date(this.editingRider.license_expiry_date + 'T00:00:00') : new Date();
+        if (!isNaN(d.getTime())) {
+            this.calYear = d.getFullYear();
+            this.calMonth = d.getMonth();
+        }
         this.editRiderModalOpen = true;
+    },
+    get calMonthLabel() {
+        const months = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+        return (months[this.calMonth] || '') + ' ' + this.calYear;
+    },
+    get calDays() {
+        const firstDay = new Date(this.calYear, this.calMonth, 1).getDay();
+        const daysInMonth = new Date(this.calYear, this.calMonth + 1, 0).getDate();
+        const cells = [];
+        for (let i = 0; i < firstDay; i++) cells.push({ day: null, iso: '' });
+        const curIso = this.editingRider?.license_expiry_date || '';
+        for (let d = 1; d <= daysInMonth; d++) {
+            const m = String(this.calMonth + 1).padStart(2, '0');
+            const dayStr = String(d).padStart(2, '0');
+            const iso = `${this.calYear}-${m}-${dayStr}`;
+            cells.push({ day: d, iso: iso, selected: iso === curIso });
+        }
+        return cells;
+    },
+    prevCal() {
+        if (this.calMonth === 0) { this.calMonth = 11; this.calYear--; } else { this.calMonth--; }
+    },
+    nextCal() {
+        if (this.calMonth === 11) { this.calMonth = 0; this.calYear++; } else { this.calMonth++; }
+    },
+    pickExpiryDate(cell) {
+        if (!cell || !cell.iso || !this.editingRider) return;
+        this.editingRider.license_expiry_date = cell.iso;
+        this.expiryCalOpen = false;
     },
     openSuspendRider(riderData) {
         this.suspendingRider = riderData;
@@ -58,7 +106,7 @@
     <div class="flex flex-col lg:flex-row lg:items-end justify-between gap-4">
         <div>
             <div class="flex items-center gap-2.5">
-                <h1 class="text-3xl font-bold text-text-main">Active Last-Mile Riders</h1>
+                <h1 class="text-3xl font-bold text-primary-dark">Active Last-Mile Riders</h1>
                 <span class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold bg-brand-light/60 text-primary-dark border border-border-subtle">
                     {{ $profile->business_name }}
                 </span>
@@ -89,7 +137,7 @@
             </form>
 
             <a href="{{ route('logistics.riders.create') }}"
-               class="inline-flex items-center justify-center gap-2 px-5 py-2.5 bg-primary-dark hover:bg-text-main text-surface text-xs font-bold rounded-2xl shadow-xs transition-all cursor-pointer active:scale-95 shrink-0">
+               class="inline-flex items-center justify-center gap-2 px-5 py-2.5 bg-primary-dark hover:bg-primary text-surface text-xs font-bold rounded-2xl shadow-xs transition-all cursor-pointer active:scale-95 shrink-0">
                 <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 4v16m8-8H4" />
                 </svg>
@@ -97,20 +145,6 @@
             </a>
         </div>
     </div>
-
-    @if (session('success'))
-        <div class="p-4 rounded-2xl bg-success/10 border border-success/20 text-success text-xs font-bold flex items-center justify-between">
-            <span>{{ session('success') }}</span>
-        </div>
-    @endif
-
-    @if ($errors->any())
-        <div class="p-4 rounded-2xl bg-red-50 border border-red-200 text-red-700 text-xs space-y-1">
-            @foreach ($errors->all() as $err)
-                <p class="font-semibold">{{ $err }}</p>
-            @endforeach
-        </div>
-    @endif
 
     <div class="flex flex-wrap items-center justify-between gap-2">
         <div class="flex flex-wrap items-center gap-2">
@@ -121,7 +155,6 @@
                     'on_delivery' => 'Currently On Delivery',
                 ];
             @endphp
-
             @foreach ($tabs as $key => $label)
                 <a href="{{ route('logistics.riders.active', ['filter' => $key, 'search' => $search]) }}"
                    class="inline-flex items-center gap-2 px-4 py-2 rounded-2xl text-xs font-bold border transition-all cursor-pointer {{ $filter === $key ? 'bg-primary-dark text-surface border-primary-dark shadow-xs' : 'bg-surface text-text-muted border-border-subtle hover:text-text-main hover:bg-surface-subtle' }}">
@@ -131,7 +164,7 @@
         </div>
 
         <a href="{{ route('logistics.rider-applications.index') }}"
-           class="text-xs font-bold text-primary hover:text-primary-dark underline">
+           class="text-xs font-bold text-primary hover:text-primary-dark underline cursor-pointer">
             Open Full Rider Applications &amp; Directory &rarr;
         </a>
     </div>
@@ -139,15 +172,15 @@
     <div class="bg-surface rounded-3xl border border-border-subtle shadow-xs overflow-hidden">
         @if ($riders->isEmpty())
             <div class="py-16 px-6 text-center">
-                <div class="w-12 h-12 rounded-2xl bg-surface-subtle text-text-muted flex items-center justify-center mx-auto mb-3">
+                <div class="w-12 h-12 rounded-2xl bg-brand-light/30 text-primary flex items-center justify-center mx-auto mb-3 border border-primary/20">
                     <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
                     </svg>
                 </div>
-                <h3 class="text-base font-bold text-text-main">No active riders found</h3>
+                <h3 class="text-base font-bold text-primary-dark">No active riders found</h3>
                 <p class="text-xs text-text-muted mt-1 mb-5">Approved riders matching this filter under {{ $profile->business_name }} will appear here.</p>
                 <a href="{{ route('logistics.riders.create') }}"
-                   class="inline-flex items-center gap-2 px-5 py-2.5 bg-primary-dark hover:bg-text-main text-surface text-xs font-bold rounded-2xl shadow-xs transition-all cursor-pointer">
+                   class="inline-flex items-center gap-2 px-5 py-2.5 bg-primary-dark hover:bg-primary text-surface text-xs font-bold rounded-2xl shadow-xs transition-all cursor-pointer">
                     <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 4v16m8-8H4" />
                     </svg>
@@ -191,7 +224,7 @@
                                     'license_expiry_date' => $rider->license_expiry_date?->format('Y-m-d') ?? '',
                                 ];
                             @endphp
-                            <tr class="hover:bg-surface-subtle/40 transition-colors">
+                            <tr x-data="{ showAllBrgys: false }" class="hover:bg-surface-subtle/40 transition-colors">
                                 <td class="py-4 px-5 align-top">
                                     <div class="flex items-start gap-3">
                                         <div class="w-11 h-11 rounded-full bg-brand-light/40 border border-border-subtle overflow-hidden flex items-center justify-center shrink-0 font-serif font-bold text-primary-dark text-sm">
@@ -203,8 +236,8 @@
                                         </div>
                                         <div class="min-w-0">
                                             <div class="font-bold text-sm text-text-main">{{ $rider->full_name }}</div>
-                                            <div class="text-text-muted mt-0.5 font-mono text-[11px]">{{ $rider->email }}</div>
-                                            <div class="text-text-muted mt-0.5">{{ $rider->contact_no }}</div>
+                                            <div class="text-text-muted mt-0.5 font-mono text-[11px] select-text">{{ $rider->email }}</div>
+                                            <div class="text-text-muted mt-0.5 font-mono select-text">{{ $rider->contact_no }}</div>
                                             <div class="text-[11px] text-text-muted/80 mt-1">
                                                 DOB: {{ $rider->birthday?->format('M d, Y') }} ({{ $rider->birthday?->age }} yrs old)
                                             </div>
@@ -216,16 +249,18 @@
                                                 </div>
                                             @endif
                                             @if(!empty($coveredBarangays))
-                                                <div class="flex flex-wrap gap-1 mt-1.5 max-w-xs">
-                                                    @foreach(array_slice($coveredBarangays, 0, 3) as $brgy)
-                                                        <span class="px-2 py-0.5 rounded-md bg-blue-50 text-blue-800 border border-blue-200 text-[10px] font-semibold">
+                                                <div class="flex flex-wrap items-center gap-1 mt-1.5 max-w-xs">
+                                                    @foreach($coveredBarangays as $bIdx => $brgy)
+                                                        <span x-show="{{ $bIdx }} < 3 || showAllBrgys"
+                                                              class="px-2 py-0.5 rounded-md bg-primary/10 text-primary-dark border border-primary/20 text-[10px] font-semibold">
                                                             {{ $brgy }}
                                                         </span>
                                                     @endforeach
                                                     @if(count($coveredBarangays) > 3)
-                                                        <span class="px-2 py-0.5 rounded-md bg-surface-subtle text-text-muted border border-border-subtle text-[10px] font-bold">
-                                                            +{{ count($coveredBarangays) - 3 }} more
-                                                        </span>
+                                                        <button type="button"
+                                                                @click="showAllBrgys = !showAllBrgys"
+                                                                class="px-2 py-0.5 rounded-md bg-surface-subtle hover:bg-brand-light/40 text-primary border border-border-subtle text-[10px] font-extrabold cursor-pointer"
+                                                                x-text="showAllBrgys ? 'See less' : '+{{ count($coveredBarangays) - 3 }} more'"></button>
                                                     @endif
                                                 </div>
                                             @endif
@@ -240,11 +275,11 @@
                                     </div>
                                     <div>
                                         <span class="text-text-muted">Plate No.:</span>
-                                        <span class="font-mono font-bold text-primary-dark bg-brand-light/30 px-1.5 py-0.5 rounded">{{ $rider->plate_number }}</span>
+                                        <span class="font-mono font-bold text-primary-dark bg-brand-light/30 px-1.5 py-0.5 rounded select-text">{{ $rider->plate_number }}</span>
                                     </div>
                                     <div>
                                         <span class="text-text-muted">License No.:</span>
-                                        <span class="font-mono font-semibold text-text-main">{{ $rider->license_no }}</span>
+                                        <span class="font-mono font-semibold text-text-main select-text">{{ $rider->license_no }}</span>
                                     </div>
                                     <div class="text-[11px] text-text-muted">
                                         Expires: {{ $rider->license_expiry_date?->format('M d, Y') }}
@@ -346,6 +381,7 @@
                                                  x-transition.opacity.duration.150ms
                                                  :style="menuStyle"
                                                  class="w-52 bg-surface rounded-2xl shadow-2xl border-2 border-border-subtle overflow-hidden divide-y divide-border-subtle/60 text-xs select-none">
+
                                                 <button type="button"
                                                         @click="rowMenuOpen = false; openEditRider(@js($riderEditPayload))"
                                                         class="w-full text-left px-4 py-2.5 font-bold text-primary-dark hover:bg-brand-light/25 flex items-center gap-2 cursor-pointer">
@@ -357,7 +393,7 @@
 
                                                 <button type="button"
                                                         @click="rowMenuOpen = false; openSuspendRider(@js($riderEditPayload))"
-                                                        class="w-full text-left px-4 py-2.5 font-semibold text-danger hover:bg-red-50 flex items-center gap-2 cursor-pointer">
+                                                        class="w-full text-left px-4 py-2.5 font-semibold text-danger hover:bg-danger/10 flex items-center gap-2 cursor-pointer">
                                                     <span class="w-2 h-2 rounded-full bg-danger"></span>
                                                     Suspend Rider
                                                 </button>
@@ -379,7 +415,6 @@
         @endif
     </div>
 
-    <!-- Enhanced Edit Rider Profile Modal -->
     <template x-teleport="body">
         <div x-show="editRiderModalOpen && editingRider"
              x-cloak
@@ -394,7 +429,7 @@
                         <h3 class="text-xl font-extrabold text-primary-dark">Edit Rider Profile &amp; Vehicle</h3>
                         <p class="text-xs text-text-muted mt-0.5">Upload a new profile photo, update vehicle &amp; license credentials, or replace legal documents.</p>
                     </div>
-                    <button type="button" @click="editRiderModalOpen = false" class="p-2 rounded-full bg-surface-subtle hover:bg-red-50 text-text-muted hover:text-danger transition-colors cursor-pointer">
+                    <button type="button" @click="editRiderModalOpen = false" class="p-2 rounded-full bg-surface-subtle hover:bg-danger/10 text-text-muted hover:text-danger transition-colors cursor-pointer">
                         <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.2"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
                     </button>
                 </div>
@@ -407,10 +442,9 @@
                     @csrf
                     @method('PATCH')
 
-                    <!-- High-Emphasis Profile Picture Upload Card -->
                     <div class="p-5 rounded-2xl bg-gradient-to-r from-brand-light/35 via-surface-subtle to-brand-light/20 border-2 border-primary/30 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                         <div class="flex items-center gap-4">
-                            <div class="w-20 h-20 rounded-full bg-white border-4 border-primary/30 shadow-md overflow-hidden flex items-center justify-center shrink-0 font-serif font-bold text-2xl text-primary-dark">
+                            <div class="w-20 h-20 rounded-full bg-surface border-4 border-primary/30 shadow-md overflow-hidden flex items-center justify-center shrink-0 font-serif font-bold text-2xl text-primary-dark">
                                 <template x-if="avatarPreview">
                                     <img :src="avatarPreview" class="w-full h-full object-cover">
                                 </template>
@@ -424,7 +458,6 @@
                                 <p class="text-[11px] text-text-muted" x-text="avatarFileName ? 'Selected: ' + avatarFileName : 'JPG, PNG, or WEBP up to 5 MB (Auto-optimized to WebP)'"></p>
                             </div>
                         </div>
-
                         <div class="shrink-0">
                             <label class="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-primary-dark hover:bg-primary text-white font-extrabold text-xs shadow-sm transition-all cursor-pointer active:scale-95">
                                 <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.2">
@@ -440,57 +473,62 @@
                         </div>
                     </div>
 
-                    <!-- Read-Only Personal Identity Details -->
-                    <div class="p-4 rounded-2xl bg-gray-100/90 border border-gray-300 space-y-3">
+                    <div class="p-4 rounded-2xl bg-surface-subtle border border-border-subtle space-y-3">
                         <div class="flex items-center justify-between">
-                            <span class="text-[11px] font-extrabold uppercase tracking-wider text-gray-600 flex items-center gap-1.5">
-                                <svg class="w-3.5 h-3.5 text-gray-500" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z" clip-rule="evenodd"/></svg>
+                            <span class="text-[11px] font-extrabold uppercase tracking-wider text-text-muted flex items-center gap-1.5">
+                                <svg class="w-3.5 h-3.5 text-primary" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z" clip-rule="evenodd"/></svg>
                                 Personal Identity Details (Locked)
                             </span>
-                            <span class="px-2.5 py-0.5 rounded-full bg-gray-200 text-gray-700 text-[10px] font-extrabold uppercase">Read-Only</span>
+                            <span class="px-2.5 py-0.5 rounded-full bg-surface text-text-muted border border-border-subtle text-[10px] font-extrabold uppercase">Read-Only</span>
                         </div>
                         <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                             <div>
-                                <label class="block text-[10px] font-bold text-gray-500 uppercase">Full Name</label>
-                                <input type="text" :value="editingRider?.full_name" readonly class="w-full mt-1 px-3 py-2 rounded-xl border border-gray-300 bg-gray-200/70 text-gray-700 font-bold cursor-not-allowed outline-none">
+                                <label class="block text-[10px] font-bold text-text-muted uppercase">Full Name</label>
+                                <input type="text" :value="editingRider?.full_name" readonly class="w-full mt-1 px-3 py-2 rounded-xl border border-border-subtle bg-surface/60 text-text-muted font-bold cursor-not-allowed outline-none">
                             </div>
                             <div>
-                                <label class="block text-[10px] font-bold text-gray-500 uppercase">Date of Birth</label>
-                                <input type="text" :value="editingRider?.birthday" readonly class="w-full mt-1 px-3 py-2 rounded-xl border border-gray-300 bg-gray-200/70 text-gray-700 font-semibold cursor-not-allowed outline-none">
+                                <label class="block text-[10px] font-bold text-text-muted uppercase">Date of Birth</label>
+                                <input type="text" :value="editingRider?.birthday" readonly class="w-full mt-1 px-3 py-2 rounded-xl border border-border-subtle bg-surface/60 text-text-muted font-semibold cursor-not-allowed outline-none">
                             </div>
                             <div>
-                                <label class="block text-[10px] font-bold text-gray-500 uppercase">Internal Email</label>
-                                <input type="text" :value="editingRider?.email" readonly class="w-full mt-1 px-3 py-2 rounded-xl border border-gray-300 bg-gray-200/70 text-gray-700 font-mono cursor-not-allowed outline-none">
+                                <label class="block text-[10px] font-bold text-text-muted uppercase">Internal Email</label>
+                                <input type="text" :value="editingRider?.email" readonly class="w-full mt-1 px-3 py-2 rounded-xl border border-border-subtle bg-surface/60 text-text-muted font-mono cursor-not-allowed outline-none">
                             </div>
                             <div>
-                                <label class="block text-[10px] font-bold text-gray-500 uppercase">Contact Number</label>
-                                <input type="text" :value="editingRider?.contact_no" readonly class="w-full mt-1 px-3 py-2 rounded-xl border border-gray-300 bg-gray-200/70 text-gray-700 font-mono cursor-not-allowed outline-none">
+                                <label class="block text-[10px] font-bold text-text-muted uppercase">Contact Number</label>
+                                <input type="text" :value="editingRider?.contact_no" readonly class="w-full mt-1 px-3 py-2 rounded-xl border border-border-subtle bg-surface/60 text-text-muted font-mono cursor-not-allowed outline-none">
                             </div>
                         </div>
                     </div>
 
-                    <!-- Emphasized Editable Vehicle & License Fields -->
-                    <div class="p-5 rounded-2xl bg-white border-2 border-primary/25 shadow-2xs space-y-4">
+                    <div class="p-5 rounded-2xl bg-surface border-2 border-primary/25 shadow-2xs space-y-4">
                         <div class="flex items-center justify-between border-b border-border-subtle pb-2.5">
                             <span class="text-xs font-extrabold uppercase tracking-wider text-primary-dark">Editable Vehicle &amp; License Credentials</span>
                             <span class="text-[11px] font-bold text-primary">Required Fields *</span>
                         </div>
 
                         <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                            <div>
+                            <div class="relative" @click.away="vehicleDropdownOpen = false">
                                 <label class="block font-extrabold text-text-main uppercase text-[11px] mb-1.5">Vehicle Type <span class="text-danger">*</span></label>
-                                <select name="vehicle_type"
-                                        x-model="editingRider.vehicle_type"
-                                        required
-                                        class="w-full px-3.5 py-2.5 rounded-xl border-2 border-gray-300 hover:border-primary/60 focus:border-primary focus:ring-4 focus:ring-primary/10 bg-white text-text-main font-bold text-xs outline-none transition-all cursor-pointer">
-                                    <option value="Motorcycle">Motorcycle</option>
-                                    <option value="Bicycle / E-Bike">Bicycle / E-Bike</option>
-                                    <option value="Tricycle / Three-Wheeler">Tricycle / Three-Wheeler</option>
-                                    <option value="Sedan / Hatchback">Sedan / Hatchback</option>
-                                    <option value="MPV / Utility Van">MPV / Utility Van</option>
-                                </select>
+                                <input type="hidden" name="vehicle_type" :value="editingRider.vehicle_type" required>
+                                <button type="button"
+                                        @click="vehicleDropdownOpen = !vehicleDropdownOpen; expiryCalOpen = false"
+                                        class="w-full px-3.5 py-2.5 rounded-xl border-2 border-border-subtle hover:border-primary bg-surface text-text-main font-bold text-xs flex items-center justify-between text-left transition-all cursor-pointer">
+                                    <span x-text="editingRider.vehicle_type || 'Select Vehicle Type'"></span>
+                                    <svg class="w-4 h-4 text-primary shrink-0 transition-transform" :class="vehicleDropdownOpen ? 'rotate-180' : ''" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/></svg>
+                                </button>
+                                <div x-show="vehicleDropdownOpen" x-cloak x-transition class="absolute left-0 right-0 top-full mt-1 bg-surface border border-border-subtle rounded-2xl shadow-xl z-40 py-1 overflow-hidden">
+                                    <template x-for="vType in vehicleTypes" :key="vType">
+                                        <button type="button"
+                                                @click="editingRider.vehicle_type = vType; vehicleDropdownOpen = false"
+                                                class="w-full px-3.5 py-2 text-left text-xs hover:bg-brand-light/30 flex items-center justify-between cursor-pointer"
+                                                :class="editingRider.vehicle_type === vType ? 'text-primary font-bold bg-primary/5' : 'text-text-main font-medium'">
+                                            <span x-text="vType"></span>
+                                            <span x-show="editingRider.vehicle_type === vType" class="text-primary font-extrabold">&#10003;</span>
+                                        </button>
+                                    </template>
+                                </div>
                             </div>
-
                             <div>
                                 <label class="block font-extrabold text-text-main uppercase text-[11px] mb-1.5">Plate Number <span class="text-danger">*</span></label>
                                 <input type="text"
@@ -499,9 +537,8 @@
                                        required
                                        maxlength="20"
                                        placeholder="e.g. ABC-1234"
-                                       class="w-full px-3.5 py-2.5 rounded-xl border-2 border-gray-300 hover:border-primary/60 focus:border-primary focus:ring-4 focus:ring-primary/10 bg-white font-mono uppercase font-extrabold text-primary-dark text-xs outline-none transition-all">
+                                       class="w-full px-3.5 py-2.5 rounded-xl border-2 border-border-subtle hover:border-primary/60 focus:border-primary bg-surface font-mono uppercase font-extrabold text-primary-dark text-xs outline-none transition-all">
                             </div>
-
                             <div>
                                 <label class="block font-extrabold text-text-main uppercase text-[11px] mb-1.5">Driver's License No. <span class="text-danger">*</span></label>
                                 <input type="text"
@@ -510,21 +547,48 @@
                                        required
                                        maxlength="35"
                                        placeholder="e.g. N01-23-456789"
-                                       class="w-full px-3.5 py-2.5 rounded-xl border-2 border-gray-300 hover:border-primary/60 focus:border-primary focus:ring-4 focus:ring-primary/10 bg-white font-mono uppercase font-extrabold text-text-main text-xs outline-none transition-all">
+                                       class="w-full px-3.5 py-2.5 rounded-xl border-2 border-border-subtle hover:border-primary/60 focus:border-primary bg-surface font-mono uppercase font-extrabold text-text-main text-xs outline-none transition-all">
                             </div>
-
-                            <div>
+                            <div class="relative" @click.away="expiryCalOpen = false">
                                 <label class="block font-extrabold text-text-main uppercase text-[11px] mb-1.5">License Expiry Date <span class="text-danger">*</span></label>
-                                <input type="date"
-                                       name="license_expiry_date"
-                                       x-model="editingRider.license_expiry_date"
-                                       required
-                                       class="w-full px-3.5 py-2.5 rounded-xl border-2 border-gray-300 hover:border-primary/60 focus:border-primary focus:ring-4 focus:ring-primary/10 bg-white font-bold text-text-main text-xs outline-none transition-all cursor-pointer">
+                                <input type="hidden" name="license_expiry_date" :value="editingRider.license_expiry_date" required>
+                                <button type="button"
+                                        @click="expiryCalOpen = !expiryCalOpen; vehicleDropdownOpen = false"
+                                        class="w-full px-3.5 py-2.5 rounded-xl border-2 border-border-subtle hover:border-primary bg-surface font-mono font-bold text-primary-dark text-xs flex items-center justify-between cursor-pointer">
+                                    <span x-text="editingRider.license_expiry_date || 'Select Date'"></span>
+                                    <svg class="w-4 h-4 text-primary shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+                                </button>
+                                <div x-show="expiryCalOpen" x-cloak x-transition class="absolute right-0 bottom-full mb-2 w-72 bg-surface border border-border-subtle rounded-2xl shadow-2xl p-4 z-50">
+                                    <div class="flex items-center justify-between mb-3">
+                                        <button type="button" @click="prevCal()" class="p-1.5 rounded-lg hover:bg-surface-subtle text-text-main cursor-pointer">
+                                            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/></svg>
+                                        </button>
+                                        <span class="text-xs font-extrabold text-primary-dark" x-text="calMonthLabel"></span>
+                                        <button type="button" @click="nextCal()" class="p-1.5 rounded-lg hover:bg-surface-subtle text-text-main cursor-pointer">
+                                            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
+                                        </button>
+                                    </div>
+                                    <div class="grid grid-cols-7 gap-1 text-[10px] font-bold text-text-muted text-center mb-1">
+                                        <span>Su</span><span>Mo</span><span>Tu</span><span>We</span><span>Th</span><span>Fr</span><span>Sa</span>
+                                    </div>
+                                    <div class="grid grid-cols-7 gap-1">
+                                        <template x-for="(cell, cIdx) in calDays" :key="'rcal_' + cIdx">
+                                            <div>
+                                                <template x-if="cell.day !== null">
+                                                    <button type="button"
+                                                            @click="pickExpiryDate(cell)"
+                                                            :class="cell.selected ? 'bg-primary text-white font-extrabold' : 'text-text-main hover:bg-brand-light/40 font-semibold'"
+                                                            class="w-8 h-8 rounded-lg text-xs flex items-center justify-center transition-colors cursor-pointer"
+                                                            x-text="cell.day"></button>
+                                                </template>
+                                            </div>
+                                        </template>
+                                    </div>
+                                </div>
                             </div>
                         </div>
                     </div>
 
-                    <!-- High-Emphasis Document Replacement Upload Cards -->
                     <div class="p-5 rounded-2xl bg-surface-subtle/70 border-2 border-border-subtle space-y-3">
                         <div class="flex items-center justify-between">
                             <span class="text-xs font-extrabold uppercase tracking-wider text-primary-dark">Replace Compliance Documents (Optional)</span>
@@ -532,7 +596,7 @@
                         </div>
 
                         <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                            <div class="p-3.5 rounded-2xl bg-white border-2 border-dashed border-primary/35 hover:border-primary transition-all flex flex-col justify-between gap-2.5">
+                            <div class="p-3.5 rounded-2xl bg-surface border-2 border-dashed border-primary/35 hover:border-primary transition-all flex flex-col justify-between gap-2.5">
                                 <div>
                                     <span class="text-[11px] font-extrabold text-text-main block">Driver's License Document</span>
                                     <span class="text-[10px] text-text-muted block mt-0.5 truncate" x-text="licenseFileName ? 'Selected: ' + licenseFileName : 'Keep current file or choose replacement'"></span>
@@ -548,7 +612,7 @@
                                 </label>
                             </div>
 
-                            <div class="p-3.5 rounded-2xl bg-white border-2 border-dashed border-primary/35 hover:border-primary transition-all flex flex-col justify-between gap-2.5">
+                            <div class="p-3.5 rounded-2xl bg-surface border-2 border-dashed border-primary/35 hover:border-primary transition-all flex flex-col justify-between gap-2.5">
                                 <div>
                                     <span class="text-[11px] font-extrabold text-text-main block">Vehicle OR/CR Document</span>
                                     <span class="text-[10px] text-text-muted block mt-0.5 truncate" x-text="orCrFileName ? 'Selected: ' + orCrFileName : 'Keep current file or choose replacement'"></span>
@@ -569,7 +633,7 @@
                     <div class="flex items-center justify-end gap-3 pt-3 border-t border-border-subtle">
                         <button type="button"
                                 @click="editRiderModalOpen = false"
-                                class="px-5 py-2.5 rounded-xl bg-surface-subtle hover:bg-gray-200 text-text-main font-bold cursor-pointer transition-colors">
+                                class="px-5 py-2.5 rounded-xl bg-surface-subtle hover:bg-brand-light/30 text-text-main font-bold cursor-pointer transition-colors">
                             Cancel
                         </button>
                         <button type="submit"
@@ -584,7 +648,6 @@
         </div>
     </template>
 
-    <!-- Suspend Rider Modal -->
     <template x-teleport="body">
         <div x-show="suspendModalOpen && suspendingRider"
              x-cloak
@@ -613,16 +676,15 @@
                                   maxlength="300"
                                   required
                                   placeholder="Explain why this rider is being suspended (uncollected assignments will return to the hub queue)..."
-                                  class="w-full p-3 rounded-xl border-2 border-gray-300 focus:border-danger bg-white text-text-main font-medium outline-none"></textarea>
+                                  class="w-full p-3 rounded-xl border-2 border-border-subtle focus:border-danger bg-surface text-text-main font-medium outline-none"></textarea>
                     </div>
-
                     <div class="flex justify-end gap-2 pt-2 border-t border-border-subtle">
-                        <button type="button" @click="suspendModalOpen = false" class="px-4 py-2.5 rounded-xl bg-surface-subtle text-text-muted font-bold cursor-pointer">
+                        <button type="button" @click="suspendModalOpen = false" class="px-4 py-2.5 rounded-xl bg-surface-subtle hover:bg-brand-light/30 text-text-muted font-bold cursor-pointer">
                             Cancel
                         </button>
                         <button type="submit"
                                 :disabled="isSubmittingSuspend"
-                                class="px-5 py-2.5 rounded-xl bg-danger hover:bg-red-700 text-white font-extrabold shadow-sm cursor-pointer disabled:opacity-50">
+                                class="px-5 py-2.5 rounded-xl bg-danger hover:opacity-90 text-white font-extrabold shadow-sm cursor-pointer disabled:opacity-50">
                             Confirm Suspension
                         </button>
                     </div>
@@ -631,7 +693,6 @@
         </div>
     </template>
 
-    <!-- Document Preview Modal -->
     <template x-teleport="body">
         <div x-show="docModalOpen"
              x-cloak
@@ -644,12 +705,13 @@
                         <h3 class="font-bold text-sm text-primary-dark truncate" x-text="docModalTitle"></h3>
                     </div>
                     <div class="flex items-center gap-3">
-                        <a :href="docModalUrl" target="_blank" class="text-xs font-bold text-primary hover:underline">Open in New Tab</a>
+                        <a :href="docModalUrl" target="_blank" class="text-xs font-bold text-primary hover:underline cursor-pointer">Open in New Tab</a>
                         <button type="button" @click="docModalOpen = false" class="p-1 rounded-lg hover:bg-surface-subtle text-text-muted hover:text-text-main cursor-pointer">
                             <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
                         </button>
                     </div>
                 </div>
+
                 <div class="flex-1 overflow-auto p-2 flex items-center justify-center bg-surface-subtle rounded-2xl mt-3">
                     <template x-if="docModalType === 'image'">
                         <img :src="docModalUrl" alt="Rider Document" class="max-h-full max-w-full object-contain rounded-lg shadow-sm">

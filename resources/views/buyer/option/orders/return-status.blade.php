@@ -8,17 +8,17 @@
     $rr = $returnRequest;
 
     $tone = match ($rr->status) {
-        'refunded'                                  => 'bg-green-50 border-green-200 text-green-900',
-        'rejected', 'closed', 'rejected_by_seller'  => 'bg-red-50 border-red-200 text-red-900',
-        'refund_pending'                            => 'bg-blue-50 border-blue-200 text-blue-900',
-        default                                     => 'bg-amber-50 border-amber-200 text-amber-900',
+        'refunded'                                  => 'bg-success/10 border-success/25 text-text-main',
+        'rejected', 'closed', 'rejected_by_seller'  => 'bg-danger/10 border-danger/25 text-danger',
+        'refund_pending'                            => 'bg-primary/10 border-primary/25 text-primary-dark',
+        default                                     => 'bg-brand-light/35 border-primary/25 text-primary-dark',
     };
 
     $badge = match ($rr->status) {
-        'refunded'                                  => 'bg-green-600 text-white',
-        'rejected', 'closed', 'rejected_by_seller'  => 'bg-red-600 text-white',
-        'refund_pending'                            => 'bg-blue-600 text-white',
-        default                                     => 'bg-amber-500 text-white',
+        'refunded'                                  => 'bg-success text-white',
+        'rejected', 'closed', 'rejected_by_seller'  => 'bg-danger text-white',
+        'refund_pending'                            => 'bg-primary-dark text-white',
+        default                                     => 'bg-primary text-white',
     };
 
     $photos = is_array($rr->evidence_photos) ? $rr->evidence_photos : [];
@@ -88,28 +88,22 @@
     };
 @endphp
 
-<div class="space-y-5">
+<div x-data="{
+        showAllEvents: false,
+        photoModalOpen: false,
+        photoModalUrl: '',
+        openPhoto(url) {
+            this.photoModalUrl = url;
+            this.photoModalOpen = true;
+        }
+     }"
+     class="space-y-5 select-none">
 
     <a href="{{ route('user.orders.show', $sellerOrder->id) }}"
-       class="inline-flex items-center gap-1.5 text-xs font-bold text-text-muted hover:text-primary transition-colors">
+       class="inline-flex items-center gap-1.5 text-xs font-bold text-text-muted hover:text-primary transition-colors cursor-pointer">
         &larr; Back to Order #{{ $sellerOrder->seller_order_number }}
     </a>
 
-    @if(session('success'))
-        <div class="p-4 rounded-2xl bg-green-50 border border-green-200 text-green-700 text-xs sm:text-sm font-bold">
-            {{ session('success') }}
-        </div>
-    @endif
-
-    @if($errors->any())
-        <div class="p-4 rounded-2xl bg-red-50 border border-red-200 text-red-700 text-xs sm:text-sm space-y-1">
-            @foreach($errors->all() as $err)
-                <p class="font-semibold">{{ $err }}</p>
-            @endforeach
-        </div>
-    @endif
-
-    <!-- Header -->
     <div class="bg-surface rounded-2xl border border-border-subtle p-5 shadow-xs flex flex-wrap items-center justify-between gap-3">
         <div class="space-y-1">
             <div class="flex flex-wrap items-center gap-2">
@@ -117,16 +111,15 @@
                 <span class="text-xs font-bold text-text-main">{{ $rr->resolution_label }}</span>
             </div>
             <p class="text-xs text-text-muted">
-                {{ $rr->request_number }} &bull; {{ $sellerOrder->sellerProfile?->business_name ?? 'Seller' }} &bull; Sent {{ $fmt($rr->created_at) }}
+                <span class="font-mono font-bold text-primary-dark select-text">{{ $rr->request_number }}</span> &bull; {{ $sellerOrder->sellerProfile?->business_name ?? 'Seller' }} &bull; Sent {{ $fmt($rr->created_at) }}
             </p>
         </div>
         <div class="text-right">
             <p class="text-[10px] font-bold uppercase text-text-muted">Refund amount</p>
-            <p class="text-lg font-extrabold text-primary">₱{{ $refundAmount }}</p>
+            <p class="text-lg font-extrabold text-price">&#8369;{{ $refundAmount }}</p>
         </div>
     </div>
 
-    <!-- What happens next -->
     <div class="p-5 rounded-2xl border {{ $tone }} space-y-3 text-xs">
         <div>
             <h3 class="text-sm font-bold">{{ $nextTitle }}</h3>
@@ -138,27 +131,26 @@
         @if($rr->canBuyerEscalate())
             <form action="{{ route('user.returns.escalate', $rr->id) }}" method="POST" class="space-y-2 m-0">
                 @csrf
-                <label class="block font-bold">Anything to add for the Admin? (optional)</label>
+                <label class="block font-bold text-primary-dark">Anything to add for the Admin? (optional)</label>
                 <textarea name="escalation_note"
                           rows="2"
                           maxlength="500"
                           placeholder="Tell us why you disagree with the seller's decision."
-                          class="w-full p-3 rounded-xl border border-red-200 bg-white text-text-main outline-none focus:border-red-400">{{ old('escalation_note') }}</textarea>
-                <button type="submit" class="px-4 py-2 rounded-xl bg-danger text-white font-bold cursor-pointer hover:opacity-90">
+                          class="w-full p-3 rounded-xl border border-border-subtle bg-surface text-text-main outline-none focus:border-primary">{{ old('escalation_note') }}</textarea>
+                <button type="submit" class="px-4 py-2 rounded-xl bg-danger text-white font-bold cursor-pointer hover:opacity-90 transition-opacity">
                     Escalate to Storkia Admin
                 </button>
             </form>
         @endif
     </div>
 
-    <!-- Return trip -->
     @if($returnShipment)
         <div class="bg-surface rounded-2xl border border-border-subtle p-5 sm:p-6 shadow-xs space-y-5">
             <div class="flex flex-wrap items-center justify-between gap-2 pb-4 border-b border-border-subtle">
                 <div>
                     <h3 class="text-sm sm:text-base font-bold text-primary-dark">Return Tracking</h3>
                     <p class="text-xs text-text-muted mt-0.5">
-                        <span class="font-mono font-bold text-text-main">{{ $returnShipment->tracking_number }}</span>
+                        <span class="font-mono font-bold text-primary-dark select-text">{{ $returnShipment->tracking_number }}</span>
                         &bull; {{ $returnShipment->status_label }}
                     </p>
                 </div>
@@ -170,7 +162,7 @@
             </div>
 
             @if($returnShipment->status === 'cancelled')
-                <p class="text-xs font-bold text-red-700">This return was cancelled.</p>
+                <p class="text-xs font-bold text-danger">This return was cancelled.</p>
             @else
                 <ol class="grid grid-cols-2 sm:grid-cols-6 gap-3">
                     @foreach($steps as $i => $label)
@@ -180,14 +172,14 @@
                                          {{ $done ? 'bg-primary text-white' : 'bg-surface-subtle text-text-muted border border-border-subtle' }}">
                                 {{ $done ? '✓' : $i + 1 }}
                             </span>
-                            <span class="text-[11px] font-bold {{ $done ? 'text-text-main' : 'text-text-muted' }}">{{ $label }}</span>
+                            <span class="text-[11px] font-bold {{ $done ? 'text-primary-dark' : 'text-text-muted' }}">{{ $label }}</span>
                         </li>
                     @endforeach
                 </ol>
             @endif
 
             @if($returnShipment->status === 'pickup_failed')
-                <p class="p-3 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900 font-semibold">
+                <p class="p-3 rounded-xl bg-brand-light/40 border border-primary/30 text-xs text-primary-dark font-semibold">
                     The rider could not collect your parcel{{ $returnShipment->pickup_failure_reason ? ' (' . $returnShipment->pickup_failure_reason . ')' : '' }}.
                     Logistics will arrange another attempt. Please make sure you are reachable.
                     (Attempt {{ $returnShipment->pickup_attempts_count }} of {{ \App\Models\ReturnShipment::MAX_PICKUP_ATTEMPTS }})
@@ -196,8 +188,10 @@
 
             @if($returnShipment->events->isNotEmpty())
                 <div class="space-y-3 pt-1">
-                    @foreach($returnShipment->events as $event)
-                        <div class="flex gap-3 text-xs">
+                    @foreach($returnShipment->events as $evIdx => $event)
+                        <div x-show="{{ $evIdx }} < 5 || showAllEvents"
+                             x-transition
+                             class="flex gap-3 text-xs">
                             <span class="mt-1 w-2 h-2 rounded-full bg-primary shrink-0"></span>
                             <div class="min-w-0">
                                 <p class="font-bold text-text-main">{{ $event->title }}</p>
@@ -210,12 +204,20 @@
                             </div>
                         </div>
                     @endforeach
+
+                    @if($returnShipment->events->count() > 5)
+                        <div class="pt-1">
+                            <button type="button"
+                                    @click="showAllEvents = !showAllEvents"
+                                    class="text-xs font-extrabold text-primary hover:underline cursor-pointer"
+                                    x-text="showAllEvents ? 'See Less Tracking Events' : 'See All {{ $returnShipment->events->count() }} Tracking Events'"></button>
+                        </div>
+                    @endif
                 </div>
             @endif
         </div>
     @endif
 
-    <!-- Your claim -->
     <div class="bg-surface rounded-2xl border border-border-subtle p-5 sm:p-6 shadow-xs space-y-3 text-xs">
         <h3 class="text-sm sm:text-base font-bold text-primary-dark">Your Request</h3>
         <div>
@@ -224,24 +226,25 @@
         </div>
         <div>
             <p class="font-bold text-text-muted uppercase text-[10px]">Your description</p>
-            <p class="text-text-main leading-relaxed whitespace-pre-line">{{ $rr->reason }}</p>
+            <p class="text-text-main leading-relaxed whitespace-pre-line select-text">{{ $rr->reason }}</p>
         </div>
         @if(!empty($photos))
             <div>
                 <p class="font-bold text-text-muted uppercase text-[10px] mb-1.5">Photo evidence ({{ count($photos) }})</p>
                 <div class="flex flex-wrap gap-2">
                     @foreach($photos as $photoPath)
-                        <a href="{{ asset('storage/' . ltrim($photoPath, '/')) }}" target="_blank" rel="noopener"
-                           class="w-16 h-16 rounded-xl overflow-hidden border border-border-subtle bg-white p-0.5">
-                            <img src="{{ asset('storage/' . ltrim($photoPath, '/')) }}" alt="Evidence photo" class="w-full h-full object-cover rounded-lg">
-                        </a>
+                        @php $fullPhotoUrl = asset('storage/' . ltrim($photoPath, '/')); @endphp
+                        <button type="button"
+                                @click="openPhoto('{{ $fullPhotoUrl }}')"
+                                class="w-16 h-16 rounded-xl overflow-hidden border border-border-subtle hover:border-primary bg-surface p-0.5 transition-colors cursor-pointer">
+                            <img src="{{ $fullPhotoUrl }}" alt="Evidence photo" class="w-full h-full object-cover rounded-lg">
+                        </button>
                     @endforeach
                 </div>
             </div>
         @endif
     </div>
 
-    <!-- Decisions -->
     @if($rr->seller_decision || $rr->admin_decision || $rr->seller_receipt_outcome)
         <div class="bg-surface rounded-2xl border border-border-subtle p-5 sm:p-6 shadow-xs space-y-3 text-xs">
             <h3 class="text-sm sm:text-base font-bold text-primary-dark">Decisions</h3>
@@ -257,7 +260,7 @@
                         @endswitch
                     </p>
                     @if($rr->seller_decision_reason)
-                        <p class="text-text-muted mt-0.5">"{{ $rr->seller_decision_reason }}"</p>
+                        <p class="text-text-muted mt-0.5 select-text">"{{ $rr->seller_decision_reason }}"</p>
                     @endif
                 </div>
             @endif
@@ -269,7 +272,7 @@
                         {{ $rr->seller_receipt_outcome === 'received_ok' ? 'Received in good order.' : 'Reported a problem.' }}
                     </p>
                     @if($rr->seller_receipt_notes)
-                        <p class="text-text-muted mt-0.5">"{{ $rr->seller_receipt_notes }}"</p>
+                        <p class="text-text-muted mt-0.5 select-text">"{{ $rr->seller_receipt_notes }}"</p>
                     @endif
                 </div>
             @endif
@@ -285,14 +288,13 @@
                         @endswitch
                     </p>
                     @if($rr->admin_remarks)
-                        <p class="text-text-muted mt-0.5">"{{ $rr->admin_remarks }}"</p>
+                        <p class="text-text-muted mt-0.5 select-text">"{{ $rr->admin_remarks }}"</p>
                     @endif
                 </div>
             @endif
         </div>
     @endif
 
-    <!-- Refund -->
     @if($rr->refund_status !== 'not_due')
         <div class="bg-surface rounded-2xl border border-border-subtle p-5 sm:p-6 shadow-xs space-y-2 text-xs">
             <h3 class="text-sm sm:text-base font-bold text-primary-dark">Refund</h3>
@@ -300,21 +302,31 @@
                 <span class="text-text-muted">
                     Paid to GCash:
                     <strong class="text-text-main">{{ $rr->refund_account_name }}</strong>
-                    <span class="font-mono">&bull; {{ $rr->refund_account_number }}</span>
+                    <span class="font-mono select-text">&bull; {{ $rr->refund_account_number }}</span>
                 </span>
-                <span class="font-extrabold text-primary">₱{{ $refundAmount }}</span>
+                <span class="font-extrabold text-price">&#8369;{{ $refundAmount }}</span>
             </div>
             @if($rr->refund_status === 'refunded')
-                <p class="text-green-700 font-bold">
+                <p class="text-success font-bold">
                     Sent on {{ $fmt($rr->refunded_at) }}@if($rr->refund_reference) &bull; GCash Ref #{{ $rr->refund_reference }}@endif
                 </p>
             @else
-                <p class="text-blue-700 font-bold">
+                <p class="text-primary-dark font-bold">
                     Waiting for Storkia to send it
                     @if($rr->refund_due_at) &bull; due by {{ $fmt($rr->refund_due_at) }}@endif
                 </p>
             @endif
         </div>
     @endif
+
+    <template x-teleport="body">
+        <div x-show="photoModalOpen"
+             x-cloak
+             @keydown.escape.window="photoModalOpen = false"
+             class="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-black/75 backdrop-blur-xs cursor-zoom-out"
+             @click="photoModalOpen = false">
+            <img :src="photoModalUrl" alt="Evidence photo" class="max-w-full max-h-[85vh] rounded-2xl shadow-2xl bg-surface" @click.stop>
+        </div>
+    </template>
 </div>
 @endsection

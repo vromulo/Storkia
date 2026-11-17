@@ -25,9 +25,34 @@
         'inter_province'    => 'Inter-Provincial',
         'inter_island'      => 'Inter-Island',
     ];
+
+    $hubOptionsMap = ['0' => 'All Company Hubs'];
+    foreach ($companyHubs as $cHub) {
+        $hubOptionsMap[(string) $cHub->id] = $cHub->hub_name . ' (' . $cHub->municipality . ')';
+    }
 @endphp
 
-<div class="max-w-7xl mx-auto space-y-6 select-none">
+<div x-data="{
+        hubOpen: false,
+        munOpen: false,
+        tierOpen: false,
+        sortOpen: false,
+        selectedHubId: '{{ (int) $hubFilter }}',
+        selectedMunicipality: @js((string) $municipalityFilter),
+        selectedTier: @js((string) $tierFilter),
+        selectedSort: @js((string) $queueSort),
+        hubLabels: @js($hubOptionsMap),
+        tierLabels: @js($tierLabels),
+        sortLabels: @js($sortLabels),
+        submitFilterForm() {
+            this.$nextTick(() => {
+                if (this.$refs.shipmentFilterForm) {
+                    this.$refs.shipmentFilterForm.submit();
+                }
+            });
+        }
+     }"
+     class="max-w-7xl mx-auto space-y-6 select-none">
     <div class="flex flex-col md:flex-row md:items-end justify-between gap-4">
         <div>
             <div class="flex flex-wrap items-center gap-2.5">
@@ -67,25 +92,11 @@
                    value="{{ $search }}"
                    placeholder="Tracking #, package ref, order, store..."
                    class="px-4 py-2.5 rounded-2xl border border-border-subtle bg-surface text-xs text-text-main outline-none focus:border-primary w-64">
-            <button type="submit" class="px-4 py-2.5 rounded-2xl bg-primary-dark hover:bg-text-main text-surface text-xs font-bold transition-colors cursor-pointer">
+            <button type="submit" class="px-4 py-2.5 rounded-2xl bg-primary-dark hover:bg-primary text-surface text-xs font-bold transition-colors cursor-pointer">
                 Search
             </button>
         </form>
     </div>
-
-    @if(session('success'))
-        <div class="p-4 rounded-2xl bg-green-50 border border-green-200 text-green-700 text-xs sm:text-sm font-bold">
-            {{ session('success') }}
-        </div>
-    @endif
-
-    @if($errors->any())
-        <div class="p-4 rounded-2xl bg-red-50 border border-red-200 text-red-700 text-xs sm:text-sm space-y-1">
-            @foreach($errors->all() as $err)
-                <p class="font-semibold">{{ $err }}</p>
-            @endforeach
-        </div>
-    @endif
 
     <div class="flex flex-col xl:flex-row xl:items-center justify-between gap-3">
         <div class="flex flex-wrap items-center gap-2">
@@ -109,7 +120,7 @@
                         'municipality' => $municipalityFilter ?: null,
                         'hub_id'       => $hubFilter > 0 ? $hubFilter : null,
                    ])) }}"
-                   class="inline-flex items-center gap-2 px-4 py-2 rounded-2xl text-xs font-bold border transition-all {{ $statusTab === $key || ($key === 'all' && !$statusTab) ? 'bg-primary-dark text-surface border-primary-dark shadow-xs' : 'bg-surface text-text-muted border-border-subtle hover:text-text-main hover:bg-surface-subtle' }}">
+                   class="inline-flex items-center gap-2 px-4 py-2 rounded-2xl text-xs font-bold border transition-all cursor-pointer {{ $statusTab === $key || ($key === 'all' && !$statusTab) ? 'bg-primary-dark text-surface border-primary-dark shadow-xs' : 'bg-surface text-text-muted border-border-subtle hover:text-text-main hover:bg-surface-subtle' }}">
                     <span>{{ $tab['label'] }}</span>
                     <span class="px-2 py-0.5 rounded-full text-[10px] {{ $statusTab === $key || ($key === 'all' && !$statusTab) ? 'bg-surface/20 text-surface' : 'bg-surface-subtle text-text-main' }}">
                         {{ $tab['count'] }}
@@ -118,53 +129,108 @@
             @endforeach
         </div>
 
-        <form method="GET" action="{{ route('logistics.shipments.index') }}" class="flex flex-wrap items-center gap-2 text-xs">
+        <form x-ref="shipmentFilterForm" method="GET" action="{{ route('logistics.shipments.index') }}" class="flex flex-wrap items-center gap-2 text-xs">
             @if($statusTab && $statusTab !== 'all')
                 <input type="hidden" name="status" value="{{ $statusTab }}">
             @endif
             @if($search !== '')
                 <input type="hidden" name="search" value="{{ $search }}">
             @endif
+            <input type="hidden" name="hub_id" :value="selectedHubId === '0' ? '' : selectedHubId">
+            <input type="hidden" name="municipality" :value="selectedMunicipality">
+            <input type="hidden" name="tier" :value="selectedTier">
+            <input type="hidden" name="sort" :value="selectedSort">
 
             @if(empty($activeBranchHub) && $companyHubs->count() > 1)
-                <select name="hub_id"
-                        onchange="this.form.submit()"
-                        class="px-3 py-2 rounded-xl border border-border-subtle bg-surface text-xs font-bold text-text-main outline-none focus:border-primary cursor-pointer max-w-[190px]">
-                    <option value="">All Company Hubs</option>
-                    @foreach($companyHubs as $cHub)
-                        <option value="{{ $cHub->id }}" {{ $hubFilter === (int) $cHub->id ? 'selected' : '' }}>
-                            {{ $cHub->hub_name }} ({{ $cHub->municipality }})
-                        </option>
-                    @endforeach
-                </select>
+                <div class="relative" @click.away="hubOpen = false">
+                    <button type="button"
+                            @click="hubOpen = !hubOpen; munOpen = false; tierOpen = false; sortOpen = false"
+                            class="px-3.5 py-2 rounded-xl border border-border-subtle hover:border-primary bg-surface text-xs font-bold text-text-main flex items-center gap-2 transition-colors cursor-pointer max-w-[200px]">
+                        <span class="truncate" x-text="hubLabels[selectedHubId] || 'All Company Hubs'"></span>
+                        <svg class="w-3.5 h-3.5 text-text-muted shrink-0 transition-transform" :class="hubOpen ? 'rotate-180' : ''" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.2"><path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/></svg>
+                    </button>
+                    <div x-show="hubOpen" x-cloak x-transition class="absolute right-0 mt-1.5 w-60 bg-surface border border-border-subtle rounded-2xl shadow-xl z-40 py-1.5 max-h-60 overflow-y-auto custom-scrollbar">
+                        @foreach($hubOptionsMap as $hKey => $hLbl)
+                            <button type="button"
+                                    @click="selectedHubId = '{{ $hKey }}'; hubOpen = false; submitFilterForm()"
+                                    class="w-full px-3.5 py-2 text-left hover:bg-brand-light/30 flex items-center justify-between font-semibold cursor-pointer"
+                                    :class="selectedHubId === '{{ $hKey }}' ? 'text-primary font-bold bg-primary/5' : 'text-text-main'">
+                                <span class="truncate pr-2">{{ $hLbl }}</span>
+                                <span x-show="selectedHubId === '{{ $hKey }}'" class="text-primary font-extrabold shrink-0">&#10003;</span>
+                            </button>
+                        @endforeach
+                    </div>
+                </div>
             @endif
 
             @if($availableMunicipalities->isNotEmpty())
-                <select name="municipality"
-                        onchange="this.form.submit()"
-                        class="px-3 py-2 rounded-xl border border-border-subtle bg-surface text-xs font-bold text-text-main outline-none focus:border-primary cursor-pointer max-w-[170px]">
-                    <option value="">All Municipalities</option>
-                    @foreach($availableMunicipalities as $munOpt)
-                        <option value="{{ $munOpt }}" {{ $municipalityFilter === $munOpt ? 'selected' : '' }}>{{ $munOpt }}</option>
-                    @endforeach
-                </select>
+                <div class="relative" @click.away="munOpen = false">
+                    <button type="button"
+                            @click="munOpen = !munOpen; hubOpen = false; tierOpen = false; sortOpen = false"
+                            class="px-3.5 py-2 rounded-xl border border-border-subtle hover:border-primary bg-surface text-xs font-bold text-text-main flex items-center gap-2 transition-colors cursor-pointer max-w-[180px]">
+                        <span class="truncate" x-text="selectedMunicipality || 'All Municipalities'"></span>
+                        <svg class="w-3.5 h-3.5 text-text-muted shrink-0 transition-transform" :class="munOpen ? 'rotate-180' : ''" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.2"><path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/></svg>
+                    </button>
+                    <div x-show="munOpen" x-cloak x-transition class="absolute right-0 mt-1.5 w-52 bg-surface border border-border-subtle rounded-2xl shadow-xl z-40 py-1.5 max-h-60 overflow-y-auto custom-scrollbar">
+                        <button type="button"
+                                @click="selectedMunicipality = ''; munOpen = false; submitFilterForm()"
+                                class="w-full px-3.5 py-2 text-left hover:bg-brand-light/30 flex items-center justify-between font-semibold cursor-pointer"
+                                :class="selectedMunicipality === '' ? 'text-primary font-bold bg-primary/5' : 'text-text-main'">
+                            <span>All Municipalities</span>
+                            <span x-show="selectedMunicipality === ''" class="text-primary font-extrabold">&#10003;</span>
+                        </button>
+                        @foreach($availableMunicipalities as $munOpt)
+                            <button type="button"
+                                    @click="selectedMunicipality = '{{ addslashes($munOpt) }}'; munOpen = false; submitFilterForm()"
+                                    class="w-full px-3.5 py-2 text-left hover:bg-brand-light/30 flex items-center justify-between font-semibold cursor-pointer"
+                                    :class="selectedMunicipality === '{{ addslashes($munOpt) }}' ? 'text-primary font-bold bg-primary/5' : 'text-text-main'">
+                                <span class="truncate pr-2">{{ $munOpt }}</span>
+                                <span x-show="selectedMunicipality === '{{ addslashes($munOpt) }}'" class="text-primary font-extrabold shrink-0">&#10003;</span>
+                            </button>
+                        @endforeach
+                    </div>
+                </div>
             @endif
 
-            <select name="tier"
-                    onchange="this.form.submit()"
-                    class="px-3 py-2 rounded-xl border border-border-subtle bg-surface text-xs font-bold text-text-main outline-none focus:border-primary cursor-pointer">
-                @foreach($tierLabels as $tVal => $tLabel)
-                    <option value="{{ $tVal }}" {{ $tierFilter === $tVal ? 'selected' : '' }}>{{ $tLabel }}</option>
-                @endforeach
-            </select>
+            <div class="relative" @click.away="tierOpen = false">
+                <button type="button"
+                        @click="tierOpen = !tierOpen; hubOpen = false; munOpen = false; sortOpen = false"
+                        class="px-3.5 py-2 rounded-xl border border-border-subtle hover:border-primary bg-surface text-xs font-bold text-text-main flex items-center gap-2 transition-colors cursor-pointer">
+                    <span x-text="tierLabels[selectedTier] || 'All Distance Tiers'"></span>
+                    <svg class="w-3.5 h-3.5 text-text-muted transition-transform" :class="tierOpen ? 'rotate-180' : ''" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.2"><path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/></svg>
+                </button>
+                <div x-show="tierOpen" x-cloak x-transition class="absolute right-0 mt-1.5 w-52 bg-surface border border-border-subtle rounded-2xl shadow-xl z-40 py-1.5 overflow-hidden">
+                    @foreach($tierLabels as $tVal => $tLabel)
+                        <button type="button"
+                                @click="selectedTier = '{{ $tVal }}'; tierOpen = false; submitFilterForm()"
+                                class="w-full px-3.5 py-2 text-left hover:bg-brand-light/30 flex items-center justify-between font-semibold cursor-pointer"
+                                :class="selectedTier === '{{ $tVal }}' ? 'text-primary font-bold bg-primary/5' : 'text-text-main'">
+                            <span>{{ $tLabel }}</span>
+                            <span x-show="selectedTier === '{{ $tVal }}'" class="text-primary font-extrabold">&#10003;</span>
+                        </button>
+                    @endforeach
+                </div>
+            </div>
 
-            <select name="sort"
-                    onchange="this.form.submit()"
-                    class="px-3.5 py-2 rounded-xl border border-border-subtle bg-surface text-xs font-bold text-primary-dark outline-none focus:border-primary cursor-pointer">
-                @foreach($sortLabels as $sVal => $sLabel)
-                    <option value="{{ $sVal }}" {{ $queueSort === $sVal ? 'selected' : '' }}>Sort: {{ $sLabel }}</option>
-                @endforeach
-            </select>
+            <div class="relative" @click.away="sortOpen = false">
+                <button type="button"
+                        @click="sortOpen = !sortOpen; hubOpen = false; munOpen = false; tierOpen = false"
+                        class="px-3.5 py-2 rounded-xl border border-border-subtle hover:border-primary bg-surface text-xs font-bold text-primary-dark flex items-center gap-2 transition-colors cursor-pointer">
+                    <span x-text="'Sort: ' + (sortLabels[selectedSort] || 'Oldest First (FIFO)')"></span>
+                    <svg class="w-3.5 h-3.5 text-primary transition-transform" :class="sortOpen ? 'rotate-180' : ''" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.2"><path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/></svg>
+                </button>
+                <div x-show="sortOpen" x-cloak x-transition class="absolute right-0 mt-1.5 w-60 bg-surface border border-border-subtle rounded-2xl shadow-xl z-40 py-1.5 overflow-hidden">
+                    @foreach($sortLabels as $sVal => $sLabel)
+                        <button type="button"
+                                @click="selectedSort = '{{ $sVal }}'; sortOpen = false; submitFilterForm()"
+                                class="w-full px-3.5 py-2 text-left hover:bg-brand-light/30 flex items-center justify-between font-semibold cursor-pointer"
+                                :class="selectedSort === '{{ $sVal }}' ? 'text-primary font-bold bg-primary/5' : 'text-text-main'">
+                            <span>{{ $sLabel }}</span>
+                            <span x-show="selectedSort === '{{ $sVal }}'" class="text-primary font-extrabold">&#10003;</span>
+                        </button>
+                    @endforeach
+                </div>
+            </div>
 
             @if($tierFilter !== '' || $municipalityFilter !== '' || $hubFilter > 0 || $queueSort !== 'oldest')
                 <a href="{{ route('logistics.shipments.index', array_filter(['status' => $statusTab === 'all' ? null : $statusTab, 'search' => $search])) }}"
@@ -211,10 +277,10 @@
                                 $origDistKm = $shipment->calculated_origin_distance_km;
                                 $buyerDistKm = $shipment->calculated_buyer_distance_km;
                                 $badgeClass = match($shipment->status) {
-                                    'delivered' => 'bg-green-100 text-green-700 border-green-200',
-                                    'delivery_failed', 'returning_to_seller', 'returned_to_seller' => 'bg-red-100 text-red-700 border-red-200',
-                                    'out_for_delivery', 'received_at_hub', 'rider_assigned' => 'bg-blue-100 text-blue-700 border-blue-200',
-                                    default => 'bg-yellow-100 text-yellow-800 border-yellow-200',
+                                    'delivered' => 'bg-success/15 text-success border-success/25',
+                                    'delivery_failed', 'returning_to_seller', 'returned_to_seller' => 'bg-danger/10 text-danger border-danger/25',
+                                    'out_for_delivery', 'received_at_hub', 'rider_assigned' => 'bg-primary/10 text-primary-dark border-primary/25',
+                                    default => 'bg-brand-light/60 text-primary-dark border-border-subtle',
                                 };
                             @endphp
                             <tr class="hover:bg-surface-subtle/40 transition-colors {{ $isTerminal ? 'bg-surface-subtle/20 opacity-85' : '' }}">
@@ -226,7 +292,7 @@
                                                 Active Queue
                                             </span>
                                         @else
-                                            <span class="px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 border border-gray-200 text-[10px] font-bold">
+                                            <span class="px-2 py-0.5 rounded-full bg-surface-subtle text-text-muted border border-border-subtle text-[10px] font-bold">
                                                 Closed
                                             </span>
                                         @endif
@@ -240,7 +306,7 @@
                                     @endif
                                     <div class="mt-1 flex flex-wrap items-center gap-1">
                                         @if($handoverMethod === 'self_drop_off')
-                                            <span class="px-2 py-0.5 rounded-md bg-purple-100 text-purple-800 border border-purple-200 text-[10px] font-bold">
+                                            <span class="px-2 py-0.5 rounded-md bg-primary/15 text-primary-dark border border-primary/25 text-[10px] font-bold">
                                                 Seller Self Drop-Off
                                             </span>
                                         @else
@@ -286,7 +352,7 @@
                                         Origin Hub: {{ $assignedHubName }}
                                     </div>
                                     @if($destHubName && $destHubName !== $assignedHubName)
-                                        <div class="text-[11px] font-bold text-blue-700 truncate max-w-[210px]" title="{{ $destHubName }}">
+                                        <div class="text-[11px] font-bold text-primary truncate max-w-[210px]" title="{{ $destHubName }}">
                                             Dest Hub: {{ $destHubName }}
                                         </div>
                                     @endif
@@ -303,7 +369,7 @@
                                 </td>
 
                                 <td class="py-4 px-4 align-top space-y-0.5">
-                                    <div class="font-bold text-primary">COD: &#8369;{{ number_format((float) $shipment->cod_amount, 2) }}</div>
+                                    <div class="font-bold text-price">COD: &#8369;{{ number_format((float) $shipment->cod_amount, 2) }}</div>
                                     <div class="text-text-muted">Ship Fee: &#8369;{{ number_format((float) $shipment->shipping_fee, 2) }}</div>
                                     <div class="text-text-muted">Weight: {{ number_format((float) $shipment->total_weight, 2) }} kg</div>
                                 </td>
@@ -321,7 +387,7 @@
 
                                 <td class="py-4 px-5 align-top text-right">
                                     <a href="{{ route('logistics.shipments.show', $shipment->id) }}"
-                                       class="inline-flex items-center px-4 py-2 rounded-xl bg-primary hover:bg-primary-dark text-surface text-xs font-bold shadow-xs transition-colors">
+                                       class="inline-flex items-center px-4 py-2 rounded-xl bg-primary hover:bg-primary-dark text-surface text-xs font-bold shadow-xs transition-colors cursor-pointer">
                                         Manage
                                     </a>
                                 </td>

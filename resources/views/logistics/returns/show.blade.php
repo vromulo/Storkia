@@ -10,18 +10,22 @@
     $status = $returnShipment->status;
     $requestActive = $returnRequest
         && $returnRequest->status === \App\Models\ReturnRequest::STATUS_RETURN_IN_TRANSIT;
+
     $canAssignRider = $requestActive && in_array($status, [$RS::STATUS_AWAITING_RIDER, $RS::STATUS_PICKUP_FAILED, $RS::STATUS_RIDER_ASSIGNED], true);
     $canReceiveAtHub = $requestActive && $status === $RS::STATUS_PICKED_UP_FROM_BUYER;
     $canAssignCourier = $requestActive && in_array($status, [$RS::STATUS_RECEIVED_AT_HUB, $RS::STATUS_DELIVERY_FAILED, $RS::STATUS_COURIER_ASSIGNED], true);
+
     $attempts = (int) $returnShipment->pickup_attempts_count;
     $forwardPackages = $returnShipment->shipment?->packages ?? collect();
     $primaryForwardPackage = $forwardPackages->first();
+    $availableRiders = $availableRiders ?? collect();
+    $availableCouriers = $availableCouriers ?? collect();
 
     $badgeClass = match($status) {
-        'delivered_to_seller' => 'bg-green-100 text-green-700 border-green-200',
-        'pickup_failed', 'delivery_failed', 'cancelled' => 'bg-red-100 text-red-700 border-red-200',
-        'awaiting_rider_assignment' => 'bg-yellow-100 text-yellow-800 border-yellow-200',
-        default => 'bg-blue-100 text-blue-700 border-blue-200',
+        'delivered_to_seller' => 'bg-success/15 text-success border-success/25',
+        'pickup_failed', 'delivery_failed', 'cancelled' => 'bg-danger/10 text-danger border-danger/25',
+        'awaiting_rider_assignment' => 'bg-brand-light/70 text-primary-dark border-primary/30',
+        default => 'bg-primary/10 text-primary-dark border-primary/25',
     };
 
     $steps = [
@@ -35,9 +39,26 @@
     ];
 
     $evidencePhotos = is_array($returnRequest?->evidence_photos) ? $returnRequest->evidence_photos : [];
+
+    $riderOptions = $availableRiders->map(function ($r) {
+        return [
+            'id'    => (string) $r->id,
+            'label' => "{$r->full_name} ({$r->vehicle_type} - {$r->plate_number} | Hub: " . ($r->assigned_hub?->municipality ?? 'Main') . " | Brgy: {$r->formatted_barangay_coverage})",
+        ];
+    })->values();
+
+    $courierOptions = $availableCouriers->map(function ($c) {
+        return [
+            'id'    => (string) $c->id,
+            'label' => "{$c->full_name} ({$c->vehicle_type} - {$c->plate_number} | Hub: " . ($c->assigned_hub?->municipality ?? 'Main') . ")",
+        ];
+    })->values();
+
+    $initialRiderId = (string) ($returnShipment->current_rider_id ?: ($riderOptions->first()['id'] ?? ''));
+    $initialCourierId = (string) ($returnShipment->current_courier_id ?: ($courierOptions->first()['id'] ?? ''));
 @endphp
 
-<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
+<script src="[https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js](https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js)"></script>
 
 <div x-data="{
         photoModalOpen: false,
@@ -46,7 +67,15 @@
         verificationMethod: 'manual',
         lookupInput: '',
         isSubmittingHubReceive: false,
-
+        showAllReturnItems: false,
+        showAllReturnEvents: false,
+        riderDropdownOpen: false,
+        courierDropdownOpen: false,
+        cameraDropdownOpen: false,
+        selectedRiderId: @js($initialRiderId),
+        selectedCourierId: @js($initialCourierId),
+        riderOptions: @js($riderOptions),
+        courierOptions: @js($courierOptions),
         qrScannerOpen: false,
         cameraLoading: false,
         noCameraAvailable: false,
@@ -57,12 +86,23 @@
         mediaStream: null,
         scanInterval: null,
         barcodeDetector: null,
-
+        get selectedRiderLabel() {
+            const found = this.riderOptions.find(r => String(r.id) === String(this.selectedRiderId));
+            return found ? found.label : 'Select Approved Rider...';
+        },
+        get selectedCourierLabel() {
+            const found = this.courierOptions.find(c => String(c.id) === String(this.selectedCourierId));
+            return found ? found.label : 'Select Active Courier...';
+        },
+        get selectedCameraLabel() {
+            const idx = this.cameras.findIndex(c => c.deviceId === this.selectedCameraId);
+            if (idx === -1) return 'Default Camera';
+            return this.cameras[idx].label || ('Camera ' + (idx + 1));
+        },
         openPhoto(url) {
             this.photoUrl = url;
             this.photoModalOpen = true;
         },
-
         async openQrScanner() {
             this.verificationMethod = 'qr';
             this.qrScannerOpen = true;
@@ -70,14 +110,12 @@
             this.noCameraAvailable = false;
             this.cameraError = '';
             this.scanStatusText = 'Starting camera...';
-
             if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
                 this.cameraLoading = false;
                 this.noCameraAvailable = true;
                 this.cameraError = 'Your device does not have a camera (or browser camera API is unavailable). Please fill in the verification code manually.';
                 return;
             }
-
             if ('BarcodeDetector' in window) {
                 try {
                     this.barcodeDetector = new window.BarcodeDetector({ formats: ['qr_code'] });
@@ -85,31 +123,25 @@
                     this.barcodeDetector = null;
                 }
             }
-
             try {
                 const devices = await navigator.mediaDevices.enumerateDevices();
                 this.cameras = devices.filter(d => d.kind === 'videoinput');
             } catch (e) {
                 this.cameras = [];
             }
-
             await this.startCameraStream();
         },
-
         async startCameraStream() {
             this.stopStreamOnly();
             this.cameraLoading = true;
             this.noCameraAvailable = false;
             this.cameraError = '';
-
             const constraints = this.selectedCameraId
                 ? { video: { deviceId: { exact: this.selectedCameraId }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false }
                 : { video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false };
-
             try {
                 const stream = await navigator.mediaDevices.getUserMedia(constraints);
                 this.mediaStream = stream;
-
                 try {
                     const devices = await navigator.mediaDevices.enumerateDevices();
                     this.cameras = devices.filter(d => d.kind === 'videoinput');
@@ -120,7 +152,6 @@
                         }
                     }
                 } catch (err) {}
-
                 this.$nextTick(() => {
                     const videoEl = this.$refs.qrVideo;
                     if (videoEl) {
@@ -129,7 +160,6 @@
                         videoEl.play().catch(() => {});
                     }
                 });
-
                 this.cameraLoading = false;
                 this.scanStatusText = 'Align the parcel QR code inside the box. It will confirm hub receipt automatically once detected.';
                 this.startQrScanLoop();
@@ -137,7 +167,6 @@
                 this.cameraLoading = false;
                 this.noCameraAvailable = true;
                 const errName = (err && err.name) ? err.name : '';
-
                 if (errName === 'NotFoundError' || errName === 'DevicesNotFoundError' || errName === 'OverconstrainedError') {
                     this.cameraError = 'Your device does not have a camera detected. Please fill in the Return / Package Reference code manually.';
                 } else if (errName === 'NotAllowedError' || errName === 'PermissionDeniedError') {
@@ -147,17 +176,14 @@
                 }
             }
         },
-
         startQrScanLoop() {
             if (this.scanInterval) {
                 clearInterval(this.scanInterval);
             }
-
             this.scanInterval = setInterval(async () => {
                 if (!this.qrScannerOpen || this.isSubmittingHubReceive) return;
                 const video = this.$refs.qrVideo;
                 if (!video || video.readyState < 2 || !video.videoWidth || !video.videoHeight) return;
-
                 if (this.barcodeDetector) {
                     try {
                         const codes = await this.barcodeDetector.detect(video);
@@ -167,41 +193,33 @@
                         }
                     } catch (e) {}
                 }
-
                 if (typeof window.jsQR === 'function') {
                     const canvas = this.$refs.qrCanvas;
                     if (!canvas) return;
                     const ctx = canvas.getContext('2d', { willReadFrequently: true });
                     if (!ctx) return;
-
                     canvas.width = video.videoWidth;
                     canvas.height = video.videoHeight;
                     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
                     const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
                     const code = window.jsQR(imageData.data, imageData.width, imageData.height, {
                         inversionAttempts: 'dontInvert'
                     });
-
                     if (code && code.data && code.data.trim() !== '') {
                         this.handleQrDetected(code.data);
                     }
                 }
             }, 180);
         },
-
         handleQrDetected(rawValue) {
             const cleaned = String(rawValue || '').trim();
             if (!cleaned || this.isSubmittingHubReceive) return;
-
             this.isSubmittingHubReceive = true;
             this.verificationMethod = 'qr';
             this.lookupInput = cleaned;
             this.parcelChecked = true;
             this.scanStatusText = 'QR Code Detected (' + cleaned + ')! Confirming return receipt at sorting hub...';
-
             this.stopStreamOnly();
-
             this.$nextTick(() => {
                 setTimeout(() => {
                     this.qrScannerOpen = false;
@@ -211,7 +229,6 @@
                 }, 250);
             });
         },
-
         stopStreamOnly() {
             if (this.scanInterval) {
                 clearInterval(this.scanInterval);
@@ -226,12 +243,10 @@
                 videoEl.srcObject = null;
             }
         },
-
         closeQrScanner() {
             this.stopStreamOnly();
             this.qrScannerOpen = false;
         },
-
         switchToManualEntry() {
             this.closeQrScanner();
             this.verificationMethod = 'manual';
@@ -248,44 +263,30 @@
     <div class="flex flex-wrap items-center justify-between gap-4">
         <div class="flex items-center gap-3">
             <a href="{{ route('logistics.returns.index') }}"
-               class="p-2.5 bg-surface rounded-full border border-border-subtle text-text-muted hover:text-primary transition-colors">
+               class="p-2.5 bg-surface rounded-full border border-border-subtle text-text-muted hover:text-primary transition-colors cursor-pointer">
                 <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                     <path stroke-linecap="round" stroke-linejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18" />
                 </svg>
             </a>
             <div>
                 <div class="flex flex-wrap items-center gap-2.5">
-                    <h1 class="text-2xl font-bold text-primary-dark font-mono">{{ $returnShipment->tracking_number }}</h1>
+                    <h1 class="text-2xl font-bold text-primary-dark font-mono select-text">{{ $returnShipment->tracking_number }}</h1>
                     <span class="px-3 py-1 rounded-full text-xs font-bold border {{ $badgeClass }}">
                         {{ $returnShipment->status_label }}
                     </span>
-                    <span class="px-2.5 py-1 rounded-full text-[11px] font-bold bg-purple-100 text-purple-800 border border-purple-200">
+                    <span class="px-2.5 py-1 rounded-full text-[11px] font-bold bg-primary/15 text-primary-dark border border-primary/25">
                         Return to Seller
                     </span>
                 </div>
                 <p class="text-xs text-text-muted mt-0.5">
-                    Request: <strong>{{ $returnRequest?->request_number ?? 'N/A' }}</strong> &bull;
-                    Seller Order: <strong>{{ $sellerOrder?->seller_order_number ?? 'N/A' }}</strong> &bull;
-                    Parent Order: <strong>{{ $sellerOrder?->order?->order_number ?? 'N/A' }}</strong> &bull;
+                    Request: <strong class="select-text">{{ $returnRequest?->request_number ?? 'N/A' }}</strong> &bull;
+                    Seller Order: <strong class="select-text">{{ $sellerOrder?->seller_order_number ?? 'N/A' }}</strong> &bull;
+                    Parent Order: <strong class="select-text">{{ $sellerOrder?->order?->order_number ?? 'N/A' }}</strong> &bull;
                     Weight: <strong>{{ number_format((float) $returnShipment->total_weight, 2) }} kg</strong>
                 </p>
             </div>
         </div>
     </div>
-
-    @if(session('success'))
-        <div class="p-4 rounded-2xl bg-green-50 border border-green-200 text-green-700 text-xs sm:text-sm font-bold">
-            {{ session('success') }}
-        </div>
-    @endif
-
-    @if($errors->any())
-        <div class="p-4 rounded-2xl bg-red-50 border border-red-200 text-red-700 text-xs sm:text-sm space-y-1">
-            @foreach($errors->all() as $err)
-                <p class="font-semibold">{{ $err }}</p>
-            @endforeach
-        </div>
-    @endif
 
     <div class="bg-surface rounded-3xl border border-border-subtle p-6 shadow-xs">
         <div class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-4">
@@ -306,18 +307,18 @@
     </div>
 
     @if($returnRequest && ! $requestActive && ! in_array($status, [$RS::STATUS_DELIVERED_TO_SELLER], true))
-        <div class="p-5 rounded-3xl bg-yellow-50 border border-yellow-200 text-xs text-yellow-900 font-semibold">
+        <div class="p-5 rounded-3xl bg-brand-light/35 border border-primary/25 text-xs text-primary-dark font-semibold">
             This return request is no longer active ({{ $returnRequest->status_label }}), so the parcel does not need to move any further.
         </div>
     @endif
 
     @if($status === $RS::STATUS_PICKUP_FAILED)
-        <div class="p-6 rounded-3xl bg-red-50 border-2 border-red-200 space-y-1.5">
-            <h2 class="text-base font-bold text-red-900">Return Pickup Failed (Attempt {{ $attempts }} of {{ $maxPickupAttempts }})</h2>
-            <p class="text-xs text-red-800">
+        <div class="p-6 rounded-3xl bg-danger/10 border-2 border-danger/30 space-y-1.5">
+            <h2 class="text-base font-bold text-danger">Return Pickup Failed (Attempt {{ $attempts }} of {{ $maxPickupAttempts }})</h2>
+            <p class="text-xs text-text-main">
                 Reason reported: <strong>"{{ $returnShipment->pickup_failure_reason }}"</strong>
             </p>
-            <p class="text-xs text-red-800 font-semibold">
+            <p class="text-xs text-danger font-semibold">
                 @if($attempts >= $maxPickupAttempts - 1)
                     This is the last chance: one more failed attempt closes the request without a refund and the order completes normally.
                 @else
@@ -337,23 +338,35 @@
                     to collect the parcel from <strong>{{ $pickup['recipient_name'] ?? 'the buyer' }}</strong> and bring it to <strong>{{ $hubName }}</strong>.
                 </p>
             </div>
+
             @if($availableRiders->isEmpty())
-                <div class="p-4 rounded-2xl bg-yellow-50 border border-yellow-200 text-xs text-yellow-800 font-semibold">
-                    No approved Riders cover this area. <a href="{{ route('rider.register') }}" class="underline font-bold">Create a Rider Account</a> or
-                    <a href="{{ route('logistics.employees.index') }}" class="underline font-bold">assign Rider hub and barangay coverage</a> first.
+                <div class="p-4 rounded-2xl bg-brand-light/35 border border-primary/25 text-xs text-primary-dark font-semibold">
+                    No approved Riders cover this area. <a href="{{ route('rider.register') }}" class="underline font-bold cursor-pointer">Create a Rider Account</a> or
+                    <a href="{{ route('logistics.employees.index') }}" class="underline font-bold cursor-pointer">assign Rider hub and barangay coverage</a> first.
                 </div>
             @else
                 <form action="{{ route('logistics.returns.assign-rider', $returnShipment->id) }}" method="POST" class="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
                     @csrf
-                    <div>
+                    <div class="relative" @click.away="riderDropdownOpen = false">
                         <label class="block text-xs font-bold text-text-muted mb-1">Select Approved Rider <span class="text-danger">*</span></label>
-                        <select name="rider_id" required class="w-full p-3 rounded-xl border border-border-subtle bg-surface text-xs font-semibold outline-none focus:border-primary">
-                            @foreach($availableRiders as $r)
-                                <option value="{{ $r->id }}" {{ (int) $returnShipment->current_rider_id === (int) $r->id ? 'selected' : '' }}>
-                                    {{ $r->full_name }} ({{ $r->vehicle_type }} - {{ $r->plate_number }} | Hub: {{ $r->assigned_hub?->municipality ?? 'Main' }} | Brgy: {{ $r->formatted_barangay_coverage }})
-                                </option>
-                            @endforeach
-                        </select>
+                        <input type="hidden" name="rider_id" :value="selectedRiderId" required>
+                        <button type="button"
+                                @click="riderDropdownOpen = !riderDropdownOpen"
+                                class="w-full p-3 rounded-xl border border-border-subtle hover:border-primary bg-surface text-xs font-semibold flex items-center justify-between text-left cursor-pointer">
+                            <span class="truncate pr-2 text-text-main" x-text="selectedRiderLabel"></span>
+                            <svg class="w-4 h-4 text-primary shrink-0 transition-transform" :class="riderDropdownOpen ? 'rotate-180' : ''" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/></svg>
+                        </button>
+                        <div x-show="riderDropdownOpen" x-cloak x-transition class="absolute left-0 right-0 top-full mt-1 bg-surface border border-border-subtle rounded-2xl shadow-xl max-h-56 overflow-y-auto custom-scrollbar z-30 divide-y divide-border-subtle/40">
+                            <template x-for="rOpt in riderOptions" :key="'rret_' + rOpt.id">
+                                <button type="button"
+                                        @click="selectedRiderId = String(rOpt.id); riderDropdownOpen = false"
+                                        class="w-full px-3.5 py-2.5 text-left text-xs hover:bg-brand-light/30 flex items-center justify-between gap-2 cursor-pointer"
+                                        :class="String(selectedRiderId) === String(rOpt.id) ? 'text-primary font-bold bg-primary/5' : 'text-text-main font-medium'">
+                                    <span class="truncate" x-text="rOpt.label"></span>
+                                    <span x-show="String(selectedRiderId) === String(rOpt.id)" class="text-primary font-extrabold shrink-0">&#10003;</span>
+                                </button>
+                            </template>
+                        </div>
                     </div>
                     <div>
                         <label class="block text-xs font-bold text-text-muted mb-1">Pickup Notes (Optional)</label>
@@ -370,11 +383,11 @@
     @endif
 
     @if($canReceiveAtHub)
-        <div class="p-6 rounded-3xl bg-blue-50/90 border-2 border-blue-200 shadow-xs space-y-5">
-            <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-blue-200">
+        <div class="p-6 rounded-3xl bg-brand-light/25 border-2 border-primary/30 shadow-xs space-y-5">
+            <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-border-subtle">
                 <div>
-                    <h2 class="text-base font-bold text-blue-950">Step 2: Receive the Returned Parcel at the Sorting Hub (Scan QR or Enter Code)</h2>
-                    <p class="text-xs text-blue-800 mt-0.5">
+                    <h2 class="text-base font-bold text-primary-dark">Step 2: Receive the Returned Parcel at the Sorting Hub (Scan QR or Enter Code)</h2>
+                    <p class="text-xs text-text-main mt-0.5">
                         Rider <strong>{{ $returnShipment->rider?->full_name }}</strong> collected this parcel from the buyer
                         @if($returnShipment->picked_up_from_buyer_at)
                             on {{ $returnShipment->picked_up_from_buyer_at->format('M d, Y h:i A') }}
@@ -382,7 +395,7 @@
                         . Open your camera to scan the parcel QR code (or enter the Return / Package Reference manually) to immediately confirm physical receipt at <strong>{{ $hubName }}</strong>.
                     </p>
                 </div>
-                <span class="px-3 py-1 rounded-full text-xs font-bold bg-yellow-100 text-yellow-800 border border-yellow-300 shrink-0">
+                <span class="px-3 py-1 rounded-full text-xs font-bold bg-brand-light text-primary-dark border border-primary/30 shrink-0">
                     Awaiting Hub Receipt Verification
                 </span>
             </div>
@@ -395,7 +408,7 @@
                 @csrf
                 <input type="hidden" name="verification_method" :value="verificationMethod">
 
-                <div class="bg-white rounded-2xl border border-blue-200 p-4 space-y-4">
+                <div class="bg-surface rounded-2xl border border-border-subtle p-4 space-y-4">
                     <div class="flex flex-wrap items-center justify-between gap-2">
                         <span class="font-bold uppercase tracking-wider text-[11px] text-primary-dark">
                             Return Parcel Verification (Camera QR Scan or Manual Code Entry)
@@ -451,11 +464,10 @@
                             </div>
                             <button type="button"
                                     @click="verificationMethod = 'manual'; lookupInput = '{{ $returnShipment->tracking_number }}'; parcelChecked = true"
-                                    class="px-2.5 py-1 rounded-lg bg-white border border-border-subtle hover:border-primary text-primary-dark font-bold text-[10px] cursor-pointer shrink-0">
+                                    class="px-2.5 py-1 rounded-lg bg-surface border border-border-subtle hover:border-primary text-primary-dark font-bold text-[10px] cursor-pointer shrink-0">
                                 Fill Return #
                             </button>
                         </div>
-
                         @if($primaryForwardPackage)
                             <div class="p-3 rounded-xl border border-border-subtle bg-surface-subtle flex items-center justify-between gap-3">
                                 <div>
@@ -466,7 +478,7 @@
                                 </div>
                                 <button type="button"
                                         @click="verificationMethod = 'manual'; lookupInput = '{{ $primaryForwardPackage->package_reference }}'; parcelChecked = true"
-                                        class="px-2.5 py-1 rounded-lg bg-white border border-border-subtle hover:border-primary text-primary-dark font-bold text-[10px] cursor-pointer shrink-0">
+                                        class="px-2.5 py-1 rounded-lg bg-surface border border-border-subtle hover:border-primary text-primary-dark font-bold text-[10px] cursor-pointer shrink-0">
                                     Fill Pkg Ref
                                 </button>
                             </div>
@@ -485,12 +497,12 @@
                 </div>
 
                 <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1">
-                    <p class="text-xs text-blue-900">
+                    <p class="text-xs text-text-main">
                         <strong>Note:</strong> Scanning the parcel QR code with your camera immediately confirms hub receipt and credits the Rider's pickup pay.
                     </p>
                     <button type="submit"
                             :disabled="(!parcelChecked && lookupInput.trim() === '') || isSubmittingHubReceive"
-                            :class="(parcelChecked || lookupInput.trim() !== '') && !isSubmittingHubReceive ? 'bg-primary hover:bg-primary-dark text-white cursor-pointer' : 'bg-gray-300 text-gray-500 cursor-not-allowed'"
+                            :class="(parcelChecked || lookupInput.trim() !== '') && !isSubmittingHubReceive ? 'bg-primary hover:bg-primary-dark text-white cursor-pointer' : 'bg-surface-subtle text-text-muted border border-border-subtle cursor-not-allowed'"
                             class="px-6 py-3 rounded-xl font-bold shadow-sm transition-colors shrink-0">
                         <span x-show="!isSubmittingHubReceive">Confirm Receipt at Sorting Hub</span>
                         <span x-show="isSubmittingHubReceive" x-cloak>Confirming...</span>
@@ -510,23 +522,35 @@
                     in {{ $sellerAddr['municipality'] ?? '' }}, {{ $sellerAddr['province'] ?? '' }}.
                 </p>
             </div>
+
             @if($availableCouriers->isEmpty())
-                <div class="p-4 rounded-2xl bg-yellow-50 border border-yellow-200 text-xs text-yellow-800 font-semibold">
-                    No active Couriers are registered to this hub. <a href="{{ route('logistics.couriers.create') }}" class="underline font-bold">Create a Courier Account</a> or
-                    <a href="{{ route('logistics.employees.index') }}" class="underline font-bold">reassign a Courier to this hub</a> first.
+                <div class="p-4 rounded-2xl bg-brand-light/35 border border-primary/25 text-xs text-primary-dark font-semibold">
+                    No active Couriers are registered to this hub. <a href="{{ route('logistics.couriers.create') }}" class="underline font-bold cursor-pointer">Create a Courier Account</a> or
+                    <a href="{{ route('logistics.employees.index') }}" class="underline font-bold cursor-pointer">reassign a Courier to this hub</a> first.
                 </div>
             @else
                 <form action="{{ route('logistics.returns.assign-courier', $returnShipment->id) }}" method="POST" class="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
                     @csrf
-                    <div>
+                    <div class="relative" @click.away="courierDropdownOpen = false">
                         <label class="block text-xs font-bold text-text-muted mb-1">Select Active Courier <span class="text-danger">*</span></label>
-                        <select name="courier_id" required class="w-full p-3 rounded-xl border border-border-subtle bg-surface text-xs font-semibold outline-none focus:border-primary">
-                            @foreach($availableCouriers as $c)
-                                <option value="{{ $c->id }}" {{ (int) $returnShipment->current_courier_id === (int) $c->id ? 'selected' : '' }}>
-                                    {{ $c->full_name }} ({{ $c->vehicle_type }} - {{ $c->plate_number }} | Hub: {{ $c->assigned_hub?->municipality ?? 'Main' }})
-                                </option>
-                            @endforeach
-                        </select>
+                        <input type="hidden" name="courier_id" :value="selectedCourierId" required>
+                        <button type="button"
+                                @click="courierDropdownOpen = !courierDropdownOpen"
+                                class="w-full p-3 rounded-xl border border-border-subtle hover:border-primary bg-surface text-xs font-semibold flex items-center justify-between text-left cursor-pointer">
+                            <span class="truncate pr-2 text-text-main" x-text="selectedCourierLabel"></span>
+                            <svg class="w-4 h-4 text-primary shrink-0 transition-transform" :class="courierDropdownOpen ? 'rotate-180' : ''" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/></svg>
+                        </button>
+                        <div x-show="courierDropdownOpen" x-cloak x-transition class="absolute left-0 right-0 top-full mt-1 bg-surface border border-border-subtle rounded-2xl shadow-xl max-h-56 overflow-y-auto custom-scrollbar z-30 divide-y divide-border-subtle/40">
+                            <template x-for="cOpt in courierOptions" :key="'cret_' + cOpt.id">
+                                <button type="button"
+                                        @click="selectedCourierId = String(cOpt.id); courierDropdownOpen = false"
+                                        class="w-full px-3.5 py-2.5 text-left text-xs hover:bg-brand-light/30 flex items-center justify-between gap-2 cursor-pointer"
+                                        :class="String(selectedCourierId) === String(cOpt.id) ? 'text-primary font-bold bg-primary/5' : 'text-text-main font-medium'">
+                                    <span class="truncate" x-text="cOpt.label"></span>
+                                    <span x-show="String(selectedCourierId) === String(cOpt.id)" class="text-primary font-extrabold shrink-0">&#10003;</span>
+                                </button>
+                            </template>
+                        </div>
                     </div>
                     <div>
                         <label class="block text-xs font-bold text-text-muted mb-1">Delivery Notes (Optional)</label>
@@ -543,20 +567,20 @@
     @endif
 
     @if($status === $RS::STATUS_OUT_FOR_RETURN_DELIVERY)
-        <div class="p-5 rounded-3xl bg-blue-50 border border-blue-200 text-xs text-blue-900 font-semibold">
+        <div class="p-5 rounded-3xl bg-brand-light/30 border border-primary/25 text-xs text-primary-dark font-semibold">
             Courier {{ $returnShipment->courier?->full_name }} is on the way to the seller with this parcel. Nothing to do until the Courier confirms delivery.
         </div>
     @endif
 
     @if($status === $RS::STATUS_DELIVERED_TO_SELLER)
-        <div class="p-5 rounded-3xl bg-green-50 border border-green-200 text-xs text-green-900 font-semibold">
+        <div class="p-5 rounded-3xl bg-success/10 border border-success/25 text-xs text-text-main font-semibold">
             Delivered to the seller on {{ $returnShipment->delivered_to_seller_at?->format('M d, Y h:i A') }}.
             Request status: <strong>{{ $returnRequest?->status_label }}</strong>. The seller now confirms the parcel before the refund is processed.
         </div>
     @endif
 
     @if($status === $RS::STATUS_CANCELLED)
-        <div class="p-5 rounded-3xl bg-red-50 border border-red-200 text-xs text-red-900 font-semibold">
+        <div class="p-5 rounded-3xl bg-danger/10 border border-danger/25 text-xs text-danger font-semibold">
             This return was cancelled on {{ $returnShipment->cancelled_at?->format('M d, Y h:i A') }}. See the timeline below for the reason.
         </div>
     @endif
@@ -582,8 +606,9 @@
                 </div>
                 <div>
                     <span class="font-bold text-text-muted uppercase text-[10px] block">Buyer Explanation</span>
-                    <p class="text-sm font-semibold text-text-main mt-0.5">"{{ $returnRequest?->reason }}"</p>
+                    <p class="text-sm font-semibold text-text-main mt-0.5 select-text">"{{ $returnRequest?->reason }}"</p>
                 </div>
+
                 @if(!empty($evidencePhotos))
                     <div>
                         <span class="font-bold text-text-muted uppercase text-[10px] block mb-2">Buyer Evidence Photos ({{ count($evidencePhotos) }})</span>
@@ -606,8 +631,9 @@
                     <span class="text-xs text-text-muted">{{ $sellerOrder?->items->sum('quantity') }} item(s)</span>
                 </div>
                 <div class="divide-y divide-border-subtle/60">
-                    @foreach($sellerOrder?->items ?? [] as $item)
-                        <div class="p-5 flex items-center justify-between gap-4">
+                    @foreach($sellerOrder?->items ?? [] as $itIdx => $item)
+                        <div x-show="{{ $itIdx }} < 4 || showAllReturnItems"
+                             class="p-5 flex items-center justify-between gap-4">
                             <div class="min-w-0">
                                 <p class="text-xs sm:text-sm font-bold text-text-main truncate">{{ $item->product_name }}</p>
                                 @if($item->variant_name)
@@ -618,20 +644,30 @@
                         </div>
                     @endforeach
                 </div>
+                @if(($sellerOrder?->items?->count() ?? 0) > 4)
+                    <div class="p-3 bg-surface-subtle/30 border-t border-border-subtle text-center">
+                        <button type="button"
+                                @click="showAllReturnItems = !showAllReturnItems"
+                                class="text-xs font-extrabold text-primary hover:underline cursor-pointer"
+                                x-text="showAllReturnItems ? 'See Less Items' : 'See All {{ $sellerOrder->items->count() }} Items'"></button>
+                    </div>
+                @endif
             </div>
 
             <div class="bg-surface rounded-3xl border border-border-subtle p-6 shadow-xs space-y-4">
                 <div class="flex items-center justify-between">
                     <h3 class="text-sm font-bold text-primary-dark">
                         Return Tracking Timeline
-                        <span class="font-mono text-xs text-primary ml-1">({{ $returnShipment->tracking_number }})</span>
+                        <span class="font-mono text-xs text-primary ml-1 select-text">({{ $returnShipment->tracking_number }})</span>
                     </h3>
                     <span class="text-[11px] font-bold text-text-muted">{{ $returnShipment->events->count() }} milestone(s)</span>
                 </div>
+
                 <div class="relative pl-6 border-l-2 border-primary/30 space-y-5">
                     @forelse($returnShipment->events as $idx => $event)
-                        <div class="relative">
-                            <span class="absolute -left-[31px] top-1 w-3.5 h-3.5 rounded-full border-2 border-white {{ $idx === 0 ? 'bg-primary ring-4 ring-primary/20' : 'bg-gray-300' }}"></span>
+                        <div x-show="{{ $idx }} < 5 || showAllReturnEvents"
+                             class="relative">
+                            <span class="absolute -left-[31px] top-1 w-3.5 h-3.5 rounded-full border-2 border-surface {{ $idx === 0 ? 'bg-primary ring-4 ring-primary/20' : 'bg-border-subtle' }}"></span>
                             <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
                                 <span class="text-xs sm:text-sm font-bold text-text-main">{{ $event->title }}</span>
                                 <span class="text-[11px] text-text-muted">{{ $event->occurred_at?->format('M d, Y h:i A') }}</span>
@@ -648,15 +684,25 @@
                         <p class="text-xs text-text-muted">No tracking events yet.</p>
                     @endforelse
                 </div>
+
+                @if($returnShipment->events->count() > 5)
+                    <div class="pt-2 flex justify-center">
+                        <button type="button"
+                                @click="showAllReturnEvents = !showAllReturnEvents"
+                                class="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full bg-primary/10 hover:bg-primary text-primary hover:text-white border border-primary/30 text-xs font-extrabold transition-colors cursor-pointer">
+                            <span x-text="showAllReturnEvents ? 'See Less Milestones' : 'See All {{ $returnShipment->events->count() }} Milestones'"></span>
+                        </button>
+                    </div>
+                @endif
             </div>
         </div>
 
         <div class="space-y-6">
             <div class="bg-surface rounded-3xl border border-border-subtle p-6 shadow-xs space-y-3 text-xs">
                 <h3 class="font-bold uppercase tracking-wider text-text-muted">1. Pickup From Buyer</h3>
-                <p class="text-sm font-bold text-text-main">{{ $pickup['recipient_name'] ?? ($sellerOrder?->buyer?->full_name ?? 'Buyer') }}</p>
-                <p class="text-text-muted">{{ $pickup['phone_number'] ?? '' }}</p>
-                <p class="text-text-main leading-relaxed">{{ $pickup['full_address'] ?? (($pickup['municipality'] ?? '') . ', ' . ($pickup['province'] ?? '')) }}</p>
+                <p class="text-sm font-bold text-text-main select-text">{{ $pickup['recipient_name'] ?? ($sellerOrder?->buyer?->full_name ?? 'Buyer') }}</p>
+                <p class="text-text-muted font-mono select-text">{{ $pickup['phone_number'] ?? '' }}</p>
+                <p class="text-text-main leading-relaxed select-text">{{ $pickup['full_address'] ?? (($pickup['municipality'] ?? '') . ', ' . ($pickup['province'] ?? '')) }}</p>
             </div>
 
             <div class="bg-surface rounded-3xl border border-border-subtle p-6 shadow-xs space-y-3 text-xs">
@@ -667,9 +713,9 @@
 
             <div class="bg-surface rounded-3xl border border-border-subtle p-6 shadow-xs space-y-3 text-xs">
                 <h3 class="font-bold uppercase tracking-wider text-text-muted">3. Return To Seller</h3>
-                <p class="text-sm font-bold text-text-main">{{ $sellerOrder?->sellerProfile?->business_name ?? ($sellerAddr['business_name'] ?? 'Seller') }}</p>
-                <p class="text-text-muted">{{ $sellerAddr['phone_number'] ?? '' }}</p>
-                <p class="text-text-main leading-relaxed">{{ $sellerAddr['full_address'] ?? (($sellerAddr['municipality'] ?? '') . ', ' . ($sellerAddr['province'] ?? '')) }}</p>
+                <p class="text-sm font-bold text-text-main select-text">{{ $sellerOrder?->sellerProfile?->business_name ?? ($sellerAddr['business_name'] ?? 'Seller') }}</p>
+                <p class="text-text-muted font-mono select-text">{{ $sellerAddr['phone_number'] ?? '' }}</p>
+                <p class="text-text-main leading-relaxed select-text">{{ $sellerAddr['full_address'] ?? (($sellerAddr['municipality'] ?? '') . ', ' . ($sellerAddr['province'] ?? '')) }}</p>
             </div>
 
             <div class="bg-surface rounded-3xl border border-border-subtle p-6 shadow-xs space-y-3 text-xs">
@@ -701,7 +747,7 @@
 
             @if($returnShipment->buyer_pickup_photo || $returnShipment->seller_delivery_photo)
                 <div class="bg-surface rounded-3xl border border-border-subtle p-6 shadow-xs space-y-3 text-xs">
-                    <h3 class="font-bold uppercase tracking-wider text-green-700">Proof Photos</h3>
+                    <h3 class="font-bold uppercase tracking-wider text-success">Proof Photos</h3>
                     @if($returnShipment->buyer_pickup_photo)
                         <button type="button"
                                 @click.stop="openPhoto('{{ asset('storage/' . $returnShipment->buyer_pickup_photo) }}')"
@@ -726,7 +772,6 @@
              x-cloak
              class="fixed inset-0 z-[210] flex items-center justify-center p-4">
             <div @click="closeQrScanner()" class="absolute inset-0 bg-black/75 backdrop-blur-xs cursor-pointer"></div>
-
             <div @click.stop class="relative z-10 bg-surface rounded-3xl max-w-lg w-full p-6 shadow-2xl border border-border-subtle space-y-4">
                 <div class="flex items-center justify-between pb-3 border-b border-border-subtle">
                     <div>
@@ -739,28 +784,37 @@
                 </div>
 
                 <template x-if="cameras.length > 1 && !noCameraAvailable">
-                    <div class="flex items-center gap-2 text-xs">
+                    <div class="flex items-center gap-2 text-xs relative" @click.away="cameraDropdownOpen = false">
                         <label class="font-bold text-text-muted shrink-0">Camera:</label>
-                        <select x-model="selectedCameraId"
-                                @change="startCameraStream()"
-                                class="flex-1 p-2 rounded-xl border border-border-subtle bg-surface text-xs font-semibold outline-none focus:border-primary">
-                            <template x-for="(cam, idx) in cameras" :key="cam.deviceId || idx">
-                                <option :value="cam.deviceId" x-text="cam.label || ('Camera ' + (idx + 1))"></option>
-                            </template>
-                        </select>
+                        <div class="flex-1 relative">
+                            <button type="button"
+                                    @click="cameraDropdownOpen = !cameraDropdownOpen"
+                                    class="w-full p-2.5 rounded-xl border border-border-subtle hover:border-primary bg-surface text-xs font-semibold flex items-center justify-between text-left cursor-pointer">
+                                <span class="truncate pr-2" x-text="selectedCameraLabel"></span>
+                                <svg class="w-4 h-4 text-primary shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/></svg>
+                            </button>
+                            <div x-show="cameraDropdownOpen" x-cloak class="absolute left-0 right-0 top-full mt-1 bg-surface border border-border-subtle rounded-xl shadow-xl z-40 py-1">
+                                <template x-for="(cam, idx) in cameras" :key="cam.deviceId || idx">
+                                    <button type="button"
+                                            @click="selectedCameraId = cam.deviceId; cameraDropdownOpen = false; startCameraStream()"
+                                            class="w-full px-3 py-2 text-left text-xs hover:bg-brand-light/30 flex items-center justify-between cursor-pointer">
+                                        <span class="truncate" x-text="cam.label || ('Camera ' + (idx + 1))"></span>
+                                        <span x-show="selectedCameraId === cam.deviceId" class="text-primary font-bold">&#10003;</span>
+                                    </button>
+                                </template>
+                            </div>
+                        </div>
                     </div>
                 </template>
 
                 <div x-show="!noCameraAvailable" class="relative rounded-2xl overflow-hidden bg-black aspect-video flex items-center justify-center border border-border-subtle">
                     <video x-ref="qrVideo" class="w-full h-full object-cover" playsinline muted></video>
                     <canvas x-ref="qrCanvas" class="hidden"></canvas>
-
                     <div class="pointer-events-none absolute inset-0 flex items-center justify-center p-6">
                         <div class="w-48 h-48 rounded-2xl border-2 border-primary shadow-[0_0_0_9999px_rgba(0,0,0,0.45)] relative">
                             <div class="absolute inset-x-2 top-1/2 h-0.5 bg-primary/80 animate-pulse"></div>
                         </div>
                     </div>
-
                     <div x-show="cameraLoading" class="absolute inset-0 bg-black/70 flex flex-col items-center justify-center text-white text-xs gap-2">
                         <span class="font-bold">Opening device camera...</span>
                     </div>
@@ -768,14 +822,14 @@
 
                 <div x-show="!noCameraAvailable" class="p-3 rounded-2xl bg-brand-light/30 border border-border-subtle text-xs text-primary-dark font-semibold text-center" x-text="scanStatusText"></div>
 
-                <div x-show="noCameraAvailable" x-cloak class="p-5 rounded-2xl bg-red-50 border border-red-200 text-center space-y-3">
-                    <div class="w-12 h-12 rounded-full bg-red-100 text-red-600 flex items-center justify-center mx-auto">
+                <div x-show="noCameraAvailable" x-cloak class="p-5 rounded-2xl bg-danger/10 border border-danger/25 text-center space-y-3">
+                    <div class="w-12 h-12 rounded-full bg-danger/15 text-danger flex items-center justify-center mx-auto">
                         <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                             <path stroke-linecap="round" stroke-linejoin="round" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
                         </svg>
                     </div>
-                    <h4 class="text-sm font-bold text-red-900">Camera Unavailable on This Device</h4>
-                    <p class="text-xs text-red-800 leading-relaxed" x-text="cameraError"></p>
+                    <h4 class="text-sm font-bold text-danger">Camera Unavailable on This Device</h4>
+                    <p class="text-xs text-text-main leading-relaxed" x-text="cameraError"></p>
                     <button type="button"
                             @click="switchToManualEntry()"
                             class="px-5 py-2.5 rounded-xl bg-primary hover:bg-primary-dark text-white text-xs font-bold shadow-xs cursor-pointer">
@@ -791,7 +845,7 @@
                     </button>
                     <button type="button"
                             @click="closeQrScanner()"
-                            class="px-4 py-2 rounded-xl bg-surface-subtle hover:bg-gray-200 text-text-main font-bold cursor-pointer">
+                            class="px-4 py-2 rounded-xl bg-surface-subtle hover:bg-brand-light/30 text-text-main font-bold cursor-pointer">
                         Close
                     </button>
                 </div>
