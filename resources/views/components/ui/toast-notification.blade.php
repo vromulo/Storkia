@@ -60,6 +60,10 @@
                     this.trigger(t.title, t.message, t.type);
                 }, idx * 140);
             });
+
+            window.storkiaToast = (message, type = 'success', title = null) => {
+                this.trigger(title, message, type);
+            };
         },
         trigger(eventTitle, eventMessage, eventType = 'success') {
             if (!eventMessage) return;
@@ -78,7 +82,7 @@
             this.recentSignatures[sig] = now;
 
             const id = ++this.counter;
-            const duration = normType === 'danger' ? 5200 : 4000;
+            const duration = normType === 'danger' ? 4800 : 3800;
             const item = {
                 id,
                 title: eventTitle || (normType === 'danger' ? 'Alert' : (normType === 'success' ? 'Success' : 'Notice')),
@@ -86,6 +90,7 @@
                 type: normType,
                 duration,
                 visible: true,
+                paused: false,
                 timer: null
             };
 
@@ -104,14 +109,16 @@
             if (item && item.timer) {
                 clearTimeout(item.timer);
                 item.timer = null;
+                item.paused = true;
             }
         },
         resume(id) {
             const item = this.toasts.find(t => t.id === id);
             if (item && !item.timer) {
+                item.paused = false;
                 item.timer = setTimeout(() => {
                     this.dismiss(id);
-                }, 2200);
+                }, 2000);
             }
         },
         dismiss(id) {
@@ -129,7 +136,7 @@
     }"
     @toast.window="trigger($event.detail?.title, $event.detail?.message, $event.detail?.type || 'success')"
     @storkia-toast.window="trigger($event.detail?.title, $event.detail?.message, $event.detail?.type || 'success')"
-    class="fixed top-5 right-5 z-[350] flex flex-col gap-2.5 max-w-sm w-[calc(100vw-2.5rem)] sm:w-96 pointer-events-none select-none"
+    class="fixed top-4 inset-x-4 sm:inset-x-auto sm:top-5 sm:right-5 z-[350] flex flex-col gap-2.5 sm:w-96 max-w-md mx-auto sm:mx-0 pointer-events-none select-none"
 >
     <template x-for="item in toasts" :key="item.id">
         <div
@@ -142,7 +149,7 @@
             x-transition:leave="transition ease-in duration-200 transform"
             x-transition:leave-start="opacity-100 scale-100"
             x-transition:leave-end="opacity-0 -translate-y-2 scale-95"
-            class="pointer-events-auto relative overflow-hidden flex items-start gap-3.5 px-4 py-3.5 bg-surface/95 backdrop-blur-md border border-border-subtle rounded-2xl shadow-2xl shadow-primary-dark/10"
+            class="pointer-events-auto relative overflow-hidden flex items-start gap-3.5 px-4 py-3.5 bg-surface/95 backdrop-blur-md border border-border-subtle rounded-2xl shadow-2xl shadow-primary-dark/15"
         >
             <div
                 class="absolute left-0 top-0 bottom-0 w-1.5"
@@ -188,6 +195,15 @@
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
                 </svg>
             </button>
+
+            <div class="absolute bottom-0 left-1.5 right-0 h-0.5 bg-surface-subtle overflow-hidden">
+                <div
+                    class="h-full transition-all ease-linear"
+                    :class="item.type === 'success' ? 'bg-success/60' : (item.type === 'danger' ? 'bg-danger/60' : 'bg-primary/60')"
+                    :style="`width: ${item.paused ? '100%' : '0%'}; transition-duration: ${item.paused ? '150ms' : item.duration + 'ms'};`"
+                    x-init="$nextTick(() => { $el.style.width = '100%'; setTimeout(() => { if (!item.paused) $el.style.width = '0%'; }, 30); })"
+                ></div>
+            </div>
         </div>
     </template>
 </div>

@@ -124,7 +124,7 @@
     $rawAddDescText = (string) ($product->additional_descriptions ?? '');
     $fullDescriptionLength = mb_strlen($rawDescText) + mb_strlen($rawAddDescText);
     $totalLineBreaks = substr_count($rawDescText, "\n") + substr_count($rawAddDescText, "\n");
-    $isLongDescription = $fullDescriptionLength > 260 || $totalLineBreaks >= 5;
+    $isLongDescription = $fullDescriptionLength > 240 || $totalLineBreaks >= 5;
     $specsCount = $product->specifications ? $product->specifications->count() : 0;
 @endphp
 
@@ -177,7 +177,7 @@
                 this.$nextTick(() => {
                     const el = this.$refs.descContent;
                     if (!el) return;
-                    if (el.scrollHeight > 196) {
+                    if (el.scrollHeight > 180) {
                         this.descOverflows = true;
                     }
                 });
@@ -399,10 +399,14 @@
                 }
                 if (this.hasVariants && !this.selectedMainName) {
                     this.triggerToast('Please select a ' + cfg.variantTitle + ' first.');
+                    const varEl = document.getElementById('product-variants-anchor');
+                    if (varEl) varEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
                     return;
                 }
                 if (this.hasSubVariants && !this.selectedSubName) {
                     this.triggerToast('Please select a ' + cfg.subVariantTitle + ' too.');
+                    const varEl = document.getElementById('product-variants-anchor');
+                    if (varEl) varEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
                     return;
                 }
                 const parsedQty = Number(this.quantity);
@@ -511,7 +515,7 @@
 <div x-data="storkiaProductShowState(@js($productShowConfig))"
      x-init="startDealCountdown()"
      @resize.window.debounce.150ms="checkDescriptionOverflow()"
-     class="bg-surface-subtle font-sans antialiased text-text-main min-h-screen pb-16 relative overflow-x-hidden select-none">
+     class="bg-surface-subtle font-sans antialiased text-text-main min-h-screen pb-24 lg:pb-16 relative overflow-x-hidden select-none">
 
     <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-6 sm:pt-8 space-y-6">
 
@@ -617,7 +621,7 @@
                 <div class="lg:col-span-7 flex flex-col justify-between">
                     <div>
                         <div class="flex items-start justify-between gap-3 mb-3">
-                            <h1 class="text-2xl sm:text-3xl font-extrabold text-text-main tracking-tight leading-snug select-text">
+                            <h1 class="text-2xl sm:text-3xl font-extrabold text-primary-dark tracking-tight leading-snug select-text">
                                 {{ $product->name }}
                             </h1>
                         </div>
@@ -717,7 +721,7 @@
                         @endif
 
                         @if(is_array($product->variants) && isset($product->variants['items']) && is_array($product->variants['items']))
-                            <div class="mb-6 space-y-5">
+                            <div id="product-variants-anchor" class="mb-6 space-y-5">
                                 <div>
                                     <h3 class="text-xs font-bold uppercase tracking-wider text-text-muted mb-2.5">
                                         {{ $product->variants['title'] ?? 'Variants' }}
@@ -902,7 +906,7 @@
                 <div class="flex-1 w-full text-center lg:text-left">
                     <div class="flex flex-col sm:flex-row items-center justify-between gap-4 pb-5 border-b border-border-subtle">
                         <div>
-                            <a href="{{ $shopUrl }}" class="text-xl sm:text-2xl font-extrabold text-text-main hover:text-primary transition-colors tracking-tight leading-tight inline-block cursor-pointer">
+                            <a href="{{ $shopUrl }}" class="text-xl sm:text-2xl font-extrabold text-primary-dark hover:text-primary transition-colors tracking-tight leading-tight inline-block cursor-pointer">
                                 {{ $seller->business_name ?? 'Official Store' }}
                             </a>
                             <div class="flex flex-wrap items-center justify-center lg:justify-start gap-2 mt-1 text-xs sm:text-sm text-text-muted">
@@ -1108,9 +1112,9 @@
                                     ? $rev->review_photos
                                     : ($rev->review_photo_path ? [$rev->review_photo_path] : []);
                                 $revTextStr = (string) ($rev->review_text ?? '');
-                                $isLongRevText = mb_strlen($revTextStr) > 180 || substr_count($revTextStr, "\n") >= 3;
+                                $isLongRevText = mb_strlen($revTextStr) > 160 || substr_count($revTextStr, "\n") >= 3;
                                 $replyTextStr = (string) ($rev->seller_reply ?? '');
-                                $isLongReplyText = mb_strlen($replyTextStr) > 180 || substr_count($replyTextStr, "\n") >= 3;
+                                $isLongReplyText = mb_strlen($replyTextStr) > 160 || substr_count($replyTextStr, "\n") >= 3;
                             @endphp
                             <div x-show="{{ $rIdx }} < visibleReviewsLimit"
                                  x-transition
@@ -1244,7 +1248,7 @@
                         @foreach($productQuestions as $qIdx => $pq)
                             @php
                                 $ansStr = (string) ($pq->answer ?? '');
-                                $isLongAns = mb_strlen($ansStr) > 180 || substr_count($ansStr, "\n") >= 3;
+                                $isLongAns = mb_strlen($ansStr) > 160 || substr_count($ansStr, "\n") >= 3;
                             @endphp
                             <div x-show="{{ $qIdx }} < visibleQuestionsLimit"
                                  x-transition
@@ -1310,7 +1314,7 @@
                 <div class="flex items-center justify-between border-b border-border-subtle pb-3">
                     <div>
                         <span class="text-[10px] font-extrabold uppercase tracking-wider text-primary block">Tailored For You</span>
-                        <h2 class="text-lg sm:text-xl font-bold font-serif text-text-main uppercase">Recommended Products You May Also Like</h2>
+                        <h2 class="text-lg sm:text-xl font-bold font-serif text-primary-dark uppercase">Recommended Products You May Also Like</h2>
                     </div>
                     <a href="{{ route('home') }}" class="text-xs font-bold text-primary hover:underline cursor-pointer">Explore All &rarr;</a>
                 </div>
@@ -1323,6 +1327,30 @@
                 </div>
             </div>
         @endif
+    </div>
+
+    <div class="lg:hidden fixed bottom-0 inset-x-0 z-40 bg-surface/95 backdrop-blur-md border-t border-border-subtle px-4 py-2.5 shadow-[0_-6px_25px_rgba(93,49,64,0.12)] flex items-center justify-between gap-3">
+        <div class="min-w-0">
+            <div class="text-sm sm:text-base font-extrabold text-price leading-tight" x-text="'&#8369;' + formatMoney(discountedPrice)"></div>
+            <div class="text-[10px] text-text-muted truncate"
+                 x-text="selectedMainName ? ('Selected: ' + selectedMainName + (selectedSubName ? ' / ' + selectedSubName : '')) : (hasVariants ? 'Tap to select ' + @js($product->variants['title'] ?? 'variant') : (activeStock + ' in stock'))"></div>
+        </div>
+        <div class="flex items-center gap-2 shrink-0">
+            <button type="button"
+                    :disabled="isStoreOnVacation || activeStock <= 0 || isAddingToCart"
+                    @click="validateAndSubmit({{ auth()->check() ? 'true' : 'false' }}, false)"
+                    :class="(isStoreOnVacation || activeStock <= 0) ? 'bg-surface-subtle text-text-muted border border-border-subtle cursor-not-allowed' : 'bg-primary/10 text-primary border border-primary/30 hover:bg-primary hover:text-white cursor-pointer'"
+                    class="px-4 py-2.5 rounded-xl text-xs font-extrabold transition-colors">
+                <span x-text="isAddingToCart ? 'Adding...' : 'Add to Cart'"></span>
+            </button>
+            <button type="button"
+                    :disabled="isStoreOnVacation || activeStock <= 0"
+                    @click="validateAndSubmit({{ auth()->check() ? 'true' : 'false' }}, true)"
+                    :class="(isStoreOnVacation || activeStock <= 0) ? 'bg-surface-subtle text-text-muted border border-border-subtle cursor-not-allowed' : 'bg-primary text-white hover:bg-primary-dark shadow-sm cursor-pointer'"
+                    class="px-5 py-2.5 rounded-xl text-xs font-extrabold transition-colors">
+                Buy Now
+            </button>
+        </div>
     </div>
 
     <div x-show="imageModalOpen"

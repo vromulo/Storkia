@@ -50,6 +50,7 @@
     <div x-data="{
             modalOpen: false,
             activeProduct: null,
+            recExpanded: false,
             batchSize: {{ (int) $batchSize }},
             visibleCount: {{ (int) $initialProducts->count() }},
             totalProducts: {{ (int) $totalProductsCount }},
@@ -173,10 +174,10 @@
 
             <div class="my-6 sm:my-8">
                 <div class="flex justify-between items-center mb-4 border-b border-border-subtle/80 pb-3">
-                    <h2 class="text-base sm:text-xl font-bold font-serif text-main uppercase tracking-wide">
+                    <h2 class="text-base sm:text-xl font-bold font-serif text-primary-dark uppercase tracking-wide">
                         Our Sellers
                     </h2>
-                    <a href="{{ route('sellers.index') }}" class="inline-flex items-center gap-1 text-xs sm:text-sm font-bold text-primary hover:text-primary-dark transition-colors">
+                    <a href="{{ route('sellers.index') }}" class="inline-flex items-center gap-1 text-xs sm:text-sm font-bold text-primary hover:text-primary-dark transition-colors cursor-pointer">
                         See More
                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
                     </a>
@@ -204,22 +205,33 @@
                             <span class="px-2.5 py-0.5 rounded-full bg-primary/10 text-primary text-[10px] font-extrabold uppercase tracking-wider">
                                 Personalized Recommendations
                             </span>
-                            <h2 class="text-xl sm:text-2xl font-bold font-serif text-main uppercase tracking-wide mt-1">
+                            <h2 class="text-xl sm:text-2xl font-bold font-serif text-primary-dark uppercase tracking-wide mt-1">
                                 You May Also Like
                             </h2>
                         </div>
-                        <p class="text-xs text-text-muted">
-                            @auth
-                                Curated from your recent orders, cart preferences, and followed stores
-                            @else
-                                Trending picks across top verified stores
-                            @endauth
-                        </p>
+                        <div class="flex items-center gap-3">
+                            <p class="text-xs text-text-muted">
+                                @auth
+                                    Curated from your recent orders, cart preferences, and followed stores
+                                @else
+                                    Trending picks across top verified stores
+                                @endauth
+                            </p>
+                            @if($youMayAlsoLike->count() > 6)
+                                <button type="button"
+                                        @click="recExpanded = !recExpanded"
+                                        class="inline-flex items-center gap-1 px-3 py-1 rounded-full bg-primary/10 hover:bg-primary text-primary hover:text-white border border-primary/25 text-xs font-extrabold transition-colors cursor-pointer shrink-0">
+                                    <span x-text="recExpanded ? 'See Less' : 'See More'"></span>
+                                </button>
+                            @endif
+                        </div>
                     </div>
 
                     <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4 sm:gap-5">
-                        @foreach($youMayAlsoLike->take(6) as $recProduct)
-                            <x-storefront.seller-product-card :product="$recProduct" />
+                        @foreach($youMayAlsoLike->take(12) as $recIdx => $recProduct)
+                            <div x-show="{{ $recIdx }} < 6 || recExpanded" x-transition>
+                                <x-storefront.seller-product-card :product="$recProduct" />
+                            </div>
                         @endforeach
                     </div>
                 </section>
@@ -227,15 +239,16 @@
 
             <section class="space-y-5" data-live-ignore>
                 <div class="flex items-center justify-between border-b border-border-subtle/80 pb-3">
-                    <h2 class="text-xl sm:text-2xl font-bold font-serif text-main uppercase tracking-wide">
+                    <h2 class="text-xl sm:text-2xl font-bold font-serif text-primary-dark uppercase tracking-wide">
                         Picked For You (All Products)
                     </h2>
-                    <span class="text-xs font-bold text-text-muted" x-text="'Showing ' + Math.min(visibleCount, totalProducts) + ' of ' + totalProducts + ' products'"></span>
+                    <span class="px-3 py-1 rounded-full bg-surface-subtle border border-border-subtle text-xs font-bold text-primary-dark"
+                          x-text="'Showing ' + Math.min(visibleCount, totalProducts) + ' of ' + totalProducts + ' products'"></span>
                 </div>
 
                 <div id="products-grid"
                      x-ref="productsGrid"
-                     class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-5 lg:gap-6">
+                     class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4 sm:gap-5 lg:gap-6">
                     @forelse($initialProducts as $product)
                         <div data-product-id="{{ (int) $product->id }}" class="transition-all duration-300 ease-out">
                             <x-storefront.seller-product-card :product="$product" />
@@ -249,12 +262,12 @@
 
                 <div x-show="isLoadingMore"
                      x-cloak
-                     class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-5 lg:gap-6 pt-2">
+                     class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4 sm:gap-5 lg:gap-6 pt-2">
                     <template x-for="n in Math.min(batchSize, Math.max(1, totalProducts - visibleCount))" :key="'skel_' + n">
                         <div class="flex flex-col space-y-2.5">
-                            <div class="w-full aspect-square rounded-2xl bg-surface-subtle border border-border-subtle/60 animate-pulse"></div>
-                            <div class="h-3.5 w-4/5 rounded bg-surface-subtle animate-pulse"></div>
-                            <div class="h-4 w-2/5 rounded bg-surface-subtle animate-pulse"></div>
+                            <div class="w-full aspect-square rounded-2xl storkia-skeleton border border-border-subtle/60"></div>
+                            <div class="h-3.5 w-4/5 rounded-lg storkia-skeleton"></div>
+                            <div class="h-4 w-2/5 rounded-lg storkia-skeleton"></div>
                         </div>
                     </template>
                 </div>
@@ -269,20 +282,20 @@
                     </div>
                     <span x-text="isLoadingMore
                         ? ('Loading next batch of ' + Math.min(batchSize, totalProducts - visibleCount) + ' products...')
-                        : ('Loaded ' + Math.min(visibleCount, totalProducts) + ' of ' + totalProducts + ' products — Scroll down for next batch')"></span>
+                        : ('Loaded ' + Math.min(visibleCount, totalProducts) + ' of ' + totalProducts + ' products — Scroll down or click below')"></span>
 
                     <button type="button"
                             x-show="!isLoadingMore"
                             @click="userHasScrolled = true; loadNextBatch()"
-                            class="px-5 py-2 rounded-full bg-primary/10 hover:bg-primary text-primary hover:text-white border border-primary/25 text-xs font-extrabold transition-colors cursor-pointer">
-                        <span x-text="batchError ? 'Retry Loading Batch' : ('Load Next ' + Math.min(batchSize, totalProducts - visibleCount) + ' Products')"></span>
+                            class="px-6 py-2.5 rounded-full bg-primary/10 hover:bg-primary text-primary hover:text-white border border-primary/30 text-xs font-extrabold transition-all shadow-xs cursor-pointer">
+                        <span x-text="batchError ? 'Retry Loading Batch' : ('See More Products (' + Math.min(batchSize, totalProducts - visibleCount) + ' Next)')"></span>
                     </button>
                 </div>
 
                 <div x-show="!hasMore && totalProducts > 0"
                      x-cloak
                      class="py-6 text-center text-xs font-bold text-text-muted">
-                    <span x-text="'All ' + totalProducts + ' products loaded'"></span>
+                    <span class="px-4 py-1.5 rounded-full bg-surface-subtle border border-border-subtle" x-text="'All ' + totalProducts + ' products loaded'"></span>
                 </div>
             </section>
         </div>
@@ -407,7 +420,7 @@
                         :title="canOpen ? 'Tap to open your Daily Treasure Chest!' : ('Next Daily Chest in ' + cooldownLabel)">
                     <div class="relative w-16 h-16 sm:w-20 sm:h-20 flex items-center justify-center">
                         <span x-show="canOpen"
-                              class="absolute inset-0 rounded-full bg-amber-400/35 blur-md animate-pulse"></span>
+                              class="absolute inset-0 rounded-full bg-primary/35 blur-md animate-pulse"></span>
                         <img src="{{ asset('game-assets/chest-frame-1.png') }}"
                              alt="Daily Chest"
                              class="relative z-10 w-14 h-14 sm:w-16 sm:h-16 object-contain drop-shadow-[0_6px_12px_rgba(0,0,0,0.35)] transition-transform duration-200 group-hover:scale-110"
@@ -433,6 +446,9 @@
                                          alt="Treasure Chest"
                                          :class="isShaking ? 'animate-chest-shake' : ''"
                                          class="w-64 h-64 sm:w-80 sm:h-80 object-contain drop-shadow-[0_20px_35px_rgba(0,0,0,0.65)] transition-transform duration-150 active:scale-95">
+                                    <span class="mt-3 px-4 py-1.5 rounded-full bg-brand-light/90 text-primary-dark text-xs font-extrabold uppercase tracking-wider shadow-lg">
+                                        Tap Chest 3 Times (<span x-text="tapCount"></span>/3)
+                                    </span>
                                 </div>
                             </template>
 
@@ -441,10 +457,10 @@
                                      class="cursor-pointer flex flex-col items-center justify-center animate-reward-stage-pop">
                                     <img :src="rewardStageImage"
                                          alt="Coin Reward"
-                                         class="w-72 h-72 sm:w-96 sm:h-96 object-contain drop-shadow-[0_25px_45px_rgba(255,195,0,0.45)]">
+                                         class="w-72 h-72 sm:w-96 sm:h-96 object-contain drop-shadow-[0_25px_45px_rgba(207,65,115,0.45)]">
                                     <a href="{{ route('user.points') }}"
                                        @click.stop
-                                       class="mt-4 px-5 py-2 rounded-full bg-amber-400 hover:bg-amber-300 text-primary-dark font-serif font-extrabold text-lg shadow-xl transition-transform hover:scale-105">
+                                       class="mt-4 px-6 py-2.5 rounded-full bg-gradient-to-r from-primary to-primary-dark text-white font-serif font-extrabold text-lg shadow-xl border border-brand-light/40 transition-transform hover:scale-105 cursor-pointer">
                                         +<span x-text="coinsWon"></span> Storkia Coins
                                     </a>
                                 </div>
