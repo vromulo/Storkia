@@ -7,12 +7,16 @@ use App\Models\LogisticsEmployeeHubAssignment;
 use App\Models\LogisticsHub;
 use App\Models\Rider;
 use App\Models\RiderBarangayCoverage;
+use App\Notifications\OrderLifecycleNotification;
 use App\Services\AuditLoggerService;
 use App\Services\PsgcService;
+use App\Services\RealtimeBroadcastService;
+use App\Services\RiderMobileSchemaService;
 use App\Services\StorkSchemaBootstrapService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\Rules\Password;
@@ -25,12 +29,24 @@ class RiderApplicationController extends Controller
         protected PsgcService $psgc
     ) {}
 
+    protected function resolveLogisticsProfile(Request $request)
+    {
+        $user = $request->user();
+        if (! $user) {
+            return null;
+        }
+        return method_exists($user, 'effectiveLogisticsProfile')
+            ? ($user->effectiveLogisticsProfile() ?? $user->logisticsProfile)
+            : $user->logisticsProfile;
+    }
+
     public function index(Request $request)
     {
         StorkSchemaBootstrapService::ensureTablesExist();
+        RiderMobileSchemaService::ensureTablesExist();
 
         $user = $request->user();
-        $profile = $user->logisticsProfile;
+        $profile = $this->resolveLogisticsProfile($request);
 
         if (! $profile) {
             abort(403, 'Approved Logistics profile required.');
@@ -116,8 +132,7 @@ class RiderApplicationController extends Controller
     {
         StorkSchemaBootstrapService::ensureTablesExist();
 
-        $user = $request->user();
-        $profile = $user->logisticsProfile;
+        $profile = $this->resolveLogisticsProfile($request);
 
         if (! $profile) {
             abort(403);
@@ -129,9 +144,10 @@ class RiderApplicationController extends Controller
     public function store(Request $request)
     {
         StorkSchemaBootstrapService::ensureTablesExist();
+        RiderMobileSchemaService::ensureTablesExist();
 
         $user = $request->user();
-        $profile = $user->logisticsProfile;
+        $profile = $this->resolveLogisticsProfile($request);
 
         if (! $profile) {
             abort(403);
@@ -203,22 +219,23 @@ class RiderApplicationController extends Controller
 
         $rider = DB::transaction(function () use ($profile, $user, $targetHub, $validated, $licensePath, $orCrPath, $barangayList) {
             $created = Rider::create([
-                'logistics_profile_id' => $profile->id,
-                'first_name'           => $validated['first_name'],
-                'last_name'            => $validated['last_name'],
-                'birthday'             => $validated['birthday'] ?? now()->subYears(22)->toDateString(),
-                'email'                => $validated['email'],
-                'contact_no'           => $validated['contact_no'],
-                'password'             => Hash::make($validated['password']),
-                'vehicle_type'         => $validated['vehicle_type'],
-                'plate_number'         => $validated['plate_number'],
-                'license_no'           => $validated['license_no'],
-                'license_expiry_date'  => $validated['license_expiry_date'] ?? now()->addYears(3)->toDateString(),
-                'license_path'         => $licensePath,
-                'or_cr_path'           => $orCrPath,
-                'status'               => 'approved',
-                'approved_at'          => now(),
-                'is_online'            => true,
+                'logistics_profile_id'        => $profile->id,
+                'first_name'                  => $validated['first_name'],
+                'last_name'                   => $validated['last_name'],
+                'birthday'                    => $validated['birthday'] ?? now()->subYears(22)->toDateString(),
+                'email'                       => $validated['email'],
+                'contact_no'                  => $validated['contact_no'],
+                'password'                    => Hash::make($validated['password']),
+                'vehicle_type'                => $validated['vehicle_type'],
+                'plate_number'                => $validated['plate_number'],
+                'license_no'                  => $validated['license_no'],
+                'license_expiry_date'         => $validated['license_expiry_date'] ?? now()->addYears(3)->toDateString(),
+                'license_path'                => $licensePath,
+                'or_cr_path'                  => $orCrPath,
+                'status'                      => 'approved',
+                'approved_at'                 => now(),
+                'is_online'                   => true,
+                'vehicle_verification_status' => 'verified',
             ]);
 
             LogisticsEmployeeHubAssignment::create([
@@ -256,16 +273,13 @@ class RiderApplicationController extends Controller
             ->with('success', "Last-Mile Rider {$rider->full_name} ({$rider->email}) created and assigned to {$targetHub->hub_name}!");
     }
 
-    /**
-     * Update an existing Rider's profile picture, vehicle/license details, or documents.
-     * Name and personal details (first_name, last_name, birthday, email, contact_no) are strictly read-only.
-     */
     public function updateProfile(Request $request, Rider $rider)
     {
         StorkSchemaBootstrapService::ensureTablesExist();
+        RiderMobileSchemaService::ensureTablesExist();
 
         $user = $request->user();
-        $profile = $user->logisticsProfile;
+        $profile = $this->resolveLogisticsProfile($request);
 
         if (! $profile || (int) $rider->logistics_profile_id !== (int) $profile->id) {
             abort(403);
@@ -314,6 +328,10 @@ class RiderApplicationController extends Controller
             'license_expiry_date' => $validated['license_expiry_date'],
         ];
 
+        if (Schema::hasColumn('riders', 'vehicle_verification_status')) {
+            $updates['vehicle_verification_status'] = 'verified';
+        }
+
         if ($request->hasFile('avatar')) {
             $file = $request->file('avatar');
             $filename = 'rider_avatars/rider_' . $rider->id . '_' . uniqid('', true) . '.webp';
@@ -347,6 +365,22 @@ class RiderApplicationController extends Controller
 
         $rider->update($updates);
 
+        if (Schema::hasTable('rider_vehicle_updates')) {
+            $updatePayload = [
+                'status'     => 'approved',
+                'remarks'    => 'Verified and updated by Logistics Hub (' . $user->full_name . ').',
+                'updated_at' => now(),
+            ];
+            if (Schema::hasColumn('rider_vehicle_updates', 'reviewed_by')) {
+                $updatePayload['reviewed_by'] = $user->id;
+                $updatePayload['reviewed_at'] = now();
+            }
+            DB::table('rider_vehicle_updates')
+                ->where('rider_id', $rider->id)
+                ->where('status', 'pending_verification')
+                ->update($updatePayload);
+        }
+
         AuditLoggerService::log(
             action: 'rider_profile_updated_by_logistics',
             targetType: 'Rider',
@@ -357,25 +391,60 @@ class RiderApplicationController extends Controller
             reason: "Updated by Logistics ({$user->full_name}) — personal details locked"
         );
 
-        return back()->with('success', "Rider {$rider->full_name}'s profile and vehicle details have been updated.");
+        RealtimeBroadcastService::send(
+            channels: [
+                'rider.' . $rider->id,
+                'logistics.' . $profile->id,
+            ],
+            scope: 'rider',
+            action: 'rider.profile.updated',
+            payload: [
+                'rider_id'                    => (int) $rider->id,
+                'vehicle_verification_status' => 'verified',
+            ]
+        );
+
+        return back()->with('success', "Rider {$rider->full_name}'s profile and vehicle details have been updated and verified.");
     }
 
     public function approve(Request $request, Rider $rider)
     {
+        RiderMobileSchemaService::ensureTablesExist();
+
         $user = $request->user();
-        $profile = $user->logisticsProfile;
+        $profile = $this->resolveLogisticsProfile($request);
 
         if (! $profile || (int) $rider->logistics_profile_id !== (int) $profile->id) {
             abort(403);
         }
 
         $oldStatus = $rider->status;
-        $rider->update([
+        $updates = [
             'status'      => 'approved',
             'approved_at' => now(),
             'rejected_at' => null,
             'is_online'   => true,
-        ]);
+        ];
+        if (Schema::hasColumn('riders', 'vehicle_verification_status')) {
+            $updates['vehicle_verification_status'] = 'verified';
+        }
+        $rider->update($updates);
+
+        if (Schema::hasTable('rider_vehicle_updates')) {
+            $updatePayload = [
+                'status'     => 'approved',
+                'remarks'    => 'Approved by Logistics Hub.',
+                'updated_at' => now(),
+            ];
+            if (Schema::hasColumn('rider_vehicle_updates', 'reviewed_by')) {
+                $updatePayload['reviewed_by'] = $user->id;
+                $updatePayload['reviewed_at'] = now();
+            }
+            DB::table('rider_vehicle_updates')
+                ->where('rider_id', $rider->id)
+                ->where('status', 'pending_verification')
+                ->update($updatePayload);
+        }
 
         AuditLoggerService::log(
             action: 'rider_approved',
@@ -387,13 +456,36 @@ class RiderApplicationController extends Controller
             reason: 'Approved by Logistics Hub'
         );
 
+        try {
+            $rider->notify(new OrderLifecycleNotification(
+                title: 'Rider Account & Vehicle Verified!',
+                message: "Your Rider account and vehicle documents have been verified and approved by {$profile->business_name}.",
+                type: 'success',
+                url: route('rider.dashboard')
+            ));
+        } catch (\Throwable $e) {
+        }
+
+        RealtimeBroadcastService::send(
+            channels: [
+                'rider.' . $rider->id,
+                'logistics.' . $profile->id,
+            ],
+            scope: 'rider',
+            action: 'rider.profile.updated',
+            payload: [
+                'rider_id'                    => (int) $rider->id,
+                'status'                      => 'approved',
+                'vehicle_verification_status' => 'verified',
+            ]
+        );
+
         return back()->with('success', "Rider {$rider->full_name} has been approved and activated.");
     }
 
     public function reject(Request $request, Rider $rider)
     {
-        $user = $request->user();
-        $profile = $user->logisticsProfile;
+        $profile = $this->resolveLogisticsProfile($request);
 
         if (! $profile || (int) $rider->logistics_profile_id !== (int) $profile->id) {
             abort(403);
@@ -420,12 +512,152 @@ class RiderApplicationController extends Controller
             reason: $validated['rejection_reason'] ?? 'Rejected by Logistics Hub'
         );
 
+        RealtimeBroadcastService::send(
+            channels: [
+                'rider.' . $rider->id,
+                'logistics.' . $profile->id,
+            ],
+            scope: 'rider',
+            action: 'rider.profile.updated',
+            payload: [
+                'rider_id'  => (int) $rider->id,
+                'status'    => 'rejected',
+                'is_online' => false,
+            ]
+        );
+
         return back()->with('success', "Rider {$rider->full_name} status updated to Rejected.");
+    }
+
+    public function decideVehicleVerification(Request $request, Rider $rider)
+    {
+        RiderMobileSchemaService::ensureTablesExist();
+
+        $user = $request->user();
+        $profile = $this->resolveLogisticsProfile($request);
+
+        if (! $profile || (int) $rider->logistics_profile_id !== (int) $profile->id) {
+            abort(403);
+        }
+
+        $validated = $request->validate([
+            'decision' => ['required', 'in:approve,reject,approved,rejected,verified'],
+            'remarks'  => ['nullable', 'string', 'max:300'],
+        ]);
+
+        $isApprove = in_array(strtolower($validated['decision']), ['approve', 'approved', 'verified'], true);
+        $newStatus = $isApprove ? 'verified' : 'rejected';
+        $remarks = trim((string) ($validated['remarks'] ?? ''));
+
+        if (Schema::hasColumn('riders', 'vehicle_verification_status')) {
+            $rider->update([
+                'vehicle_verification_status' => $newStatus,
+            ]);
+        }
+
+        if (Schema::hasTable('rider_vehicle_updates')) {
+            $updatePayload = [
+                'status'     => $isApprove ? 'approved' : 'rejected',
+                'remarks'    => $remarks !== '' ? $remarks : ($isApprove ? 'Approved by Logistics Hub.' : 'Rejected by Logistics Hub.'),
+                'updated_at' => now(),
+            ];
+            if (Schema::hasColumn('rider_vehicle_updates', 'reviewed_by')) {
+                $updatePayload['reviewed_by'] = $user->id;
+                $updatePayload['reviewed_at'] = now();
+            }
+            DB::table('rider_vehicle_updates')
+                ->where('rider_id', $rider->id)
+                ->where('status', 'pending_verification')
+                ->update($updatePayload);
+        }
+
+        try {
+            $rider->notify(new OrderLifecycleNotification(
+                title: $isApprove ? 'Vehicle & License Update Verified' : 'Vehicle & License Update Needs Attention',
+                message: $isApprove
+                    ? "Your updated vehicle and driver's license documents were verified by {$profile->business_name}."
+                    : "Your vehicle/license update could not be verified" . ($remarks !== '' ? ": {$remarks}" : '. Please upload clear documents in the Rider app.'),
+                type: $isApprove ? 'success' : 'warning',
+                url: route('rider.dashboard')
+            ));
+        } catch (\Throwable $e) {
+        }
+
+        RealtimeBroadcastService::send(
+            channels: [
+                'rider.' . $rider->id,
+                'logistics.' . $profile->id,
+            ],
+            scope: 'rider',
+            action: 'rider.profile.updated',
+            payload: [
+                'rider_id'                    => (int) $rider->id,
+                'vehicle_verification_status' => $newStatus,
+            ]
+        );
+
+        return back()->with(
+            'success',
+            $isApprove
+                ? "Rider {$rider->full_name}'s vehicle and documents marked as Verified."
+                : "Rider {$rider->full_name}'s vehicle update marked as Rejected."
+        );
+    }
+
+    public function resolveIncident(Request $request, int $incidentId)
+    {
+        RiderMobileSchemaService::ensureTablesExist();
+
+        $profile = $this->resolveLogisticsProfile($request);
+        if (! $profile || ! Schema::hasTable('rider_trip_incidents')) {
+            abort(403);
+        }
+
+        $incident = DB::table('rider_trip_incidents')
+            ->where('id', $incidentId)
+            ->where('logistics_profile_id', $profile->id)
+            ->first();
+
+        if (! $incident) {
+            abort(404);
+        }
+
+        DB::table('rider_trip_incidents')
+            ->where('id', $incidentId)
+            ->update([
+                'status'     => 'resolved',
+                'updated_at' => now(),
+            ]);
+
+        if ($incident->delivery_assignment_id && Schema::hasColumn('delivery_assignments', 'is_delayed')) {
+            DB::table('delivery_assignments')
+                ->where('id', $incident->delivery_assignment_id)
+                ->update([
+                    'is_delayed' => false,
+                    'updated_at' => now(),
+                ]);
+        }
+
+        RealtimeBroadcastService::send(
+            channels: [
+                'rider.' . (int) $incident->rider_id,
+                'logistics.' . (int) $profile->id,
+            ],
+            scope: 'delivery',
+            action: 'delivery.incident_resolved',
+            payload: [
+                'incident_id'            => $incidentId,
+                'delivery_assignment_id' => (int) $incident->delivery_assignment_id,
+                'shipment_id'            => (int) $incident->shipment_id,
+            ]
+        );
+
+        return back()->with('success', 'Rider route incident marked as resolved.');
     }
 
     public function document(Request $request, Rider $rider, string $type)
     {
-        $profile = $request->user()?->logisticsProfile;
+        $profile = $this->resolveLogisticsProfile($request);
 
         if (! $profile || (int) $rider->logistics_profile_id !== (int) $profile->id) {
             abort(403);

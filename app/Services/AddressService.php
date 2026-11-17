@@ -16,9 +16,11 @@ class AddressService
     {
         try {
             $response = Http::withoutVerifying()->timeout(10)->retry(2, 200)->get($url);
+
             if ($response->successful() && is_array($response->json())) {
                 return $response->json();
             }
+
             Log::warning('PSGC request returned an unusable response', [
                 'url'    => $url,
                 'status' => $response->status(),
@@ -113,7 +115,6 @@ class AddressService
         if ($isNcr) {
             $items = $this->rememberList('psgc_municipalities_v4_ncr', function () {
                 $items = $this->fetchJson('https://psgc.gitlab.io/api/regions/130000000/cities-municipalities');
-
                 return empty($items) ? [] : $this->sortByName($items);
             });
 
@@ -282,10 +283,16 @@ class AddressService
             return '';
         }
 
-        $cleaned = strtolower(trim($value));
+        $cleaned = str_replace(['Ñ', 'ñ'], ['n', 'n'], trim($value));
+        $cleaned = strtolower($cleaned);
+        $cleaned = str_replace(
+            ['las pi as', 'para aque', 'bi an', 'los ba os', 'dasmari as', 'sto.', 'sta.'],
+            ['las pinas', 'paranaque', 'binan', 'los banos', 'dasmarinas', 'santo', 'santa'],
+            $cleaned
+        );
         $cleaned = preg_replace('/\b(city of|municipality of|province of|city)\b/', '', $cleaned);
-        $cleaned = preg_replace('/[^a-z0-9\s]/', ' ', $cleaned);
-        $cleaned = preg_replace('/\s+/', ' ', $cleaned);
+        $cleaned = preg_replace('/[^a-z0-9\s]/', ' ', (string) $cleaned);
+        $cleaned = preg_replace('/\s+/', ' ', (string) $cleaned);
 
         return trim((string) $cleaned);
     }

@@ -58,7 +58,11 @@ class RiderReportApiController extends Controller
         $transactionsTotal = (clone $ledger)->count();
 
         $realizedIncome = round((float) (clone $ledger)
-            ->where('entry_type', 'commission_released')
+            ->whereIn('entry_type', [
+                'commission_released',
+                ReturnRefundLedgerService::ENTRY_COMMISSION_RELEASED,
+                ReturnRefundLedgerService::ENTRY_RETURN_RIDER_PAY,
+            ])
             ->sum('amount'), 2);
 
         $returnPickupPay = round((float) (clone $ledger)

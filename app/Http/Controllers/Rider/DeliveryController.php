@@ -19,10 +19,12 @@ use App\Models\WalletTransaction;
 use App\Notifications\OrderLifecycleNotification;
 use App\Services\AuditLoggerService;
 use App\Services\BuyerAbandonmentService;
+use App\Services\BuyerOrderNotificationService;
 use App\Services\BuyerRewardService;
 use App\Services\CommissionCalculatorService;
 use App\Services\OperationalSlaGuardService;
 use App\Services\OrderCompletionService;
+use App\Services\ReturnRefundLedgerService;
 use App\Services\RoleWalletService;
 use App\Services\ShippingCalculatorService;
 use App\Services\StorkSchemaBootstrapService;
@@ -40,16 +42,20 @@ use Intervention\Image\ImageManager;
 
 class DeliveryController extends Controller
 {
+    public const MAX_DELIVERY_ATTEMPTS = 3;
+
     public function __construct(
         protected OrderCompletionService $orderCompletionService,
         protected BuyerAbandonmentService $buyerAbandonmentService,
         protected RoleWalletService $roleWalletService,
         protected OperationalSlaGuardService $slaGuardService,
         protected ?BuyerRewardService $buyerRewardService = null,
-        protected ?VoucherService $voucherService = null
+        protected ?VoucherService $voucherService = null,
+        protected ?BuyerOrderNotificationService $buyerOrderNotificationService = null
     ) {
         $this->buyerRewardService = $buyerRewardService ?? app(BuyerRewardService::class);
         $this->voucherService = $voucherService ?? app(VoucherService::class);
+        $this->buyerOrderNotificationService = $buyerOrderNotificationService ?? app(BuyerOrderNotificationService::class);
     }
 
     public static function calculateDistanceScaledRiderPay(Shipment $shipment): array
@@ -712,9 +718,15 @@ class DeliveryController extends Controller
 
         $shipment = $assignment->shipment()->with(['sellerOrder.order', 'sellerOrder.buyer', 'sellerOrder.seller', 'sellerOrder.payment', 'sellerOrder.extra'])->firstOrFail();
         $sellerOrder = $shipment->sellerOrder;
+        $autoRtsTriggered = false;
+        $attemptNo = 1;
 
-        DB::transaction(function () use ($assignment, $shipment, $sellerOrder, $rider, $fullReason) {
-            $currentAttempts = (int) ($shipment->failed_attempts_count ?? $shipment->delivery_attempts_count ?? 0);
+        DB::transaction(function () use ($assignment, $shipment, $sellerOrder, $rider, $fullReason, &$autoRtsTriggered, &$attemptNo) {
+            $currentAttempts = max(
+                (int) ($shipment->failed_attempts_count ?? 0),
+                (int) ($shipment->delivery_attempts_count ?? 0),
+                (int) DeliveryAttempt::where('shipment_id', $shipment->id)->where('outcome', 'failed')->count()
+            );
             $attemptNo = max(1, $currentAttempts + 1);
 
             $assignmentUpdates = [
@@ -744,7 +756,7 @@ class DeliveryController extends Controller
             DeliveryAttempt::create($attemptPayload);
 
             $isBuyerRefusal = stripos($fullReason, 'refused') !== false || stripos($fullReason, 'reject') !== false;
-            $autoRtsTriggered = $attemptNo >= 2 || $isBuyerRefusal;
+            $autoRtsTriggered = $attemptNo >= self::MAX_DELIVERY_ATTEMPTS || $isBuyerRefusal;
 
             $shipmentUpdates = [
                 'status'                  => $autoRtsTriggered ? 'returned_to_seller' : 'delivery_failed',
@@ -800,7 +812,7 @@ class DeliveryController extends Controller
                 'status'          => $shipment->status,
                 'title'           => $autoRtsTriggered
                     ? "Delivery Failed (#{$attemptNo}) — Returning to Seller (RTS)"
-                    : "Delivery Attempt #{$attemptNo} Unsuccessful",
+                    : "Delivery Attempt #{$attemptNo} of " . self::MAX_DELIVERY_ATTEMPTS . " Unsuccessful",
                 'description'     => "Reason: {$fullReason}. Rider Pay for failed attempt: ₱0.00.",
                 'location'        => $shipment->delivery_address_snapshot['municipality'] ?? 'Buyer Area',
                 'actor_type'      => 'Rider',
@@ -821,6 +833,10 @@ class DeliveryController extends Controller
                 $this->orderCompletionService->syncParentOrderStatus($sellerOrder->order);
             }
         });
+
+        if (! $autoRtsTriggered) {
+            $this->buyerOrderNotificationService?->deliveryAttemptFailed($shipment, $attemptNo, $fullReason);
+        }
 
         return back()->with('success', 'Failed delivery attempt recorded (Failed attempt Rider Pay: ₱0.00).');
     }
@@ -1084,7 +1100,11 @@ class DeliveryController extends Controller
         $totalAssigned = max($assignmentsInPeriod->count(), $deliveredCount + $failedCount);
 
         $periodRealizedIncome = round((float) $walletTransactions
-            ->where('entry_type', 'commission_released')
+            ->whereIn('entry_type', [
+                'commission_released',
+                ReturnRefundLedgerService::ENTRY_COMMISSION_RELEASED,
+                ReturnRefundLedgerService::ENTRY_RETURN_RIDER_PAY,
+            ])
             ->sum('amount'), 2);
 
         $periodCodCollected = round((float) $collections->sum('collected_amount'), 2);

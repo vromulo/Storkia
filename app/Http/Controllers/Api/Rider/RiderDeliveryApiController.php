@@ -20,6 +20,7 @@ use App\Models\ShipmentVerification;
 use App\Notifications\OrderLifecycleNotification;
 use App\Services\BuyerAbandonmentService;
 use App\Services\BuyerOrderNotificationService;
+use App\Services\BuyerRewardService;
 use App\Services\CourierMobileSchemaService;
 use App\Services\OperationalSlaGuardService;
 use App\Services\OrderCompletionService;
@@ -27,6 +28,7 @@ use App\Services\RealtimeBroadcastService;
 use App\Services\RiderMobileSchemaService;
 use App\Services\RoleWalletService;
 use App\Services\StorkSchemaBootstrapService;
+use App\Services\VoucherService;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -51,8 +53,13 @@ class RiderDeliveryApiController extends Controller
         protected BuyerOrderNotificationService $buyerOrderNotificationService,
         protected RoleWalletService $roleWalletService,
         protected OperationalSlaGuardService $slaGuardService,
-        protected AuthApiController $authApiController
-    ) {}
+        protected AuthApiController $authApiController,
+        protected ?BuyerRewardService $buyerRewardService = null,
+        protected ?VoucherService $voucherService = null
+    ) {
+        $this->buyerRewardService = $buyerRewardService ?? app(BuyerRewardService::class);
+        $this->voucherService = $voucherService ?? app(VoucherService::class);
+    }
 
     public function dashboard(Request $request): JsonResponse
     {
@@ -555,15 +562,19 @@ class RiderDeliveryApiController extends Controller
             $locked->update($updates);
 
             if ($locked->shipment && (int) $locked->shipment->current_rider_id === (int) $rider->id) {
+                $restoredStatus = $locked->shipment->needsInterHubTransfer()
+                    ? 'received_at_destination_hub'
+                    : 'received_at_hub';
+
                 $locked->shipment->update([
                     'current_rider_id' => null,
-                    'status'           => 'received_at_hub',
+                    'status'           => $restoredStatus,
                 ]);
 
                 ShipmentTracking::create([
                     'shipment_id'     => $locked->shipment->id,
                     'seller_order_id' => $locked->seller_order_id,
-                    'status'          => 'received_at_hub',
+                    'status'          => $restoredStatus,
                     'title'           => 'Returned to Unassigned Hub Queue (Declined by Rider)',
                     'description'     => "Rider {$rider->full_name} declined the delivery offer ({$reason}). Returned to hub dispatch queue.",
                     'location'        => $rider->assigned_hub?->hub_name ?? 'Sorting Hub',
@@ -1707,6 +1718,7 @@ class RiderDeliveryApiController extends Controller
             'shipment.sellerOrder.buyer',
             'shipment.sellerOrder.seller',
             'shipment.sellerOrder.payment',
+            'shipment.sellerOrder.extra',
         ])->find($assignmentId);
 
         if (! $assignment || (int) $assignment->rider_id !== (int) $rider->id) {
@@ -1787,6 +1799,26 @@ class RiderDeliveryApiController extends Controller
                 'payment_status' => $autoRtsTriggered ? 'cancelled' : $sellerOrder->payment_status,
                 'cancelled_at'   => $autoRtsTriggered ? now() : $sellerOrder->cancelled_at,
             ]);
+
+            if ($autoRtsTriggered) {
+                $sellerOrder->payment?->update([
+                    'status' => 'cancelled',
+                ]);
+
+                $wasWalletPaid = strtoupper((string) $sellerOrder->effective_payment_method) === 'WALLET'
+                    || (float) ($sellerOrder->extra?->wallet_paid_amount ?? 0) > 0;
+                if ($wasWalletPaid) {
+                    $refundAmt = (float) ($sellerOrder->extra?->wallet_paid_amount > 0 ? $sellerOrder->extra->wallet_paid_amount : $sellerOrder->total_amount);
+                    $this->roleWalletService->refundBuyerWalletForOrder(
+                        $sellerOrder,
+                        $refundAmt,
+                        'Order Returned to Seller (RTS) — E-Wallet Refund'
+                    );
+                }
+
+                $this->voucherService?->restoreVouchersForSellerOrder($sellerOrder);
+                $this->buyerRewardService?->restoreCoinsForSellerOrder($sellerOrder);
+            }
 
             OrderStatusHistory::create([
                 'order_id'        => $sellerOrder->order_id,
@@ -1913,7 +1945,7 @@ class RiderDeliveryApiController extends Controller
             if ($pkg->rider_verified_at !== null || $pkg->rider_collected_at !== null) {
                 return true;
             }
-            return $pkg->verifications
+            return $pVerif = $pkg->verifications
                 ->where('stage', 'rider_collection')
                 ->where('actor_type', 'Rider')
                 ->where('actor_id', $rider->id)

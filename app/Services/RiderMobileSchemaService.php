@@ -8,7 +8,7 @@ use Illuminate\Support\Facades\Schema;
 
 class RiderMobileSchemaService
 {
-    protected const CACHE_KEY = 'storkia_rider_mobile_schema_v4_ready';
+    protected const CACHE_KEY = 'storkia_rider_mobile_schema_v5_ready';
 
     protected static bool $verifiedInProcess = false;
 
@@ -35,6 +35,7 @@ class RiderMobileSchemaService
             && Schema::hasColumn('delivery_assignments', 'decline_reason')
             && Schema::hasColumn('cod_remittances', 'proof_image_path')
             && Schema::hasColumn('rider_vehicle_updates', 'new_license_no')
+            && Schema::hasColumn('rider_vehicle_updates', 'reviewed_by')
         ) {
             Cache::put(self::CACHE_KEY, true, now()->addHours(24));
             self::$verifiedInProcess = true;
@@ -295,6 +296,8 @@ class RiderMobileSchemaService
             $table->string('or_cr_path')->nullable();
             $table->string('status', 30)->default('pending_verification')->index();
             $table->text('remarks')->nullable();
+            $table->unsignedBigInteger('reviewed_by')->nullable();
+            $table->timestamp('reviewed_at')->nullable();
             $table->timestamps();
 
             $table->index(['rider_id', 'status']);
@@ -313,6 +316,12 @@ class RiderMobileSchemaService
             }
             if (! Schema::hasColumn('rider_vehicle_updates', 'new_license_no')) {
                 $table->string('new_license_no', 40)->nullable()->after('previous_license_no');
+            }
+            if (! Schema::hasColumn('rider_vehicle_updates', 'reviewed_by')) {
+                $table->unsignedBigInteger('reviewed_by')->nullable()->after('remarks');
+            }
+            if (! Schema::hasColumn('rider_vehicle_updates', 'reviewed_at')) {
+                $table->timestamp('reviewed_at')->nullable()->after('reviewed_by');
             }
         });
     }

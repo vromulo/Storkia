@@ -4,8 +4,11 @@
     @vite(['resources/css/buyer/home.css'])
     @php
         $sellers = $sellers ?? \App\Models\SellerProfile::take(6)->get();
+        $batchSize = isset($batchSize) ? (int) $batchSize : 12;
+        $initialProducts = $initialProducts ?? $products->take($batchSize)->values();
         $youMayAlsoLike = $youMayAlsoLike ?? $products->take(12);
-        $totalProductsCount = $products->count();
+        $totalProductsCount = isset($totalProductsCount) ? (int) $totalProductsCount : $products->count();
+        $initialLoadedIds = $initialProducts->pluck('id')->map(fn ($id) => (int) $id)->values()->all();
 
         $isBuyerRole = auth()->check() && auth()->user()->role === 'Buyer';
         $chestWallet = null;
@@ -47,26 +50,119 @@
     <div x-data="{
             modalOpen: false,
             activeProduct: null,
-            batchSize: 10,
-            visibleCount: 10,
+            batchSize: {{ (int) $batchSize }},
+            visibleCount: {{ (int) $initialProducts->count() }},
             totalProducts: {{ (int) $totalProductsCount }},
+            loadedIds: @js($initialLoadedIds),
+            currentPage: 1,
+            hasMore: {{ $initialProducts->count() < $totalProductsCount ? 'true' : 'false' }},
             isLoadingMore: false,
+            batchCooldown: false,
+            batchError: false,
+            userHasScrolled: false,
+            observer: null,
             initBatchScroll() {
+                const onScroll = () => {
+                    if (window.scrollY > 40) {
+                        this.userHasScrolled = true;
+                    }
+                    if (!this.userHasScrolled || this.isLoadingMore || this.batchCooldown || !this.hasMore) {
+                        return;
+                    }
+                    const sentinel = this.$refs.homeScrollSentinel;
+                    if (!sentinel) return;
+                    const rect = sentinel.getBoundingClientRect();
+                    const viewHeight = window.innerHeight || document.documentElement.clientHeight;
+                    if (rect.top <= viewHeight + 120) {
+                        this.loadNextBatch();
+                    }
+                };
+
+                window.addEventListener('scroll', onScroll, { passive: true });
+
                 this.$nextTick(() => {
                     if (!this.$refs.homeScrollSentinel || typeof IntersectionObserver === 'undefined') return;
-                    const observer = new IntersectionObserver((entries) => {
+                    this.observer = new IntersectionObserver((entries) => {
                         entries.forEach((entry) => {
-                            if (entry.isIntersecting && this.visibleCount < this.totalProducts && !this.isLoadingMore) {
-                                this.isLoadingMore = true;
-                                setTimeout(() => {
-                                    this.visibleCount = Math.min(this.totalProducts, this.visibleCount + this.batchSize);
-                                    this.isLoadingMore = false;
-                                }, 200);
+                            if (
+                                entry.isIntersecting &&
+                                this.userHasScrolled &&
+                                this.hasMore &&
+                                !this.isLoadingMore &&
+                                !this.batchCooldown
+                            ) {
+                                this.loadNextBatch();
                             }
                         });
-                    }, { rootMargin: '180px' });
-                    observer.observe(this.$refs.homeScrollSentinel);
+                    }, { rootMargin: '120px' });
+                    this.observer.observe(this.$refs.homeScrollSentinel);
                 });
+            },
+            async loadNextBatch() {
+                if (this.isLoadingMore || this.batchCooldown || !this.hasMore || this.visibleCount >= this.totalProducts) {
+                    return;
+                }
+
+                this.isLoadingMore = true;
+                this.batchError = false;
+
+                try {
+                    const nextPage = this.currentPage + 1;
+                    const params = new URLSearchParams({
+                        batch: '1',
+                        page: String(nextPage),
+                        exclude: this.loadedIds.join(',')
+                    });
+
+                    const response = await fetch(`{{ route('home') }}?${params.toString()}`, {
+                        method: 'GET',
+                        headers: {
+                            'Accept': 'application/json',
+                            'X-Requested-With': 'XMLHttpRequest'
+                        }
+                    });
+
+                    if (!response.ok) {
+                        throw new Error('Batch request failed');
+                    }
+
+                    const data = await response.json();
+                    const grid = this.$refs.productsGrid;
+
+                    if (grid && data.html) {
+                        const temp = document.createElement('div');
+                        temp.innerHTML = data.html;
+
+                        Array.from(temp.children).forEach((cardEl) => {
+                            const pid = Number(cardEl.getAttribute('data-product-id') || 0);
+                            if (pid > 0 && this.loadedIds.includes(pid)) {
+                                return;
+                            }
+                            if (pid > 0 && !grid.querySelector(`[data-product-id='${pid}']`)) {
+                                this.loadedIds.push(pid);
+                                grid.appendChild(cardEl);
+                                if (window.Alpine && typeof window.Alpine.initTree === 'function') {
+                                    window.Alpine.initTree(cardEl);
+                                }
+                            }
+                        });
+                    }
+
+                    this.currentPage = nextPage;
+                    if (typeof data.total === 'number') {
+                        this.totalProducts = data.total;
+                    }
+                    this.visibleCount = this.loadedIds.length;
+                    this.hasMore = Boolean(data.has_more) && this.visibleCount < this.totalProducts && Number(data.count || 0) > 0;
+                } catch (e) {
+                    this.batchError = true;
+                } finally {
+                    this.isLoadingMore = false;
+                    this.batchCooldown = true;
+                    setTimeout(() => {
+                        this.batchCooldown = false;
+                    }, 450);
+                }
             }
          }"
          x-init="initBatchScroll()"
@@ -129,7 +225,7 @@
                 </section>
             @endif
 
-            <section class="space-y-5">
+            <section class="space-y-5" data-live-ignore>
                 <div class="flex items-center justify-between border-b border-border-subtle/80 pb-3">
                     <h2 class="text-xl sm:text-2xl font-bold font-serif text-main uppercase tracking-wide">
                         Picked For You (All Products)
@@ -137,12 +233,11 @@
                     <span class="text-xs font-bold text-text-muted" x-text="'Showing ' + Math.min(visibleCount, totalProducts) + ' of ' + totalProducts + ' products'"></span>
                 </div>
 
-                <div id="products-grid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-5 2xl:grid-cols-5 gap-5 lg:gap-6">
-                    @forelse($products as $idx => $product)
-                        <div x-show="{{ $idx }} < visibleCount"
-                             x-transition:enter="transition ease-out duration-300"
-                             x-transition:enter-start="opacity-0 translate-y-2"
-                             x-transition:enter-end="opacity-100 translate-y-0">
+                <div id="products-grid"
+                     x-ref="productsGrid"
+                     class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-5 lg:gap-6">
+                    @forelse($initialProducts as $product)
+                        <div data-product-id="{{ (int) $product->id }}" class="transition-all duration-300 ease-out">
                             <x-storefront.seller-product-card :product="$product" />
                         </div>
                     @empty
@@ -152,15 +247,42 @@
                     @endforelse
                 </div>
 
+                <div x-show="isLoadingMore"
+                     x-cloak
+                     class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-5 lg:gap-6 pt-2">
+                    <template x-for="n in Math.min(batchSize, Math.max(1, totalProducts - visibleCount))" :key="'skel_' + n">
+                        <div class="flex flex-col space-y-2.5">
+                            <div class="w-full aspect-square rounded-2xl bg-surface-subtle border border-border-subtle/60 animate-pulse"></div>
+                            <div class="h-3.5 w-4/5 rounded bg-surface-subtle animate-pulse"></div>
+                            <div class="h-4 w-2/5 rounded bg-surface-subtle animate-pulse"></div>
+                        </div>
+                    </template>
+                </div>
+
                 <div x-ref="homeScrollSentinel"
-                     x-show="visibleCount < totalProducts"
-                     class="py-8 flex flex-col items-center justify-center gap-2 text-xs font-bold text-text-muted">
-                    <div class="flex items-center gap-1.5">
+                     x-show="hasMore && visibleCount < totalProducts"
+                     class="py-8 flex flex-col items-center justify-center gap-3 text-xs font-bold text-text-muted">
+                    <div x-show="isLoadingMore" class="flex items-center gap-1.5">
                         <span class="w-2 h-2 rounded-full bg-primary animate-bounce"></span>
                         <span class="w-2 h-2 rounded-full bg-primary animate-bounce" style="animation-delay: 0.15s"></span>
                         <span class="w-2 h-2 rounded-full bg-primary animate-bounce" style="animation-delay: 0.3s"></span>
                     </div>
-                    <span x-text="'Loaded ' + Math.min(visibleCount, totalProducts) + ' of ' + totalProducts + ' products — Scroll down for next batch'"></span>
+                    <span x-text="isLoadingMore
+                        ? ('Loading next batch of ' + Math.min(batchSize, totalProducts - visibleCount) + ' products...')
+                        : ('Loaded ' + Math.min(visibleCount, totalProducts) + ' of ' + totalProducts + ' products — Scroll down for next batch')"></span>
+
+                    <button type="button"
+                            x-show="!isLoadingMore"
+                            @click="userHasScrolled = true; loadNextBatch()"
+                            class="px-5 py-2 rounded-full bg-primary/10 hover:bg-primary text-primary hover:text-white border border-primary/25 text-xs font-extrabold transition-colors cursor-pointer">
+                        <span x-text="batchError ? 'Retry Loading Batch' : ('Load Next ' + Math.min(batchSize, totalProducts - visibleCount) + ' Products')"></span>
+                    </button>
+                </div>
+
+                <div x-show="!hasMore && totalProducts > 0"
+                     x-cloak
+                     class="py-6 text-center text-xs font-bold text-text-muted">
+                    <span x-text="'All ' + totalProducts + ' products loaded'"></span>
                 </div>
             </section>
         </div>

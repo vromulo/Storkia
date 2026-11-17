@@ -52,12 +52,15 @@ class ReturnRefundService
             if ($locked->status === 'completed') {
                 $this->fail('Completed orders can no longer be returned or refunded.');
             }
+
             if ($locked->status !== 'delivered') {
                 $this->fail('A return or refund can only be requested after the parcel is marked delivered.');
             }
+
             if ($locked->confirmation_deadline_at && $locked->confirmation_deadline_at->isPast()) {
                 $this->fail('The ' . SellerOrder::BUYER_CONFIRMATION_HOURS . '-hour window to request a return or refund has already expired.');
             }
+
             if (ReturnRequest::where('seller_order_id', $locked->id)->exists()) {
                 $this->fail('A return or refund request already exists for this order.');
             }
@@ -177,6 +180,7 @@ class ReturnRefundService
             if ((int) $locked->buyer_id !== $buyerId) {
                 $this->fail('This request does not belong to your account.');
             }
+
             if (! $locked->canBuyerEscalate()) {
                 $this->fail('Only a request rejected by the seller can be escalated, and only once.');
             }
@@ -234,6 +238,7 @@ class ReturnRefundService
             if ((int) $order->seller_id !== $sellerUserId) {
                 $this->fail('This request belongs to another seller.');
             }
+
             if (! $locked->isAwaitingSellerResponse()) {
                 $this->fail('This request is no longer waiting for your response.');
             }
@@ -281,6 +286,7 @@ class ReturnRefundService
                     $this->url('user.orders.show', $order->id),
                     $order
                 );
+
                 return;
             }
 
@@ -303,6 +309,7 @@ class ReturnRefundService
             if ((int) $order->seller_id !== $sellerUserId) {
                 $this->fail('This request belongs to another seller.');
             }
+
             if ($locked->status !== ReturnRequest::STATUS_AWAITING_SELLER_CONFIRM) {
                 $this->fail('There is no returned parcel waiting for your confirmation.');
             }
@@ -345,6 +352,7 @@ class ReturnRefundService
                     $this->url('user.orders.show', $order->id),
                     $order
                 );
+
                 return;
             }
 
@@ -524,7 +532,6 @@ class ReturnRefundService
             if ($locked->isTerminal()) {
                 return;
             }
-
             $order = $this->lockOrder($locked->seller_order_id);
             $this->applyClose($locked, $order, $finalStatus, $reasonCode, $message, $actorType, $actorId, $ctx);
         });
@@ -640,7 +647,6 @@ class ReturnRefundService
                 (float) $locked->refund_amount,
                 "Instant E-Wallet Refund ({$locked->request_number})"
             );
-
             $walletRef = $walletTx?->transaction_reference ?? ('WAL-' . now()->format('YmdHis'));
 
             $locked->update([
@@ -694,7 +700,6 @@ class ReturnRefundService
         ]);
 
         $order->payment?->update(['status' => 'cancelled']);
-
         $this->syncParent($order);
 
         $this->queue(

@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Admin;
 use App\Models\Courier;
+use App\Models\InterHubTransfer;
 use App\Models\ReturnShipment;
 use App\Models\Rider;
 use App\Models\SellerOrder;
@@ -113,7 +114,7 @@ class BroadcastAuthController extends Controller
             return ($actor instanceof User) && (int) $actor->id === (int) $m[2];
         }
 
-        if ($channel === 'support.admin' || $channel === 'admin') {
+        if ($channel === 'support.admin' || $channel === 'admin' || $channel === 'admin.global') {
             return $actor instanceof Admin;
         }
 
@@ -171,10 +172,16 @@ class BroadcastAuthController extends Controller
             }
 
             if ($actor instanceof Courier) {
-                if ((int) ($order->shipment?->current_courier_id ?? 0) === (int) $actor->id) {
+                if (
+                    (int) ($order->shipment?->current_courier_id ?? 0) === (int) $actor->id
+                    || (int) ($order->shipment?->linehaul_courier_id ?? 0) === (int) $actor->id
+                ) {
                     return true;
                 }
                 if ($order->shipment && $order->shipment->pickupAssignments()->where('courier_id', $actor->id)->exists()) {
+                    return true;
+                }
+                if (Schema::hasTable('inter_hub_transfers') && InterHubTransfer::where('seller_order_id', $order->id)->where('courier_id', $actor->id)->exists()) {
                     return true;
                 }
                 if (Schema::hasTable('return_shipments') && ReturnShipment::where('seller_order_id', $order->id)->where('current_courier_id', $actor->id)->exists()) {
@@ -193,12 +200,16 @@ class BroadcastAuthController extends Controller
 
             if ($actor instanceof Courier) {
                 return (int) $shipment->current_courier_id === (int) $actor->id
-                    || $shipment->pickupAssignments()->where('courier_id', $actor->id)->exists();
+                    || (int) ($shipment->linehaul_courier_id ?? 0) === (int) $actor->id
+                    || $shipment->pickupAssignments()->where('courier_id', $actor->id)->exists()
+                    || (Schema::hasTable('inter_hub_transfers') && InterHubTransfer::where('shipment_id', $shipment->id)->where('courier_id', $actor->id)->exists())
+                    || (Schema::hasTable('return_shipments') && ReturnShipment::where('shipment_id', $shipment->id)->where('current_courier_id', $actor->id)->exists());
             }
 
             if ($actor instanceof Rider) {
                 return (int) $shipment->current_rider_id === (int) $actor->id
-                    || $shipment->deliveryAssignments()->where('rider_id', $actor->id)->exists();
+                    || $shipment->deliveryAssignments()->where('rider_id', $actor->id)->exists()
+                    || (Schema::hasTable('return_shipments') && ReturnShipment::where('shipment_id', $shipment->id)->where('current_rider_id', $actor->id)->exists());
             }
 
             if ($actor instanceof User) {

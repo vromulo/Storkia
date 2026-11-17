@@ -20,17 +20,12 @@ class BuyerRewardService
     public const SLA_TIMEOUT_COMPENSATION_COINS = 50;
 
     public const COINS_PER_PESO = 10;
-
     public const COIN_TO_PESO_VALUE = 0.10;
-
     public const MIN_CHECKOUT_REDEEMABLE_COINS = 10;
-
     public const MAX_CHECKOUT_COIN_OFFSET_PERCENT = 25.00;
 
     public const PESOS_PER_CASHBACK_COIN = 100.00;
-
     public const TEXT_REVIEW_REWARD_COINS = 5;
-
     public const PHOTO_REVIEW_REWARD_COINS = 10;
 
     protected const SCHEMA_CACHE_KEY = 'storkia_buyer_reward_schema_v2_ready';
@@ -204,7 +199,6 @@ class BuyerRewardService
                 $remainders[$key] = 0.0;
                 continue;
             }
-
             $exactQuota = $effectiveTotalCoins * ($sub / $totalEligibleSubtotal);
             $floorVal = (int) min($maxCoinsPerKey[$key], floor($exactQuota));
             $flooredCoins[$key] = $floorVal;
@@ -259,6 +253,7 @@ class BuyerRewardService
         string $sellerOrderNumber
     ): ?BuyerRewardTransaction {
         self::ensureTablesExist();
+
         if ($coinsToSpend <= 0) {
             return null;
         }
@@ -314,6 +309,7 @@ class BuyerRewardService
     public function restoreCoinsForSellerOrder(SellerOrder $sellerOrder): ?BuyerRewardTransaction
     {
         self::ensureTablesExist();
+
         $sellerOrder->loadMissing('extra');
         $coinsUsed = (int) ($sellerOrder->extra?->coins_used ?? 0);
         $buyerId = (int) $sellerOrder->buyer_id;
@@ -373,6 +369,7 @@ class BuyerRewardService
     public function awardOrderCompletionCashbackCoins(SellerOrder $sellerOrder): ?BuyerRewardTransaction
     {
         self::ensureTablesExist();
+
         $buyerId = (int) $sellerOrder->buyer_id;
         if ($buyerId <= 0) {
             return null;
@@ -443,6 +440,7 @@ class BuyerRewardService
     public function awardProductReviewCoins(OrderItemReview $review, bool $hasPhoto = false): ?BuyerRewardTransaction
     {
         self::ensureTablesExist();
+
         $buyerId = (int) $review->buyer_id;
         if ($buyerId <= 0) {
             return null;
@@ -464,7 +462,6 @@ class BuyerRewardService
             if (! $lockedReview) {
                 return null;
             }
-
             if (Schema::hasColumn('order_item_reviews', 'coins_rewarded') && (int) $lockedReview->coins_rewarded > 0) {
                 return null;
             }
@@ -562,6 +559,7 @@ class BuyerRewardService
     public function awardSellerTimeoutCompensation(SellerOrder $sellerOrder): ?BuyerRewardTransaction
     {
         self::ensureTablesExist();
+
         $buyerId = (int) $sellerOrder->buyer_id;
         if ($buyerId <= 0) {
             return null;
@@ -816,6 +814,7 @@ class BuyerRewardService
     public function spinWheel(int $buyerId): array
     {
         self::ensureTablesExist();
+
         $this->grantDailyLoginSpinIfEligible($buyerId);
 
         $result = DB::transaction(function () use ($buyerId) {
@@ -1013,8 +1012,8 @@ class BuyerRewardService
     public function redeemCoinsForVoucher(int $buyerId, string $catalogKey): array
     {
         self::ensureTablesExist();
-        $catalog = $this->getRedeemableVoucherCatalog();
 
+        $catalog = $this->getRedeemableVoucherCatalog();
         if (! isset($catalog[$catalogKey])) {
             throw ValidationException::withMessages([
                 'voucher' => 'Selected reward voucher package does not exist.',

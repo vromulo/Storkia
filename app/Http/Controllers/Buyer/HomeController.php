@@ -11,10 +11,13 @@ use App\Services\BuyerRewardService;
 use App\Services\OrderCompletionService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Blade;
 use Illuminate\Support\Facades\Schema;
 
 class HomeController extends Controller
 {
+    public const HOME_BATCH_SIZE = 12;
+
     public function __construct(
         protected BuyerRewardService $buyerRewardService,
         protected OrderCompletionService $orderCompletionService
@@ -27,11 +30,56 @@ class HomeController extends Controller
             ->whereHas('approval', function ($query) {
                 $query->where('status', 'Approved');
             })
-            ->latest()
+            ->orderByDesc('created_at')
+            ->orderByDesc('id')
             ->get();
 
         $user = $request->user();
         $products = $this->rankProductsByBuyerPreferences($allApprovedProducts, $user?->id);
+        $batchSize = self::HOME_BATCH_SIZE;
+        $totalProductsCount = $products->count();
+
+        if ($request->boolean('batch') || ($request->ajax() && $request->has('page'))) {
+            $rawExclude = $request->query('exclude', '');
+            $excludedIds = is_array($rawExclude)
+                ? array_values(array_unique(array_filter(array_map('intval', $rawExclude))))
+                : array_values(array_unique(array_filter(array_map('intval', explode(',', (string) $rawExclude)))));
+
+            if (! empty($excludedIds)) {
+                $remaining = $products
+                    ->reject(fn (Product $prod) => in_array((int) $prod->id, $excludedIds, true))
+                    ->values();
+                $batchItems = $remaining->take($batchSize)->values();
+                $hasMore = $remaining->count() > $batchItems->count();
+            } else {
+                $page = max(1, (int) $request->query('page', 1));
+                $batchItems = $products->forPage($page, $batchSize)->values();
+                $hasMore = ($page * $batchSize) < $totalProductsCount;
+            }
+
+            $html = '';
+            $loadedIds = [];
+
+            foreach ($batchItems as $product) {
+                $pid = (int) $product->id;
+                $loadedIds[] = $pid;
+                $cardHtml = Blade::render('<x-storefront.seller-product-card :product="$product" />', [
+                    'product' => $product,
+                ]);
+                $html .= '<div data-product-id="' . $pid . '" class="transition-all duration-300 ease-out">' . $cardHtml . '</div>';
+            }
+
+            return response()->json([
+                'success'    => true,
+                'html'       => $html,
+                'loaded_ids' => $loadedIds,
+                'count'      => count($loadedIds),
+                'total'      => $totalProductsCount,
+                'has_more'   => $hasMore,
+            ]);
+        }
+
+        $initialProducts = $products->take($batchSize)->values();
         $youMayAlsoLike = $products->take(18)->values();
 
         $rewardWallet = null;
@@ -41,7 +89,14 @@ class HomeController extends Controller
             $rewardWallet = $grant['wallet'];
         }
 
-        return view('buyer.home', compact('products', 'youMayAlsoLike', 'rewardWallet'));
+        return view('buyer.home', compact(
+            'products',
+            'initialProducts',
+            'batchSize',
+            'totalProductsCount',
+            'youMayAlsoLike',
+            'rewardWallet'
+        ));
     }
 
     public static function rankProductsByBuyerPreferences(Collection $products, ?int $buyerId = null, ?Product $contextProduct = null): Collection
@@ -133,7 +188,10 @@ class HomeController extends Controller
                 $score += 20;
             }
 
-            return $score + (($prod->created_at?->timestamp ?? 0) / 10000000000);
+            $timestampFraction = (($prod->created_at?->timestamp ?? 0) / 10000000000);
+            $idTieBreaker = ((int) $prod->id) / 100000000000000;
+
+            return $score + $timestampFraction + $idTieBreaker;
         })->values();
     }
 }

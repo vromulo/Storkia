@@ -126,6 +126,58 @@ class AuthApiController extends Controller
         ]);
     }
 
+    public function viewDocument(Request $request, string $type)
+    {
+        StorkSchemaBootstrapService::ensureTablesExist();
+        RiderMobileSchemaService::ensureTablesExist();
+
+        /** @var Rider $rider */
+        $rider = $request->user();
+
+        $path = match (strtolower(trim($type))) {
+            'license', 'drivers_license' => $rider->license_path,
+            'or_cr', 'orcr'              => $rider->or_cr_path,
+            default                      => null,
+        };
+
+        if (! $path || ! Storage::disk('public')->exists($path)) {
+            return response()->json([
+                'status'  => 'error',
+                'message' => 'Requested compliance document could not be found.',
+            ], 404);
+        }
+
+        return response()->file(Storage::disk('public')->path($path));
+    }
+
+    public function latestLocation(Request $request): JsonResponse
+    {
+        StorkSchemaBootstrapService::ensureTablesExist();
+        RiderMobileSchemaService::ensureTablesExist();
+
+        /** @var Rider $rider */
+        $rider = $request->user();
+
+        $latest = Schema::hasTable('rider_locations')
+            ? RiderLocation::where('rider_id', $rider->id)->orderByDesc('recorded_at')->first()
+            : null;
+
+        return response()->json([
+            'status' => 'success',
+            'data'   => [
+                'rider_id'               => (int) $rider->id,
+                'is_online'              => (bool) ($rider->is_online ?? false),
+                'current_latitude'       => $rider->current_latitude !== null ? (float) $rider->current_latitude : ($latest ? (float) $latest->latitude : null),
+                'current_longitude'      => $rider->current_longitude !== null ? (float) $rider->current_longitude : ($latest ? (float) $latest->longitude : null),
+                'location_accuracy'      => $rider->location_accuracy !== null ? (float) $rider->location_accuracy : ($latest && $latest->accuracy !== null ? (float) $latest->accuracy : null),
+                'speed'                  => $latest && $latest->speed !== null ? (float) $latest->speed : null,
+                'heading'                => $latest && $latest->heading !== null ? (float) $latest->heading : null,
+                'delivery_assignment_id' => $latest?->delivery_assignment_id ? (int) $latest->delivery_assignment_id : null,
+                'recorded_at'            => ($rider->location_updated_at ?? $latest?->recorded_at)?->toIso8601String(),
+            ],
+        ]);
+    }
+
     public function submitPreTripChecklist(Request $request): JsonResponse
     {
         StorkSchemaBootstrapService::ensureTablesExist();

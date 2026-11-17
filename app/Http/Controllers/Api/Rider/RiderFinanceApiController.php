@@ -15,6 +15,7 @@ use App\Models\WalletTransaction;
 use App\Models\WithdrawalRequest;
 use App\Services\AuditLoggerService;
 use App\Services\RealtimeBroadcastService;
+use App\Services\ReturnRefundLedgerService;
 use App\Services\RiderMobileSchemaService;
 use App\Services\RoleWalletService;
 use App\Services\StorkSchemaBootstrapService;
@@ -489,6 +490,12 @@ class RiderFinanceApiController extends Controller
                 ->get()
             : collect();
 
+        $realizedIncome = round((float) $walletTransactions->whereIn('entry_type', [
+            'commission_released',
+            ReturnRefundLedgerService::ENTRY_COMMISSION_RELEASED,
+            ReturnRefundLedgerService::ENTRY_RETURN_RIDER_PAY,
+        ])->sum('amount'), 2);
+
         return response()->json([
             'status' => 'success',
             'data'   => [
@@ -513,7 +520,7 @@ class RiderFinanceApiController extends Controller
                     'week_deliveries_count'  => $weekDeliveries->count(),
                     'period_delivered_count' => $deliveredCount,
                     'period_failed_count'    => $failedCount,
-                    'period_realized_income' => round((float) $walletTransactions->where('entry_type', 'commission_released')->sum('amount'), 2),
+                    'period_realized_income' => $realizedIncome,
                 ],
                 'transactions'        => $walletTransactions->map(fn (WalletTransaction $tx) => [
                     'id'                      => (int) $tx->id,
@@ -651,6 +658,28 @@ class RiderFinanceApiController extends Controller
                     'created_at'              => $r->created_at?->toIso8601String(),
                 ])->values()->all(),
             ],
+        ]);
+    }
+
+    public function badges(Request $request): JsonResponse
+    {
+        StorkSchemaBootstrapService::ensureTablesExist();
+        RiderMobileSchemaService::ensureTablesExist();
+
+        /** @var Rider $rider */
+        $rider = $request->user();
+
+        $activeAssignments = DeliveryAssignment::where('rider_id', $rider->id)
+            ->whereIn('status', ['assigned', 'accepted', 'collected', 'out_for_delivery'])
+            ->get();
+
+        $unremittedCount = CodCollection::where('rider_id', $rider->id)
+            ->where('status', 'collected')
+            ->count();
+
+        return response()->json([
+            'status' => 'success',
+            'data'   => $this->deliveryApiController->buildPendingActionBadges($rider, $activeAssignments, $unremittedCount),
         ]);
     }
 
