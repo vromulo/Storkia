@@ -7,28 +7,24 @@
 <div x-data="{
     activeTab: 'wallet',
     copiedCode: '',
+    visibleWalletLimit: 6,
+    visibleDiscoverLimit: 6,
     copyVoucherCode(code) {
+        if (!code || !navigator.clipboard) return;
         navigator.clipboard.writeText(code);
         this.copiedCode = code;
+        window.dispatchEvent(new CustomEvent('toast', {
+            detail: {
+                title: 'Voucher Code Copied',
+                message: 'Copied voucher code ' + code + ' to your clipboard.',
+                type: 'success'
+            }
+        }));
         setTimeout(() => {
             if (this.copiedCode === code) this.copiedCode = '';
         }, 2000);
     }
 }" class="space-y-6 select-none min-w-0 max-w-full">
-
-    @if(session('success'))
-        <div class="p-4 rounded-2xl bg-green-50 border border-green-200 text-green-700 text-xs sm:text-sm font-bold">
-            {{ session('success') }}
-        </div>
-    @endif
-
-    @if($errors->any())
-        <div class="p-4 rounded-2xl bg-red-50 border border-red-200 text-red-700 text-xs sm:text-sm space-y-1">
-            @foreach($errors->all() as $err)
-                <p class="font-semibold">{{ $err }}</p>
-            @endforeach
-        </div>
-    @endif
 
     <div class="p-5 sm:p-6 rounded-3xl bg-gradient-to-r from-primary-dark via-primary to-secondary text-white shadow-sm">
         <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -49,9 +45,9 @@
                        required
                        maxlength="20"
                        placeholder="ENTER VOUCHER CODE"
-                       class="flex-1 md:w-56 px-4 py-3 rounded-2xl bg-white text-text-main font-mono font-bold text-xs uppercase tracking-wider outline-none placeholder:text-text-muted/60 shadow-inner">
+                       class="flex-1 md:w-56 px-4 py-3 rounded-2xl bg-surface text-text-main font-mono font-bold text-xs uppercase tracking-wider outline-none placeholder:text-text-muted/60 shadow-inner">
                 <button type="submit"
-                        class="px-5 py-3 rounded-2xl bg-text-main hover:bg-dark-grey text-white text-xs font-extrabold uppercase tracking-wider shadow-md transition-colors cursor-pointer shrink-0">
+                        class="px-5 py-3 rounded-2xl bg-primary-dark hover:bg-text-main text-white text-xs font-extrabold uppercase tracking-wider shadow-md transition-colors cursor-pointer shrink-0">
                     Claim Voucher
                 </button>
             </form>
@@ -74,7 +70,7 @@
             </button>
         </div>
 
-        <a href="{{ route('cart.index') }}" class="text-xs font-bold text-primary hover:underline">
+        <a href="{{ route('cart.index') }}" class="text-xs font-bold text-primary hover:underline cursor-pointer">
             Go to Shopping Cart &rarr;
         </a>
     </div>
@@ -82,27 +78,27 @@
     <div x-show="activeTab === 'wallet'" class="space-y-4">
         @if($claimedRecords->isEmpty())
             <div class="bg-surface rounded-3xl border border-border-subtle p-12 text-center space-y-3">
-                <h3 class="text-base font-bold text-text-main">Your Voucher Wallet is Empty</h3>
+                <h3 class="text-base font-bold text-primary-dark">Your Voucher Wallet is Empty</h3>
                 <p class="text-xs text-text-muted max-w-md mx-auto">
                     Switch to the "Discover Claimable Vouchers" tab or enter a promo code above to claim discounts for your next checkout.
                 </p>
                 <button type="button"
                         @click="activeTab = 'discover'"
-                        class="px-5 py-2.5 rounded-xl bg-primary text-white text-xs font-bold cursor-pointer">
+                        class="px-5 py-2.5 rounded-xl bg-primary hover:bg-primary-dark text-white text-xs font-bold transition-colors cursor-pointer">
                     Browse Available Vouchers
                 </button>
             </div>
         @else
             <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                @foreach($claimedRecords as $claim)
+                @foreach($claimedRecords as $cIdx => $claim)
                     @php
                         $v = $claim->voucher;
                         if (!$v) continue;
                         $isExhausted = (int) $claim->times_used >= (int) $v->per_buyer_limit || (int) $v->used_count >= (int) $v->total_usage_limit;
                         $isExpired = !$v->isCurrentlyOngoing();
                         $stubColor = match($v->scope) {
-                            'shipping' => 'from-emerald-600 to-teal-700',
-                            'platform' => 'from-purple-700 to-indigo-900',
+                            'shipping' => 'from-primary-dark to-primary',
+                            'platform' => 'from-primary via-primary-dark to-secondary',
                             default    => 'from-primary to-primary-dark',
                         };
                         $scopeLabel = match($v->scope) {
@@ -111,7 +107,9 @@
                             default    => 'STORE VOUCHER',
                         };
                     @endphp
-                    <div class="relative flex rounded-2xl border border-border-subtle bg-surface shadow-xs overflow-hidden {{ ($isExhausted || $isExpired) ? 'opacity-60 grayscale' : '' }}">
+                    <div x-show="{{ $cIdx }} < visibleWalletLimit"
+                         x-transition
+                         class="relative flex rounded-2xl border border-border-subtle bg-surface shadow-xs overflow-hidden {{ ($isExhausted || $isExpired) ? 'opacity-60 grayscale' : '' }}">
                         <div class="w-32 sm:w-36 bg-gradient-to-br {{ $stubColor }} text-white p-4 flex flex-col items-center justify-center text-center relative shrink-0 border-r-2 border-dashed border-white/40">
                             <div class="w-4 h-4 rounded-full bg-surface absolute -top-2 -right-2 border border-border-subtle"></div>
                             <div class="w-4 h-4 rounded-full bg-surface absolute -bottom-2 -right-2 border border-border-subtle"></div>
@@ -123,11 +121,11 @@
                                 @if($v->discount_type === 'percentage')
                                     {{ rtrim(rtrim(number_format((float) $v->discount_value, 2), '0'), '.') }}% OFF
                                 @else
-                                    ₱{{ number_format((float) $v->discount_value, 0) }} OFF
+                                    &#8369;{{ number_format((float) $v->discount_value, 0) }} OFF
                                 @endif
                             </div>
                             <span class="text-[10px] text-white/90 mt-1 font-medium">
-                                Min. ₱{{ number_format((float) $v->min_spend, 0) }}
+                                Min. &#8369;{{ number_format((float) $v->min_spend, 0) }}
                             </span>
                         </div>
 
@@ -141,11 +139,11 @@
                                         <h4 class="font-bold text-sm text-text-main mt-1.5 truncate">{{ $v->title }}</h4>
                                     </div>
                                     @if($isExhausted)
-                                        <span class="px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 text-[10px] font-bold shrink-0">Used</span>
+                                        <span class="px-2 py-0.5 rounded-full bg-surface-subtle text-text-muted text-[10px] font-bold shrink-0">Used</span>
                                     @elseif($isExpired)
-                                        <span class="px-2 py-0.5 rounded-full bg-red-100 text-red-700 text-[10px] font-bold shrink-0">Expired</span>
+                                        <span class="px-2 py-0.5 rounded-full bg-danger/10 text-danger text-[10px] font-bold shrink-0">Expired</span>
                                     @else
-                                        <span class="px-2 py-0.5 rounded-full bg-green-100 text-green-700 text-[10px] font-bold shrink-0">Ready</span>
+                                        <span class="px-2 py-0.5 rounded-full bg-success/15 text-success text-[10px] font-bold shrink-0">Ready</span>
                                     @endif
                                 </div>
 
@@ -176,22 +174,32 @@
                     </div>
                 @endforeach
             </div>
+
+            @if($claimedRecords->count() > 6)
+                <div class="pt-2 flex justify-center">
+                    <button type="button"
+                            @click="visibleWalletLimit = visibleWalletLimit >= {{ $claimedRecords->count() }} ? 6 : visibleWalletLimit + 6"
+                            class="inline-flex items-center gap-2 px-5 py-2 rounded-full bg-primary/10 hover:bg-primary text-primary hover:text-white border border-primary/30 text-xs font-extrabold transition-colors cursor-pointer">
+                        <span x-text="visibleWalletLimit >= {{ $claimedRecords->count() }} ? 'See Less Claimed Vouchers' : 'See More Claimed Vouchers (' + ({{ $claimedRecords->count() }} - visibleWalletLimit) + ' remaining)'"></span>
+                    </button>
+                </div>
+            @endif
         @endif
     </div>
 
     <div x-show="activeTab === 'discover'" x-cloak class="space-y-4">
         @if($discoverableVouchers->isEmpty())
             <div class="bg-surface rounded-3xl border border-border-subtle p-12 text-center space-y-2">
-                <h3 class="text-base font-bold text-text-main">All Available Vouchers Claimed!</h3>
+                <h3 class="text-base font-bold text-primary-dark">All Available Vouchers Claimed!</h3>
                 <p class="text-xs text-text-muted">You have already claimed all public vouchers into your wallet.</p>
             </div>
         @else
             <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                @foreach($discoverableVouchers as $v)
+                @foreach($discoverableVouchers as $dIdx => $v)
                     @php
                         $stubColor = match($v->scope) {
-                            'shipping' => 'from-emerald-600 to-teal-700',
-                            'platform' => 'from-purple-700 to-indigo-900',
+                            'shipping' => 'from-primary-dark to-primary',
+                            'platform' => 'from-primary via-primary-dark to-secondary',
                             default    => 'from-primary to-primary-dark',
                         };
                         $scopeLabel = match($v->scope) {
@@ -200,7 +208,9 @@
                             default    => 'STORE VOUCHER',
                         };
                     @endphp
-                    <div class="relative flex rounded-2xl border border-border-subtle bg-surface shadow-xs overflow-hidden hover:border-primary/50 transition-all">
+                    <div x-show="{{ $dIdx }} < visibleDiscoverLimit"
+                         x-transition
+                         class="relative flex rounded-2xl border border-border-subtle bg-surface shadow-xs overflow-hidden hover:border-primary/50 transition-all">
                         <div class="w-32 sm:w-36 bg-gradient-to-br {{ $stubColor }} text-white p-4 flex flex-col items-center justify-center text-center relative shrink-0 border-r-2 border-dashed border-white/40">
                             <div class="w-4 h-4 rounded-full bg-surface absolute -top-2 -right-2 border border-border-subtle"></div>
                             <div class="w-4 h-4 rounded-full bg-surface absolute -bottom-2 -right-2 border border-border-subtle"></div>
@@ -212,11 +222,11 @@
                                 @if($v->discount_type === 'percentage')
                                     {{ rtrim(rtrim(number_format((float) $v->discount_value, 2), '0'), '.') }}% OFF
                                 @else
-                                    ₱{{ number_format((float) $v->discount_value, 0) }} OFF
+                                    &#8369;{{ number_format((float) $v->discount_value, 0) }} OFF
                                 @endif
                             </div>
                             <span class="text-[10px] text-white/90 mt-1 font-medium">
-                                Min. ₱{{ number_format((float) $v->min_spend, 0) }}
+                                Min. &#8369;{{ number_format((float) $v->min_spend, 0) }}
                             </span>
                         </div>
 
@@ -253,8 +263,17 @@
                     </div>
                 @endforeach
             </div>
+
+            @if($discoverableVouchers->count() > 6)
+                <div class="pt-2 flex justify-center">
+                    <button type="button"
+                            @click="visibleDiscoverLimit = visibleDiscoverLimit >= {{ $discoverableVouchers->count() }} ? 6 : visibleDiscoverLimit + 6"
+                            class="inline-flex items-center gap-2 px-5 py-2 rounded-full bg-primary/10 hover:bg-primary text-primary hover:text-white border border-primary/30 text-xs font-extrabold transition-colors cursor-pointer">
+                        <span x-text="visibleDiscoverLimit >= {{ $discoverableVouchers->count() }} ? 'See Less Discoverable Vouchers' : 'See More Discoverable Vouchers (' + ({{ $discoverableVouchers->count() }} - visibleDiscoverLimit) + ' remaining)'"></span>
+                    </button>
+                </div>
+            @endif
         @endif
     </div>
-
 </div>
 @endsection

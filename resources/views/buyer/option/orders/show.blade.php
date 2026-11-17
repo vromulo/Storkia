@@ -15,17 +15,22 @@
     $payMethod = $sellerOrder->effective_payment_method;
     $paymentSubmission = $sellerOrder->paymentSubmission;
     $extra = $sellerOrder->extra;
+
     $sellerOrder->loadMissing('returnRequest');
     $returnRequest = $sellerOrder->returnRequest;
+
     $canBuyerCancel = $sellerOrder->canBuyerCancelPreShipment();
     $isRated = $sellerOrder->isRatedByBuyer();
+
     $identityVerification = auth()->user()?->identityVerification;
     $identityStatus = $identityVerification?->status ?? 'unsubmitted';
     $isIdentityVerified = $isIdentityVerified ?? ($identityStatus === 'verified');
+
     $proofImageUrl = $latestProof ? route('user.orders.proof-image', $latestProof->id) : '';
     $invoiceViewUrl = route('user.orders.invoice', ['sellerOrder' => $sellerOrder->id, 'print' => 0]);
     $invoicePrintUrl = route('user.orders.invoice', ['sellerOrder' => $sellerOrder->id, 'print' => 1]);
     $invoiceDownloadUrl = route('user.orders.invoice', ['sellerOrder' => $sellerOrder->id, 'download' => 1]);
+
     $deliveryChatMessages = $deliveryChatMessages ?? collect();
     $isRiderChatOpenable = $shipment && $shipment->current_rider_id && in_array($shipment->status, ['rider_assigned', 'out_for_delivery', 'delivery_failed'], true);
 
@@ -107,6 +112,7 @@
     window.storkiaBuyerOrderShowState = function () {
         return {
             cancelModalOpen: false,
+            cancelFlaggedModalOpen: false,
             proofModalOpen: false,
             gcashScreenshotModalOpen: false,
             riderChatModalOpen: false,
@@ -114,8 +120,17 @@
             isSubmittingCancel: false,
             isPrintingInvoice: false,
             cancelReason: '',
+            cancelReasonDropdownOpen: false,
+            cancelReasonOptions: [
+                'Changed my mind',
+                'Need to change delivery address',
+                'Forgot to apply voucher code',
+                'Ordered wrong item or variation'
+            ],
             cancelNotes: '',
             cancelError: '',
+            showAllTracking: false,
+            showAllOrderItems: false,
             liveMap: null,
             driverMarker: null,
             destMarker: null,
@@ -202,7 +217,6 @@
                         }
                     }
                 };
-
                 window.addEventListener('storkia:ws-event', this._wsListener);
             },
 
@@ -216,7 +230,6 @@
                 if (this.isPrintingInvoice) return;
                 this.isPrintingInvoice = true;
                 this.notify('Preparing Official E-Invoice for printing...', 'info');
-
                 try {
                     let frame = document.getElementById('storkia-hidden-invoice-print-frame');
                     if (frame) {
@@ -231,7 +244,6 @@
                     frame.style.height = '0';
                     frame.style.border = '0';
                     frame.src = @js($invoiceViewUrl);
-
                     frame.onload = () => {
                         this.isPrintingInvoice = false;
                         try {
@@ -241,12 +253,10 @@
                             window.open(@js($invoicePrintUrl), '_blank', 'noopener');
                         }
                     };
-
                     frame.onerror = () => {
                         this.isPrintingInvoice = false;
                         window.open(@js($invoicePrintUrl), '_blank', 'noopener');
                     };
-
                     document.body.appendChild(frame);
                 } catch (e) {
                     this.isPrintingInvoice = false;
@@ -347,7 +357,6 @@
 
                     const targetLat = data.driver.role === 'Courier' ? hubLat : destLat;
                     const targetLng = data.driver.role === 'Courier' ? hubLng : destLng;
-
                     if (this.routeLine) {
                         this.routeLine.setLatLngs([[drvLat, drvLng], [targetLat, targetLng]]);
                     } else {
@@ -393,6 +402,7 @@
                     return;
                 }
                 if (this.isSendingChat) return;
+
                 this.isSendingChat = true;
                 try {
                     const socketId = window.Echo && typeof window.Echo.socketId === 'function' ? window.Echo.socketId() : null;
@@ -405,6 +415,7 @@
                     if (socketId) {
                         headers['X-Socket-ID'] = socketId;
                     }
+
                     const res = await fetch('{{ route('user.orders.delivery-chat.send', $sellerOrder->id) }}', {
                         method: 'POST',
                         headers,
@@ -438,7 +449,7 @@
      class="space-y-6 select-none w-full min-w-0 max-w-full overflow-x-hidden">
 
     <div class="flex flex-wrap items-center justify-between gap-3">
-        <a href="{{ route('user.orders') }}" class="inline-flex items-center gap-1.5 text-xs font-bold text-text-muted hover:text-primary transition-colors">
+        <a href="{{ route('user.orders') }}" class="inline-flex items-center gap-1.5 text-xs font-bold text-text-muted hover:text-primary transition-colors cursor-pointer">
             <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7" />
             </svg>
@@ -469,7 +480,7 @@
             @if($shipment && $shipment->currentRider)
                 <button type="button"
                         @click.stop="openRiderChat()"
-                        class="px-3.5 py-1 rounded-full text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs transition-colors cursor-pointer inline-flex items-center gap-1.5">
+                        class="px-3.5 py-1 rounded-full text-xs font-bold bg-primary-dark hover:bg-primary text-white shadow-xs transition-colors cursor-pointer inline-flex items-center gap-1.5">
                     <span>Chat with Rider ({{ $shipment->currentRider->first_name }})</span>
                 </button>
             @endif
@@ -486,28 +497,15 @@
                 </button>
             @endif
 
-            <span class="px-2.5 py-1 rounded-full text-[11px] font-bold uppercase {{ $payMethod === 'WALLET' ? 'bg-emerald-100 text-emerald-800 border border-emerald-200' : ($payMethod === 'GCASH' ? 'bg-blue-100 text-blue-800 border border-blue-200' : 'bg-surface-subtle text-text-main border border-border-subtle') }}">
+            <span class="px-2.5 py-1 rounded-full text-[11px] font-bold uppercase {{ $payMethod === 'WALLET' || $payMethod === 'GCASH' ? 'bg-primary/15 text-primary-dark border border-primary/25' : 'bg-surface-subtle text-text-main border border-border-subtle' }}">
                 {{ $payMethod }} ({{ strtoupper($sellerOrder->payment_status) }})
             </span>
-            <span class="px-3 py-1 rounded-full text-xs font-bold {{ $sellerOrder->status === 'pending_buyer_response' ? 'bg-amber-100 text-amber-800 border border-amber-300' : 'bg-brand-light/50 text-primary-dark border border-border-subtle' }}">
+
+            <span class="px-3 py-1 rounded-full text-xs font-bold bg-brand-light/50 text-primary-dark border border-border-subtle">
                 {{ $sellerOrder->status_label }}
             </span>
         </div>
     </div>
-
-    @if(session('success'))
-        <div data-storkia-flash-success class="p-4 rounded-2xl bg-green-50 border border-green-200 text-green-700 text-xs sm:text-sm font-bold">
-            {{ session('success') }}
-        </div>
-    @endif
-
-    @if($errors->any())
-        <div data-storkia-flash-error class="p-4 rounded-2xl bg-red-50 border border-red-200 text-red-700 text-xs sm:text-sm space-y-1">
-            @foreach($errors->all() as $err)
-                <p class="font-semibold">{{ $err }}</p>
-            @endforeach
-        </div>
-    @endif
 
     @if($sellerOrder->status === 'pending_seller_acceptance' && $sellerOrder->acceptance_deadline_at)
         <div class="p-4 sm:p-5 rounded-2xl bg-brand-light/25 border border-primary/25 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
@@ -517,10 +515,10 @@
                     <strong class="text-primary-dark">Awaiting Seller Acceptance</strong>
                 </div>
                 <p class="text-text-muted">
-                    The seller has until <strong>{{ $sellerOrder->acceptance_deadline_at->format('M d, Y h:i A') }}</strong> ({{ $sellerOrder->acceptance_deadline_at->diffForHumans() }}) to accept your order. If they fail to respond in time, the order auto-cancels and you automatically earn <strong>+50 Storkia Coins</strong> in <a href="{{ route('user.points') }}" class="text-primary font-bold underline">My Coins</a>!
+                    The seller has until <strong>{{ $sellerOrder->acceptance_deadline_at->format('M d, Y h:i A') }}</strong> ({{ $sellerOrder->acceptance_deadline_at->diffForHumans() }}) to accept your order. If they fail to respond in time, the order auto-cancels and you automatically earn <strong>+50 Storkia Coins</strong> in <a href="{{ route('user.points') }}" class="text-primary font-bold underline cursor-pointer">My Coins</a>!
                 </p>
             </div>
-            <a href="{{ route('user.points') }}" class="px-4 py-2 rounded-xl bg-primary/10 hover:bg-primary text-primary hover:text-white font-bold transition-colors shrink-0 self-start sm:self-auto">
+            <a href="{{ route('user.points') }}" class="px-4 py-2 rounded-xl bg-primary/10 hover:bg-primary text-primary hover:text-white font-bold transition-colors shrink-0 self-start sm:self-auto cursor-pointer">
                 View My Coins &rarr;
             </a>
         </div>
@@ -531,14 +529,13 @@
             <div class="flex flex-wrap items-center justify-between gap-3">
                 <div>
                     <div class="flex items-center gap-2">
-                        <span class="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-ping"></span>
+                        <span class="w-2.5 h-2.5 rounded-full bg-success animate-ping"></span>
                         <span class="text-[10px] font-extrabold uppercase tracking-wider text-primary">Live GPS Parcel &amp; Driver Map</span>
                     </div>
                     <h3 class="text-base font-bold text-primary-dark mt-0.5">
                         Real-Time Route Tracking (<span class="font-mono">{{ $shipment->tracking_number }}</span>)
                     </h3>
                 </div>
-
                 <div class="flex flex-wrap items-center gap-2 text-xs">
                     <template x-if="liveTrackingData && liveTrackingData.driver">
                         <div class="px-3 py-1.5 rounded-xl bg-surface-subtle border border-border-subtle flex items-center gap-2">
@@ -553,30 +550,29 @@
                     @if($shipment->currentRider)
                         <button type="button"
                                 @click="openRiderChat()"
-                                class="px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs cursor-pointer">
+                                class="px-3.5 py-1.5 rounded-xl bg-primary-dark hover:bg-primary text-white font-bold text-xs transition-colors cursor-pointer">
                             Message Rider
                         </button>
                     @endif
                 </div>
             </div>
-
             <div id="storkia-buyer-live-map" class="w-full h-72 rounded-2xl border border-border-subtle overflow-hidden z-10"></div>
         </div>
     @endif
 
     @if($sellerOrder->status === 'completed')
-        <div class="p-5 rounded-3xl {{ $isRated ? 'bg-green-50 border-2 border-green-200' : 'bg-amber-50 border-2 border-amber-300' }} flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div class="p-5 rounded-3xl {{ $isRated ? 'bg-success/10 border-2 border-success/25' : 'bg-brand-light/35 border-2 border-primary/30' }} flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div>
                 @if(!$isRated)
-                    <span class="px-2.5 py-0.5 rounded-full bg-amber-200 text-amber-950 text-[10px] font-extrabold uppercase">Next Step: Rate Your Order (+Up to 10 Coins/Item)</span>
-                    <h3 class="text-base font-bold text-amber-950 mt-1">Order Received! Rate Product, Condition, Seller, Logistics &amp; Rider</h3>
-                    <p class="text-xs text-amber-900 mt-0.5">
+                    <span class="px-2.5 py-0.5 rounded-full bg-primary text-white text-[10px] font-extrabold uppercase">Next Step: Rate Your Order (+Up to 10 Coins/Item)</span>
+                    <h3 class="text-base font-bold text-primary-dark mt-1">Order Received! Rate Product, Condition, Seller, Logistics &amp; Rider</h3>
+                    <p class="text-xs text-text-main mt-0.5">
                         Leave your 5-point rating to earn <strong>+5 to +10 Storkia Coins per item</strong> and unlock the <strong>Buy Again</strong> button.
                     </p>
                 @else
-                    <span class="px-2.5 py-0.5 rounded-full bg-green-200 text-green-900 text-[10px] font-extrabold uppercase">Order Completed &amp; Rated ({{ number_format((float) $sellerOrder->serviceRating->overall_average_rating, 1) }} ★)</span>
-                    <h3 class="text-base font-bold text-green-950 mt-1">Thank You for Rating This Order!</h3>
-                    <p class="text-xs text-green-800 mt-0.5">
+                    <span class="px-2.5 py-0.5 rounded-full bg-success/20 text-success text-[10px] font-extrabold uppercase">Order Completed &amp; Rated ({{ number_format((float) $sellerOrder->serviceRating->overall_average_rating, 1) }} &#9733;)</span>
+                    <h3 class="text-base font-bold text-primary-dark mt-1">Thank You for Rating This Order!</h3>
+                    <p class="text-xs text-text-main mt-0.5">
                         Your ratings for the product, packaging condition, seller, logistics hub, and rider have been recorded.
                     </p>
                 @endif
@@ -586,20 +582,20 @@
                 <a href="{{ $invoiceDownloadUrl }}"
                    data-no-live
                    download="INV-{{ str_replace('SO-', '', $sellerOrder->seller_order_number) }}.pdf"
-                   class="px-4 py-3 rounded-2xl bg-white border border-border-subtle hover:border-primary text-primary-dark text-xs font-bold shadow-2xs transition-colors">
+                   class="px-4 py-3 rounded-2xl bg-surface border border-border-subtle hover:border-primary text-primary-dark text-xs font-bold shadow-2xs transition-colors cursor-pointer">
                     Download E-Invoice (PDF)
                 </a>
                 @if($latestProof)
                     <button type="button"
                             @click.stop="proofModalOpen = true"
-                            class="px-4 py-3 rounded-2xl bg-white border border-border-subtle hover:border-primary text-primary-dark text-xs font-bold shadow-2xs transition-colors cursor-pointer">
+                            class="px-4 py-3 rounded-2xl bg-surface border border-border-subtle hover:border-primary text-primary-dark text-xs font-bold shadow-2xs transition-colors cursor-pointer">
                         Inspect Delivery Photo
                     </button>
                 @endif
                 @if(!$isRated)
                     <a href="{{ route('user.orders.rate.show', $sellerOrder->id) }}"
-                       class="inline-flex items-center gap-2 px-5 py-3 rounded-2xl bg-amber-500 hover:bg-amber-600 text-white text-xs font-extrabold shadow-sm transition-colors">
-                        ★ Rate &amp; Earn Coins
+                       class="inline-flex items-center gap-2 px-5 py-3 rounded-2xl bg-primary hover:bg-primary-dark text-white text-xs font-extrabold shadow-sm transition-colors cursor-pointer">
+                        &#9733; Rate &amp; Earn Coins
                     </a>
                 @else
                     <form action="{{ route('user.orders.buy-again', $sellerOrder->id) }}" method="POST" class="m-0">
@@ -614,36 +610,35 @@
     @endif
 
     @if($sellerOrder->status === 'pending_buyer_response')
-        <div class="p-6 rounded-3xl bg-amber-50 border-2 border-amber-300 space-y-4">
-            <div class="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-amber-200">
+        <div class="p-6 rounded-3xl bg-brand-light/35 border-2 border-primary/30 space-y-4">
+            <div class="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-border-subtle">
                 <div>
-                    <span class="px-2.5 py-0.5 rounded-full bg-amber-200 text-amber-950 text-[10px] font-extrabold uppercase">
+                    <span class="px-2.5 py-0.5 rounded-full bg-primary-dark text-white text-[10px] font-extrabold uppercase">
                         Action Required — Seller Flagged Online Payment
                     </span>
-                    <h3 class="text-base font-bold text-amber-950 mt-1">
+                    <h3 class="text-base font-bold text-primary-dark mt-1">
                         Do You Want to Continue This Transaction via Cash on Delivery (COD)?
                     </h3>
                 </div>
                 @if($paymentSubmission)
                     <button type="button"
                             @click.stop="gcashScreenshotModalOpen = true"
-                            class="px-3.5 py-2 rounded-xl bg-white border border-amber-300 text-amber-950 text-xs font-bold cursor-pointer">
+                            class="px-3.5 py-2 rounded-xl bg-surface border border-border-subtle hover:border-primary text-primary-dark text-xs font-bold cursor-pointer">
                         View Previous Payment Screenshot
                     </button>
                 @endif
             </div>
 
-            <div class="p-4 rounded-2xl bg-white border border-amber-200 space-y-2 text-xs">
-                <p class="text-amber-950 font-semibold">
+            <div class="p-4 rounded-2xl bg-surface border border-border-subtle space-y-2 text-xs">
+                <p class="text-text-main font-semibold">
                     Seller Report Reason: <em class="text-danger">"{{ $paymentSubmission?->suspicious_reason ?? 'Submitted payment details could not be verified.' }}"</em>
                 </p>
             </div>
 
             <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1">
-                <p class="text-xs text-amber-900 font-semibold leading-relaxed">
-                    Continuing this transaction will switch the payment method to <strong>Cash on Delivery (COD — ₱{{ number_format((float) $sellerOrder->total_amount, 2) }})</strong> so the Seller can accept and ship your order. Or you may cancel the order immediately.
+                <p class="text-xs text-text-main font-semibold leading-relaxed">
+                    Continuing this transaction will switch the payment method to <strong>Cash on Delivery (COD &#8369;{{ number_format((float) $sellerOrder->total_amount, 2) }})</strong> so the Seller can accept and ship your order. Or you may cancel the order immediately.
                 </p>
-
                 <div class="flex flex-wrap items-center gap-2.5 shrink-0">
                     <form action="{{ route('user.orders.switch-to-cod', $sellerOrder->id) }}" method="POST" class="m-0">
                         @csrf
@@ -652,15 +647,11 @@
                         </button>
                     </form>
 
-                    <form action="{{ route('user.orders.cancel-flagged-payment', $sellerOrder->id) }}"
-                          method="POST"
-                          onsubmit="return confirm('Cancel this order immediately? Reserved stock and any applied vouchers will be restored.');"
-                          class="m-0">
-                        @csrf
-                        <button type="submit" class="px-4 py-2.5 rounded-xl bg-white border border-red-300 hover:bg-red-50 text-danger text-xs font-bold transition-colors cursor-pointer">
-                            Cancel Order Immediately
-                        </button>
-                    </form>
+                    <button type="button"
+                            @click="cancelFlaggedModalOpen = true"
+                            class="px-4 py-2.5 rounded-xl bg-surface border border-danger/30 hover:bg-danger/10 text-danger text-xs font-bold transition-colors cursor-pointer">
+                        Cancel Order Immediately
+                    </button>
                 </div>
             </div>
         </div>
@@ -677,28 +668,28 @@
             </div>
             <button type="button"
                     @click.stop="cancelReason = ''; cancelNotes = ''; cancelError = ''; cancelModalOpen = true"
-                    class="px-4 py-2.5 rounded-xl border border-red-300 bg-white hover:bg-red-50 text-danger font-bold transition-colors cursor-pointer shrink-0 self-start sm:self-auto">
+                    class="px-4 py-2.5 rounded-xl border border-danger/30 bg-surface hover:bg-danger/10 text-danger font-bold transition-colors cursor-pointer shrink-0 self-start sm:self-auto">
                 Cancel Order
             </button>
         </div>
     @endif
 
     @if($sellerOrder->status === 'delivered' && !$sellerOrder->has_unresolved_dispute && !$returnRequest)
-        <div class="p-5 rounded-2xl bg-blue-50 border border-blue-200 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div class="p-5 rounded-2xl bg-brand-light/30 border border-primary/25 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div>
                 <div class="flex flex-wrap items-center gap-2">
-                    <h3 class="text-sm font-bold text-blue-900">Package Delivered — Confirm Receipt or Request Return &amp; Refund</h3>
+                    <h3 class="text-sm font-bold text-primary-dark">Package Delivered — Confirm Receipt or Request Return &amp; Refund</h3>
                     @if($isIdentityVerified)
-                        <span class="px-2 py-0.5 rounded-full bg-green-100 text-green-800 text-[10px] font-bold">Valid ID Verified ✓</span>
+                        <span class="px-2 py-0.5 rounded-full bg-success/15 text-success text-[10px] font-bold">Valid ID Verified &#10003;</span>
                     @elseif($identityStatus === 'pending')
-                        <span class="px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 text-[10px] font-bold">ID Under Admin Review (Required for Refund)</span>
+                        <span class="px-2 py-0.5 rounded-full bg-brand-light text-primary-dark text-[10px] font-bold">ID Under Admin Review (Required for Refund)</span>
                     @elseif($identityStatus === 'failed')
-                        <span class="px-2 py-0.5 rounded-full bg-red-100 text-red-800 text-[10px] font-bold">ID Verification Rejected (Resubmit for Refund)</span>
+                        <span class="px-2 py-0.5 rounded-full bg-danger/10 text-danger text-[10px] font-bold">ID Verification Rejected (Resubmit for Refund)</span>
                     @else
-                        <span class="px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 text-[10px] font-bold">Valid ID Required for Refund</span>
+                        <span class="px-2 py-0.5 rounded-full bg-brand-light text-primary-dark text-[10px] font-bold">Valid ID Required for Refund</span>
                     @endif
                 </div>
-                <p class="text-xs text-blue-800 mt-1 leading-relaxed">
+                <p class="text-xs text-text-main mt-1 leading-relaxed">
                     Please inspect your items. If you don't confirm or report a problem by
                     <strong>{{ $sellerOrder->confirmation_deadline_at?->format('M d, Y h:i A') }}</strong>
                     ({{ $sellerOrder->confirmation_deadline_at?->diffForHumans() }}),
@@ -709,25 +700,25 @@
                 @if($latestProof)
                     <button type="button"
                             @click.stop="proofModalOpen = true"
-                            class="px-4 py-2.5 rounded-xl border border-blue-300 bg-white hover:bg-blue-100 text-blue-900 text-xs font-bold transition-colors cursor-pointer">
+                            class="px-4 py-2.5 rounded-xl border border-primary/30 bg-surface hover:bg-brand-light/40 text-primary-dark text-xs font-bold transition-colors cursor-pointer">
                         Inspect Delivery Photo
                     </button>
                 @endif
                 @if($isIdentityVerified)
                     <a href="{{ route('user.orders.return.create', $sellerOrder->id) }}"
-                       class="px-4 py-2.5 rounded-xl border border-red-300 bg-white hover:bg-red-50 text-red-600 text-xs font-bold transition-colors">
+                       class="px-4 py-2.5 rounded-xl border border-danger/30 bg-surface hover:bg-danger/10 text-danger text-xs font-bold transition-colors cursor-pointer">
                         Request Return / Refund
                     </a>
                 @else
                     <button type="button"
                             @click.stop="idRequiredModalOpen = true; notify('Valid Government ID verification is required before requesting a Return & Refund.', 'warning')"
-                            class="px-4 py-2.5 rounded-xl border border-amber-400 bg-white hover:bg-amber-50 text-amber-950 text-xs font-bold transition-colors cursor-pointer">
+                            class="px-4 py-2.5 rounded-xl border border-primary/40 bg-surface hover:bg-brand-light/40 text-primary-dark text-xs font-bold transition-colors cursor-pointer">
                         Request Return / Refund (Verify ID)
                     </button>
                 @endif
                 <form action="{{ route('user.orders.confirm-receipt', $sellerOrder->id) }}" method="POST" class="m-0">
                     @csrf
-                    <button type="submit" class="px-5 py-2.5 rounded-xl bg-green-600 hover:bg-green-700 text-white text-xs font-bold shadow-xs transition-colors cursor-pointer">
+                    <button type="submit" class="px-5 py-2.5 rounded-xl bg-primary hover:bg-primary-dark text-white text-xs font-bold shadow-xs transition-colors cursor-pointer">
                         Confirm Order Received
                     </button>
                 </form>
@@ -739,16 +730,14 @@
         @php
             $rrStatus = $returnRequest->status;
             $rrTone = match ($rrStatus) {
-                'refunded'                                 => 'bg-green-50 border-green-200 text-green-900',
-                'rejected', 'closed', 'rejected_by_seller' => 'bg-red-50 border-red-200 text-red-900',
-                'refund_pending'                           => 'bg-blue-50 border-blue-200 text-blue-900',
-                default                                    => 'bg-amber-50 border-amber-200 text-amber-900',
+                'refunded'                                 => 'bg-success/10 border-success/25 text-text-main',
+                'rejected', 'closed', 'rejected_by_seller' => 'bg-danger/10 border-danger/25 text-danger',
+                default                                    => 'bg-brand-light/35 border-primary/25 text-primary-dark',
             };
             $rrBadge = match ($rrStatus) {
-                'refunded'                                 => 'bg-green-600 text-white',
-                'rejected', 'closed', 'rejected_by_seller' => 'bg-red-600 text-white',
-                'refund_pending'                           => 'bg-blue-600 text-white',
-                default                                    => 'bg-amber-500 text-white',
+                'refunded'                                 => 'bg-success text-white',
+                'rejected', 'closed', 'rejected_by_seller' => 'bg-danger text-white',
+                default                                    => 'bg-primary text-white',
             };
             $rrHint = match ($rrStatus) {
                 'pending_seller_response'      => 'Waiting for the seller to respond (until ' . $returnRequest->seller_response_deadline_at?->format('M d, Y h:i A') . ').',
@@ -763,7 +752,6 @@
             };
             $rrLinkLabel = $rrStatus === 'rejected_by_seller' ? 'Review & Escalate' : 'View Status & Tracking';
         @endphp
-
         <div class="p-5 rounded-2xl border {{ $rrTone }} flex flex-col sm:flex-row sm:items-center justify-between gap-4 text-xs">
             <div class="space-y-1.5">
                 <div class="flex flex-wrap items-center gap-2">
@@ -771,24 +759,24 @@
                     <span class="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase {{ $rrBadge }}">{{ $returnRequest->status_label }}</span>
                 </div>
                 <p class="font-semibold">
-                    {{ $returnRequest->request_number }} &bull; {{ $returnRequest->resolution_label }} &bull; ₱{{ number_format((float) $returnRequest->refund_amount, 2) }}
+                    {{ $returnRequest->request_number }} &bull; {{ $returnRequest->resolution_label }} &bull; &#8369;{{ number_format((float) $returnRequest->refund_amount, 2) }}
                 </p>
                 <p class="leading-relaxed">{{ $rrHint }}</p>
             </div>
             <a href="{{ route('user.returns.show', $returnRequest->id) }}"
-               class="px-4 py-2.5 rounded-xl bg-white border border-current font-bold text-center shrink-0 hover:opacity-80 transition-opacity">
+               class="px-4 py-2.5 rounded-xl bg-surface border border-border-subtle hover:border-primary text-primary-dark font-bold text-center shrink-0 transition-colors cursor-pointer">
                 {{ $rrLinkLabel }} &rarr;
             </a>
         </div>
     @elseif($sellerOrder->has_unresolved_dispute || $sellerOrder->status === 'disputed' || $extra?->seller_return_decision)
-        <div class="p-5 rounded-2xl bg-red-50 border border-red-200 space-y-2 text-xs">
-            <h3 class="text-sm font-bold text-red-900">Return / Refund Dispute</h3>
-            <p class="text-red-800">
+        <div class="p-5 rounded-2xl bg-danger/10 border border-danger/25 space-y-2 text-xs">
+            <h3 class="text-sm font-bold text-danger">Return / Refund Dispute</h3>
+            <p class="text-text-main">
                 Reported on {{ $sellerOrder->dispute_reported_at?->format('M d, Y h:i A') }}:
                 <em>"{{ $sellerOrder->dispute_reason }}"</em>
             </p>
             @if($extra?->seller_return_decision)
-                <p class="text-red-900 font-semibold">
+                <p class="text-primary-dark font-semibold">
                     Seller decision: {{ ucfirst($extra->seller_return_decision) }}
                     @if($extra->seller_return_decision_reason)
                         &mdash; "{{ $extra->seller_return_decision_reason }}"
@@ -811,6 +799,7 @@
                     @endif
                 </p>
             </div>
+
             @if($shipment && $shipment->currentRider)
                 <div class="px-3 py-1.5 rounded-xl bg-surface-subtle border border-border-subtle text-xs flex items-center gap-2">
                     <span class="text-text-muted">Assigned Rider:</span>
@@ -849,8 +838,10 @@
 
         <div class="relative pl-6 border-l-2 border-primary/30 space-y-5 pt-2">
             @foreach($trackingEvents as $idx => $ev)
-                <div class="relative">
-                    <span class="absolute -left-[31px] top-1 w-3.5 h-3.5 rounded-full border-2 border-white {{ $idx === 0 ? 'bg-primary ring-4 ring-primary/20' : 'bg-gray-300' }}"></span>
+                <div x-show="{{ $idx }} < 5 || showAllTracking"
+                     x-transition
+                     class="relative">
+                    <span class="absolute -left-[31px] top-1 w-3.5 h-3.5 rounded-full border-2 border-surface {{ $idx === 0 ? 'bg-primary ring-4 ring-primary/20' : 'bg-border-subtle' }}"></span>
                     <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
                         <div class="flex items-center gap-2 flex-wrap">
                             <span class="px-2 py-0.5 rounded text-[9px] font-extrabold uppercase {{ $ev->category === 'Shipment' ? 'bg-primary/10 text-primary' : 'bg-surface-subtle text-text-muted border border-border-subtle' }}">
@@ -876,14 +867,24 @@
                 </div>
             @endforeach
         </div>
+
+        @if($trackingEvents->count() > 5)
+            <div class="pt-2 flex justify-center">
+                <button type="button"
+                        @click="showAllTracking = !showAllTracking"
+                        class="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full bg-primary/10 hover:bg-primary text-primary hover:text-white border border-primary/30 text-xs font-extrabold transition-colors cursor-pointer">
+                    <span x-text="showAllTracking ? 'See Less Tracking Events' : 'See All {{ $trackingEvents->count() }} Tracking Events (+' + ({{ $trackingEvents->count() }} - 5) + ' older)'"></span>
+                </button>
+            </div>
+        @endif
     </div>
 
     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div class="p-5 rounded-2xl bg-surface border border-border-subtle space-y-2">
             <h3 class="text-xs font-bold uppercase tracking-wider text-text-muted">Delivery Address Snapshot</h3>
-            <p class="text-sm font-bold text-text-main">{{ $deliverySnap['recipient_name'] ?? 'Recipient' }}</p>
-            <p class="text-xs text-text-muted">{{ $deliverySnap['phone_number'] ?? '' }}</p>
-            <p class="text-xs text-text-main leading-relaxed">{{ $deliverySnap['full_address'] ?? '' }}</p>
+            <p class="text-sm font-bold text-text-main select-text">{{ $deliverySnap['recipient_name'] ?? 'Recipient' }}</p>
+            <p class="text-xs text-text-muted font-mono select-text">{{ $deliverySnap['phone_number'] ?? '' }}</p>
+            <p class="text-xs text-text-main leading-relaxed select-text">{{ $deliverySnap['full_address'] ?? '' }}</p>
         </div>
 
         <div class="p-5 rounded-2xl bg-surface border border-border-subtle space-y-2">
@@ -912,12 +913,12 @@
                 </div>
                 <div class="flex justify-between gap-2">
                     <span class="text-text-muted">Tracking Number:</span>
-                    <span class="font-mono font-bold text-primary-dark text-right">{{ $shipment->tracking_number ?? 'Not generated yet' }}</span>
+                    <span class="font-mono font-bold text-primary-dark text-right select-text">{{ $shipment->tracking_number ?? 'Not generated yet' }}</span>
                 </div>
                 @if($packages->isNotEmpty())
                     <div class="flex justify-between gap-2">
                         <span class="text-text-muted">Package Reference(s):</span>
-                        <span class="font-mono font-semibold text-text-main text-right">{{ $packages->pluck('package_reference')->implode(', ') }}</span>
+                        <span class="font-mono font-semibold text-text-main text-right select-text">{{ $packages->pluck('package_reference')->implode(', ') }}</span>
                     </div>
                 @endif
                 <div class="flex justify-between gap-2">
@@ -927,7 +928,7 @@
                 @if($latestProof)
                     <div class="flex justify-between gap-2 pt-1 border-t border-border-subtle/50">
                         <span class="text-text-muted">Received By:</span>
-                        <span class="font-bold text-green-700 text-right">
+                        <span class="font-bold text-success text-right">
                             {{ $latestProof->recipient_name ?: 'Recipient' }}
                             @if($latestProof->recipient_relation)
                                 ({{ $latestProof->recipient_relation }})
@@ -945,7 +946,6 @@
                             class="px-3 py-1.5 rounded-xl bg-surface-subtle hover:bg-brand-light/50 border border-border-subtle text-primary-dark text-xs font-bold transition-colors cursor-pointer disabled:opacity-60">
                         <span x-text="isPrintingInvoice ? 'Preparing Print...' : 'Print Official E-Invoice'"></span>
                     </button>
-
                     <a href="{{ $invoiceDownloadUrl }}"
                        data-no-live
                        download="INV-{{ str_replace('SO-', '', $sellerOrder->seller_order_number) }}.pdf"
@@ -953,7 +953,6 @@
                         Download PDF
                     </a>
                 </div>
-
                 @if($latestProof)
                     <button type="button"
                             @click.stop="proofModalOpen = true"
@@ -970,8 +969,10 @@
             <h3 class="text-sm font-bold text-primary-dark">Purchased Items</h3>
         </div>
         <div class="divide-y divide-border-subtle/60">
-            @foreach($sellerOrder->items as $item)
-                <div class="p-4 sm:px-5 flex items-center justify-between gap-4">
+            @foreach($sellerOrder->items as $itemIdx => $item)
+                <div x-show="{{ $itemIdx }} < 4 || showAllOrderItems"
+                     x-transition
+                     class="p-4 sm:px-5 flex items-center justify-between gap-4">
                     <div class="flex items-center gap-3.5 min-w-0">
                         <div class="w-14 h-14 rounded-xl bg-surface-subtle border border-border-subtle overflow-hidden shrink-0 flex items-center justify-center p-1">
                             @if($item->product_image)
@@ -983,27 +984,36 @@
                             @if($item->variant_name)
                                 <p class="text-xs text-text-muted">{{ implode(' / ', array_filter([$item->variant_name, $item->sub_variant_name])) }}</p>
                             @endif
-                            <p class="text-xs text-text-muted">₱{{ number_format((float) $item->discounted_unit_price, 2) }} &times; {{ $item->quantity }}</p>
+                            <p class="text-xs text-text-muted">&#8369;{{ number_format((float) $item->discounted_unit_price, 2) }} &times; {{ $item->quantity }}</p>
                         </div>
                     </div>
-                    <div class="text-sm font-bold text-text-main shrink-0">
-                        ₱{{ number_format((float) $item->line_total, 2) }}
+                    <div class="text-sm font-bold text-price shrink-0">
+                        &#8369;{{ number_format((float) $item->line_total, 2) }}
                     </div>
                 </div>
             @endforeach
         </div>
 
+        @if($sellerOrder->items->count() > 4)
+            <div class="p-3 bg-surface-subtle/30 border-t border-border-subtle text-center">
+                <button type="button"
+                        @click="showAllOrderItems = !showAllOrderItems"
+                        class="text-xs font-extrabold text-primary hover:underline cursor-pointer"
+                        x-text="showAllOrderItems ? 'See Less Purchased Items' : 'See All {{ $sellerOrder->items->count() }} Purchased Items'"></button>
+            </div>
+        @endif
+
         <div class="p-4 sm:px-5 bg-surface-subtle/40 border-t border-border-subtle space-y-1.5 text-xs sm:text-sm">
             @if($extra && (float) $extra->store_voucher_discount > 0)
-                <div class="flex justify-between text-green-700 font-bold">
+                <div class="flex justify-between text-primary font-bold">
                     <span>Store Voucher / Bundle Discount:</span>
-                    <span>-₱{{ number_format((float) $extra->store_voucher_discount, 2) }}</span>
+                    <span>-&#8369;{{ number_format((float) $extra->store_voucher_discount, 2) }}</span>
                 </div>
             @endif
             @if($extra && (float) ($extra->coins_discount_amount ?? 0) > 0)
                 <div class="flex justify-between text-primary font-bold">
                     <span>Storkia Coins Redeemed ({{ (int) $extra->coins_used }} Coins):</span>
-                    <span>-₱{{ number_format((float) $extra->coins_discount_amount, 2) }}</span>
+                    <span>-&#8369;{{ number_format((float) $extra->coins_discount_amount, 2) }}</span>
                 </div>
             @endif
             @php
@@ -1014,7 +1024,6 @@
                     $origSub = (float) ($extra->original_subtotal_amount ?? 0);
                     $storeDisc = (float) ($extra->store_voucher_discount ?? 0);
                     $netSub = (float) $sellerOrder->subtotal_amount;
-
                     if ($origSub > 0 && abs(round($origSub - $storeDisc - $rawPlat - $coinsDisc, 2) - round($netSub, 2)) < 0.02) {
                         $platVoucherOnly = round($rawPlat, 2);
                     } else {
@@ -1023,30 +1032,53 @@
                 }
             @endphp
             @if($platVoucherOnly > 0)
-                <div class="flex justify-between text-purple-700 font-bold">
+                <div class="flex justify-between text-primary-dark font-bold">
                     <span>Platform Voucher ({{ $extra->platform_voucher_code }}):</span>
-                    <span>-₱{{ number_format($platVoucherOnly, 2) }}</span>
+                    <span>-&#8369;{{ number_format($platVoucherOnly, 2) }}</span>
                 </div>
             @endif
             <div class="flex justify-between text-text-muted">
                 <span>Net Product Subtotal:</span>
-                <span class="font-semibold text-text-main">₱{{ number_format((float) $sellerOrder->subtotal_amount, 2) }}</span>
+                <span class="font-semibold text-text-main">&#8369;{{ number_format((float) $sellerOrder->subtotal_amount, 2) }}</span>
             </div>
             <div class="flex justify-between text-text-muted">
                 <span>Shipping Fee ({{ number_format((float) $sellerOrder->total_weight, 2) }} kg):</span>
                 <span class="font-semibold text-text-main">
-                    ₱{{ number_format((float) $sellerOrder->shipping_fee, 2) }}
+                    &#8369;{{ number_format((float) $sellerOrder->shipping_fee, 2) }}
                     @if($extra && (float) $extra->shipping_voucher_discount > 0)
-                        <span class="text-emerald-700 font-bold">(-₱{{ number_format((float) $extra->shipping_voucher_discount, 2) }} {{ $extra->shipping_voucher_code }})</span>
+                        <span class="text-primary font-bold">(-&#8369;{{ number_format((float) $extra->shipping_voucher_discount, 2) }} {{ $extra->shipping_voucher_code }})</span>
                     @endif
                 </span>
             </div>
             <div class="flex justify-between pt-2 border-t border-border-subtle text-base font-extrabold text-primary-dark">
                 <span>Total Order Amount ({{ $payMethod }}):</span>
-                <span class="text-primary">₱{{ number_format((float) $sellerOrder->total_amount, 2) }}</span>
+                <span class="text-price">&#8369;{{ number_format((float) $sellerOrder->total_amount, 2) }}</span>
             </div>
         </div>
     </div>
+
+    <template x-teleport="body">
+        <div x-show="cancelFlaggedModalOpen"
+             x-cloak
+             class="fixed inset-0 z-[205] flex items-center justify-center p-4">
+            <div @click="cancelFlaggedModalOpen = false" class="absolute inset-0 bg-black/60 backdrop-blur-xs cursor-pointer"></div>
+            <div @click.stop class="relative z-10 bg-surface rounded-3xl max-w-sm w-full p-6 shadow-2xl border border-border-subtle text-center space-y-4">
+                <h3 class="text-base font-bold text-primary-dark">Cancel Order #{{ $sellerOrder->seller_order_number }}?</h3>
+                <p class="text-xs text-text-muted leading-relaxed">
+                    Cancel this order immediately? Reserved stock and any applied vouchers or Storkia Coins will be restored.
+                </p>
+                <form action="{{ route('user.orders.cancel-flagged-payment', $sellerOrder->id) }}" method="POST" class="flex gap-2.5 pt-2 m-0">
+                    @csrf
+                    <button type="button" @click="cancelFlaggedModalOpen = false" class="flex-1 py-2.5 rounded-xl bg-surface-subtle hover:bg-brand-light/30 text-text-main text-xs font-bold transition-colors cursor-pointer">
+                        Keep Order
+                    </button>
+                    <button type="submit" class="flex-1 py-2.5 rounded-xl bg-danger hover:opacity-90 text-white text-xs font-bold transition-opacity cursor-pointer">
+                        Cancel Order
+                    </button>
+                </form>
+            </div>
+        </div>
+    </template>
 
     <template x-teleport="body">
         <div x-show="idRequiredModalOpen"
@@ -1056,18 +1088,18 @@
             <div @click.stop class="relative z-10 bg-surface rounded-3xl max-w-md w-full p-6 shadow-2xl border border-border-subtle space-y-4">
                 <div class="flex items-center justify-between pb-3 border-b border-border-subtle">
                     <div class="flex items-center gap-2">
-                        <span class="px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-900 text-[10px] font-extrabold uppercase">Refund Protection Policy</span>
+                        <span class="px-2.5 py-0.5 rounded-full bg-brand-light text-primary-dark text-[10px] font-extrabold uppercase">Refund Protection Policy</span>
                         <h3 class="text-base font-bold text-primary-dark">Valid ID Required for Return &amp; Refund</h3>
                     </div>
                     <button type="button" @click="idRequiredModalOpen = false" class="p-1 text-text-muted hover:text-text-main cursor-pointer text-lg font-bold">&times;</button>
                 </div>
 
-                <div class="p-4 rounded-2xl bg-amber-50 border border-amber-200 text-xs text-amber-950 space-y-2 leading-relaxed">
-                    <p class="font-bold">
+                <div class="p-4 rounded-2xl bg-brand-light/30 border border-primary/25 text-xs text-text-main space-y-2 leading-relaxed">
+                    <p class="font-bold text-primary-dark">
                         While you can place orders on Storkia without ID verification, submitting a Return &amp; Refund claim requires an approved Valid Government ID.
                     </p>
                     @if($identityStatus === 'pending')
-                        <p class="text-amber-900">
+                        <p>
                             Current Status: <strong>Pending Admin Review</strong>. Your submitted Government ID is currently being reviewed by Storkia Admin.
                         </p>
                     @elseif($identityStatus === 'failed')
@@ -1075,7 +1107,7 @@
                             Current Status: <strong>Verification Declined</strong> ({{ $identityVerification?->rejection_reason ?: 'Please upload a clearer photo of your valid ID.' }}).
                         </p>
                     @else
-                        <p class="text-amber-900">
+                        <p>
                             Current Status: <strong>Not Verified Yet</strong>. Please upload or capture your Government ID in Account Management.
                         </p>
                     @endif
@@ -1102,7 +1134,7 @@
             <div @click.stop class="relative z-10 bg-surface rounded-3xl max-w-md w-full p-5 shadow-2xl border border-border-subtle flex flex-col h-[520px]">
                 <div class="flex items-center justify-between pb-3 border-b border-border-subtle">
                     <div>
-                        <span class="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-extrabold uppercase">Last-Mile Delivery Chat</span>
+                        <span class="px-2 py-0.5 rounded-full bg-brand-light/60 text-primary-dark text-[10px] font-extrabold uppercase">Last-Mile Delivery Chat</span>
                         <h3 class="text-sm font-bold text-primary-dark mt-0.5">
                             Rider: {{ $shipment?->currentRider?->full_name ?? 'Assigned Rider' }}
                         </h3>
@@ -1110,17 +1142,13 @@
                     <button type="button" @click="riderChatModalOpen = false" class="p-1 text-text-muted hover:text-text-main cursor-pointer text-lg font-bold">&times;</button>
                 </div>
 
-                <template x-if="chatError">
-                    <div class="mt-2 p-2.5 rounded-xl bg-danger/10 border border-danger/30 text-danger text-[11px] font-bold" x-text="chatError"></div>
-                </template>
-
-                <div class="flex-1 overflow-y-auto p-3 space-y-2.5 bg-surface-subtle/50 rounded-2xl my-3 text-xs">
+                <div class="flex-1 overflow-y-auto p-3 space-y-2.5 bg-surface-subtle/50 rounded-2xl my-3 text-xs custom-scrollbar">
                     <template x-if="chatMessages.length === 0">
                         <p class="text-center text-text-muted py-12">Send delivery instructions or landmarks to your assigned Rider.</p>
                     </template>
                     <template x-for="msg in chatMessages" :key="msg.id">
                         <div :class="msg.sender_type === 'buyer' ? 'flex justify-end' : 'flex justify-start'">
-                            <div :class="msg.sender_type === 'buyer' ? 'bg-primary text-white' : 'bg-white border border-border-subtle text-text-main'"
+                            <div :class="msg.sender_type === 'buyer' ? 'bg-primary text-white' : 'bg-surface border border-border-subtle text-text-main'"
                                  class="max-w-[80%] px-3.5 py-2 rounded-2xl shadow-2xs space-y-0.5">
                                 <p class="leading-relaxed" x-text="msg.message"></p>
                                 <span class="block text-[9px] opacity-75 text-right" x-text="msg.created_at"></span>
@@ -1139,7 +1167,7 @@
                                class="flex-1 p-2.5 rounded-xl border border-border-subtle bg-surface text-xs outline-none focus:border-primary">
                         <button type="submit"
                                 :aria-disabled="isSendingChat || !chatInput.trim()"
-                                :class="(isSendingChat || !chatInput.trim()) ? 'bg-emerald-600/50 cursor-not-allowed' : 'bg-emerald-600 hover:bg-emerald-700 cursor-pointer'"
+                                :class="(isSendingChat || !chatInput.trim()) ? 'bg-primary/50 cursor-not-allowed' : 'bg-primary hover:bg-primary-dark cursor-pointer'"
                                 class="px-4 py-2.5 rounded-xl text-white text-xs font-bold transition-colors">
                             <span x-text="isSendingChat ? 'Sending...' : 'Send'"></span>
                         </button>
@@ -1162,12 +1190,8 @@
             <div @click.stop class="relative z-10 bg-surface rounded-3xl max-w-md w-full p-6 shadow-2xl border border-border-subtle space-y-4">
                 <div class="flex items-center justify-between pb-3 border-b border-border-subtle">
                     <h3 class="text-base font-bold text-primary-dark">Cancel Order #{{ $sellerOrder->seller_order_number }}</h3>
-                    <button type="button" @click="cancelModalOpen = false" class="p-1 text-text-muted hover:text-text-main cursor-pointer">&times;</button>
+                    <button type="button" @click="cancelModalOpen = false" class="p-1 text-text-muted hover:text-text-main text-lg font-bold cursor-pointer">&times;</button>
                 </div>
-
-                <template x-if="cancelError">
-                    <div class="p-3 rounded-xl bg-danger/10 border border-danger/30 text-danger text-xs font-bold" x-text="cancelError"></div>
-                </template>
 
                 <form action="{{ route('user.orders.cancel', $sellerOrder->id) }}"
                       method="POST"
@@ -1175,19 +1199,26 @@
                       @submit="handleCancelOrderSubmit($event)"
                       class="space-y-4 text-xs">
                     @csrf
-                    <div>
+                    <div class="relative" @click.away="cancelReasonDropdownOpen = false">
                         <label class="block font-bold text-text-muted mb-1">Select Cancellation Reason <span class="text-danger">*</span></label>
-                        <select name="cancel_reason"
-                                x-model="cancelReason"
-                                @change="cancelError = ''"
-                                required
-                                class="w-full p-3 rounded-xl border border-border-subtle bg-surface font-semibold outline-none focus:border-primary">
-                            <option value="">-- Choose a reason --</option>
-                            <option value="Changed my mind">Changed my mind</option>
-                            <option value="Need to change delivery address">Need to change delivery address</option>
-                            <option value="Forgot to apply voucher code">Forgot to apply voucher code</option>
-                            <option value="Ordered wrong item or variation">Ordered wrong item or variation</option>
-                        </select>
+                        <input type="hidden" name="cancel_reason" :value="cancelReason" required>
+                        <button type="button"
+                                @click="cancelReasonDropdownOpen = !cancelReasonDropdownOpen"
+                                class="w-full p-3 rounded-xl border border-border-subtle hover:border-primary bg-surface font-semibold flex items-center justify-between text-left cursor-pointer">
+                            <span :class="cancelReason ? 'text-text-main font-bold' : 'text-text-muted'" x-text="cancelReason || '-- Choose a reason --'"></span>
+                            <svg class="w-4 h-4 text-primary transition-transform" :class="cancelReasonDropdownOpen ? 'rotate-180' : ''" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/></svg>
+                        </button>
+                        <div x-show="cancelReasonDropdownOpen" x-cloak x-transition class="absolute left-0 right-0 top-full mt-1 bg-surface border border-border-subtle rounded-2xl shadow-xl z-30 py-1 overflow-hidden">
+                            <template x-for="rOpt in cancelReasonOptions" :key="rOpt">
+                                <button type="button"
+                                        @click="cancelReason = rOpt; cancelError = ''; cancelReasonDropdownOpen = false"
+                                        class="w-full px-4 py-2.5 text-left hover:bg-brand-light/30 font-semibold flex items-center justify-between cursor-pointer"
+                                        :class="cancelReason === rOpt ? 'text-primary font-bold bg-primary/5' : 'text-text-main'">
+                                    <span x-text="rOpt"></span>
+                                    <span x-show="cancelReason === rOpt" class="text-primary font-extrabold">&#10003;</span>
+                                </button>
+                            </template>
+                        </div>
                     </div>
 
                     <div>
@@ -1199,12 +1230,6 @@
                                   placeholder="Optional details..."
                                   class="w-full p-3 rounded-xl border border-border-subtle bg-surface outline-none focus:border-primary"></textarea>
                     </div>
-
-                    <template x-if="!cancelReason">
-                        <div class="p-3 rounded-xl bg-amber-50 border border-amber-300 text-amber-950 text-[11px] font-semibold">
-                            Incomplete Step: Please select a cancellation reason above to enable <strong>Confirm Cancel</strong>.
-                        </div>
-                    </template>
 
                     <div class="flex justify-end gap-2 pt-1">
                         <button type="button" @click="cancelModalOpen = false" class="px-4 py-2.5 rounded-xl bg-surface-subtle text-text-muted font-bold cursor-pointer">
@@ -1266,9 +1291,9 @@
                             <span class="text-text-muted block">Payment / COD Collected:</span>
                             <strong class="text-primary-dark">
                                 @if((float) ($latestProof->cod_collected_amount ?? 0) > 0)
-                                    ₱{{ number_format((float) $latestProof->cod_collected_amount, 2) }} (COD)
+                                    &#8369;{{ number_format((float) $latestProof->cod_collected_amount, 2) }} (COD)
                                 @else
-                                    {{ $payMethod }} (₱{{ number_format((float) $sellerOrder->total_amount, 2) }})
+                                    {{ $payMethod }} (&#8369;{{ number_format((float) $sellerOrder->total_amount, 2) }})
                                 @endif
                             </strong>
                         </div>
@@ -1278,12 +1303,12 @@
                         <a href="{{ $proofImageUrl }}"
                            target="_blank"
                            data-no-live
-                           class="font-bold text-primary hover:underline">
+                           class="font-bold text-primary hover:underline cursor-pointer">
                             Open Full Image in New Tab &nearr;
                         </a>
                         <button type="button"
                                 @click="proofModalOpen = false"
-                                class="px-5 py-2 rounded-xl bg-primary-dark hover:bg-text-main text-white font-bold cursor-pointer">
+                                class="px-5 py-2 rounded-xl bg-primary-dark hover:bg-primary text-white font-bold transition-colors cursor-pointer">
                             Done
                         </button>
                     </div>
