@@ -24,23 +24,24 @@
 <body class="m-0 p-0 h-screen w-screen font-sans antialiased text-text-main overflow-hidden bg-gradient-to-b from-surface via-surface to-brand-light/30 relative">
     <x-ui.preloader />
 
-    <div class="mobile-view fixed inset-0 bg-surface/90 backdrop-blur-xl z-40"></div>
+    <div class="mobile-view fixed inset-0 bg-surface/95 backdrop-blur-xl z-40"></div>
     <div class="mobile-view fixed inset-0 flex-col items-center justify-center h-screen w-screen px-5 py-8 z-50 overflow-y-auto select-none">
         <div class="bg-surface rounded-3xl shadow-2xl border border-border-subtle w-full max-w-md p-7 text-center flex flex-col items-center">
-            <div class="w-16 h-16 bg-primary/10 text-primary rounded-2xl flex items-center justify-center mb-4 border border-primary/20">
+            <div class="w-16 h-16 bg-primary/10 text-primary rounded-2xl flex items-center justify-center mb-4 border border-primary/20 shadow-inner">
                 <svg class="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
                 </svg>
             </div>
-            <span class="px-3 py-1 rounded-full bg-brand-light/60 text-primary-dark text-[10px] font-extrabold uppercase tracking-wider mb-2">
-                Viewport Restricted
+            <span class="px-3.5 py-1 rounded-full bg-brand-light/60 text-primary-dark text-[10px] font-extrabold uppercase tracking-wider mb-2 border border-primary/20">
+                Tablet or Desktop View Required
             </span>
-            <h2 class="text-2xl font-serif font-bold text-primary-dark mb-3">Tablet or Desktop Required</h2>
-            <div class="bg-surface-subtle border border-border-subtle rounded-2xl p-4 mb-6 w-full">
+            <h2 class="text-2xl font-serif font-bold text-primary-dark mb-3">Switch to Tablet or Desktop</h2>
+            <div class="bg-surface-subtle border border-border-subtle rounded-2xl p-4 mb-6 w-full space-y-2">
                 <p class="text-text-main text-xs sm:text-sm leading-relaxed font-medium">
                     You are accessing an <strong class="text-primary">Administrative Account</strong>.
-                    <br><br>
-                    <span class="text-text-muted">Please log in from a Tablet (768px+) or Desktop computer to access this administration portal.</span>
+                </p>
+                <p class="text-text-muted text-xs leading-relaxed">
+                    Only Buyer accounts can access mobile view. Please switch to a <strong class="text-primary-dark">Tablet (768px+)</strong> or <strong class="text-primary-dark">Desktop Computer</strong> to access the Storkia Executive Administration Portal.
                 </p>
             </div>
             <form method="POST" action="{{ route('admin.logout') }}" data-no-live class="w-full">
@@ -62,6 +63,14 @@
         <div class="flex-1 flex flex-col h-screen overflow-hidden min-w-0">
             <header class="h-18 lg:h-20 bg-surface/90 backdrop-blur-md border-b border-border-subtle px-5 lg:px-8 flex items-center justify-between shrink-0 z-30">
                 <div class="flex items-center gap-3">
+                    <button type="button"
+                            @click="sidebarOpen = !sidebarOpen"
+                            title="Toggle Sidebar"
+                            class="p-2 rounded-xl bg-surface-subtle hover:bg-brand-light/40 text-primary-dark border border-border-subtle transition-colors cursor-pointer">
+                        <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.2">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h16M4 18h10" />
+                        </svg>
+                    </button>
                     <span class="w-2.5 h-2.5 rounded-full bg-primary animate-pulse"></span>
                     <h2 class="text-sm font-bold text-primary-dark tracking-tight">Storkia Executive Administration Portal</h2>
                 </div>
@@ -70,9 +79,9 @@
                         $adminUser = auth('admin')->user();
                         $unreadNotifications = $adminUser ? $adminUser->unreadNotifications : collect();
                         $unreadCount = $unreadNotifications->count();
-                        $recentNotifications = $adminUser ? $adminUser->notifications()->take(8)->get() : collect();
+                        $recentNotifications = $adminUser ? $adminUser->notifications()->take(10)->get() : collect();
                     @endphp
-                    <div data-live-notifications x-data="{ notifOpen: false }" @click.away="notifOpen = false" class="relative">
+                    <div data-live-notifications x-data="{ notifOpen: false, notifLimit: 4 }" @click.away="notifOpen = false" class="relative">
                         <button type="button"
                                 @click="notifOpen = !notifOpen"
                                 class="p-2.5 rounded-xl bg-surface-subtle hover:bg-brand-light/40 text-text-muted hover:text-primary transition-colors relative cursor-pointer focus:outline-none">
@@ -106,12 +115,12 @@
                                 @endif
                             </div>
                             <div class="max-h-80 overflow-y-auto divide-y divide-border-subtle/60 custom-scrollbar">
-                                @forelse($recentNotifications as $notif)
+                                @forelse($recentNotifications as $nIdx => $notif)
                                     @php
                                         $data = $notif->data;
                                         $isUnread = is_null($notif->read_at);
                                     @endphp
-                                    <div class="p-4 transition-colors {{ $isUnread ? 'bg-brand-light/15' : 'bg-surface' }}">
+                                    <div x-show="{{ $nIdx }} < notifLimit" class="p-4 transition-colors {{ $isUnread ? 'bg-brand-light/15' : 'bg-surface' }}">
                                         <div class="flex items-start justify-between gap-2">
                                             <h4 class="text-xs font-bold {{ ($data['type'] ?? '') === 'danger' ? 'text-danger' : 'text-primary-dark' }}">
                                                 {{ $data['title'] ?? 'System Notice' }}
@@ -121,7 +130,7 @@
                                         <p class="text-xs text-text-main mt-1 leading-relaxed">{{ $data['message'] ?? '' }}</p>
                                         <div class="mt-2 flex items-center justify-between">
                                             @if(!empty($data['url']))
-                                                <a href="{{ route('admin.notifications.open', $notif->id) }}" class="text-[11px] font-bold text-primary hover:underline">
+                                                <a href="{{ route('admin.notifications.open', $notif->id) }}" class="text-[11px] font-bold text-primary hover:underline cursor-pointer">
                                                     Open &rarr;
                                                 </a>
                                             @else
@@ -143,6 +152,14 @@
                                     </div>
                                 @endforelse
                             </div>
+                            @if($recentNotifications->count() > 4)
+                                <div class="p-2.5 bg-surface-subtle border-t border-border-subtle text-center">
+                                    <button type="button"
+                                            @click="notifLimit = notifLimit >= {{ $recentNotifications->count() }} ? 4 : {{ $recentNotifications->count() }}"
+                                            class="text-xs font-extrabold text-primary hover:text-primary-dark cursor-pointer"
+                                            x-text="notifLimit >= {{ $recentNotifications->count() }} ? 'See Less' : 'See All ({{ $recentNotifications->count() }})'"></button>
+                                </div>
+                            @endif
                         </div>
                     </div>
                     <a href="{{ route('admin.settings.index') }}" class="flex items-center gap-3 pl-3 border-l border-border-subtle group cursor-pointer">
@@ -167,6 +184,30 @@
         </div>
     </div>
     <x-ui.toast-notification />
+    @if ($errors->any() || session('warning') || session('info') || session('status'))
+        <script>
+            document.addEventListener('DOMContentLoaded', () => {
+                const fireToast = (title, message, type) => {
+                    if (!message) return;
+                    window.dispatchEvent(new CustomEvent('toast', {
+                        detail: { title, message, type }
+                    }));
+                };
+                @if ($errors->any())
+                    fireToast('Validation Error', @js($errors->first()), 'danger');
+                @endif
+                @if (session('warning'))
+                    fireToast('Notice', @js(session('warning')), 'warning');
+                @endif
+                @if (session('info'))
+                    fireToast('Information', @js(session('info')), 'info');
+                @endif
+                @if (session('status'))
+                    fireToast('Update', @js(session('status')), 'success');
+                @endif
+            });
+        </script>
+    @endif
     @livewireScripts
 </body>
 </html>

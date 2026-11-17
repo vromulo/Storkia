@@ -18,6 +18,9 @@
     <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0,1&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
     @vite(['resources/css/app.css', 'resources/js/app.js'])
     @livewireStyles
+    <style>
+        [x-cloak] { display: none !important; }
+    </style>
 </head>
 <body class="overflow-x-clip max-w-full flex flex-col min-h-screen bg-surface text-text-main font-sans antialiased">
     <x-ui.preloader />
@@ -71,6 +74,30 @@
     @endif
     <x-ui.scroll-to-top />
     <x-ui.toast-notification />
+    @if ($errors->any() || session('warning') || session('info') || session('status'))
+        <script>
+            document.addEventListener('DOMContentLoaded', () => {
+                const fireToast = (title, message, type) => {
+                    if (!message) return;
+                    window.dispatchEvent(new CustomEvent('toast', {
+                        detail: { title, message, type }
+                    }));
+                };
+                @if ($errors->any())
+                    fireToast('Validation Notice', @js($errors->first()), 'danger');
+                @endif
+                @if (session('warning'))
+                    fireToast('Notice', @js(session('warning')), 'warning');
+                @endif
+                @if (session('info'))
+                    fireToast('Information', @js(session('info')), 'info');
+                @endif
+                @if (session('status'))
+                    fireToast('Update', @js(session('status')), 'success');
+                @endif
+            });
+        </script>
+    @endif
     @livewireScripts
 </body>
 </html>
