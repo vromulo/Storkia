@@ -22,14 +22,15 @@
     $resolvedTab = in_array($initialTab, ['ewallet', 'wheel', 'redeem', 'history'], true) ? $initialTab : 'ewallet';
 
     $pointsHubConfig = [
-        'activeTab'     => $resolvedTab,
-        'coinsBalance'  => $coinsBalance,
-        'spinTickets'   => $spinTickets,
-        'cooldownSec'   => $nextDailySpinSeconds,
-        'segments'      => array_values($wheelSegments ?? []),
-        'spinUrl'       => route('user.points.spin'),
-        'redeemUrl'     => route('user.points.redeem'),
-        'csrfToken'     => csrf_token(),
+        'activeTab'            => $resolvedTab,
+        'coinsBalance'         => $coinsBalance,
+        'spinTickets'          => $spinTickets,
+        'cooldownSec'          => $nextDailySpinSeconds,
+        'segments'             => array_values($wheelSegments ?? []),
+        'spinUrl'              => route('user.points.spin'),
+        'redeemUrl'            => route('user.points.redeem'),
+        'csrfToken'            => csrf_token(),
+        'justGrantedDailySpin' => (bool) ($justGrantedDailySpin ?? false),
     ];
 @endphp
 
@@ -66,10 +67,30 @@
             screenshotModalUrl: '',
             topupPreviewUrl: '',
             isSubmittingTopup: false,
+            showAllTopups: false,
+            showAllActiveVouchers: false,
+            showAllWalletTx: false,
+            showAllCoinTx: false,
             segments: Array.isArray(cfg.segments) ? cfg.segments : [],
+
+            notify(msg, type = 'success', title = null) {
+                if (!msg) return;
+                window.dispatchEvent(new CustomEvent('toast', {
+                    detail: {
+                        title: title || (type === 'danger' ? 'Alert' : 'Storkia Rewards & E-Wallet'),
+                        message: msg,
+                        type: type
+                    }
+                }));
+            },
 
             initPointsHub() {
                 this.updateCooldownText();
+                if (cfg.justGrantedDailySpin) {
+                    setTimeout(() => {
+                        this.notify('Daily Login Bonus Unlocked: +1 Spin Attempt has been added to your Spin Stack!', 'success', 'Daily Login Bonus');
+                    }, 250);
+                }
                 setInterval(() => {
                     if (this.cooldownSec > 0) {
                         this.cooldownSec--;
@@ -127,6 +148,7 @@
                 if (!code || !navigator.clipboard) return;
                 navigator.clipboard.writeText(code);
                 this.copiedVoucherCode = code;
+                this.notify('Copied voucher code ' + code + ' to clipboard.', 'success', 'Code Copied');
                 setTimeout(() => {
                     if (this.copiedVoucherCode === code) this.copiedVoucherCode = '';
                 }, 2000);
@@ -136,12 +158,19 @@
                 if (!num || !navigator.clipboard) return;
                 navigator.clipboard.writeText(num);
                 this.copiedGcashNumber = true;
+                this.notify('Copied official Admin GCash number (' + num + ').', 'success', 'GCash Number Copied');
                 setTimeout(() => { this.copiedGcashNumber = false; }, 2000);
             },
 
             onTopupFileChange(event) {
                 const file = event.target.files[0];
                 if (!file) {
+                    this.topupPreviewUrl = '';
+                    return;
+                }
+                if (file.size > 5 * 1024 * 1024) {
+                    this.notify('Receipt screenshot must not exceed 5MB.', 'danger');
+                    event.target.value = '';
                     this.topupPreviewUrl = '';
                     return;
                 }
@@ -171,6 +200,7 @@
                     if (!res.ok || !data.success) {
                         const errText = data.errors ? Object.values(data.errors).flat()[0] : (data.message || 'Unable to spin right now.');
                         this.spinError = errText;
+                        this.notify(errText, 'danger', 'Spin Error');
                         this.isSpinning = false;
                         return;
                     }
@@ -200,6 +230,7 @@
                     }, 4600);
                 } catch (e) {
                     this.spinError = 'Network error while spinning the wheel. Please try again.';
+                    this.notify(this.spinError, 'danger', 'Network Error');
                     this.isSpinning = false;
                 }
             },
@@ -227,12 +258,15 @@
                     if (!res.ok || !data.success) {
                         const errText = data.errors ? Object.values(data.errors).flat()[0] : (data.message || 'Could not redeem voucher.');
                         this.redeemErrorMsg = errText;
+                        this.notify(errText, 'danger', 'Redemption Failed');
                     } else {
                         this.coinsBalance = Number(data.coins_balance ?? this.coinsBalance);
                         this.redeemSuccessMsg = data.message;
+                        this.notify(data.message || 'Voucher redeemed and added to your wallet!', 'success', 'Voucher Redeemed');
                     }
                 } catch (e) {
                     this.redeemErrorMsg = 'Network error while redeeming voucher.';
+                    this.notify(this.redeemErrorMsg, 'danger', 'Network Error');
                 } finally {
                     this.redeemingKey = '';
                 }
@@ -245,59 +279,24 @@
      x-init="initPointsHub()"
      class="space-y-8 select-none w-full min-w-0 max-w-full overflow-x-hidden">
 
-    @if($justGrantedDailySpin)
-        <div class="p-4 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs sm:text-sm font-bold flex items-center justify-between gap-3">
-            <span>Daily Login Bonus Unlocked: +1 Spin Attempt has been added to your Spin Stack!</span>
-            <span class="px-2.5 py-1 rounded-full bg-emerald-600 text-white text-[10px] font-extrabold uppercase shrink-0">+1 Spin</span>
-        </div>
-    @endif
-
-    @if(session('success'))
-        <div class="p-4 rounded-2xl bg-green-50 border border-green-200 text-green-700 text-xs sm:text-sm font-bold">
-            {{ session('success') }}
-        </div>
-    @endif
-
-    @if($errors->any())
-        <div class="p-4 rounded-2xl bg-red-50 border border-red-200 text-red-700 text-xs sm:text-sm space-y-1">
-            @foreach($errors->all() as $err)
-                <p class="font-semibold">{{ $err }}</p>
-            @endforeach
-        </div>
-    @endif
-
-    <template x-if="redeemSuccessMsg">
-        <div class="p-4 rounded-2xl bg-green-50 border border-green-200 text-green-700 text-xs sm:text-sm font-bold flex items-center justify-between gap-3">
-            <span x-text="redeemSuccessMsg"></span>
-            <a href="{{ route('user.coupons') }}" class="px-3 py-1.5 rounded-xl bg-green-700 text-white text-xs font-extrabold shrink-0">
-                Open My Vouchers &rarr;
-            </a>
-        </div>
-    </template>
-
-    <template x-if="redeemErrorMsg || spinError">
-        <div class="p-4 rounded-2xl bg-red-50 border border-red-200 text-danger text-xs sm:text-sm font-bold"
-             x-text="redeemErrorMsg || spinError"></div>
-    </template>
-
     <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <div class="p-5 rounded-3xl bg-gradient-to-br from-emerald-700 via-emerald-600 to-teal-700 text-white shadow-md relative overflow-hidden">
+        <div class="p-5 rounded-3xl bg-gradient-to-br from-primary-dark to-primary text-white shadow-md relative overflow-hidden">
             <div class="flex items-center justify-between">
                 <span class="text-[11px] font-extrabold uppercase tracking-wider text-white/85">Storkia E-Wallet Balance</span>
                 <span class="px-2 py-0.5 rounded-full bg-white/20 text-[10px] font-extrabold">PHP</span>
             </div>
-            <p class="text-3xl font-serif font-extrabold mt-2">₱{{ number_format($ewalletAvailable, 2) }}</p>
+            <p class="text-3xl font-serif font-extrabold mt-2">&#8369;{{ number_format($ewalletAvailable, 2) }}</p>
             <span class="text-[11px] text-white/85 mt-1 block">Instant Checkout Pay &amp; Refunds</span>
         </div>
 
-        <div class="p-5 rounded-3xl bg-gradient-to-br from-primary-dark via-primary to-secondary text-white shadow-md relative overflow-hidden">
+        <div class="p-5 rounded-3xl bg-gradient-to-br from-primary via-primary-dark to-secondary text-white shadow-md relative overflow-hidden">
             <div class="flex items-center justify-between">
                 <span class="text-[11px] font-extrabold uppercase tracking-wider text-white/85">Available Storkia Coins</span>
-                <span class="px-2 py-0.5 rounded-full bg-white/20 text-[10px] font-extrabold">10 Coins = ₱1.00</span>
+                <span class="px-2 py-0.5 rounded-full bg-white/20 text-[10px] font-extrabold">10 Coins = &#8369;1.00</span>
             </div>
             <p class="text-3xl font-serif font-extrabold mt-2" x-text="coinsBalance.toLocaleString()"></p>
             <span class="text-[11px] text-white/85 mt-1 block">
-                Checkout Value: ₱<span x-text="checkoutPesoEquivalent()"></span> (Min 10 Coins)
+                Checkout Value: &#8369;<span x-text="checkoutPesoEquivalent()"></span> (Min 10 Coins)
             </span>
         </div>
 
@@ -320,7 +319,7 @@
     <div class="flex flex-wrap items-center gap-2 border-b border-border-subtle pb-3">
         <button type="button"
                 @click="activeTab = 'ewallet'"
-                :class="activeTab === 'ewallet' ? 'bg-emerald-700 text-white border-emerald-700 shadow-xs' : 'bg-surface text-text-muted border-border-subtle hover:text-text-main'"
+                :class="activeTab === 'ewallet' ? 'bg-primary-dark text-white border-primary-dark shadow-xs' : 'bg-surface text-text-muted border-border-subtle hover:text-text-main'"
                 class="px-4 py-2.5 rounded-2xl text-xs font-bold border transition-all cursor-pointer">
             1. Storkia E-Wallet &amp; GCash Top-Up
         </button>
@@ -348,7 +347,7 @@
         <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
             <div class="lg:col-span-5 bg-surface rounded-3xl border border-border-subtle p-6 shadow-xs space-y-4 text-xs">
                 <div>
-                    <span class="px-2.5 py-0.5 rounded-full bg-blue-100 text-blue-800 text-[10px] font-extrabold uppercase">Step 1: Send via GCash</span>
+                    <span class="px-2.5 py-0.5 rounded-full bg-brand-light/60 text-primary-dark text-[10px] font-extrabold uppercase">Step 1: Send via GCash</span>
                     <h3 class="text-base font-bold text-primary-dark mt-1">Official Storkia Admin GCash Account</h3>
                     <p class="text-text-muted mt-0.5">
                         Transfer any amount to the official Storkia Admin GCash account below, then submit your receipt screenshot on the right.
@@ -356,37 +355,37 @@
                 </div>
 
                 @if($platformGcash && !empty($platformGcash->gcash_number))
-                    <div class="p-4 rounded-2xl bg-blue-50 border border-blue-200 space-y-3">
+                    <div class="p-4 rounded-2xl bg-brand-light/25 border border-primary/25 space-y-3">
                         <div class="flex items-center justify-between gap-2">
                             <div>
-                                <span class="text-[10px] font-bold uppercase text-blue-700 block">Account Holder Name</span>
-                                <strong class="text-sm text-blue-950">{{ $platformGcash->account_name }}</strong>
+                                <span class="text-[10px] font-bold uppercase text-text-muted block">Account Holder Name</span>
+                                <strong class="text-sm text-primary-dark select-text">{{ $platformGcash->account_name }}</strong>
                             </div>
-                            <span class="px-2.5 py-0.5 rounded-full bg-blue-600 text-white text-[10px] font-extrabold">Active</span>
+                            <span class="px-2.5 py-0.5 rounded-full bg-success/15 text-success text-[10px] font-extrabold">Active</span>
                         </div>
-                        <div class="flex items-center justify-between gap-2 pt-2 border-t border-blue-200/70">
+                        <div class="flex items-center justify-between gap-2 pt-2 border-t border-border-subtle">
                             <div>
-                                <span class="text-[10px] font-bold uppercase text-blue-700 block">GCash Mobile Number</span>
-                                <strong class="text-base font-mono font-extrabold text-blue-900">{{ $platformGcash->gcash_number }}</strong>
+                                <span class="text-[10px] font-bold uppercase text-text-muted block">GCash Mobile Number</span>
+                                <strong class="text-base font-mono font-extrabold text-primary-dark select-text">{{ $platformGcash->gcash_number }}</strong>
                             </div>
                             <button type="button"
                                     @click="copyAdminGcash('{{ $platformGcash->gcash_number }}')"
-                                    class="px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs cursor-pointer">
+                                    class="px-3 py-1.5 rounded-xl bg-primary hover:bg-primary-dark text-white font-bold text-xs transition-colors cursor-pointer">
                                 <span x-show="!copiedGcashNumber">Copy Number</span>
                                 <span x-show="copiedGcashNumber" x-cloak>Copied!</span>
                             </button>
                         </div>
                         @if(!empty($platformGcash->qr_image_path))
-                            <div class="pt-3 border-t border-blue-200/70 text-center">
+                            <div class="pt-3 border-t border-border-subtle text-center">
                                 <img src="{{ asset('storage/' . $platformGcash->qr_image_path) }}"
                                      alt="Storkia Admin GCash QR"
-                                     class="w-44 h-44 object-contain mx-auto rounded-2xl bg-white p-2 border border-blue-200 shadow-2xs">
-                                <span class="text-[11px] font-semibold text-blue-800 block mt-1.5">Scan in GCash App &rarr; Pay QR</span>
+                                     class="w-44 h-44 object-contain mx-auto rounded-2xl bg-surface p-2 border border-border-subtle shadow-2xs">
+                                <span class="text-[11px] font-semibold text-primary-dark block mt-1.5">Scan in GCash App &rarr; Pay QR</span>
                             </div>
                         @endif
                     </div>
                 @else
-                    <div class="p-4 rounded-2xl bg-amber-50 border border-amber-200 text-amber-900 font-semibold">
+                    <div class="p-4 rounded-2xl bg-brand-light/40 border border-primary/25 text-primary-dark font-semibold">
                         Admin GCash details are currently being updated. Please check back shortly.
                     </div>
                 @endif
@@ -400,7 +399,7 @@
 
             <div class="lg:col-span-7 bg-surface rounded-3xl border border-border-subtle p-6 shadow-xs space-y-4 text-xs">
                 <div class="border-b border-border-subtle pb-3">
-                    <span class="px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-extrabold uppercase">Step 2: Submit Receipt</span>
+                    <span class="px-2.5 py-0.5 rounded-full bg-primary/10 text-primary text-[10px] font-extrabold uppercase">Step 2: Submit Receipt</span>
                     <h3 class="text-base font-bold text-primary-dark mt-1">Submit GCash Top-Up Proof</h3>
                     <p class="text-text-muted">Once verified by Admin, your E-Wallet balance updates automatically.</p>
                 </div>
@@ -444,7 +443,7 @@
                                required
                                accept="image/jpeg,image/png,image/jpg,image/webp"
                                @change="onTopupFileChange($event)"
-                               class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:bg-emerald-600 file:text-white file:font-bold cursor-pointer">
+                               class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:bg-primary file:text-white file:font-bold cursor-pointer">
                         <template x-if="topupPreviewUrl">
                             <div class="mt-3 p-2 rounded-2xl bg-surface-subtle border border-border-subtle text-center">
                                 <img :src="topupPreviewUrl" alt="Top-Up Receipt Preview" class="max-h-44 mx-auto rounded-xl object-contain">
@@ -455,7 +454,7 @@
                     <div class="flex justify-end pt-2">
                         <button type="submit"
                                 :disabled="isSubmittingTopup"
-                                class="px-6 py-3 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold shadow-sm cursor-pointer disabled:opacity-50">
+                                class="px-6 py-3 rounded-2xl bg-primary hover:bg-primary-dark text-white font-bold shadow-sm transition-colors cursor-pointer disabled:opacity-50">
                             <span x-show="!isSubmittingTopup">Submit Top-Up Receipt for Verification</span>
                             <span x-show="isSubmittingTopup" x-cloak>Submitting Receipt...</span>
                         </button>
@@ -488,34 +487,34 @@
                             </tr>
                         </thead>
                         <tbody class="divide-y divide-border-subtle">
-                            @foreach($walletTopups as $tp)
-                                <tr class="hover:bg-surface-subtle/30">
+                            @foreach($walletTopups as $tpIdx => $tp)
+                                <tr x-show="{{ $tpIdx }} < 5 || showAllTopups" class="hover:bg-surface-subtle/30">
                                     <td class="py-3.5 px-5 font-mono">
-                                        <div class="font-bold text-primary-dark">{{ $tp->topup_reference }}</div>
+                                        <div class="font-bold text-primary-dark select-text">{{ $tp->topup_reference }}</div>
                                         <div class="text-[11px] text-text-muted">{{ $tp->created_at?->format('M d, Y h:i A') }}</div>
                                     </td>
                                     <td class="py-3.5 px-4 font-semibold text-text-main">{{ $tp->sender_account_name }}</td>
-                                    <td class="py-3.5 px-4 font-mono font-bold text-blue-800">#{{ $tp->reference_number }}</td>
+                                    <td class="py-3.5 px-4 font-mono font-bold text-primary-dark select-text">#{{ $tp->reference_number }}</td>
                                     <td class="py-3.5 px-4">
                                         @if($tp->screenshot_path)
                                             <button type="button"
                                                     @click="screenshotModalUrl = '{{ asset('storage/' . ltrim($tp->screenshot_path, '/')) }}'; screenshotModalOpen = true"
-                                                    class="px-3 py-1 rounded-lg bg-blue-50 text-blue-800 border border-blue-200 font-bold text-[11px] cursor-pointer">
+                                                    class="px-3 py-1 rounded-lg bg-brand-light/40 hover:bg-brand-light text-primary-dark border border-border-subtle font-bold text-[11px] transition-colors cursor-pointer">
                                                 View Receipt
                                             </button>
                                         @endif
                                     </td>
                                     <td class="py-3.5 px-4 font-serif font-extrabold text-sm">
                                         @if($tp->status === 'approved' && $tp->approved_amount !== null)
-                                            <span class="text-emerald-700">+₱{{ number_format((float) $tp->approved_amount, 2) }}</span>
+                                            <span class="text-success">+&#8369;{{ number_format((float) $tp->approved_amount, 2) }}</span>
                                         @elseif($tp->status === 'rejected')
                                             <span class="text-danger text-xs font-sans">Declined ({{ $tp->rejection_reason }})</span>
                                         @else
-                                            <span class="text-amber-700 text-xs font-sans font-semibold">Pending Admin Verification</span>
+                                            <span class="text-primary-dark text-xs font-sans font-semibold">Pending Admin Verification</span>
                                         @endif
                                     </td>
                                     <td class="py-3.5 px-5 text-right">
-                                        <span class="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase {{ $tp->status === 'approved' ? 'bg-green-100 text-green-700' : ($tp->status === 'rejected' ? 'bg-red-100 text-danger' : 'bg-amber-100 text-amber-800') }}">
+                                        <span class="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase {{ $tp->status === 'approved' ? 'bg-success/15 text-success' : ($tp->status === 'rejected' ? 'bg-danger/10 text-danger' : 'bg-brand-light/60 text-primary-dark') }}">
                                             {{ str_replace('_', ' ', $tp->status) }}
                                         </span>
                                     </td>
@@ -524,6 +523,16 @@
                         </tbody>
                     </table>
                 </div>
+
+                @if($walletTopups->count() > 5)
+                    <div class="p-4 border-t border-border-subtle bg-surface-subtle/30 flex justify-center">
+                        <button type="button"
+                                @click="showAllTopups = !showAllTopups"
+                                class="inline-flex items-center gap-2 px-5 py-2 rounded-full bg-primary/10 hover:bg-primary text-primary hover:text-white border border-primary/30 text-xs font-extrabold transition-colors cursor-pointer">
+                            <span x-text="showAllTopups ? 'See Less Top-Up Requests' : 'See More Top-Up Requests (' + ({{ $walletTopups->count() }} - 5) + ' more)'"></span>
+                        </button>
+                    </div>
+                @endif
             @endif
         </div>
     </div>
@@ -536,7 +545,7 @@
                     <div class="w-0 h-0 border-l-[16px] border-l-transparent border-r-[16px] border-r-transparent border-t-[30px] border-t-primary-dark"></div>
                 </div>
 
-                <div class="w-full h-full rounded-full p-3 sm:p-3.5 bg-gradient-to-br from-primary-dark via-primary to-secondary shadow-[0_20px_50px_rgba(93,49,64,0.28)] border-4 border-white relative flex items-center justify-center">
+                <div class="w-full h-full rounded-full p-3 sm:p-3.5 bg-gradient-to-br from-primary-dark via-primary to-secondary shadow-[0_20px_50px_rgba(93,49,64,0.28)] border-4 border-surface relative flex items-center justify-center">
                     <svg viewBox="0 0 360 360"
                          class="w-full h-full rounded-full overflow-hidden transition-transform duration-[4500ms] ease-[cubic-bezier(0.15,0.85,0.25,1)]"
                          :style="`transform: rotate(${wheelRotation}deg);`">
@@ -639,7 +648,7 @@
                         @click="spinNow()"
                         :disabled="cannotSpin()"
                         :class="cannotSpin()
-                            ? 'bg-gray-200 text-gray-500 cursor-not-allowed'
+                            ? 'bg-surface-subtle text-text-muted border border-border-subtle cursor-not-allowed'
                             : 'bg-primary hover:bg-primary-dark text-white cursor-pointer shadow-lg shadow-primary/25 active:scale-95'"
                         class="px-8 py-3.5 rounded-2xl text-sm font-extrabold transition-all">
                     <span x-show="canSpinNow()" x-text="'SPIN THE WHEEL (' + spinTickets + ' Left)'"></span>
@@ -659,7 +668,7 @@
                 </span>
                 <h3 class="text-xl font-serif font-bold text-primary-dark">Earn Coins from Orders, Reviews &amp; Daily Spins</h3>
                 <p class="text-text-muted leading-relaxed">
-                    You earn Storkia Coins from Daily Spins, Daily Treasure Chests, Completed Orders (+1 Coin per ₱100), and Verified Product Reviews (+5 Coins for text, +10 Coins with photo). Spend your coins directly at Checkout (<strong>10 Coins = ₱1.00</strong>, minimum 10 coins) or redeem vouchers below!
+                    You earn Storkia Coins from Daily Spins, Daily Treasure Chests, Completed Orders (+1 Coin per &#8369;100), and Verified Product Reviews (+5 Coins for text, +10 Coins with photo). Spend your coins directly at Checkout (<strong>10 Coins = &#8369;1.00</strong>, minimum 10 coins) or redeem vouchers below!
                 </p>
             </div>
 
@@ -709,7 +718,7 @@
                 @foreach($redeemCatalog as $item)
                     @php
                         $isShipping = $item['scope'] === 'shipping';
-                        $stubGradient = $isShipping ? 'from-emerald-600 to-teal-700' : 'from-primary to-primary-dark';
+                        $stubGradient = $isShipping ? 'from-primary-dark to-primary' : 'from-primary to-primary-dark';
                         $itemCost = (int) $item['coins_cost'];
                     @endphp
                     <div class="flex rounded-2xl border border-border-subtle bg-surface overflow-hidden shadow-2xs">
@@ -724,7 +733,7 @@
                             <div>
                                 <div class="flex items-center justify-between gap-2">
                                     <h4 class="font-bold text-sm text-text-main truncate">{{ $item['title'] }}</h4>
-                                    <span class="px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-900 font-extrabold text-[11px] shrink-0">
+                                    <span class="px-2.5 py-0.5 rounded-full bg-brand-light/70 text-primary-dark font-extrabold text-[11px] shrink-0">
                                         {{ number_format($itemCost) }} Coins
                                     </span>
                                 </div>
@@ -737,7 +746,7 @@
                                         :disabled="isRedeemDisabled('{{ $item['key'] }}', {{ $itemCost }})"
                                         :class="canAffordVoucher({{ $itemCost }})
                                             ? 'bg-primary hover:bg-primary-dark text-white cursor-pointer'
-                                            : 'bg-gray-200 text-gray-500 cursor-not-allowed'"
+                                            : 'bg-surface-subtle text-text-muted border border-border-subtle cursor-not-allowed'"
                                         class="px-4 py-2 rounded-xl font-bold text-xs transition-colors">
                                     <span x-show="redeemingKey !== '{{ $item['key'] }}'"
                                           x-text="redeemButtonText({{ $itemCost }})"></span>
@@ -754,13 +763,22 @@
             <div class="bg-surface rounded-3xl border border-border-subtle p-6 shadow-xs space-y-4">
                 <div class="flex items-center justify-between">
                     <h3 class="text-sm font-bold text-primary-dark">Your Active Claimed &amp; Redeemed Vouchers Ready for Checkout</h3>
-                    <a href="{{ route('cart.index') }}" class="text-xs font-bold text-primary hover:underline">Use in Cart / Checkout &rarr;</a>
+                    <div class="flex items-center gap-3">
+                        @if($activeRewardVouchers->count() > 6)
+                            <button type="button"
+                                    @click="showAllActiveVouchers = !showAllActiveVouchers"
+                                    class="text-xs font-extrabold text-primary hover:underline cursor-pointer"
+                                    x-text="showAllActiveVouchers ? 'See Less' : 'See All ({{ $activeRewardVouchers->count() }})'"></button>
+                        @endif
+                        <a href="{{ route('cart.index') }}" class="text-xs font-bold text-primary hover:underline cursor-pointer">Use in Cart / Checkout &rarr;</a>
+                    </div>
                 </div>
                 <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 text-xs">
-                    @foreach($activeRewardVouchers as $claim)
+                    @foreach($activeRewardVouchers as $vIdx => $claim)
                         @php $v = $claim->voucher; @endphp
                         @if($v)
-                            <div class="p-3.5 rounded-2xl bg-surface-subtle border border-border-subtle flex items-center justify-between gap-2">
+                            <div x-show="{{ $vIdx }} < 6 || showAllActiveVouchers"
+                                 class="p-3.5 rounded-2xl bg-surface-subtle border border-border-subtle flex items-center justify-between gap-2">
                                 <div class="min-w-0">
                                     <div class="flex items-center gap-1.5">
                                         <span class="font-mono font-extrabold text-primary-dark">{{ $v->code }}</span>
@@ -771,7 +789,7 @@
                                 </div>
                                 <button type="button"
                                         @click="copyCode('{{ $v->code }}')"
-                                        class="px-2.5 py-1.5 rounded-lg bg-white border border-border-subtle hover:border-primary text-primary-dark font-bold text-[11px] cursor-pointer shrink-0">
+                                        class="px-2.5 py-1.5 rounded-lg bg-surface border border-border-subtle hover:border-primary text-primary-dark font-bold text-[11px] cursor-pointer shrink-0">
                                     <span x-text="copiedVoucherCode === '{{ $v->code }}' ? 'Copied!' : 'Copy'"></span>
                                 </button>
                             </div>
@@ -802,29 +820,39 @@
                             </tr>
                         </thead>
                         <tbody class="divide-y divide-border-subtle">
-                            @foreach($walletTransactions as $wtx)
-                                <tr class="hover:bg-surface-subtle/30">
+                            @foreach($walletTransactions as $wIdx => $wtx)
+                                <tr x-show="{{ $wIdx }} < 6 || showAllWalletTx" class="hover:bg-surface-subtle/30">
                                     <td class="py-3.5 px-5 font-mono">
-                                        <div class="font-bold text-primary-dark">{{ $wtx->transaction_reference }}</div>
+                                        <div class="font-bold text-primary-dark select-text">{{ $wtx->transaction_reference }}</div>
                                         <div class="text-[11px] text-text-muted">{{ $wtx->created_at?->format('M d, Y h:i A') }}</div>
                                     </td>
                                     <td class="py-3.5 px-4">
-                                        <span class="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase bg-emerald-50 text-emerald-800 border border-emerald-200">
+                                        <span class="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase bg-brand-light/50 text-primary-dark border border-border-subtle">
                                             {{ str_replace('_', ' ', $wtx->entry_type) }}
                                         </span>
                                     </td>
                                     <td class="py-3.5 px-4 font-medium text-text-main">{{ $wtx->description }}</td>
-                                    <td class="py-3.5 px-4 text-right font-mono font-extrabold {{ (float) $wtx->amount >= 0 ? 'text-emerald-700' : 'text-danger' }}">
+                                    <td class="py-3.5 px-4 text-right font-mono font-extrabold {{ (float) $wtx->amount >= 0 ? 'text-success' : 'text-danger' }}">
                                         {{ (float) $wtx->amount >= 0 ? '+₱' . number_format((float) $wtx->amount, 2) : '-₱' . number_format(abs((float) $wtx->amount), 2) }}
                                     </td>
                                     <td class="py-3.5 px-5 text-right font-mono font-bold text-text-main">
-                                        ₱{{ number_format((float) $wtx->available_balance_after, 2) }}
+                                        &#8369;{{ number_format((float) $wtx->available_balance_after, 2) }}
                                     </td>
                                 </tr>
                             @endforeach
                         </tbody>
                     </table>
                 </div>
+
+                @if($walletTransactions->count() > 6)
+                    <div class="p-4 border-t border-border-subtle bg-surface-subtle/30 flex justify-center">
+                        <button type="button"
+                                @click="showAllWalletTx = !showAllWalletTx"
+                                class="inline-flex items-center gap-2 px-5 py-2 rounded-full bg-primary/10 hover:bg-primary text-primary hover:text-white border border-primary/30 text-xs font-extrabold transition-colors cursor-pointer">
+                            <span x-text="showAllWalletTx ? 'See Less E-Wallet Entries' : 'See More E-Wallet Entries (' + ({{ $walletTransactions->count() }} - 6) + ' more)'"></span>
+                        </button>
+                    </div>
+                @endif
             @endif
         </div>
 
@@ -850,10 +878,10 @@
                             </tr>
                         </thead>
                         <tbody class="divide-y divide-border-subtle">
-                            @foreach($transactions as $tx)
-                                <tr class="hover:bg-surface-subtle/30">
+                            @foreach($transactions as $cIdx => $tx)
+                                <tr x-show="{{ $cIdx }} < 8 || showAllCoinTx" class="hover:bg-surface-subtle/30">
                                     <td class="py-3.5 px-5 font-mono">
-                                        <div class="font-bold text-primary-dark">{{ $tx->reference_code }}</div>
+                                        <div class="font-bold text-primary-dark select-text">{{ $tx->reference_code }}</div>
                                         <div class="text-[11px] text-text-muted">{{ $tx->created_at?->format('M d, Y h:i A') }}</div>
                                     </td>
                                     <td class="py-3.5 px-4">
@@ -867,7 +895,7 @@
                                             <span class="font-mono font-bold text-primary ml-1">({{ $tx->voucher->code }})</span>
                                         @endif
                                     </td>
-                                    <td class="py-3.5 px-4 text-right font-mono font-extrabold {{ $tx->coins_delta > 0 ? 'text-green-700' : ($tx->coins_delta < 0 ? 'text-danger' : 'text-text-muted') }}">
+                                    <td class="py-3.5 px-4 text-right font-mono font-extrabold {{ $tx->coins_delta > 0 ? 'text-success' : ($tx->coins_delta < 0 ? 'text-danger' : 'text-text-muted') }}">
                                         {{ $tx->coins_delta > 0 ? '+' . $tx->coins_delta : ($tx->coins_delta < 0 ? $tx->coins_delta : '0') }}
                                     </td>
                                     <td class="py-3.5 px-4 text-right font-mono font-bold {{ $tx->spins_delta > 0 ? 'text-primary' : 'text-text-muted' }}">
@@ -881,6 +909,17 @@
                         </tbody>
                     </table>
                 </div>
+
+                @if($transactions->count() > 8)
+                    <div class="p-4 border-t border-border-subtle bg-surface-subtle/30 flex justify-center">
+                        <button type="button"
+                                @click="showAllCoinTx = !showAllCoinTx"
+                                class="inline-flex items-center gap-2 px-5 py-2 rounded-full bg-primary/10 hover:bg-primary text-primary hover:text-white border border-primary/30 text-xs font-extrabold transition-colors cursor-pointer">
+                            <span x-text="showAllCoinTx ? 'See Less Coin Activity' : 'See More Coin Activity (' + ({{ $transactions->count() }} - 8) + ' more)'"></span>
+                        </button>
+                    </div>
+                @endif
+
                 @if($transactions->hasPages())
                     <div class="px-5 py-3 border-t border-border-subtle">
                         {{ $transactions->links() }}
