@@ -84,6 +84,17 @@
         return {
             items: Array.isArray(initialItems) ? initialItems : [],
             syncTimers: {},
+            storeExpandMap: {},
+            notify(msg, type = 'success') {
+                if (!msg) return;
+                window.dispatchEvent(new CustomEvent('toast', {
+                    detail: {
+                        title: type === 'danger' ? 'Cart Alert' : 'Shopping Cart',
+                        message: msg,
+                        type: type
+                    }
+                }));
+            },
             get activeItems() {
                 return this.items.filter(i => !i.isRemoving);
             },
@@ -164,9 +175,7 @@
                         if (typeof window.setCartBadge === 'function') {
                             window.setCartBadge(this.activeItems.length);
                         }
-                        if (window.StorkiaLive) {
-                            window.StorkiaLive.showToast(`Removed "${item.title}" from your cart.`, 'success');
-                        }
+                        this.notify(`Removed "${item.title}" from your cart.`, 'success');
                         if (this.activeItems.length === 0 && window.StorkiaLive) {
                             await window.StorkiaLive.visit(window.location.href, {
                                 method: 'GET',
@@ -177,10 +186,12 @@
                     } else {
                         item.isRemoving = false;
                         item.selected = true;
+                        this.notify('Could not remove item right now.', 'danger');
                     }
                 } catch (err) {
                     item.isRemoving = false;
                     item.selected = true;
+                    this.notify('Network error while removing item.', 'danger');
                 }
             },
             queueDatabaseSync(index, delay = 180) {
@@ -237,7 +248,6 @@
                         }));
                     }
                 } catch (err) {
-                    console.error('Cart sync error:', err);
                 } finally {
                     if (this.items[index]) {
                         this.items[index].isSyncing = false;
@@ -254,7 +264,10 @@
                 let val = parseInt(rawVal, 10);
                 const limit = Math.max(1, parseInt(item.maxStock) || 1);
                 if (val < 1) val = 1;
-                if (val > limit) val = limit;
+                if (val > limit) {
+                    val = limit;
+                    this.notify(`Maximum available stock is ${limit} unit(s).`, 'info');
+                }
                 item.quantity = val;
                 event.target.value = val;
                 this.broadcastLocalSync(item);
@@ -318,16 +331,16 @@
             item.quantity = Number($event.detail.quantity);
         }
     "
-    class="min-h-screen bg-surface-subtle/40 pb-16 lg:pb-20 pt-4"
+    class="min-h-screen bg-surface-subtle/40 pb-24 lg:pb-20 pt-4 select-none"
 >
     <div class="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 space-y-6">
-        <nav aria-label="Checkout Stepper" class="w-full bg-surface border border-border-subtle rounded-2xl p-4 sm:p-5 shadow-xs select-none">
+        <nav aria-label="Checkout Stepper" class="w-full bg-surface border border-border-subtle rounded-2xl p-4 sm:p-5 shadow-xs">
             <div class="flex items-center justify-between max-w-3xl mx-auto">
                 <div class="flex items-center gap-2 text-primary font-bold">
-                    <span class="w-7 h-7 rounded-full bg-primary text-surface text-xs font-bold flex items-center justify-center shadow-xs">1</span>
+                    <span class="w-7 h-7 rounded-full bg-primary text-surface text-xs font-extrabold flex items-center justify-center shadow-xs">1</span>
                     <span class="text-sm font-sans tracking-tight">Cart</span>
                 </div>
-                <div class="flex-1 h-[2px] bg-primary/20 mx-3 sm:mx-6 rounded-full"></div>
+                <div class="flex-1 h-[2px] bg-primary/25 mx-3 sm:mx-6 rounded-full"></div>
                 <div class="flex items-center gap-2 text-text-muted font-medium">
                     <span class="w-7 h-7 rounded-full bg-surface-subtle border border-border-subtle text-text-muted text-xs font-bold flex items-center justify-center">2</span>
                     <span class="text-sm font-sans tracking-tight hidden sm:inline">Place Order</span>
@@ -347,14 +360,14 @@
 
         @if($cartItems->isEmpty())
             <div class="bg-surface border border-border-subtle rounded-3xl p-16 text-center max-w-xl mx-auto shadow-xs my-10">
-                <div class="w-20 h-20 rounded-full bg-surface-subtle text-text-muted flex items-center justify-center mx-auto mb-4 border border-border-subtle">
+                <div class="w-20 h-20 rounded-full bg-brand-light/30 text-primary flex items-center justify-center mx-auto mb-4 border border-primary/20">
                     <svg class="w-9 h-9" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z" />
                     </svg>
                 </div>
                 <h2 class="text-2xl font-serif font-bold text-primary-dark mb-2">Your Shopping Cart is Empty</h2>
                 <p class="text-text-muted text-sm mb-6">Looks like you haven't added anything to your cart yet.</p>
-                <a href="/shop" class="inline-flex px-8 py-3.5 bg-primary hover:bg-primary-dark text-surface font-semibold text-sm rounded-full transition-colors shadow-xs">
+                <a href="{{ route('home') }}" class="inline-flex px-8 py-3.5 bg-primary hover:bg-primary-dark text-surface font-bold text-sm rounded-full transition-colors shadow-xs cursor-pointer">
                     Start Shopping
                 </a>
             </div>
@@ -369,44 +382,49 @@
                                 @change="toggleSelectAll($event.target.checked)"
                                 class="w-5 h-5 rounded-md text-primary focus:ring-primary/30 border-border-subtle cursor-pointer"
                             >
-                            <span class="text-base font-bold text-text-main font-sans tracking-tight">
+                            <span class="text-sm sm:text-base font-extrabold text-primary-dark font-sans tracking-tight">
                                 ALL ITEMS (<span x-text="activeItems.length"></span>)
                             </span>
                         </label>
-                        <div class="text-xs text-text-muted font-medium">
+                        <div class="px-3 py-1 rounded-full bg-brand-light/40 border border-primary/20 text-xs text-primary-dark font-bold">
                             <span x-text="selectedCount"></span> of <span x-text="activeItems.length"></span> selected
                         </div>
                     </div>
 
                     @foreach ($groupedCart as $storeName => $itemsInStore)
+                        @php $storeKey = md5($storeName); @endphp
                         <div x-show="hasActiveStoreItems('{{ addslashes($storeName) }}')"
+                             x-data="{ showAllStoreItems: false }"
                              x-transition
-                             class="bg-surface rounded-2xl border border-border-subtle shadow-xs overflow-hidden">
-                            <div class="p-4 sm:px-6 bg-surface-subtle/50 border-b border-border-subtle flex items-center gap-3.5 select-none">
-                                <input
-                                    type="checkbox"
-                                    :checked="isStoreSelected('{{ addslashes($storeName) }}')"
-                                    @change="toggleStore('{{ addslashes($storeName) }}', $event.target.checked)"
-                                    class="w-5 h-5 rounded-md text-primary focus:ring-primary/30 border-border-subtle cursor-pointer"
-                                >
-                                <div class="flex items-center gap-2">
-                                    <svg class="w-5 h-5 text-text-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
-                                    </svg>
-                                    <span class="font-bold text-sm sm:text-base text-primary-dark">
-                                        {{ $storeName }}
-                                    </span>
-                                </div>
+                             class="bg-surface rounded-3xl border border-border-subtle shadow-xs overflow-hidden">
+                            <div class="p-4 sm:px-6 bg-surface-subtle/60 border-b border-border-subtle flex items-center justify-between gap-3.5">
+                                <label class="flex items-center gap-3.5 cursor-pointer">
+                                    <input
+                                        type="checkbox"
+                                        :checked="isStoreSelected('{{ addslashes($storeName) }}')"
+                                        @change="toggleStore('{{ addslashes($storeName) }}', $event.target.checked)"
+                                        class="w-5 h-5 rounded-md text-primary focus:ring-primary/30 border-border-subtle cursor-pointer"
+                                    >
+                                    <div class="flex items-center gap-2">
+                                        <svg class="w-5 h-5 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
+                                        </svg>
+                                        <span class="font-bold text-sm sm:text-base text-primary-dark">
+                                            {{ $storeName }}
+                                        </span>
+                                    </div>
+                                </label>
+                                <span class="text-[11px] font-bold text-text-muted">{{ $itemsInStore->count() }} {{ Str::plural('item', $itemsInStore->count()) }}</span>
                             </div>
 
                             <div class="divide-y divide-border-subtle/60">
-                                @foreach ($itemsInStore as $cartItem)
+                                @foreach ($itemsInStore->values() as $storeItemIdx => $cartItem)
                                     @php
                                         $alpineIndex = $cartItems->search(fn($ci) => $ci->id === $cartItem->id);
                                     @endphp
-                                    <div x-show="!items[{{ $alpineIndex }}].isRemoving"
+                                    <div x-show="!items[{{ $alpineIndex }}].isRemoving && ({{ $storeItemIdx }} < 5 || showAllStoreItems)"
                                          x-transition
-                                         class="p-4 sm:p-6 flex items-start gap-4 hover:bg-surface-subtle/20 transition-colors">
+                                         class="p-4 sm:p-6 flex items-start gap-4 hover:bg-brand-light/10 transition-colors">
                                         <div class="pt-2 sm:pt-4">
                                             <input
                                                 type="checkbox"
@@ -415,7 +433,7 @@
                                             >
                                         </div>
 
-                                        <a href="{{ route('product.show', $cartItem->product->id) }}" class="w-20 h-20 sm:w-28 sm:h-28 rounded-xl bg-surface-subtle border border-border-subtle overflow-hidden shrink-0 flex items-center justify-center p-1.5 group">
+                                        <a href="{{ route('product.show', $cartItem->product->id) }}" class="w-20 h-20 sm:w-28 sm:h-28 rounded-2xl bg-surface-subtle border border-border-subtle overflow-hidden shrink-0 flex items-center justify-center p-1.5 group cursor-pointer">
                                             @if($initialAlpineData[$alpineIndex]['image'])
                                                 <img
                                                     src="{{ $initialAlpineData[$alpineIndex]['image'] }}"
@@ -431,11 +449,11 @@
 
                                         <div class="flex-1 min-w-0 flex flex-col justify-between self-stretch">
                                             <div>
-                                                <a href="{{ route('product.show', $cartItem->product->id) }}" class="text-sm sm:text-base font-semibold text-text-main line-clamp-2 hover:text-primary transition-colors leading-snug">
+                                                <a href="{{ route('product.show', $cartItem->product->id) }}" class="text-sm sm:text-base font-bold text-text-main line-clamp-2 hover:text-primary transition-colors leading-snug cursor-pointer">
                                                     {{ $cartItem->product->name }}
                                                 </a>
                                                 @if(!empty($initialAlpineData[$alpineIndex]['variant']))
-                                                    <div class="inline-flex items-center gap-1 mt-1.5 px-2.5 py-1 rounded-md bg-surface-subtle text-xs text-text-muted font-medium border border-border-subtle">
+                                                    <div class="inline-flex items-center gap-1 mt-1.5 px-2.5 py-0.5 rounded-full bg-brand-light/40 text-xs text-primary-dark font-bold border border-border-subtle">
                                                         <span>{{ $initialAlpineData[$alpineIndex]['variant'] }}</span>
                                                     </div>
                                                 @endif
@@ -444,18 +462,18 @@
                                             <div class="mt-4 flex flex-wrap items-end justify-between gap-3">
                                                 <div class="flex items-baseline gap-2 font-sans">
                                                     <span
-                                                        class="text-base sm:text-lg font-semibold tracking-tight"
+                                                        class="text-base sm:text-lg font-extrabold tracking-tight"
                                                         :class="items[{{ $alpineIndex }}].discountPercent > 0 ? 'text-price' : 'text-text-main'"
                                                     >
-                                                        ₱<span x-text="(items[{{ $alpineIndex }}].discountedPrice * items[{{ $alpineIndex }}].quantity).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})"></span>
+                                                        &#8369;<span x-text="(items[{{ $alpineIndex }}].discountedPrice * items[{{ $alpineIndex }}].quantity).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})"></span>
                                                     </span>
 
                                                     <template x-if="items[{{ $alpineIndex }}].discountPercent > 0">
                                                         <div class="flex items-center gap-1.5">
                                                             <span class="text-xs text-text-muted font-normal line-through">
-                                                                ₱<span x-text="(items[{{ $alpineIndex }}].originalPrice * items[{{ $alpineIndex }}].quantity).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})"></span>
+                                                                &#8369;<span x-text="(items[{{ $alpineIndex }}].originalPrice * items[{{ $alpineIndex }}].quantity).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})"></span>
                                                             </span>
-                                                            <span class="text-[10px] font-semibold text-price bg-red-50 border border-red-200 px-1.5 py-0.5 rounded">
+                                                            <span class="text-[10px] font-extrabold text-danger bg-danger/10 border border-danger/25 px-1.5 py-0.5 rounded-md">
                                                                 -<span x-text="Math.round(items[{{ $alpineIndex }}].discountPercent)"></span>%
                                                             </span>
                                                         </div>
@@ -466,7 +484,7 @@
                                                     <span class="text-[11px] text-text-muted hidden sm:inline"
                                                           x-text="'Stock: ' + items[{{ $alpineIndex }}].maxStock"></span>
 
-                                                    <div class="flex items-center border border-border-subtle focus-within:border-primary rounded-lg bg-surface h-8 overflow-hidden w-28 shadow-2xs"
+                                                    <div class="flex items-center border border-border-subtle focus-within:border-primary rounded-xl bg-surface h-9 overflow-hidden w-28 shadow-2xs"
                                                          :class="{'opacity-70': items[{{ $alpineIndex }}].isSyncing}">
                                                         <button
                                                             type="button"
@@ -502,7 +520,7 @@
                                                     <button
                                                         type="button"
                                                         @click="removeItem({{ $alpineIndex }})"
-                                                        class="text-text-muted hover:text-danger p-1 transition-colors cursor-pointer"
+                                                        class="text-text-muted hover:text-danger p-1.5 rounded-lg hover:bg-danger/10 transition-colors cursor-pointer"
                                                         title="Remove item"
                                                     >
                                                         <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
@@ -515,6 +533,16 @@
                                     </div>
                                 @endforeach
                             </div>
+
+                            @if($itemsInStore->count() > 5)
+                                <div class="p-3 bg-surface-subtle/40 border-t border-border-subtle text-center">
+                                    <button type="button"
+                                            @click="showAllStoreItems = !showAllStoreItems"
+                                            class="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full bg-primary/10 hover:bg-primary text-primary hover:text-white border border-primary/30 text-xs font-extrabold transition-colors cursor-pointer">
+                                        <span x-text="showAllStoreItems ? 'See Less Store Items' : 'See All {{ $itemsInStore->count() }} Store Items'"></span>
+                                    </button>
+                                </div>
+                            @endif
                         </div>
                     @endforeach
                 </div>
@@ -523,7 +551,7 @@
                      x-data="{ mobileSummaryOpen: false }"
                      @resize.window.debounce.100ms="if (window.innerWidth >= 1024) mobileSummaryOpen = false">
 
-                    <div class="hidden lg:block bg-surface rounded-2xl border border-border-subtle p-6 shadow-xs sticky top-24 select-none space-y-6">
+                    <div class="hidden lg:block bg-surface rounded-3xl border border-border-subtle p-6 shadow-xs sticky top-24 space-y-6">
                         <div>
                             <h3 class="text-xl font-serif font-bold text-primary-dark">Order Summary</h3>
                             <p class="text-xs text-text-muted mt-0.5">Proceed to checkout and select your shipping address.</p>
@@ -534,7 +562,7 @@
                                 Selected Items (<span x-text="selectedCount"></span>)
                             </div>
 
-                            <div class="flex items-center gap-2 overflow-x-auto pt-2.5 pb-2 pr-2 min-h-[56px] [scrollbar-width:thin] [&::-webkit-scrollbar]:h-1.5">
+                            <div class="flex items-center gap-2 overflow-x-auto pt-2.5 pb-2 pr-2 min-h-[56px] custom-scrollbar">
                                 <template x-for="item in selectedItems" :key="item.id">
                                     <div class="relative w-12 h-12 rounded-xl bg-surface-subtle border border-border-subtle shrink-0 flex items-center justify-center p-1 group">
                                         <template x-if="item.image">
@@ -549,7 +577,7 @@
                                             type="button"
                                             @click.stop="item.selected = false"
                                             title="Remove from selection"
-                                            class="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-text-main hover:bg-price text-surface flex items-center justify-center transition-colors shadow-xs cursor-pointer z-10"
+                                            class="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-primary-dark hover:bg-danger text-surface flex items-center justify-center transition-colors shadow-xs cursor-pointer z-10"
                                         >
                                             <svg class="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3">
                                                 <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
@@ -567,24 +595,24 @@
                             <div class="flex items-center justify-between text-text-muted">
                                 <span>Retail Price:</span>
                                 <span class="font-semibold text-text-main">
-                                    ₱<span x-text="retailTotal.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})"></span>
+                                    &#8369;<span x-text="retailTotal.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})"></span>
                                 </span>
                             </div>
 
                             <div class="flex items-center justify-between text-text-muted">
                                 <span>Promotions / Savings:</span>
                                 <span class="font-bold text-price">
-                                    -₱<span x-text="savingsTotal.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})"></span>
+                                    -&#8369;<span x-text="savingsTotal.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})"></span>
                                 </span>
                             </div>
 
-                            <div class="flex items-center justify-between pt-3 border-t border-border-subtle text-base font-bold text-text-main">
+                            <div class="flex items-center justify-between pt-3 border-t border-border-subtle text-base font-bold text-primary-dark">
                                 <span>Estimated Price:</span>
                                 <span
                                     class="text-2xl font-extrabold font-serif"
-                                    :class="savingsTotal > 0 ? 'text-price' : 'text-text-main'"
+                                    :class="savingsTotal > 0 ? 'text-price' : 'text-primary-dark'"
                                 >
-                                    ₱<span x-text="estimatedTotal.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})"></span>
+                                    &#8369;<span x-text="estimatedTotal.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})"></span>
                                 </span>
                             </div>
                         </div>
@@ -600,8 +628,8 @@
                                     :disabled="selectedCount === 0"
                                     :class="selectedCount === 0
                                         ? 'bg-surface-subtle text-text-muted cursor-not-allowed border border-border-subtle'
-                                        : 'bg-text-main hover:bg-dark-grey text-surface cursor-pointer shadow-xs active:scale-[0.99]'"
-                                    class="w-full py-3.5 px-6 font-bold text-sm rounded-xl transition-all flex items-center justify-center gap-2"
+                                        : 'bg-primary hover:bg-primary-dark text-surface cursor-pointer shadow-md active:scale-[0.99]'"
+                                    class="w-full py-3.5 px-6 font-bold text-sm rounded-2xl transition-all flex items-center justify-center gap-2"
                                 >
                                     <span>Checkout Now</span>
                                     <span x-show="selectedCount > 0" x-text="'(' + selectedCount + ')'"></span>
@@ -613,20 +641,20 @@
                         </div>
                     </div>
 
-                    <div class="lg:hidden fixed inset-x-0 bottom-0 z-40 bg-surface border-t border-border-subtle px-4 py-2 sm:px-5 sm:py-2.5 shadow-[0_-4px_25px_rgba(0,0,0,0.12)] select-none">
+                    <div class="lg:hidden fixed inset-x-0 bottom-0 z-40 bg-surface/95 backdrop-blur-md border-t border-border-subtle px-4 py-2.5 sm:px-5 shadow-[0_-4px_25px_rgba(93,49,64,0.12)]">
                         <div x-show="mobileSummaryOpen" x-collapse x-cloak class="mb-3">
                             <div class="space-y-4 pb-3 border-b border-border-subtle/70">
                                 <div class="space-y-1.5 text-xs sm:text-sm">
                                     <div class="flex items-center justify-between text-text-muted">
                                         <span>Retail Price:</span>
                                         <span class="font-semibold text-text-main">
-                                            ₱<span x-text="retailTotal.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})"></span>
+                                            &#8369;<span x-text="retailTotal.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})"></span>
                                         </span>
                                     </div>
                                     <div class="flex items-center justify-between text-text-muted">
                                         <span>Promotions / Savings:</span>
                                         <span class="font-bold text-price">
-                                            -₱<span x-text="savingsTotal.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})"></span>
+                                            -&#8369;<span x-text="savingsTotal.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})"></span>
                                         </span>
                                     </div>
                                 </div>
@@ -639,9 +667,9 @@
                                     <span class="text-xs font-semibold text-text-muted">Total:</span>
                                     <span
                                         class="text-lg sm:text-xl font-extrabold font-serif"
-                                        :class="savingsTotal > 0 ? 'text-price' : 'text-text-main'"
+                                        :class="savingsTotal > 0 ? 'text-price' : 'text-primary-dark'"
                                     >
-                                        ₱<span x-text="estimatedTotal.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})"></span>
+                                        &#8369;<span x-text="estimatedTotal.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})"></span>
                                     </span>
 
                                     <button
@@ -664,7 +692,7 @@
                                 </div>
                                 <template x-if="savingsTotal > 0">
                                     <span class="text-[11px] sm:text-xs text-price font-bold block leading-tight mt-0.5">
-                                        Saved: ₱<span x-text="savingsTotal.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})"></span>
+                                        Saved: &#8369;<span x-text="savingsTotal.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})"></span>
                                     </span>
                                 </template>
                             </div>
@@ -680,7 +708,7 @@
                                         :disabled="selectedCount === 0"
                                         :class="selectedCount === 0
                                             ? 'bg-surface-subtle text-text-muted cursor-not-allowed border border-border-subtle'
-                                            : 'bg-text-main hover:bg-dark-grey text-surface cursor-pointer shadow-xs active:scale-[0.98]'"
+                                            : 'bg-primary hover:bg-primary-dark text-surface cursor-pointer shadow-sm active:scale-[0.98]'"
                                         class="py-2.5 px-6 font-bold text-xs sm:text-sm rounded-xl transition-all flex items-center justify-center gap-1.5"
                                     >
                                         <span>Checkout</span>

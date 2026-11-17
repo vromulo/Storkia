@@ -6,6 +6,16 @@
     $deals = $deals ?? collect();
     $bundles = $bundles ?? collect();
 
+    $timeOptions = [];
+    for ($h = 0; $h < 24; $h++) {
+        foreach ([0, 30] as $m) {
+            $val = sprintf('%02d:%02d', $h, $m);
+            $label = \Carbon\Carbon::createFromTime($h, $m)->format('h:i A');
+            $timeOptions[] = ['val' => $val, 'label' => $label];
+        }
+    }
+    $timeOptions[] = ['val' => '23:59', 'label' => '11:59 PM'];
+
     $productVariantsMap = [];
     $productOptionsList = [];
     foreach ($products as $prod) {
@@ -47,6 +57,10 @@
     }
 
     $firstProductId = (string) ($products->first()?->id ?? '');
+
+    $defaultDealStart = old('starts_at') ? \Carbon\Carbon::parse(old('starts_at')) : now();
+    $defaultDealEnd = old('ends_at') ? \Carbon\Carbon::parse(old('ends_at')) : now()->addHours(4);
+
     $promotionsConfig = [
         'dealType'               => (string) old('deal_type', 'super_deal'),
         'bundleType'             => (string) old('bundle_type', 'percentage_off'),
@@ -58,6 +72,15 @@
         'selectedGiftSubVariant' => (string) old('free_gift_sub_variant_name', ''),
         'variantsByProduct'      => $productVariantsMap,
         'productsList'           => $productOptionsList,
+        'dealStartDate'          => $defaultDealStart->format('Y-m-d'),
+        'dealStartTime'          => $defaultDealStart->format('H:i'),
+        'dealEndDate'            => $defaultDealEnd->format('Y-m-d'),
+        'dealEndTime'            => $defaultDealEnd->format('H:i'),
+        'bundleStartDate'        => now()->format('Y-m-d'),
+        'bundleStartTime'        => now()->format('H:i'),
+        'bundleEndDate'          => now()->addDays(14)->format('Y-m-d'),
+        'bundleEndTime'          => '23:59',
+        'timeOptions'            => $timeOptions,
     ];
 @endphp
 
@@ -74,6 +97,19 @@
             selectedGiftSubVariant: cfg.selectedGiftSubVariant || '',
             variantsByProduct: cfg.variantsByProduct || {},
             productsList: Array.isArray(cfg.productsList) ? cfg.productsList : [],
+            timeOptions: Array.isArray(cfg.timeOptions) ? cfg.timeOptions : [],
+            dealStartDate: cfg.dealStartDate || '',
+            dealStartTime: cfg.dealStartTime || '00:00',
+            dealEndDate: cfg.dealEndDate || '',
+            dealEndTime: cfg.dealEndTime || '23:59',
+            bundleStartDate: cfg.bundleStartDate || '',
+            bundleStartTime: cfg.bundleStartTime || '00:00',
+            bundleEndDate: cfg.bundleEndDate || '',
+            bundleEndTime: cfg.bundleEndTime || '23:59',
+            activeCalTarget: null,
+            activeTimeTarget: null,
+            calYear: new Date().getFullYear(),
+            calMonth: new Date().getMonth(),
             dealProductOpen: false,
             dealVariantOpen: false,
             dealSubVariantOpen: false,
@@ -86,6 +122,64 @@
             bundlesTableExpanded: false,
             isSubmittingDeal: false,
             isSubmittingBundle: false,
+            openCal(target) {
+                this.activeTimeTarget = null;
+                if (this.activeCalTarget === target) {
+                    this.activeCalTarget = null;
+                    return;
+                }
+                this.activeCalTarget = target;
+                const map = {
+                    deal_start: this.dealStartDate,
+                    deal_end: this.dealEndDate,
+                    bundle_start: this.bundleStartDate,
+                    bundle_end: this.bundleEndDate,
+                };
+                const iso = map[target] || '';
+                const d = iso ? new Date(iso + 'T00:00:00') : new Date();
+                if (!isNaN(d.getTime())) {
+                    this.calYear = d.getFullYear();
+                    this.calMonth = d.getMonth();
+                }
+            },
+            get calMonthLabel() {
+                const months = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+                return (months[this.calMonth] || '') + ' ' + this.calYear;
+            },
+            get calDays() {
+                const firstDay = new Date(this.calYear, this.calMonth, 1).getDay();
+                const daysInMonth = new Date(this.calYear, this.calMonth + 1, 0).getDate();
+                const cells = [];
+                for (let i = 0; i < firstDay; i++) cells.push({ day: null, iso: '' });
+                const map = {
+                    deal_start: this.dealStartDate,
+                    deal_end: this.dealEndDate,
+                    bundle_start: this.bundleStartDate,
+                    bundle_end: this.bundleEndDate,
+                };
+                const currentIso = map[this.activeCalTarget] || '';
+                for (let d = 1; d <= daysInMonth; d++) {
+                    const m = String(this.calMonth + 1).padStart(2, '0');
+                    const dayStr = String(d).padStart(2, '0');
+                    const iso = `${this.calYear}-${m}-${dayStr}`;
+                    cells.push({ day: d, iso: iso, selected: iso === currentIso });
+                }
+                return cells;
+            },
+            prevCal() {
+                if (this.calMonth === 0) { this.calMonth = 11; this.calYear--; } else { this.calMonth--; }
+            },
+            nextCal() {
+                if (this.calMonth === 11) { this.calMonth = 0; this.calYear++; } else { this.calMonth++; }
+            },
+            pickCal(cell) {
+                if (!cell || !cell.iso) return;
+                if (this.activeCalTarget === 'deal_start') this.dealStartDate = cell.iso;
+                else if (this.activeCalTarget === 'deal_end') this.dealEndDate = cell.iso;
+                else if (this.activeCalTarget === 'bundle_start') this.bundleStartDate = cell.iso;
+                else if (this.activeCalTarget === 'bundle_end') this.bundleEndDate = cell.iso;
+                this.activeCalTarget = null;
+            },
             get selectedDealProductLabel() {
                 const found = this.productsList.find(p => String(p.id) === String(this.selectedDealProductId));
                 if (!found) return 'Select product...';
@@ -240,14 +334,100 @@
                     </div>
                 </div>
 
-                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <div>
-                        <label class="block font-bold text-text-muted uppercase mb-1">Start Date &amp; Time <span class="text-danger">*</span></label>
-                        <input type="datetime-local" name="starts_at" value="{{ old('starts_at', now()->format('Y-m-d\TH:i')) }}" min="{{ now()->subMinutes(5)->format('Y-m-d\TH:i') }}" required class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface font-mono font-bold outline-none focus:border-primary cursor-pointer">
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 relative" @click.away="if (activeCalTarget === 'deal_start' || activeCalTarget === 'deal_end') activeCalTarget = null; if (activeTimeTarget === 'deal_start' || activeTimeTarget === 'deal_end') activeTimeTarget = null">
+                    <div class="p-3 rounded-2xl bg-surface-subtle border border-border-subtle space-y-1.5">
+                        <label class="block font-bold text-primary-dark uppercase">Start Date &amp; Time <span class="text-danger">*</span></label>
+                        <input type="hidden" name="starts_at" :value="dealStartDate + 'T' + dealStartTime">
+                        <div class="grid grid-cols-2 gap-1.5">
+                            <button type="button"
+                                    @click="openCal('deal_start')"
+                                    class="p-2 rounded-xl border border-border-subtle hover:border-primary bg-surface font-mono font-bold text-xs text-primary-dark flex items-center justify-between cursor-pointer">
+                                <span x-text="dealStartDate"></span>
+                                <svg class="w-3.5 h-3.5 text-primary shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+                            </button>
+                            <div class="relative">
+                                <button type="button"
+                                        @click="activeCalTarget = null; activeTimeTarget = activeTimeTarget === 'deal_start' ? null : 'deal_start'"
+                                        class="w-full p-2 rounded-xl border border-border-subtle hover:border-primary bg-surface font-mono font-bold text-xs text-primary-dark flex items-center justify-between cursor-pointer">
+                                    <span x-text="dealStartTime"></span>
+                                    <svg class="w-3.5 h-3.5 text-primary shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                                </button>
+                                <div x-show="activeTimeTarget === 'deal_start'" x-cloak class="absolute right-0 top-full mt-1 w-40 bg-surface border border-border-subtle rounded-xl shadow-xl max-h-44 overflow-y-auto custom-scrollbar z-40 py-1">
+                                    <template x-for="tOpt in timeOptions" :key="'dst_' + tOpt.val">
+                                        <button type="button"
+                                                @click="dealStartTime = tOpt.val; activeTimeTarget = null"
+                                                class="w-full px-3 py-1.5 text-left hover:bg-brand-light/30 font-mono text-xs flex items-center justify-between cursor-pointer"
+                                                :class="dealStartTime === tOpt.val ? 'text-primary font-extrabold bg-primary/5' : 'text-text-main'">
+                                            <span x-text="tOpt.label"></span>
+                                            <span x-show="dealStartTime === tOpt.val" class="text-primary">&#10003;</span>
+                                        </button>
+                                    </template>
+                                </div>
+                            </div>
+                        </div>
                     </div>
-                    <div>
-                        <label class="block font-bold text-text-muted uppercase mb-1">End Date &amp; Time <span class="text-danger">*</span></label>
-                        <input type="datetime-local" name="ends_at" value="{{ old('ends_at', now()->addHours(4)->format('Y-m-d\TH:i')) }}" required class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface font-mono font-bold outline-none focus:border-primary cursor-pointer">
+
+                    <div class="p-3 rounded-2xl bg-surface-subtle border border-border-subtle space-y-1.5">
+                        <label class="block font-bold text-primary-dark uppercase">End Date &amp; Time <span class="text-danger">*</span></label>
+                        <input type="hidden" name="ends_at" :value="dealEndDate + 'T' + dealEndTime">
+                        <div class="grid grid-cols-2 gap-1.5">
+                            <button type="button"
+                                    @click="openCal('deal_end')"
+                                    class="p-2 rounded-xl border border-border-subtle hover:border-primary bg-surface font-mono font-bold text-xs text-primary-dark flex items-center justify-between cursor-pointer">
+                                <span x-text="dealEndDate"></span>
+                                <svg class="w-3.5 h-3.5 text-primary shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+                            </button>
+                            <div class="relative">
+                                <button type="button"
+                                        @click="activeCalTarget = null; activeTimeTarget = activeTimeTarget === 'deal_end' ? null : 'deal_end'"
+                                        class="w-full p-2 rounded-xl border border-border-subtle hover:border-primary bg-surface font-mono font-bold text-xs text-primary-dark flex items-center justify-between cursor-pointer">
+                                    <span x-text="dealEndTime"></span>
+                                    <svg class="w-3.5 h-3.5 text-primary shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                                </button>
+                                <div x-show="activeTimeTarget === 'deal_end'" x-cloak class="absolute right-0 top-full mt-1 w-40 bg-surface border border-border-subtle rounded-xl shadow-xl max-h-44 overflow-y-auto custom-scrollbar z-40 py-1">
+                                    <template x-for="tOpt in timeOptions" :key="'det_' + tOpt.val">
+                                        <button type="button"
+                                                @click="dealEndTime = tOpt.val; activeTimeTarget = null"
+                                                class="w-full px-3 py-1.5 text-left hover:bg-brand-light/30 font-mono text-xs flex items-center justify-between cursor-pointer"
+                                                :class="dealEndTime === tOpt.val ? 'text-primary font-extrabold bg-primary/5' : 'text-text-main'">
+                                            <span x-text="tOpt.label"></span>
+                                            <span x-show="dealEndTime === tOpt.val" class="text-primary">&#10003;</span>
+                                        </button>
+                                    </template>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div x-show="activeCalTarget === 'deal_start' || activeCalTarget === 'deal_end'"
+                         x-cloak
+                         x-transition
+                         class="absolute left-0 top-full mt-2 w-72 bg-surface border border-border-subtle rounded-2xl shadow-2xl p-4 z-50">
+                        <div class="flex items-center justify-between mb-3">
+                            <button type="button" @click="prevCal()" class="p-1.5 rounded-lg hover:bg-surface-subtle text-text-main cursor-pointer">
+                                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/></svg>
+                            </button>
+                            <span class="text-xs font-extrabold text-primary-dark" x-text="calMonthLabel"></span>
+                            <button type="button" @click="nextCal()" class="p-1.5 rounded-lg hover:bg-surface-subtle text-text-main cursor-pointer">
+                                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
+                            </button>
+                        </div>
+                        <div class="grid grid-cols-7 gap-1 text-[10px] font-bold text-text-muted text-center mb-1">
+                            <span>Su</span><span>Mo</span><span>Tu</span><span>We</span><span>Th</span><span>Fr</span><span>Sa</span>
+                        </div>
+                        <div class="grid grid-cols-7 gap-1">
+                            <template x-for="(cell, cIdx) in calDays" :key="'dcal_' + cIdx">
+                                <div>
+                                    <template x-if="cell.day !== null">
+                                        <button type="button"
+                                                @click="pickCal(cell)"
+                                                :class="cell.selected ? 'bg-primary text-white font-extrabold' : 'text-text-main hover:bg-brand-light/40 font-semibold'"
+                                                class="w-8 h-8 rounded-lg text-xs flex items-center justify-center transition-colors cursor-pointer"
+                                                x-text="cell.day"></button>
+                                    </template>
+                                </div>
+                            </template>
+                        </div>
                     </div>
                 </div>
 
@@ -305,12 +485,10 @@
                         <label class="block font-bold text-text-muted uppercase mb-1">Required Quantity (X) <span class="text-danger">*</span></label>
                         <input type="number" name="required_quantity" value="{{ old('required_quantity', 3) }}" min="2" max="20" required class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface font-bold outline-none focus:border-primary">
                     </div>
-
                     <div x-show="bundleType === 'percentage_off'">
                         <label class="block font-bold text-text-muted uppercase mb-1">Bundle Discount % <span class="text-danger">*</span></label>
                         <input type="number" step="0.1" min="1" max="99" name="discount_percentage" value="{{ old('discount_percentage', 15) }}" class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface font-bold text-primary outline-none focus:border-primary">
                     </div>
-
                     <div x-show="bundleType === 'buy_x_get_y'" x-cloak class="relative" @click.away="giftProductOpen = false">
                         <label class="block font-bold text-text-muted uppercase mb-1">Free Gift Product (Y) <span class="text-danger">*</span></label>
                         <input type="hidden" name="free_gift_product_id" :value="selectedGiftProductId">
@@ -401,14 +579,100 @@
                     </div>
                 </div>
 
-                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <div>
-                        <label class="block font-bold text-text-muted uppercase mb-1">Starts At <span class="text-danger">*</span></label>
-                        <input type="datetime-local" name="starts_at" value="{{ now()->format('Y-m-d\TH:i') }}" min="{{ now()->subMinutes(5)->format('Y-m-d\TH:i') }}" required class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface font-mono font-bold outline-none focus:border-primary cursor-pointer">
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 relative" @click.away="if (activeCalTarget === 'bundle_start' || activeCalTarget === 'bundle_end') activeCalTarget = null; if (activeTimeTarget === 'bundle_start' || activeTimeTarget === 'bundle_end') activeTimeTarget = null">
+                    <div class="p-3 rounded-2xl bg-surface-subtle border border-border-subtle space-y-1.5">
+                        <label class="block font-bold text-primary-dark uppercase">Starts At <span class="text-danger">*</span></label>
+                        <input type="hidden" name="starts_at" :value="bundleStartDate + 'T' + bundleStartTime">
+                        <div class="grid grid-cols-2 gap-1.5">
+                            <button type="button"
+                                    @click="openCal('bundle_start')"
+                                    class="p-2 rounded-xl border border-border-subtle hover:border-primary bg-surface font-mono font-bold text-xs text-primary-dark flex items-center justify-between cursor-pointer">
+                                <span x-text="bundleStartDate"></span>
+                                <svg class="w-3.5 h-3.5 text-primary shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+                            </button>
+                            <div class="relative">
+                                <button type="button"
+                                        @click="activeCalTarget = null; activeTimeTarget = activeTimeTarget === 'bundle_start' ? null : 'bundle_start'"
+                                        class="w-full p-2 rounded-xl border border-border-subtle hover:border-primary bg-surface font-mono font-bold text-xs text-primary-dark flex items-center justify-between cursor-pointer">
+                                    <span x-text="bundleStartTime"></span>
+                                    <svg class="w-3.5 h-3.5 text-primary shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                                </button>
+                                <div x-show="activeTimeTarget === 'bundle_start'" x-cloak class="absolute right-0 top-full mt-1 w-40 bg-surface border border-border-subtle rounded-xl shadow-xl max-h-44 overflow-y-auto custom-scrollbar z-40 py-1">
+                                    <template x-for="tOpt in timeOptions" :key="'bst_' + tOpt.val">
+                                        <button type="button"
+                                                @click="bundleStartTime = tOpt.val; activeTimeTarget = null"
+                                                class="w-full px-3 py-1.5 text-left hover:bg-brand-light/30 font-mono text-xs flex items-center justify-between cursor-pointer"
+                                                :class="bundleStartTime === tOpt.val ? 'text-primary font-extrabold bg-primary/5' : 'text-text-main'">
+                                            <span x-text="tOpt.label"></span>
+                                            <span x-show="bundleStartTime === tOpt.val" class="text-primary">&#10003;</span>
+                                        </button>
+                                    </template>
+                                </div>
+                            </div>
+                        </div>
                     </div>
-                    <div>
-                        <label class="block font-bold text-text-muted uppercase mb-1">Ends At <span class="text-danger">*</span></label>
-                        <input type="datetime-local" name="ends_at" value="{{ now()->addDays(14)->format('Y-m-d\TH:i') }}" required class="w-full p-2.5 rounded-xl border border-border-subtle bg-surface font-mono font-bold outline-none focus:border-primary cursor-pointer">
+
+                    <div class="p-3 rounded-2xl bg-surface-subtle border border-border-subtle space-y-1.5">
+                        <label class="block font-bold text-primary-dark uppercase">Ends At <span class="text-danger">*</span></label>
+                        <input type="hidden" name="ends_at" :value="bundleEndDate + 'T' + bundleEndTime">
+                        <div class="grid grid-cols-2 gap-1.5">
+                            <button type="button"
+                                    @click="openCal('bundle_end')"
+                                    class="p-2 rounded-xl border border-border-subtle hover:border-primary bg-surface font-mono font-bold text-xs text-primary-dark flex items-center justify-between cursor-pointer">
+                                <span x-text="bundleEndDate"></span>
+                                <svg class="w-3.5 h-3.5 text-primary shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+                            </button>
+                            <div class="relative">
+                                <button type="button"
+                                        @click="activeCalTarget = null; activeTimeTarget = activeTimeTarget === 'bundle_end' ? null : 'bundle_end'"
+                                        class="w-full p-2 rounded-xl border border-border-subtle hover:border-primary bg-surface font-mono font-bold text-xs text-primary-dark flex items-center justify-between cursor-pointer">
+                                    <span x-text="bundleEndTime"></span>
+                                    <svg class="w-3.5 h-3.5 text-primary shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                                </button>
+                                <div x-show="activeTimeTarget === 'bundle_end'" x-cloak class="absolute right-0 top-full mt-1 w-40 bg-surface border border-border-subtle rounded-xl shadow-xl max-h-44 overflow-y-auto custom-scrollbar z-40 py-1">
+                                    <template x-for="tOpt in timeOptions" :key="'bet_' + tOpt.val">
+                                        <button type="button"
+                                                @click="bundleEndTime = tOpt.val; activeTimeTarget = null"
+                                                class="w-full px-3 py-1.5 text-left hover:bg-brand-light/30 font-mono text-xs flex items-center justify-between cursor-pointer"
+                                                :class="bundleEndTime === tOpt.val ? 'text-primary font-extrabold bg-primary/5' : 'text-text-main'">
+                                            <span x-text="tOpt.label"></span>
+                                            <span x-show="bundleEndTime === tOpt.val" class="text-primary">&#10003;</span>
+                                        </button>
+                                    </template>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div x-show="activeCalTarget === 'bundle_start' || activeCalTarget === 'bundle_end'"
+                         x-cloak
+                         x-transition
+                         class="absolute left-0 top-full mt-2 w-72 bg-surface border border-border-subtle rounded-2xl shadow-2xl p-4 z-50">
+                        <div class="flex items-center justify-between mb-3">
+                            <button type="button" @click="prevCal()" class="p-1.5 rounded-lg hover:bg-surface-subtle text-text-main cursor-pointer">
+                                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/></svg>
+                            </button>
+                            <span class="text-xs font-extrabold text-primary-dark" x-text="calMonthLabel"></span>
+                            <button type="button" @click="nextCal()" class="p-1.5 rounded-lg hover:bg-surface-subtle text-text-main cursor-pointer">
+                                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
+                            </button>
+                        </div>
+                        <div class="grid grid-cols-7 gap-1 text-[10px] font-bold text-text-muted text-center mb-1">
+                            <span>Su</span><span>Mo</span><span>Tu</span><span>We</span><span>Th</span><span>Fr</span><span>Sa</span>
+                        </div>
+                        <div class="grid grid-cols-7 gap-1">
+                            <template x-for="(cell, cIdx) in calDays" :key="'bcal_' + cIdx">
+                                <div>
+                                    <template x-if="cell.day !== null">
+                                        <button type="button"
+                                                @click="pickCal(cell)"
+                                                :class="cell.selected ? 'bg-primary text-white font-extrabold' : 'text-text-main hover:bg-brand-light/40 font-semibold'"
+                                                class="w-8 h-8 rounded-lg text-xs flex items-center justify-center transition-colors cursor-pointer"
+                                                x-text="cell.day"></button>
+                                    </template>
+                                </div>
+                            </template>
+                        </div>
                     </div>
                 </div>
 
@@ -507,6 +771,7 @@
                     </tbody>
                 </table>
             </div>
+
             @if($deals->count() > 6)
                 <div class="p-4 border-t border-border-subtle flex justify-center bg-surface-subtle/30">
                     <button type="button"
@@ -608,6 +873,7 @@
                     </tbody>
                 </table>
             </div>
+
             @if($bundles->count() > 6)
                 <div class="p-4 border-t border-border-subtle flex justify-center bg-surface-subtle/30">
                     <button type="button"

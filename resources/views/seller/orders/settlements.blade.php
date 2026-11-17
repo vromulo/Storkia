@@ -9,11 +9,16 @@
     $netWithdrawableAfterArrears = max(0.0, round($availableBalance - $arrearsAmount, 2));
     $canWithdraw = $netWithdrawableAfterArrears >= 100 && !$hasPendingPayout;
 
+    $resolvedFromDate = $fromDate ?? now()->startOfMonth()->toDateString();
+    $resolvedToDate = $toDate ?? now()->toDateString();
+
     $settlementsConfig = [
         'canWithdraw'     => (bool) $canWithdraw,
         'maxWithdrawable' => round($netWithdrawableAfterArrears, 2),
         'requestedAmount' => max(100, floor($netWithdrawableAfterArrears * 100) / 100),
         'accountName'     => (string) (auth()->user()?->full_name ?? ''),
+        'fromDate'        => $resolvedFromDate,
+        'toDate'          => $resolvedToDate,
     ];
 @endphp
 
@@ -34,6 +39,90 @@
             isSubmittingArrears: false,
             showAllPayouts: false,
             showAllCommissions: false,
+            fromDate: cfg.fromDate || '',
+            toDate: cfg.toDate || '',
+            activeCalField: null,
+            calYear: new Date().getFullYear(),
+            calMonth: new Date().getMonth(),
+
+            notify(msg, type = 'danger') {
+                if (!msg) return;
+                window.dispatchEvent(new CustomEvent('toast', {
+                    detail: {
+                        title: type === 'danger' ? 'Withdrawal Notice' : 'E-Wallet',
+                        message: msg,
+                        type: type
+                    }
+                }));
+            },
+
+            openCalendar(field) {
+                if (this.activeCalField === field) {
+                    this.activeCalField = null;
+                    return;
+                }
+                this.activeCalField = field;
+                const currentIso = field === 'from' ? this.fromDate : this.toDate;
+                const d = currentIso ? new Date(currentIso + 'T00:00:00') : new Date();
+                if (!isNaN(d.getTime())) {
+                    this.calYear = d.getFullYear();
+                    this.calMonth = d.getMonth();
+                }
+            },
+
+            get calMonthYearLabel() {
+                const months = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+                return (months[this.calMonth] || '') + ' ' + this.calYear;
+            },
+
+            get calendarDays() {
+                const firstDay = new Date(this.calYear, this.calMonth, 1).getDay();
+                const daysInMonth = new Date(this.calYear, this.calMonth + 1, 0).getDate();
+                const cells = [];
+                for (let i = 0; i < firstDay; i++) {
+                    cells.push({ day: null, iso: '' });
+                }
+                const targetIso = this.activeCalField === 'from' ? this.fromDate : this.toDate;
+                for (let d = 1; d <= daysInMonth; d++) {
+                    const m = String(this.calMonth + 1).padStart(2, '0');
+                    const dayStr = String(d).padStart(2, '0');
+                    const iso = `${this.calYear}-${m}-${dayStr}`;
+                    cells.push({
+                        day: d,
+                        iso: iso,
+                        selected: iso === targetIso
+                    });
+                }
+                return cells;
+            },
+
+            prevCalMonth() {
+                if (this.calMonth === 0) {
+                    this.calMonth = 11;
+                    this.calYear--;
+                } else {
+                    this.calMonth--;
+                }
+            },
+
+            nextCalMonth() {
+                if (this.calMonth === 11) {
+                    this.calMonth = 0;
+                    this.calYear++;
+                } else {
+                    this.calMonth++;
+                }
+            },
+
+            pickCalDate(cell) {
+                if (!cell || !cell.iso) return;
+                if (this.activeCalField === 'from') {
+                    this.fromDate = cell.iso;
+                } else if (this.activeCalField === 'to') {
+                    this.toDate = cell.iso;
+                }
+                this.activeCalField = null;
+            },
 
             openPayoutModal() {
                 if (!this.canWithdraw) return;
@@ -59,18 +148,22 @@
                 const amt = parseFloat(this.requestedAmount);
                 if (isNaN(amt) || amt < 100) {
                     this.payoutError = 'Minimum withdrawal amount is \u20B1100.00.';
+                    this.notify(this.payoutError, 'danger');
                     return;
                 }
                 if (amt > this.maxWithdrawable + 0.001) {
                     this.payoutError = 'Requested amount cannot exceed your net withdrawable balance of \u20B1' + this.maxWithdrawable.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + '.';
+                    this.notify(this.payoutError, 'danger');
                     return;
                 }
                 if (!this.accountName || this.accountName.trim().length < 2) {
                     this.payoutError = 'Please enter the GCash Account Holder Name (at least 2 characters).';
+                    this.notify(this.payoutError, 'danger');
                     return;
                 }
                 if (!/^09\d{9}$/.test(this.accountNumber)) {
                     this.payoutError = 'Please enter a valid 11-digit GCash mobile number starting with 09 (e.g., 09171234567).';
+                    this.notify(this.payoutError, 'danger');
                     return;
                 }
                 this.payoutConfirmStep = true;
@@ -96,7 +189,7 @@
         </div>
 
         <div class="flex flex-wrap items-center gap-2.5">
-            <a href="{{ route('seller.reports.formal-pdf', ['from_date' => $fromDate ?? now()->startOfMonth()->toDateString(), 'to_date' => $toDate ?? now()->toDateString(), 'preset' => 'custom']) }}"
+            <a :href="`{{ route('seller.reports.formal-pdf') }}?from_date=${fromDate}&to_date=${toDate}&preset=custom`"
                target="_blank"
                class="px-4 py-2.5 rounded-2xl bg-primary-dark hover:bg-primary text-white text-xs font-bold shadow-xs transition-colors cursor-pointer">
                 Open Formal Printable PDF Statement
@@ -238,14 +331,67 @@
         @endif
     </div>
 
-    <div class="bg-surface rounded-3xl border border-border-subtle shadow-xs overflow-hidden">
-        <div class="p-5 border-b border-border-subtle bg-surface-subtle/50 flex flex-wrap items-center justify-between gap-3">
+    <div class="bg-surface rounded-3xl border border-border-subtle shadow-xs overflow-visible">
+        <div class="p-5 border-b border-border-subtle bg-surface-subtle/50 rounded-t-3xl flex flex-wrap items-center justify-between gap-3">
             <h2 class="text-base font-bold text-primary-dark">Per-Order Commission &amp; E-Wallet Earnings Ledger (FIFO)</h2>
-            <form method="GET" action="{{ route('seller.settlements.index') }}" class="flex items-center gap-2 text-xs">
-                <input type="date" name="from_date" value="{{ $fromDate ?? now()->startOfMonth()->toDateString() }}" class="px-3 py-1.5 rounded-xl border border-border-subtle bg-surface font-mono font-bold text-primary-dark outline-none focus:border-primary cursor-pointer">
+
+            <form method="GET" action="{{ route('seller.settlements.index') }}" class="flex flex-wrap items-center gap-2 text-xs relative" @click.away="activeCalField = null">
+                <input type="hidden" name="from_date" :value="fromDate">
+                <input type="hidden" name="to_date" :value="toDate">
+
+                <button type="button"
+                        @click="openCalendar('from')"
+                        class="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl border border-border-subtle hover:border-primary bg-surface font-mono font-bold text-primary-dark transition-colors cursor-pointer">
+                    <svg class="w-3.5 h-3.5 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+                    <span x-text="fromDate"></span>
+                </button>
+
                 <span class="text-text-muted font-semibold">to</span>
-                <input type="date" name="to_date" value="{{ $toDate ?? now()->toDateString() }}" class="px-3 py-1.5 rounded-xl border border-border-subtle bg-surface font-mono font-bold text-primary-dark outline-none focus:border-primary cursor-pointer">
-                <button type="submit" class="px-4 py-1.5 rounded-xl bg-primary-dark hover:bg-primary text-white font-bold transition-colors cursor-pointer">Filter</button>
+
+                <button type="button"
+                        @click="openCalendar('to')"
+                        class="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl border border-border-subtle hover:border-primary bg-surface font-mono font-bold text-primary-dark transition-colors cursor-pointer">
+                    <svg class="w-3.5 h-3.5 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+                    <span x-text="toDate"></span>
+                </button>
+
+                <button type="submit" class="px-4 py-2 rounded-xl bg-primary-dark hover:bg-primary text-white font-bold transition-colors cursor-pointer">
+                    Filter
+                </button>
+
+                <div x-show="activeCalField !== null"
+                     x-cloak
+                     x-transition
+                     class="absolute right-0 top-full mt-2 w-72 bg-surface border border-border-subtle rounded-2xl shadow-2xl p-4 z-50">
+                    <div class="flex items-center justify-between mb-3">
+                        <button type="button" @click="prevCalMonth()" class="p-1.5 rounded-lg hover:bg-surface-subtle text-text-main cursor-pointer">
+                            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/></svg>
+                        </button>
+                        <div class="text-center">
+                            <span class="text-[10px] font-extrabold uppercase text-primary block" x-text="activeCalField === 'from' ? 'Select Start Date' : 'Select End Date'"></span>
+                            <span class="text-xs font-extrabold text-primary-dark" x-text="calMonthYearLabel"></span>
+                        </div>
+                        <button type="button" @click="nextCalMonth()" class="p-1.5 rounded-lg hover:bg-surface-subtle text-text-main cursor-pointer">
+                            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
+                        </button>
+                    </div>
+                    <div class="grid grid-cols-7 gap-1 text-[10px] font-bold text-text-muted text-center mb-1">
+                        <span>Su</span><span>Mo</span><span>Tu</span><span>We</span><span>Th</span><span>Fr</span><span>Sa</span>
+                    </div>
+                    <div class="grid grid-cols-7 gap-1">
+                        <template x-for="(cell, cIdx) in calendarDays" :key="'set_cal_' + cIdx">
+                            <div>
+                                <template x-if="cell.day !== null">
+                                    <button type="button"
+                                            @click="pickCalDate(cell)"
+                                            :class="cell.selected ? 'bg-primary text-white font-extrabold' : 'text-text-main hover:bg-brand-light/40 font-semibold'"
+                                            class="w-8 h-8 rounded-lg text-xs flex items-center justify-center transition-colors cursor-pointer"
+                                            x-text="cell.day"></button>
+                                </template>
+                            </div>
+                        </template>
+                    </div>
+                </div>
             </form>
         </div>
 
@@ -293,7 +439,7 @@
             </div>
 
             @if($commissionRecords->count() > 6)
-                <div class="p-4 border-t border-border-subtle bg-surface-subtle/30 flex justify-center">
+                <div class="p-4 border-t border-border-subtle bg-surface-subtle/30 rounded-b-3xl flex justify-center">
                     <button type="button"
                             @click="showAllCommissions = !showAllCommissions"
                             class="inline-flex items-center gap-2 px-5 py-2 rounded-full bg-primary/10 hover:bg-primary text-primary hover:text-white border border-primary/30 text-xs font-extrabold transition-colors cursor-pointer">
@@ -381,10 +527,6 @@
                                    placeholder="09171234567"
                                    class="w-full p-3 rounded-xl border border-border-subtle bg-surface font-mono font-bold text-primary-dark outline-none focus:border-primary">
                         </div>
-
-                        <template x-if="payoutError">
-                            <div class="p-3 rounded-xl bg-danger/10 border border-danger/25 text-danger font-bold text-xs" x-text="payoutError"></div>
-                        </template>
 
                         <div class="flex justify-end gap-2 pt-2 border-t border-border-subtle">
                             <button type="button"

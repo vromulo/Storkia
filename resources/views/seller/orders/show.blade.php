@@ -196,14 +196,14 @@
     </div>
 
     @if($sellerOrder->is_unserviceable_exception && in_array($sellerOrder->status, ['cancelled', 'rejected'], true))
-        <div class="p-6 rounded-3xl bg-amber-50 border-2 border-amber-300 space-y-2">
+        <div class="p-6 rounded-3xl bg-brand-light/35 border-2 border-primary/30 space-y-2">
             <div class="flex flex-wrap items-center gap-2">
-                <span class="px-2.5 py-0.5 rounded-full bg-amber-600 text-white text-[10px] font-extrabold uppercase">
+                <span class="px-2.5 py-0.5 rounded-full bg-primary-dark text-white text-[10px] font-extrabold uppercase">
                     Automated System Protection (0 SLA Strikes)
                 </span>
-                <h2 class="text-base font-bold text-amber-950">Order Automatically Cancelled — Logistics / Rider Route Unavailable</h2>
+                <h2 class="text-base font-bold text-primary-dark">Order Automatically Cancelled — Logistics / Rider Route Unavailable</h2>
             </div>
-            <p class="text-xs text-amber-900 leading-relaxed">
+            <p class="text-xs text-text-main leading-relaxed">
                 {{ $sellerOrder->rejection_reason ?: 'This order was automatically cancelled by the platform because no active Origin Courier + Destination Branch Hub + Local Municipality Rider route remained available.' }}
                 <strong>0 SLA violation strikes</strong> were recorded against your store, and reserved product stock was restored automatically.
                 @if($payMethod === 'WALLET')

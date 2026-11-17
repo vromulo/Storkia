@@ -23,7 +23,24 @@
     ];
 @endphp
 
-<div class="max-w-7xl mx-auto space-y-6 select-none">
+<div x-data="{
+        tierOpen: false,
+        locOpen: false,
+        sortOpen: false,
+        selectedTier: @js((string) $tierFilter),
+        selectedLocation: @js((string) $locationFilter),
+        selectedSort: @js((string) $queueSort),
+        tierLabels: @js($tierLabels),
+        sortLabels: @js($sortLabels),
+        submitFilterForm() {
+            this.$nextTick(() => {
+                if (this.$refs.orderFilterForm) {
+                    this.$refs.orderFilterForm.submit();
+                }
+            });
+        }
+     }"
+     class="max-w-7xl mx-auto space-y-6 select-none">
     <div class="flex flex-col md:flex-row md:items-end justify-between gap-4">
         <div>
             <div class="flex items-center gap-3">
@@ -93,40 +110,85 @@
             @endforeach
         </div>
 
-        <form method="GET" action="{{ route('seller.orders.index') }}" class="flex flex-wrap items-center gap-2 text-xs">
+        <form x-ref="orderFilterForm" method="GET" action="{{ route('seller.orders.index') }}" class="flex flex-wrap items-center gap-2 text-xs">
             @if($statusTab && $statusTab !== 'all')
                 <input type="hidden" name="status" value="{{ $statusTab }}">
             @endif
             @if($search !== '')
                 <input type="hidden" name="search" value="{{ $search }}">
             @endif
+            <input type="hidden" name="tier" :value="selectedTier">
+            <input type="hidden" name="location" :value="selectedLocation">
+            <input type="hidden" name="sort" :value="selectedSort">
 
-            <select name="tier"
-                    onchange="this.form.submit()"
-                    class="px-3 py-2 rounded-xl border border-border-subtle bg-surface text-xs font-bold text-text-main outline-none focus:border-primary cursor-pointer">
-                @foreach($tierLabels as $tVal => $tLabel)
-                    <option value="{{ $tVal }}" {{ $tierFilter === $tVal ? 'selected' : '' }}>{{ $tLabel }}</option>
-                @endforeach
-            </select>
+            <div class="relative" @click.away="tierOpen = false">
+                <button type="button"
+                        @click="tierOpen = !tierOpen; locOpen = false; sortOpen = false"
+                        class="px-3.5 py-2 rounded-xl border border-border-subtle hover:border-primary bg-surface text-xs font-bold text-text-main flex items-center gap-2 transition-colors cursor-pointer">
+                    <span x-text="tierLabels[selectedTier] || 'All Distance Tiers'"></span>
+                    <svg class="w-3.5 h-3.5 text-text-muted transition-transform" :class="tierOpen ? 'rotate-180' : ''" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.2"><path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/></svg>
+                </button>
+                <div x-show="tierOpen" x-cloak x-transition class="absolute right-0 mt-1.5 w-52 bg-surface border border-border-subtle rounded-2xl shadow-xl z-40 py-1.5 overflow-hidden">
+                    @foreach($tierLabels as $tVal => $tLabel)
+                        <button type="button"
+                                @click="selectedTier = '{{ $tVal }}'; tierOpen = false; submitFilterForm()"
+                                class="w-full px-3.5 py-2 text-left hover:bg-brand-light/30 flex items-center justify-between font-semibold cursor-pointer"
+                                :class="selectedTier === '{{ $tVal }}' ? 'text-primary font-bold bg-primary/5' : 'text-text-main'">
+                            <span>{{ $tLabel }}</span>
+                            <span x-show="selectedTier === '{{ $tVal }}'" class="text-primary font-extrabold">&#10003;</span>
+                        </button>
+                    @endforeach
+                </div>
+            </div>
 
             @if($availableLocations->isNotEmpty())
-                <select name="location"
-                        onchange="this.form.submit()"
-                        class="px-3 py-2 rounded-xl border border-border-subtle bg-surface text-xs font-bold text-text-main outline-none focus:border-primary cursor-pointer max-w-[190px]">
-                    <option value="">All Buyer Locations</option>
-                    @foreach($availableLocations as $locOption)
-                        <option value="{{ $locOption }}" {{ $locationFilter === $locOption ? 'selected' : '' }}>{{ $locOption }}</option>
-                    @endforeach
-                </select>
+                <div class="relative" @click.away="locOpen = false">
+                    <button type="button"
+                            @click="locOpen = !locOpen; tierOpen = false; sortOpen = false"
+                            class="px-3.5 py-2 rounded-xl border border-border-subtle hover:border-primary bg-surface text-xs font-bold text-text-main flex items-center gap-2 transition-colors cursor-pointer max-w-[210px]">
+                        <span class="truncate" x-text="selectedLocation || 'All Buyer Locations'"></span>
+                        <svg class="w-3.5 h-3.5 text-text-muted shrink-0 transition-transform" :class="locOpen ? 'rotate-180' : ''" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.2"><path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/></svg>
+                    </button>
+                    <div x-show="locOpen" x-cloak x-transition class="absolute right-0 mt-1.5 w-60 bg-surface border border-border-subtle rounded-2xl shadow-xl z-40 py-1.5 max-h-60 overflow-y-auto custom-scrollbar">
+                        <button type="button"
+                                @click="selectedLocation = ''; locOpen = false; submitFilterForm()"
+                                class="w-full px-3.5 py-2 text-left hover:bg-brand-light/30 flex items-center justify-between font-semibold cursor-pointer"
+                                :class="selectedLocation === '' ? 'text-primary font-bold bg-primary/5' : 'text-text-main'">
+                            <span>All Buyer Locations</span>
+                            <span x-show="selectedLocation === ''" class="text-primary font-extrabold">&#10003;</span>
+                        </button>
+                        @foreach($availableLocations as $locOption)
+                            <button type="button"
+                                    @click="selectedLocation = '{{ addslashes($locOption) }}'; locOpen = false; submitFilterForm()"
+                                    class="w-full px-3.5 py-2 text-left hover:bg-brand-light/30 flex items-center justify-between font-semibold cursor-pointer"
+                                    :class="selectedLocation === '{{ addslashes($locOption) }}' ? 'text-primary font-bold bg-primary/5' : 'text-text-main'">
+                                <span class="truncate pr-2">{{ $locOption }}</span>
+                                <span x-show="selectedLocation === '{{ addslashes($locOption) }}'" class="text-primary font-extrabold shrink-0">&#10003;</span>
+                            </button>
+                        @endforeach
+                    </div>
+                </div>
             @endif
 
-            <select name="sort"
-                    onchange="this.form.submit()"
-                    class="px-3.5 py-2 rounded-xl border border-border-subtle bg-surface text-xs font-bold text-primary-dark outline-none focus:border-primary cursor-pointer">
-                @foreach($sortLabels as $sVal => $sLabel)
-                    <option value="{{ $sVal }}" {{ $queueSort === $sVal ? 'selected' : '' }}>Sort: {{ $sLabel }}</option>
-                @endforeach
-            </select>
+            <div class="relative" @click.away="sortOpen = false">
+                <button type="button"
+                        @click="sortOpen = !sortOpen; tierOpen = false; locOpen = false"
+                        class="px-3.5 py-2 rounded-xl border border-border-subtle hover:border-primary bg-surface text-xs font-bold text-primary-dark flex items-center gap-2 transition-colors cursor-pointer">
+                    <span x-text="'Sort: ' + (sortLabels[selectedSort] || 'Oldest to Newest (FIFO)')"></span>
+                    <svg class="w-3.5 h-3.5 text-primary transition-transform" :class="sortOpen ? 'rotate-180' : ''" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.2"><path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/></svg>
+                </button>
+                <div x-show="sortOpen" x-cloak x-transition class="absolute right-0 mt-1.5 w-60 bg-surface border border-border-subtle rounded-2xl shadow-xl z-40 py-1.5 overflow-hidden">
+                    @foreach($sortLabels as $sVal => $sLabel)
+                        <button type="button"
+                                @click="selectedSort = '{{ $sVal }}'; sortOpen = false; submitFilterForm()"
+                                class="w-full px-3.5 py-2 text-left hover:bg-brand-light/30 flex items-center justify-between font-semibold cursor-pointer"
+                                :class="selectedSort === '{{ $sVal }}' ? 'text-primary font-bold bg-primary/5' : 'text-text-main'">
+                            <span>{{ $sLabel }}</span>
+                            <span x-show="selectedSort === '{{ $sVal }}'" class="text-primary font-extrabold">&#10003;</span>
+                        </button>
+                    @endforeach
+                </div>
+            </div>
 
             @if($tierFilter !== '' || $locationFilter !== '' || $queueSort !== 'oldest')
                 <a href="{{ route('seller.orders.index', array_filter(['status' => $statusTab === 'all' ? null : $statusTab, 'search' => $search])) }}"
@@ -276,7 +338,7 @@
                                     </span>
                                     @if($so->is_unserviceable_exception)
                                         <div class="mt-1">
-                                            <span class="px-2 py-0.5 rounded bg-amber-100 text-amber-900 text-[10px] font-bold">
+                                            <span class="px-2 py-0.5 rounded bg-brand-light/70 text-primary-dark border border-primary/25 text-[10px] font-bold">
                                                 Unserviceable Area (0 SLA Strike)
                                             </span>
                                         </div>
